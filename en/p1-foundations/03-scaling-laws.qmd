@@ -1,0 +1,149 @@
+# Scaling Laws and Compute Allocation {#sec-scaling-laws}
+
+Pre-training is the bulk compute spend: take a fixed architecture and a
+fixed data mixture and turn FLOPs into a base model by minimizing a
+next-token loss. This chapter owns the recipe of that spend, the
+objective, the optimizer, the schedule, the batch size, and above all the
+scaling laws that decide how big a model to train on how many tokens before
+you pay for the run. By the end a reader can explain why a frontier model is
+the size it is, trained on the number of tokens it is, and why that answer
+changed between 2020 and today.
+
+## Problem
+
+A pre-training run commits a cluster for weeks and a budget you cannot
+refund. Before it starts you must choose a parameter count, a token budget,
+a learning-rate schedule, and a batch size, and you must choose them from
+small experiments because you cannot afford to try them at full scale. The
+question this chapter answers is how to spend a fixed compute budget so the
+final loss is as low as it can be, and how to know that before committing.
+
+## Design
+
+The autoregressive objective makes the spend possible: next-token
+prediction is maximum likelihood over a token stream, cross-entropy on the
+shifted sequence under a causal mask, so every position is a training
+example and the corpus is its own supervision. The loss this produces, in
+nats or bits per token, is the quantity scaling laws predict; perplexity is
+just its exponential.
+
+Around that objective sits a recipe. AdamW is the default optimizer, with
+decoupled weight decay and two moment estimates whose state is the dominant
+memory term, which is why @sec-training-at-scale shards it. The
+learning-rate schedule has three parts: a linear warmup while the moment
+estimates are still cold, a stable high phase, and a decay. Cosine decay to
+a small floor is the well-understood default. Warmup-stable-decay holds a
+constant rate on a plateau and decays only when you choose to stop, which
+makes one plateau checkpoint spawn many decays and makes scaling
+experiments composable.
+
+The decision that dominates all of these is sizing. A scaling law fit on a
+ladder of small runs predicts the loss of a large run as a smooth power law
+in parameters, data, and compute:
+
+$$
+L(N, D) = E + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}}
+$$
+
+where $N$ is parameters and $D$ is training tokens. You fit the constants on
+runs you can afford, then read off the compute-optimal $N$ and $D$ for the
+budget you intend to spend. Maximal-update parametrization (muP) makes the
+hyperparameters transfer too: parametrize the widths so the optimal learning
+rate and initialization are stable across model size, tune them on a small
+proxy, and carry them to full scale instead of sweeping at full cost.
+
+## Evolution
+
+The sizing rule itself has a history, and getting it wrong is the most
+expensive mistake in this chapter. Kaplan et al. (2020) established that
+loss follows smooth power laws and, from their fits, recommended spending
+most of a larger budget on parameters. Hoffmann et al. (2022), the
+Chinchilla paper, corrected this: parameters and tokens should scale
+together, roughly twenty training tokens per parameter at compute-optimal,
+and the Kaplan-era recipe had been systematically under-training on data. A
+Chinchilla-optimal model is smaller and reads more than the prior
+generation expected.
+
+When unique tokens run out, data-constrained scaling takes over: repeated
+data has decaying value, and past a few epochs adding parameters beats
+adding repetitions. The frontier of the recipe is still moving. Second-order
+and preconditioned optimizers, Shampoo and the newer Muon, claim better
+loss per FLOP by conditioning the update with curvature or orthogonalization.
+These are live options, not settled defaults.
+
+::: {.callout-important}
+## What's contested
+The compute-optimal token-to-parameter ratio is not settled, and Chinchilla
+is not the last word. Inference-aware scaling argues that if a model will
+serve a large volume of tokens, the right move is to deliberately
+over-train a smaller model far past Chinchilla-optimal, because training is
+paid once and inference is paid forever. Frontier models now train well past
+the twenty-to-one ratio for exactly this reason. The reconciliation between
+Kaplan and Chinchilla fits, and how far over-training pays, are active
+questions. Treat any single ratio as a budget-and-deployment-dependent
+choice, not a constant.
+:::
+
+::: {.callout-tip}
+## Constraint arrow
+This is the first place a lower layer reaches up the stack. The serving
+cost in @sec-serving-problem, not the training budget, is what justifies
+over-training a smaller model. A decision that looks like pure pre-training
+economics is actually set by how many tokens the model will decode over its
+lifetime.
+:::
+
+## Trade-offs
+
+The recipe is a set of balances, each with a knee.
+
+- **Compute-optimal versus over-training for inference.** Chinchilla
+  optimizes loss for a training budget. If the model will serve many
+  tokens, over-train a smaller model: you pay more to train and far less per
+  inference, and the right point depends on expected lifetime inference
+  volume.
+- **Batch size versus steps.** A larger batch buys data parallelism and
+  shorter wall-clock, but past the critical batch size you burn compute for
+  no loss gain, and too small a batch leaves the accelerators idle and pays
+  communication overhead per useful token. The critical batch size grows
+  during training, so the optimal batch is a schedule, not a constant.
+- **Schedule choice.** Cosine is the understood default but locks the token
+  budget at run start. Warmup-stable-decay trades a small loss penalty for
+  the ability to keep training, fork decays, and run clean scaling ladders.
+  Choose cosine for a single known-budget run, the plateau schedule when the
+  budget is uncertain.
+
+## Implementation
+
+Most of this chapter is a plan; a small part is an operational kit for
+keeping a multi-week run alive. The stability tricks are z-loss, an
+auxiliary penalty on the log-partition that stops output logits from
+drifting; QK-norm, normalizing query and key before the dot product to cap
+attention-logit growth; depth-scaled initialization; and global-norm
+gradient clipping as the blunt safety net. Loss-spike recovery is a
+procedure, not a hyperparameter: detect the spike from grad-norm and loss
+telemetry, then skip and resume from a recent checkpoint, lower the rate,
+and reorder the data batches that triggered it.
+
+The failure modes are worth naming because each bites at a different time.
+Divergence to NaN sends the loss to infinity early, usually from too high a
+rate, too short a warmup, or a precision interaction from
+@sec-training-at-scale, and is cheapest to prevent with warmup and clipping.
+Loss spikes appear mid-run and waste days of compute if you have no recovery
+plan. The wrong size-versus-tokens choice is the most expensive of all
+because it is the whole run, and an untuned learning rate at full width
+leaves loss on the table that you never see without muP to give you a
+baseline.
+
+## Further reading
+
+- Kaplan et al., "Scaling Laws for Neural Language Models," 2020. [arXiv:2001.08361](https://arxiv.org/abs/2001.08361)
+- Hoffmann et al., "Training Compute-Optimal Large Language Models" (Chinchilla), 2022. [arXiv:2203.15556](https://arxiv.org/abs/2203.15556)
+- Yang et al., "Tensor Programs V: Tuning Large Neural Networks via Zero-Shot Hyperparameter Transfer" (muP), 2022. [arXiv:2203.03466](https://arxiv.org/abs/2203.03466)
+- Loshchilov & Hutter, "Decoupled Weight Decay Regularization" (AdamW), 2019. [arXiv:1711.05101](https://arxiv.org/abs/1711.05101)
+- McCandlish et al., "An Empirical Model of Large-Batch Training" (critical batch size), 2018. [arXiv:1812.06162](https://arxiv.org/abs/1812.06162)
+- Muennighoff et al., "Scaling Data-Constrained Language Models," 2023. [arXiv:2305.16264](https://arxiv.org/abs/2305.16264)
+- Hu et al., "MiniCPM" (warmup-stable-decay schedule), 2024. [arXiv:2404.06395](https://arxiv.org/abs/2404.06395)
+- Chowdhery et al., "PaLM" (z-loss, stability at scale), 2022. [arXiv:2204.02311](https://arxiv.org/abs/2204.02311)
+- Jordan, "Muon: An Optimizer for Hidden Layers in Neural Networks," 2024. [kellerjordan.github.io](https://kellerjordan.github.io/posts/muon/); scaled follow-up Liu et al., 2025, [arXiv:2502.16982](https://arxiv.org/abs/2502.16982)
+- DeepSeek-AI, "DeepSeek-V3 Technical Report" (trillion-token stability and loss-spike practice), 2024. [arXiv:2412.19437](https://arxiv.org/abs/2412.19437)
