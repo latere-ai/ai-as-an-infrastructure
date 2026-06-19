@@ -2,33 +2,49 @@
 
 From Systems to Agents: history, design decisions, and foundations.
 
-A book that treats AI as an infrastructure and explains it design-first: it
-traces how each piece got the shape it has, what trade-offs that shape
-encodes, and the theory underneath. Released under
-[latere.ai](https://latere.ai).
-
-The book is organized as a stack, bottom to top. Each chapter establishes
-the practice and then the foundations that explain it, following the arc in
-[`CONVENTIONS.md`](CONVENTIONS.md).
+A bilingual book that treats AI as an infrastructure and explains it
+design-first. It follows one continuous arc, the lifecycle of a capability,
+from raw compute to a deployed and governed behavior, asking at every step
+how each piece got its shape, what trade-offs that shape encodes, and the
+theory underneath. Released under [latere.ai](https://latere.ai), to be
+served at [aaai.latere.ai](https://aaai.latere.ai).
 
 ## Structure
 
-- Part I, Systems (`systems/`): inference, training, evaluation.
-- Part II, Applications (`applications/`): chat completion, assistants,
-  agentic agents.
-- Part III, Frontiers (`frontiers/`): autonomous agents, self-improvement.
-- `index.qmd`, `summary.qmd`, `references.qmd`, `references.bib`: preface,
-  closing, and bibliography.
-- `_quarto.yml`: book configuration. `CONVENTIONS.md`: how chapters are
-  written.
+The spine is the lifecycle of a capability, read as a stack.
+
+- **Part 0, Orientation.** The whole stack in one pass, and how to read.
+- **Part I, Foundations and Pretraining.** Scaling, data, tokenization,
+  architecture, training at scale.
+- **Part II, Adaptation and Alignment.** Fine-tuning, RLHF, preference
+  optimization, self-improvement.
+- **Part III, Reasoning and Test-Time Compute.**
+- **Part IV, Inference and Serving.**
+- **Part V, Orchestration.** Agents, memory, the harness, multi-agent,
+  retrieval, context.
+- **Part VI, Evaluation.**
+- **Part VII, Infrastructure and Systems.**
+- **Part VIII, Safety, Interpretability, and Governance.**
+- **Part IX, Ecosystem and Economics.**
+
+Two motifs recur: the **three loops** (training, inference, agentic) and the
+**capability, efficiency, trust** lens. Watch the **constraint arrows**,
+where a lower layer dictates an upper layer's choice.
+
+## Layout
+
+- `en/` and `zh/` are two standalone Quarto book projects, same chapter
+  paths and labels under each. Chapters live at `en/pN-*/NN-slug.qmd`.
+- `CONVENTIONS.md`: how chapters are written. `INTEGRATION.md`: how the
+  research notes and blog series map into chapters (the book is canonical).
 
 ## Philosophy
 
 Design-first, after [golang.design/under-the-hood](https://golang.design/under-the-hood):
 every section moves through Problem, Design, Evolution, Trade-offs, and
 Implementation, so a reader finishes able to answer "why is it built this
-way?". History is traced through primary sources, code is kept minimal, and
-each chapter ends with Further reading. See [`CONVENTIONS.md`](CONVENTIONS.md).
+way?". Live debates get a "what's contested" box rather than being papered
+over. See [`CONVENTIONS.md`](CONVENTIONS.md).
 
 ## Build
 
@@ -36,22 +52,17 @@ Built with [Quarto](https://quarto.org).
 
 ```sh
 # Install Quarto: https://quarto.org/docs/get-started/
-quarto --version
-
-make preview      # live local preview
-make render-html  # HTML only (what CI builds)
-make render       # HTML + PDF + ePub (PDF needs: quarto install tinytex)
+make preview       # live English preview (make preview-zh for Chinese)
+make render-html   # build both languages, what CI checks
+make render        # both languages, all formats (PDF needs tinytex)
 ```
 
-CI renders the HTML build on every push and pull request as a smoke test
-(`.github/workflows/render.yml`).
+CI renders both `en` and `zh` on every push and pull request.
 
 ## License
 
-Prose, figures, and other content are licensed under
-[Creative Commons Attribution-NonCommercial-NoDerivatives 4.0 International](https://creativecommons.org/licenses/by-nc-nd/4.0/)
-(CC BY-NC-ND 4.0). See [`LICENSE`](LICENSE).
-
-Copyright © 2026 latere.ai. The license variant is a deliberate, swappable
-choice: BY-NC-ND keeps monetization and derivatives reserved. Switch to
-BY-SA or BY if wider reuse and translation become the goal.
+Content is licensed
+[CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/). See
+[`LICENSE`](LICENSE). Copyright © 2026 latere.ai. The variant is a
+deliberate, swappable choice; switch to BY-SA or BY if wider reuse and
+translation become the goal.

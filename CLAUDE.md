@@ -1,48 +1,60 @@
 # AI as an Infrastructure
 
-A Quarto book covering AI as an infrastructure across three stack layers,
-each written design-first: history, design decisions, trade-offs, and the
-foundations underneath.
-
-- Part I, Systems (`systems/`): inference, training, evaluation.
-- Part II, Applications (`applications/`): chat completion, assistants,
-  agentic agents.
-- Part III, Frontiers (`frontiers/`): autonomous agents, self-improvement.
+A bilingual Quarto book, written design-first. The spine is the lifecycle of
+a capability, from compute to a deployed and governed behavior, across nine
+parts (Part 0 to Part IX). See `README.md` for the part list and
+`CONVENTIONS.md` for how chapters are written.
 
 Released under latere.ai, licensed CC BY-NC-ND 4.0.
 
+## Layout
+
+- Two standalone Quarto projects: `en/` and `zh/`, same chapter paths and
+  `{#sec-...}` labels under each. Built into `_book/en` and `_book/zh`.
+- Chapters live under `en/pN-*/NN-slug.qmd` (and the zh twin). Global
+  chapter numbers 01 to 37.
+- `INTEGRATION.md` maps source material (`../specs/research/llm-training/`
+  and `../latere-ai/content/blog/`) to chapters. The book is canonical.
+- Regenerate the scaffold from the TOC table if the structure changes;
+  hand-written chapters (for example `03-scaling-laws`) are not regenerated.
+
 ## Authoring philosophy
 
-Read [`CONVENTIONS.md`](CONVENTIONS.md) before writing. In short: every
-section follows Problem, Design, Evolution, Trade-offs, Implementation, and
-leaves the reader able to answer "why is it built this way?". Trace history
-through primary sources. Keep code minimal and cite it as `symbol, path`.
-Close each chapter with Further reading.
+Read [`CONVENTIONS.md`](CONVENTIONS.md) before writing. Every section runs
+Problem, Design, Evolution, Trade-offs, Implementation, and leaves the
+reader able to answer "why is it built this way?". Add a "what's contested"
+box where the field is unsettled and a "constraint arrow" where a lower
+layer dictates an upper one. Trace history through primary sources, keep
+code minimal and cite it as `symbol, path`, close each chapter with Further
+reading.
 
 ## Build and verify
 
-- `make preview` for a live local preview.
-- `make render-html` is the smoke test. CI runs the same on push and PR.
-- The render check is the test here: before committing structural or
-  config changes, run `make render-html` (or at least `quarto check`) and
-  confirm the book builds. A broken render is a broken commit.
+- `make preview` (English) or `make preview-zh` for a live preview.
+- `make render-html` builds both languages, matching CI. CI renders `en`
+  and `zh` on push and PR.
+- The render check is the test: before committing structural or config
+  changes, run `make render-html` (or `quarto check`) and confirm both
+  books build. A broken render is a broken commit.
 
 ## Writing conventions
 
 - No em dashes. Use commas, periods, or colons. No filler, no intensifiers.
-- Each chapter opens with what the reader will be able to explain by the
-  end, and closes with Further reading.
-- Math is LaTeX, diagrams are Mermaid, cross-references use Quarto labels
-  (for example `@sec-sys-inference`).
-- Cite by adding entries to `references.bib` and using `[@key]`.
+- The zh side follows `../specs/research/llm-training/TRANSLATION-GLOSSARY.md`:
+  code, symbols, math, URLs, and author names byte-verbatim.
+
+## Deploy
+
+The book deploys to `aaai.latere.ai` as a static-serving container behind the
+shared K8s ingress. See `deploy/prod/` and `.github/workflows/`. DNS is one
+A record in `../terraform/dns.tf`; the header link lives in `../latere-ai`.
 
 ## Commits
 
 - Commit message style: `scope: lowercase description`.
-- Commit often, one intended diff at a time.
-- Work on `main` directly.
+- Commit often, one intended diff at a time. Work on `main` directly.
 
 ## Related
 
-Other latere projects and shared infrastructure are in `../`. The reference
-for this book's style is `../../golang.design/under-the-hood`.
+Other latere projects are in `../`. The style reference is
+`../../golang.design/under-the-hood`.

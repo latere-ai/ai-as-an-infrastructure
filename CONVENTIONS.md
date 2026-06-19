@@ -55,5 +55,35 @@ explain it.
 
 ## Cross-references and links
 
-Use Quarto labels for cross-references (`@sec-sys-inference`) and relative
+Use Quarto labels for cross-references (`@sec-scaling-laws`) and relative
 links within the book tree. Keep section anchors stable across edits.
+
+## Debate boxes and constraint arrows
+
+Two callouts carry the book's intellectual signature and belong in chapters
+that warrant them.
+
+- **What's contested** (`::: {.callout-important}`). Where the field is
+  genuinely unsettled, state the live debate with named positions rather
+  than papering over it. Scaling ratios, DPO-variant efficacy, whether RLVR
+  teaches new reasoning, whether sparse autoencoders are the right
+  interpretability primitive, and benchmark-versus-harness measurement are
+  the recurring ones.
+- **Constraint arrow** (`::: {.callout-tip}`). Where a lower layer dictates
+  an upper layer's choice, name it. The serving cost of a token justifies
+  over-training a smaller model; the key-value cache size motivates an
+  attention variant; the harness moves an evaluation score. These arrows are
+  the payoff of reading the stack in order.
+
+Two motifs run through the prose without needing a callout: the **three
+loops** (training, inference, agentic) as one recurring control structure,
+and the **capability, efficiency, trust** lens that closes a chapter.
+
+## Bilingual
+
+The book is two standalone Quarto projects, `en/` and `zh/`, mirroring the
+`under-the-hood` split. A chapter exists as the same path under both trees
+with the same `{#sec-...}` label. The zh side follows
+`../specs/research/llm-training/TRANSLATION-GLOSSARY.md`: keep code, symbols,
+math, URLs, and author names byte-verbatim, use Chinese punctuation, and
+never carry over an em dash.
