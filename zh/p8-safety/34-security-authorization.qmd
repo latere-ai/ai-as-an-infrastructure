@@ -1,25 +1,216 @@
 # 安全与授权 {#sec-security-authorization}
 
-提示注入、工具投毒、智能体沙箱、授权范围与数据外泄。
-
-::: {.callout-note}
-## 状态
-提纲。来源：`blog/agent-harness-identity + agent-harness-governance + agent-harness-model-access`。参见 [`INTEGRATION.md`](../../INTEGRATION.md)。
-:::
+智能体带着某人的授权在世界中行动，而核心的安全问题是：每次调用随行多少授权、随行多久。
+读完本章，读者应能解释为何一个长期存在的宽泛令牌加上一次提示注入就等于一次入侵，身份与
+治理如何分工来约束授权，以及为何预算与审计是经过验证的主体的下游，而非各自独立的系统。
 
 ## 问题
 
+智能体的全部目的就是采取行动：读一个仓库、发一封邮件、查一个数仓、调用一个模型。每个
+行动都需要授权，而诱人的默认做法是用一个宽泛凭证对智能体一次性授权，并让它在整个会话
+生命周期内复用这个凭证。麻烦正是从这里开始。一个长期存在的授予可被任何能触达智能体的
+东西触达，而智能体的输入通道在构造上就是敞开的：它会读取不受信任的内容。攻击者只要在
+一个网页、一个文件或一个工具的输出里植入指令（即间接提示注入，工具投毒是其中一个变体），
+就能把智能体引导去使用那个授予。令牌并不知道智能体是自己决定行动，还是被骗去行动的。
+
+所以攻击面就是范围（scope）列表。宽泛且长期存在的授权，会把一条被注入的指令变成该凭证
+所允许的一切的并集。Invariant Labs 对 GitHub MCP “一个 PAT 通用于所有仓库”模式的披露
+是干净的演示：一个看似合理的个人访问令牌，宽到足以跨越多个仓库，一旦一条被注入的指令
+触达同一个令牌所覆盖的那些仓库，它就变成了一个跨仓库的外泄原语。失效的不是泄露的
+密钥，而是一个被正确持有、却太宽且太持久的密钥。
+
+另有三个问题叠加在第一个之上。智能体运行在共享基础设施上，所以平台必须知道一个行动属于
+哪个租户，否则一次检索查询会悄无声息地把一个租户的数据返回进另一个租户的会话。为这项
+工作付费并授权的提供商密钥与 OAuth 令牌，绝不能被那些可能泄露它们的生成代码触达。而当
+一个人撤回同意时，已经签发的授权必须真正停止，而不只是被打上标记。
+
 ## 设计
+
+设计的答案是把授权做成一个一等的、狭窄的、短时的、有归属的东西，由两个协作的底座拥有，
+它们分担同一个动词。
+
+**主体元组。** 每个操作把它的调用方解析为
+`(user_id, tenant_id, agent_id, workload_id, scopes, attributes)`，并回答一个问题：
+这个主体可否对这个资源采取这个行动？这个元组正是其他每个系统所消费的东西。持久化把它
+盖在一个会话上，成本流水线据它计费，审计日志据它归属。一条只记录“会话 X 做了 Y”而没有
+那个经过验证的元组的审计条目，无法回答调查唯一会问的问题，即谁、为哪个租户。
+
+**三重身份，而非一个层级。** 运行框架在每次调用上调和三个主体，它们是无法被压扁的正交轴。
+
+```mermaid
+graph TB
+    U[User identity<br/>human, SSO, MFA]
+    A[Agent identity<br/>name, version, capabilities]
+    W[Workload identity<br/>pod, process, SPIFFE ID]
+
+    U -->|"on-behalf-of"| A
+    A -->|"runs as"| W
+    W -->|"calls"| EXT[External systems]
+```
+
+用户是通过 SSO 认证、且同意可被撤回的人。智能体是一个有名字、有版本的主体，拥有自己的
+能力面，正是这一点才让“是智能体做了 X，而非用户”成为可表达的。工作负载是运行时，它回答
+另外两者无法回答的问题：这究竟是一个合法的运行框架副本，还是集群里别的什么东西拿到了
+令牌？每重身份都封堵了另外两者留下的一个攻击，每重身份也都承载着另外两者无法承载的一种
+归属。
+
+**声明与执行。** 两个底座分担约束授权的工作，而它们之间的接缝是本章承重的思想。治理
+**声明**一项收窄：这个智能体只可读、只可读这一个仓库、只可在某个花费上限之下。身份
+**执行**它，方式是铸造一个恰好被收窄到那个范围的令牌，并拒绝铸造任何更宽的。能力收窄
+是治理的词汇；令牌范围划定是身份在网络上把它变为现实的机制。判定某项关注由哪个底座
+拥有，最干净的检验是：如果撤销它改变了谁能触达一个资源，它属于身份；如果撤销它改变了
+一个已授权主体被允许尝试什么，它属于治理。一个令牌的 `scope` 声明正坐落在接缝上，恰恰
+因为身份写下它，是为了把治理所决定的东西编码进去。
+
+治理把智能体当作一份**文档**，而非一个运行中的进程：一份有名字、由所有者签名、有版本的
+记录，记下它的提示、它的工具授予、它的模型绑定、它的预算与它的审批步骤。文档正是那个能
+回答“这个智能体在它行动的那一刻被允许做什么”的东西，因为那份允许就是版本控制中某一时点
+的那份文档。委派上承重的不变式是 $C_{child} \subseteq C_{parent}$：随着工作沿一条链向下
+交接，授权只能不断收缩，绝不增长。
+
+**凭证托管。** 提供商密钥与 OAuth 令牌住在底座里，绝不住在智能体的环境、配置、日志或
+命令历史中。智能体收到的是一个有范围、短时的句柄，由底座在调用时兑换为真正的凭证。这与
+运行框架在沙箱边界所施加的密钥可达性纪律是同一条（@sec-the-harness）：生成代码绝不可
+读取高价值密钥。它对提供商密钥尤为要紧，因为它们的爆炸半径是在别人的模型上、无归属的
+花费，直到账单上才被发现。
+
+**租户身份作为最粗粒度的所有权轴。** 每个资源要么携带一个租户属性，要么悄无声息地被困在
+单个租户里。隔离随后落在一条谱系上，其定义性属性是一个缺陷上的爆炸半径，而这个选择是按
+资源类逐一做的，而非平台范围统一做的，因为爆炸半径并不均匀：一条泄露的审计行是一次保密性
+事件，但一次泄露的跨租户记忆检索是一次活跃的数据泄露，它把一个租户的内容浮现进另一个租户
+的活动会话里（@sec-memory-systems，@sec-rag-retrieval）。
 
 ## 演化
 
+为一次调用打包授权的方式，已经稳步地从宽泛而持久，走向狭窄而短暂，每一步都由前一种形态
+所造就的事件推动。
+
+**宽泛持有者令牌**曾是默认，因为它是一次同意对话框、一个凭证。它的代价是时间性的：一个
+宽泛令牌是一个长期存在的授予，可被任何能触达智能体的东西触达。GitHub 的细粒度个人访问
+令牌 与 Google 收窄后的同意屏，正是为了从这个模式里夺回授权而存在的。
+
+**短时能力令牌**反转了长期授予：每次工具调用都铸造一个恰好携带该次调用所需权限的令牌，
+TTL 以分钟计，于是一次泄露或被注入的调用能造成损害的窗口，从一个会话收缩到单个操作。
+Macaroons（2014）与 Biscuit 是其形式根基：持有者可对令牌做**收窄**，加上的限定
+（caveat）只会进一步限制、绝不放宽，于是一个服务可以把一个严格更弱的令牌交给下一跳，而
+无需回头联系签发者。这就是对象能力纪律，正是在令牌层表达的
+$C_{child} \subseteq C_{parent}$。
+
+**代表用户（OBO）**让用户的授权端到端地传播，而非用智能体的授权替换它，于是数仓的行级
+安全看到的是那个人，而非服务账号。RFC 8693 形式化了令牌交换；针对智能体的标准轨答案
+是 IETF draft-oauth-ai-agents-on-behalf-of-user-00，它把用户加智能体加客户端身份编码
+进一个委派令牌。Okta for AI Agents 与 Auth0 的智能体身份工作 把这作为产品而非
+草案发布。
+
+**工作负载身份**（SPIFFE/SPIRE）让 pod 以密码学方式证明自己是什么，没有可泄露的共享
+密钥。正是它让令牌中介可以拒绝为一个仅仅坐在集群里的进程铸造用户令牌，而它对任何多副本
+部署都是标准。
+
+这段历史沉淀出的选择规则：宽泛范围只在单用户、低权限部署中站得住脚；当行动是高权限或
+不可逆时，能力令牌才值得它的管线开销；只要下游授权依赖于具体用户，OBO 就是承重的；对
+任何多副本部署，SPIFFE 都是标准。
+
+::: {.callout-important}
+## 争议所在
+治理是否是一个区别于身份的原语，确实并未定论。怀疑的立场是：身份已经签发可收窄、有范围、
+可委派的令牌（Macaroons、Biscuit、OBO，以及其元组里的 `agent_id`），所以并没有什么留给
+一个独立底座去拥有。分离的论证以一个身份无法独自回答的问题作答：这个智能体在它行动的那
+一刻被允许做什么？答案不是一个令牌范围；它是一个提示、一份工具清单、一笔预算与一组审批
+步骤，即智能体那份有版本的文档，而身份从未持有过它。诚实的反向砝码是：市场很薄，并不存在
+一个像身份（Okta、Auth0、SPIFFE）或沙箱那样成熟的、厂商中立的“治理底座”品类。薄市场是
+一个被服务不足的原语在被命名之前的样子，但它也是一个并非原语的东西的样子，这正是为何这个
+问题悬而未决。
+:::
+
 ## 权衡
+
+本章的每个选择都拿一种好处去换另一种，而拐点都很锋利。
+
+- **隔离粒度与共享灵活性。** 扁平用户租户身份隔离起来轻而易举，却无法共享。一个三级的
+  组织-项目层级靠检视即可读懂，但一旦真实组织是矩阵而非树，它就立刻僵化。基于属性的访问
+  契合任何拓扑，却让“谁能看到什么？”无法通过读取数据来判定，从而破坏离线的审计与抹除
+  遍历。挑选契合该组织、又让所有权图可遍历的最简单形态。
+- **撤销延迟与长 TTL。** 持有者令牌的撤销延迟无法避免：一个撤回同意的用户够不到已经签发的
+  令牌，所以会话会带着已被撤销的授权一直运行，直到令牌过期。因此 TTL 就是一个被撤销的授予
+  还能被利用多久的上限。长 TTL 令牌与即时撤销权互斥，租户越敏感，令牌就必须活得越短。
+- **写时分区与读时过滤。** 一个在读时施加的 `tenant_id` 过滤，离一次泄露只差一条漏掉的
+  `WHERE` 子句；一个物理上按租户分区的索引，即使查询出错也无法泄露。过滤便宜，分区安全。
+- **同意疲劳。** 在每个行动上重复征求同意，会训练用户为了让对话框闭嘴而授予可得的最宽
+  范围，这恰恰制造了整套设计所对抗的环境授权。结构性的修复是把智能体做成一等身份，拥有
+  它自己持久、可审计的授予，而非一个每次行动都重新借用用户授权的代理。
+- **集中化与可用性。** 在所有模型推理之前立一个单一底座，使得归属与同步预算执行成为可能，
+  但它在构造上就是一个单点故障：它一旦宕机，所有活动会话会同时停滞。换来控制的那份集中化，
+  必须用一条回退路由和一个断路器来偿付。
+
+::: {.callout-tip}
+## 约束箭头
+预算执行由身份所支配，而非由成本系统支配。一个写着“这个租户每月可花五千美元”的上限毫无
+意义，除非每次模型调用都在调用的那一刻、在花费发生之前携带一个**经过验证的**租户
+（@sec-economics）。失控花费的事件，那个 \$47,000 的智能体循环 与那次烧掉 16.7 亿
+词元、历时五小时的 Claude Code 递归，都不是纯粹的成本系统失效。两者里预算都存在；
+它们触发在系统只能在钱花光之后才归属的花费上。按租户的执行是经过验证的主体的下游，因为
+归属必须先于调用，而一个成本上限只能精确到交给它的那个身份的精度。
+:::
 
 ## 实现
 
+真正回答“这个调用方可否对这个资源采取这个行动？”的组件是一个策略引擎，它是底座最可见的
+产物。OPA / Rego 是 Kubernetes 原生、数据驱动的，有一段实打实的学习曲线。AWS
+Cedar 是带类型、可分析的，于是你可以对一条策略提出形式化的问题（“是否存在任何主体
+能够触达这个资源？”），而不只是测试它。Oso 是作为库的授权，带一个关系模型；
+Permit.io 把这些后端组合在一个 API 之后。一个生产系统会运行两个策略面，并应保持
+它们分离：身份所拥有的资源访问策略（“这个身份可否读这个资源？”）与治理所拥有的行动风险
+策略（“这个智能体可否发这封邮件？”），因为它们因不同的原因、以不同的节奏变化，而后者正是
+人类审批被放置之处（@sec-oversight-control）。
+
+隔离层级，按资源类逐一选定：
+
+| 层级 | 机制 | 缺陷上的爆炸半径 | 契合 |
+|------|------|------------------|------|
+| 逻辑 | 共享数据库加租户列加强制过滤 | 一条漏掉的 `WHERE` 泄露一切 | 开发、内部工具、低风险 SaaS |
+| 命名空间 | 每租户独立的 schema 或命名空间 | 路由错误的查询命中一个错误租户 | 多数 B2B SaaS |
+| 物理 | 每租户独立的数据库、集群或账户 | 缺陷停留在一个租户内 | 受监管、大型企业、主权云 |
+
+一个成熟的平台会刻意混用层级：会话为成本而逻辑分区，高敏感记忆物理隔离，审计作为一个
+带租户标签行的共享物理存储。贯穿这一切之下的陷阱是来自请求头的隐式租户身份：如果
+`tenant_id` 是从一个没有密码学绑定（一个 JWT 声明、一个 mTLS 客户端证书）的 HTTP 头里
+读出来的，那么一个被伪造的头就在前门绕过了最精心选定的物理层级。
+
+两个运维模式把回路闭合。预算执行必须与调用同步，住在模型访问底座或网关里，那是唯一同时
+拥有逐调用上下文与拒绝权限的地方；一个由计费系统执行的预算是一个告警，而非执行，因为它
+触发在花费之后。抹除权与审计要求记录留存之间存在张力，由墓碑加证明（tombstone-plus-proof）
+来化解：清除载荷，保持防篡改链完好，并证明删除，而非悄无声息地丢掉一行。
+
+反复出现的失效模式都是被画得不精确的身份边。环境授权就是 GitHub MCP 那个形态：一个长期
+存在的令牌、每次调用，提示注入触发它所允许的一切。转发用户令牌的智能体到智能体委派，把
+用户的全部授权交给下一个智能体，却不附带用户的任何意图；正确的形态是一个委派的、收窄的
+令牌，命名整条链，并在每一跳收窄范围（@sec-multi-agent-systems）。跨租户检索渗漏是
+最高风险的一类，靠写时分区胜过读时过滤来缓解。隐式租户耦合，即一个资源在创建时隐式继承
+租户身份，会变得无法共享、无法重新归属，除非做一次迁移，而隐式租户身份恰恰无法表达这次
+迁移。
+
 ## 延伸阅读
 
-::: {.callout-note}
-## 待办
-确立本章的奠基性、前沿与一手来源锚点。
-:::
+- GitHub. "Fine-grained personal access tokens." [GitHub Docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
+- C. Brunel et al. "Biscuit: Decentralized Authorization with Attenuable Tokens." [biscuitsec.org](https://www.biscuitsec.org/)
+- A. Birgisson et al. "Macaroons: Cookies with Contextual Caveats for Decentralized Authorization in the Cloud." NDSS 2014. [Google Research](https://research.google/pubs/macaroons-cookies-with-contextual-caveats-for-decentralized-authorization-in-the-cloud/)
+- IETF RFC 8693. "OAuth 2.0 Token Exchange." [RFC Editor](https://datatracker.ietf.org/doc/html/rfc8693)
+- IETF. "OAuth 2.0 On-Behalf-Of User for AI Agents." draft-oauth-ai-agents-on-behalf-of-user-00, 2025. [IETF Datatracker](https://datatracker.ietf.org/doc/html/draft-oauth-ai-agents-on-behalf-of-user-00)
+- Okta. "Okta for AI Agents, Early Access." September 2025. [Okta](https://www.okta.com/blog/ai/okta-ai-agents-early-access-announcement/)
+- SPIFFE/SPIRE. "Secure Production Identity Framework for Everyone." [spiffe.io](https://spiffe.io/)
+- AWS. "IAM Identity Federation and Attribute-Based Access Control." [AWS Docs](https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction_attribute-based-access-control.html)
+- Google Cloud. "IAM Overview, Resource Hierarchy and Conditions." [Google Cloud Docs](https://cloud.google.com/iam/docs/overview)
+- AWS. "Cedar Policy Language." [cedarpolicy.com](https://www.cedarpolicy.com/)
+- DEV Community. "The \$47,000 Agent Loop." 2025. [dev.to](https://dev.to/waxell/the-47000-agent-loop-why-token-budget-alerts-arent-budget-enforcement-389i)
+- anthropics/claude-code. "Massive token consumption: 1.67B tokens in 5 hours." Issue #4095, 2025. [GitHub](https://github.com/anthropics/claude-code/issues/4095)
+- CNCF. "Open Policy Agent (OPA)." [openpolicyagent.org](https://www.openpolicyagent.org/)
+- Oso. "Authorization as a Library, Relationship-Based Access Control." [osohq.com](https://www.osohq.com/)
+- Permit.io. "Authorization-as-a-Service for Fine-Grained Access Control." [permit.io](https://www.permit.io/)
+- Invariant Labs. "GitHub MCP: Ambient Authority and Cross-Repo Token Scope Creep." May 2025. [invariantlabs.ai](https://invariantlabs.ai/blog/mcp-github-vulnerability)
+- Salesforce. "Agentforce Trust Layer and Agent Identity." 2025. [Salesforce](https://www.salesforce.com/agentforce/trust-layer/)
+- Auth0. "Identity for AI Agents." 2026. [Auth0](https://auth0.com/blog/identity-for-ai-agents/)
+- Google, Microsoft et al. "Agent-to-Agent (A2A) Protocol." 2025. [a2aprotocol.org](https://a2aprotocol.org/)
+- Pinecone. "Managed Vector Database for AI." [pinecone.io](https://www.pinecone.io/)
+- pgvector. "Open-source Vector Similarity Search for Postgres." [github.com/pgvector/pgvector](https://github.com/pgvector/pgvector)
+- Anthropic. "Claude Code Plugins and Subagents Reference." [code.claude.com](https://code.claude.com/docs/en/plugins-reference)
+- M. Cemri et al. "Why Do Multi-Agent LLM Systems Fail?" *NeurIPS 2025 Datasets and Benchmarks Track*. [OpenReview](https://openreview.net/forum?id=fAjbYBmonr)

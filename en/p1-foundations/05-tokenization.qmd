@@ -1,30 +1,181 @@
 # Tokenization {#sec-tokenization}
 
-BPE, byte-level, and tokenizer-free schemes, and why the tokenizer caps downstream quality and is hard to change later.
-
-::: {.callout-note}
-## Status
-Outline. Source: `research/llm-training/01-data-pipeline`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+A tokenizer is the map between text and the integer ids a model actually
+reads. By the end of this chapter a reader can explain why almost every
+frontier model uses byte-level BPE, what unigram and tokenizer-free schemes
+trade against it, and why this one early choice quietly caps downstream
+quality and is among the hardest decisions in the stack to revisit.
 
 ## Problem
 
+A transformer does not see text. It sees a sequence of integers drawn from a
+fixed vocabulary, each mapped to a row of an embedding matrix. Something has
+to turn a stream of Unicode into that sequence, and the tokenizer is that
+something. The choice looks like plumbing and behaves like a foundation.
+
+Three constraints make it hard. The vocabulary must be finite and fixed
+before training begins, yet text is open: new words, code, emoji, and
+languages the designer never enumerated must still encode without failure.
+The segmentation must be cheap, because tokenization runs over the entire
+corpus on CPU fleets ahead of the GPU run, as covered in
+@sec-data-curation. And the result is permanent: the embedding and output
+matrices are sized to the vocabulary, so the vocabulary cannot change
+without retraining the model. A tokenizer trained on a skewed corpus caps
+quality for everything under-represented in it, and that ceiling is invisible
+until evaluation. This is the chapter's thesis: the tokenizer choice bounds
+downstream quality and is close to irreversible.
+
 ## Design
+
+The dominant answer is subword tokenization: a vocabulary of pieces smaller
+than words but larger than characters, sized so common words are single
+tokens while rare words decompose into known parts. This resolves the
+open-vocabulary problem. Any string is representable because the pieces
+bottom out at units that always exist, and frequent text stays short because
+common sequences are merged into single ids.
+
+Byte-pair encoding (BPE) is the workhorse construction. Start from a base
+alphabet, count adjacent pair frequencies across the corpus, merge the most
+frequent pair into a new symbol, and repeat until the vocabulary reaches its
+target size. The learned merge list is the tokenizer; encoding replays the
+merges in order.
+
+```text
+# BPE training, conceptual
+vocab = set(base_symbols)
+merges = []
+while len(vocab) < target_size:
+    pair = most_frequent_adjacent_pair(corpus, vocab)
+    merges.append(pair)
+    vocab.add(merge(pair))
+```
+
+The decisive refinement is to run BPE over raw bytes rather than Unicode
+characters. With 256 byte values as the base alphabet, every possible input
+encodes with zero out-of-vocabulary risk, even text the tokenizer never saw,
+and there is no separate unknown token to handle. This is byte-level BPE, and
+it is why the same tokenizer can ingest English, code, a new emoji, and a
+script absent from its training data. Byte-fallback gives a near-equivalent
+guarantee in character-based schemes by decomposing any unseen character into
+its underlying bytes.
+
+A second design question is the objective. BPE is greedy and frequency-driven,
+with no probabilistic model of how a string should split. The unigram language
+model offers an alternative: posit that a sentence is a bag of subword pieces
+with independent probabilities, start from a large candidate vocabulary, and
+prune pieces whose removal least hurts the corpus likelihood. Unigram yields a
+principled segmentation and, because it defines a distribution over
+segmentations, supports subword regularization: sampling alternative splits at
+training time as a form of augmentation.
+
+Two parameters set by the data pipeline govern the rest. Vocabulary size
+trades sequence length against matrix size, and the tokenizer's own training
+corpus bakes in which languages and domains get short, efficient encodings.
+Both are frozen here and consumed, not chosen, downstream.
 
 ## Evolution
 
-## Trade-offs
+Tokenization moved from words to bytes in three steps, each removing a
+failure of the last.
 
-## Implementation
+Word-level vocabularies came first and broke on the open-vocabulary problem:
+any word absent from the table became a single unknown token, discarding its
+content. Character-level models removed the unknown token but made sequences
+long and forced the model to relearn spelling from scratch, spending depth on
+what a vocabulary could have stored.
+
+Sennrich et al. (2015) brought BPE, invented for data compression, to neural
+machine translation as the subword compromise, and it became the default.
+Kudo (2018) introduced the unigram language model as a probabilistic
+alternative with subword regularization. Kudo and Richardson (2018) packaged
+both in SentencePiece, which treats input as a raw stream including
+whitespace, so the tokenizer is language-independent and needs no
+pre-tokenization rules. The final step was byte-level BPE, which made the base
+alphabet the 256 byte values and closed the out-of-vocabulary gap entirely.
+Byte-level BPE is the construction behind most current frontier tokenizers,
+with unigram and SentencePiece remaining common in multilingual and
+non-Latin-script settings.
+
+The open frontier is whether to tokenize at all. Tokenizer-free schemes
+operate directly on bytes or characters, learning the segmentation inside the
+model rather than fixing it in a preprocessing step. They remove the frozen
+vocabulary and its biases, at the cost of longer sequences and the compute to
+process them. This is a live research direction, not a settled replacement.
 
 ::: {.callout-important}
 ## What's contested
-Is tokenization a brittle foundation worth removing?
+Whether a fixed tokenizer should exist at all is genuinely unsettled. The
+case against it is that the vocabulary is a frozen, corpus-dependent artifact
+that bakes in language and domain bias, fragments numbers and code in ways
+that hurt arithmetic and program synthesis, and is the single component you
+cannot change after training. Tokenizer-free and byte-level approaches answer
+by learning structure inside the model, trading preprocessing bias for longer
+sequences and higher compute per character. Byte-level BPE is so entrenched,
+and the sequence-length penalty of pure byte models so real, that the field
+has not converged. Treat tokenizer-free schemes as a promising open
+direction, not a drop-in replacement.
+:::
+
+## Trade-offs
+
+Every tokenizer setting is a balance with a knee, and several of them set a
+ceiling that only shows up later.
+
+- **Vocabulary size.** A larger vocabulary shortens sequences, which makes
+  training and inference cheaper per document and improves multilingual
+  fertility, the number of characters carried per token. It also enlarges the
+  embedding and output matrices and can starve rare tokens of the occurrences
+  they need to train a good embedding. The optimum is a function of corpus and
+  budget, not a constant.
+- **Training corpus for the tokenizer.** Train it on the final data mixture or
+  on a separate curated set? The choice permanently bakes the language and
+  domain balance into the vocabulary. A mismatch with the real mixture spends
+  vocabulary on the wrong things and leaves under-represented languages with
+  long, expensive encodings.
+- **BPE versus unigram.** BPE is greedy, fast, and ubiquitous, with strong
+  tooling and broad compatibility. Unigram is probabilistic, supports subword
+  regularization, and often segments multilingual text more evenly, at the
+  cost of a heavier training procedure and less ecosystem inertia behind it.
+- **Multilingual fairness.** Petrov et al. (2023) show that a tokenizer tuned
+  on English-heavy data splits other languages into many more tokens for the
+  same meaning. That inflates cost and latency for those users and shortens
+  their effective context window, a structural unfairness fixed in the
+  vocabulary itself. This is the trade-off that most directly caps downstream
+  quality, and it is set entirely here.
+
+## Implementation
+
+In practice a tokenizer is trained once, with a handful of decisions that are
+expensive to get wrong. Beyond vocabulary size and training corpus, the
+recurring knobs are digit handling, splitting numbers into individual digits
+so arithmetic does not depend on whether "1234" happened to merge into one
+token, and whitespace handling, where SentencePiece-style schemes encode
+spaces as ordinary symbols so detokenization is exact and reversible. The
+build is `BPE training, conceptual` above: count, merge, repeat, then freeze
+the merge list and vocabulary as the artifact every later stage consumes.
+
+The failure mode to name is lock-in. A vocabulary trained on a skewed mixture
+caps multilingual quality and inflates token cost for under-served languages,
+and it cannot be changed without retraining the model, because the embedding
+and output matrices are sized to it. Vocabulary extension during continued
+training can graft on new tokens as a partial workaround, but it does not
+undo the original bias. The honest summary is that the tokenizer is decided
+once and lived with for the model's life, which is why a choice that looks
+like preprocessing deserves the scrutiny of an architecture decision.
+
+::: {.callout-tip}
+## Constraint arrow
+The tokenizer is frozen in the data pipeline and dictates a choice one layer
+up. The vocabulary size set here fixes the row count of the embedding matrix
+and the output projection in @sec-transformer-architecture: that layer
+consumes the vocabulary and sizes its matrices to match, it does not get to
+choose it. A token budget decided during data work therefore sets a hard
+parameter of the model architecture.
 :::
 
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Sennrich et al., "Neural Machine Translation of Rare Words with Subword Units" (BPE), 2015. [arXiv:1508.07909](https://arxiv.org/abs/1508.07909)
+- Kudo, "Subword Regularization: Improving Neural Network Translation Models with Multiple Subword Candidates" (Unigram LM), 2018 (ACL). [ACL Anthology](https://aclanthology.org/P18-1007/)
+- Kudo & Richardson, "SentencePiece: A simple and language independent subword tokenizer and detokenizer," 2018 (EMNLP, system demo). [ACL Anthology](https://aclanthology.org/D18-2012/)
+- Petrov et al., "Language Model Tokenizers Introduce Unfairness Between Languages," 2023 (NeurIPS). [NeurIPS Proceedings](https://proceedings.neurips.cc/paper_files/paper/2023/hash/74bb24dca8334adce292883b4b651eda-Abstract-Conference.html)

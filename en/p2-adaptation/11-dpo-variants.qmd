@@ -1,30 +1,144 @@
 # Direct Preference Optimization and the Variant Zoo {#sec-dpo-variants}
 
-DPO and its derivation, and the variant zoo (IPO, KTO, ORPO, SimPO) whose net benefit over plain DPO is contested.
-
-::: {.callout-note}
-## Status
-Outline. Source: `research/llm-training/08-post-training`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+Direct preference optimization turns the RLHF objective from a reinforcement-learning
+loop into a single classification loss on preference pairs. By the end of this chapter a
+reader can explain why that reduction is possible, what each member of the variant zoo
+(IPO, KTO, ORPO, SimPO) changes about it and why, and why a controlled comparison finds
+that none of them reliably beats plain DPO.
 
 ## Problem
 
+RLHF, covered in @sec-rlhf, aligns a model in three stages: supervised fine-tuning, a
+reward model fit to human preferences, then a policy-gradient run (PPO) that optimizes the
+policy against that reward under a KL leash to the reference. The machinery is heavy. PPO
+keeps four models in play at once, the policy, a frozen reference, the reward model, and a
+critic, and its result is sensitive to reward-model quality and to a handful of brittle
+hyperparameters. For a team that has a static set of preference pairs and wants an aligned
+model, the question is whether all of that apparatus is necessary, or whether the
+preference signal can be optimized directly.
+
 ## Design
+
+The reduction rests on one fact about the RLHF objective. Maximizing reward under a KL
+penalty to a reference policy,
+
+$$
+\max_{\pi_\theta}\; \mathbb{E}_{x,\,y\sim\pi_\theta}\big[r(x,y)\big]
+\;-\; \beta\, \mathrm{KL}\!\left(\pi_\theta(\cdot\mid x)\,\|\,\pi_\mathrm{ref}(\cdot\mid x)\right),
+$$
+
+has a closed-form optimal policy: it is the reference reweighted by the exponentiated
+reward, $\pi^*(y\mid x) \propto \pi_\mathrm{ref}(y\mid x)\exp(r(x,y)/\beta)$. Rafailov et al.
+invert this. Solving for the reward in terms of the optimal policy expresses $r$ as a
+log-ratio, so the reward that any policy implies is
+
+$$
+r_\theta(x,y) \;=\; \beta\,\log\frac{\pi_\theta(y\mid x)}{\pi_\mathrm{ref}(y\mid x)} \;+\; \beta\log Z(x).
+$$
+
+Substitute that implicit reward into the Bradley-Terry model of pairwise preference and the
+intractable partition term $Z(x)$ cancels between the chosen response $y_w$ and the rejected
+$y_l$. What remains is a supervised loss on preference pairs,
+
+$$
+\mathcal{L}_\mathrm{DPO} = -\,\mathbb{E}_{(x,y_w,y_l)}\,\log \sigma\!\left(
+\beta\log\frac{\pi_\theta(y_w\mid x)}{\pi_\mathrm{ref}(y_w\mid x)}
+- \beta\log\frac{\pi_\theta(y_l\mid x)}{\pi_\mathrm{ref}(y_l\mid x)}\right).
+$$
+
+The reward model and the RL loop are gone. The policy is trained to assign higher implicit
+reward to the preferred response, where implicit reward is the log-ratio of the policy to a
+frozen reference. The title of the paper states the point: the language model is secretly a
+reward model.
 
 ## Evolution
 
-## Trade-offs
+The variant zoo is a sequence of edits to that single loss, each removing an assumption or a
+piece of machinery.
 
-## Implementation
+IPO (Azar et al.) targets a weakness in the derivation: the Bradley-Terry substitution
+assumes preferences are well modeled as a deterministic ordering, and with finite,
+near-deterministic data the log-sigmoid loss can drive the policy to push the implicit
+reward gap to infinity, overfitting the preference set. IPO replaces the log-sigmoid with a
+bounded squared objective that regresses the implicit reward gap toward a fixed target, so
+the optimum stays finite even when preferences are clean.
+
+KTO (Ethayarajh et al.) loosens the data requirement. DPO needs a chosen and a rejected
+response for the same prompt; KTO learns from unpaired binary good or bad labels by scoring
+each response against a reference point with a prospect-theory utility, the same
+human-value-of-gains-and-losses shape Kahneman and Tversky used. This trades the paired-data
+constraint for a utility model, which matters because thumbs-up and thumbs-down logs are far
+more abundant than curated pairs.
+
+ORPO (Hong et al.) folds preference optimization into supervised fine-tuning. Instead of a
+separate alignment stage with a reference model, it adds an odds-ratio penalty to the SFT
+cross-entropy (the SFT stage itself is @sec-sft-peft), so one pass both teaches the format
+and down-weights the rejected response. It carries no reference model at all.
+
+SimPO (Meng et al.) is reference-free and length-aware. It drops the reference policy from
+the implicit reward, using the average log-probability of a sequence as the reward, and adds
+a target margin between chosen and rejected. The length normalization is the deliberate part:
+DPO's log-ratio reward correlates with sequence length, which lets a policy raise its score
+by getting wordier, and dividing by length removes that lever.
 
 ::: {.callout-important}
 ## What's contested
-Controlled multi-scale study (arXiv 2603.19335) finds no DPO variant beats vanilla DPO after correction, with a ranking inversion across scale.
+The variant zoo is usually presented as a ladder of improvements, but a controlled
+multi-scale study (arXiv:2603.19335) finds no variant reliably beats vanilla DPO once
+confounds are corrected for. When tuning budget, data, and model are held equal, the gaps
+between methods shrink into the noise, and the apparent ranking inverts across model scale:
+a variant that leads at one size trails at another. The practical reading is that reported
+wins for a new objective often reflect a better-tuned baseline-versus-variant comparison
+rather than a property of the loss, and that the choice among these methods should be driven
+by pipeline and data constraints rather than by a claimed accuracy edge.
 :::
+
+::: {.callout-tip}
+## Constraint arrow
+The memory budget of @sec-training-at-scale reaches up and shapes the loss. DPO and IPO keep
+a frozen reference model resident alongside the policy and pay a second forward pass through
+it on every step. At large model size that doubled footprint is the cost that ORPO (no
+reference) and SimPO (reference-free) exist to remove. The reference-free design is not
+primarily an accuracy claim, it is a response to the systems cost of holding two models.
+:::
+
+## Trade-offs
+
+- **Reference model versus none.** Keeping the frozen reference (DPO, IPO) anchors the
+  policy and gives the KL leash a meaning, at the cost of a second resident model and forward
+  pass. Dropping it (ORPO, SimPO) halves the alignment-stage memory and simplifies the
+  pipeline, but removes the explicit anchor that limits drift from the starting policy.
+- **Paired versus unpaired data.** DPO, IPO, ORPO, and SimPO all need a chosen and a rejected
+  response per prompt. KTO accepts unpaired binary signals, which fits production feedback
+  logs but substitutes a utility model for the pairwise comparison the others optimize.
+- **Bounded versus unbounded objective.** IPO's bounded regression resists the overfitting
+  that DPO's log-sigmoid invites on clean, near-deterministic preferences. The price is a
+  loss that no longer matches Bradley-Terry exactly and a target margin to set.
+- **Two stages versus one.** ORPO merges alignment into SFT, saving a stage and a reference
+  model, at the cost of entangling format learning and preference learning so they can no
+  longer be tuned or audited separately.
+
+## Implementation
+
+DPO is the smallest of the family to run: one loss, a frozen copy of the SFT model as the
+reference, and a static file of preference triples. The core is the log-ratio difference
+inside a log-sigmoid, computed from per-token log-probabilities of the chosen and rejected
+responses under the policy and the reference; see the loss derivation in `DPO loss,
+Rafailov et al. (arXiv:2305.18290), Sec. 4`. The reference forward pass can be precomputed
+once because the reference never updates, which is the standard memory optimization.
+
+The one hyperparameter that matters across the family is $\beta$, the strength of the KL
+leash that also scales the implicit reward. Too small and the policy drifts off the
+reference and degrades; too large and it barely moves. Because vanilla DPO is off-policy,
+trained on a fixed set rather than on samples from the live policy, its ceiling is the fixed
+data, and the common remedy is iterated or online DPO that regenerates pairs from the
+current model between rounds. That on-policy variant, and the broader RLHF apparatus it
+approaches, belong to @sec-rlhf.
 
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Rafailov et al., "Direct Preference Optimization: Your Language Model is Secretly a Reward Model" (DPO), 2023 (NeurIPS). [arXiv:2305.18290](https://arxiv.org/abs/2305.18290)
+- Azar et al., "A General Theoretical Paradigm to Understand Learning from Human Preferences" (IPO), 2023. [arXiv:2310.12036](https://arxiv.org/abs/2310.12036)
+- Ethayarajh et al., "KTO: Model Alignment as Prospect Theoretic Optimization," 2024. [arXiv:2402.01306](https://arxiv.org/abs/2402.01306)
+- Hong et al., "ORPO: Monolithic Preference Optimization without Reference Model," 2024. [arXiv:2403.07691](https://arxiv.org/abs/2403.07691)
+- Meng et al., "SimPO: Simple Preference Optimization with a Reference-Free Reward," 2024 (NeurIPS). [arXiv:2405.14734](https://arxiv.org/abs/2405.14734)

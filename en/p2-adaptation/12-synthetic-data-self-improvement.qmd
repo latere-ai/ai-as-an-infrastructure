@@ -1,25 +1,237 @@
 # Synthetic Data and Self-Improvement {#sec-synthetic-data}
 
-Distillation, self-play, rejection sampling, AI feedback, and the data flywheel.
-
-::: {.callout-note}
-## Status
-Outline. Source: `research/llm-training/08-post-training + 09-rl-and-verifiable-rewards`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+Human-written training data is finite, and the best of it is the most
+expensive. This chapter is about where the training signal comes from when
+you stop buying fresh human labels: a stronger model, the model's own
+filtered outputs, an AI critic, or a verifier. By the end a reader can
+explain why distillation, rejection sampling, self-play, and AI feedback are
+four answers to one question, why iterating any of them is called a data
+flywheel, and where each loop hits a ceiling.
 
 ## Problem
 
+Post-training needs labeled examples: prompts paired with good responses, or
+responses paired with a judgment of which is better. The supervised and
+preference methods that consume those labels live in @sec-sft-peft and
+@sec-rlhf; @sec-dpo-variants covers the direct-preference family. The
+problem this chapter owns is upstream of all of them. Human demonstrations
+and human preference labels are slow, costly, and bounded by the skill of
+the annotator. A frontier model is often already better than the median
+labeler at the task you want to teach, so paying humans to produce its
+training data caps the result at human-median quality and exhausts the
+budget long before the data does.
+
+The question is whether the model, or a model, can produce its own training
+signal. If a cheaper source of supervision exists, post-training scales with
+compute instead of with annotation headcount, and the data stops being the
+wall that @sec-data-curation describes for pre-training. The catch is that a
+self-produced signal is only as trustworthy as whatever filters it, and a
+bad filter teaches the model its own mistakes.
+
 ## Design
+
+The unifying idea is to replace the human labeler with a cheaper source of
+judgment, then keep only the outputs that source endorses. There are four
+sources, and they differ in exactly one place: who decides a response is
+good enough to train on.
+
+- **A stronger teacher (distillation).** A more capable model generates the
+  responses, and a weaker student trains on them. The judgment is implicit:
+  the teacher's output is taken as the target. This is response
+  distillation, learning from the teacher's text, not its logits, and it is
+  the dominant way open models are aligned cheaply.
+- **The model's own filtered outputs (rejection sampling).** Sample $n$
+  responses from the current model, score them, keep the best, and fine-tune
+  on the winners. The judgment is a scorer applied to the model's own
+  samples. Iterated, this is rejection-sampling fine-tuning: on-policy
+  preference data without a full RL loop.
+- **An AI critic (AI feedback).** A model, prompted with written principles,
+  produces the preference signal that a human annotator would otherwise
+  provide. Constitutional AI is the canonical form: an AI critiques and
+  revises responses against a constitution, and the resulting pairs train
+  the model. The judgment is a model reading rules.
+- **A verifier (self-improvement on checkable domains).** Generate many
+  candidate solutions, run each through a checker (a unit-test suite, an
+  answer checker, a proof checker), and keep the ones that pass. The
+  judgment is ground truth, not a proxy. This is the cleanest loop because
+  the filter cannot be flattered.
+
+In every case the shape is the same: generate, filter, train, and possibly
+repeat.
+
+```mermaid
+flowchart LR
+  P[Prompts] --> G[Generate candidates]
+  G --> F{Filter}
+  F -->|kept| D[Training data]
+  F -->|rejected| X[Discard]
+  D --> T[Fine-tune model]
+  T -.iterate.-> G
+  subgraph judge[Source of judgment]
+    TE[Stronger teacher]
+    SC[Reward / scorer]
+    AC[AI critic + principles]
+    VE[Verifier / ground truth]
+  end
+  judge --> F
+```
+
+When that loop is run repeatedly, each round's improved model generating the
+next round's data, it is a **data flywheel**: the model's current capability
+becomes the engine that produces the data for its next increment. The
+flywheel is not a fifth method. It is what you get by iterating any of the
+four.
+
+Why filtering works at all is worth stating. A model that cannot reliably
+produce a correct answer on the first try can often produce a correct answer
+somewhere in $n$ tries, and a cheap filter can find it. Training on the
+filtered winners moves probability mass onto behavior the model was already
+capable of but did not reliably emit. This is the same elicitation framing
+that explains why a few thousand curated examples move behavior so much: the
+capability is latent, and the data selects for it rather than installing it.
 
 ## Evolution
 
+The lineage is a steady retreat from the human labeler, one source of
+judgment at a time.
+
+The first move was to **borrow a teacher**. Once a strong aligned model
+existed, the cheapest way to align a weaker one was to have the strong model
+write the instruction-following data. This made capable open models possible
+without each lab running its own human-preference pipeline, and it remains
+the default. Its limit is structural: a student trained only on a teacher's
+distilled outputs rarely exceeds the teacher on those skills, and it
+inherits the teacher's biases and refusals along with its competence.
+
+The next move was to **filter your own outputs** so the model could improve
+without a stronger teacher to copy. Rejection-sampling fine-tuning formalized
+this: RAFT (Dong et al., 2023) ranks sampled responses by a reward and
+fine-tunes on the top of each group, and LIMA (Zhou et al., 2023) is the
+evidence that a small, carefully filtered set outperforms a large noisy one.
+The signal here is on-policy, drawn from the model itself, which closes the
+gap between what the model trains on and what it actually generates.
+
+The third move was to **replace the labeler** rather than just the
+demonstrator. Constitutional AI (Bai et al., 2022) showed that an AI critic
+guided by a short written constitution can generate the harmlessness
+preference data that humans had been labeling, cutting the human cost of the
+preference signal to the principles themselves. This is reinforcement
+learning from AI feedback, RLAIF; the RL machinery that consumes that
+preference signal is @sec-rlhf, but the signal's origin is here.
+
+The most recent move was to **improve against a checker**. When the filter is
+a verifier rather than a learned scorer, the loop can bootstrap on math and
+code: generate solutions, keep the verified-correct traces, train on them,
+and repeat. DeepSeek-R1 (DeepSeek-AI, 2025) is the open data point, including
+an R1-Zero variant that bootstraps reasoning from a base model with no
+supervised cold start. The reinforcement-learning mechanics that turn
+verified traces into a reasoning model belong to @sec-training-to-reason;
+what belongs here is the narrower observation that a sound verifier turns the
+model's own correct outputs into a renewable training set.
+
+## What's contested
+
+::: {.callout-important}
+## What's contested
+Whether self-improvement can create genuinely new capability, or is bounded
+by whatever does the judging, is unsettled, and the source supports both
+poles. On the distillation side the ceiling looks hard: a student rarely
+beats its teacher on a distilled skill, so copying a teacher cannot, on its
+own, exceed the teacher. On the verifier side the loop looks open-ended: a
+sound verifier is a genuine bootstrap, because the model can be pushed to
+produce correct outputs it could not reliably produce before and then train
+on them, and the verified-correct set grows with the model. The unresolved
+question is how far this goes. A verifier amplifies whatever it can check and
+amplifies its blind spots just as faithfully, so an unsound verifier teaches
+the model to satisfy the checker rather than solve the problem. Treat
+"self-improvement" as bounded by the quality of the judge, with the bound
+tight for a fixed teacher and loose, but not infinite, for a sound verifier.
+:::
+
+## Constraint arrow
+
+::: {.callout-tip}
+## Constraint arrow
+Whether the flywheel closes at all is decided one layer down, by whether the
+domain is verifiable. Math, code, and formal proof come with cheap,
+near-unspoofable checkers, so their loops close: the model generates, the
+checker filters, and the verified-correct set feeds the next round without a
+human in it. Open-ended domains, helpfulness, style, judgment, taste, have no
+ground-truth checker, so the strongest filter available is a learned scorer
+or an AI critic, both of which are proxies the model can learn to game. A
+data-layer property, the existence of a verifier, decides whether an
+upper-layer training loop can run unattended. This is why the recent
+capability jumps cluster in checkable domains and why open-ended quality
+still leans on human preference data from @sec-rlhf.
+:::
+
 ## Trade-offs
+
+Each source of judgment buys cheaper data at a different cost.
+
+- **Distillation versus from-scratch alignment.** Distilling from a stronger
+  teacher is far cheaper and the open-model default, but it caps the student
+  at the teacher's behavior on the distilled skills, launders the teacher's
+  biases and refusals into the student, and may violate the teacher's terms
+  of service. From-scratch alignment is expensive and is the only path to
+  surpassing the available teachers.
+- **Cheap filter versus trustworthy filter.** A learned reward model or an
+  AI critic can score any response, including open-ended ones, but it is a
+  proxy: push on it and the model finds outputs the scorer rates highly and
+  humans do not. A verifier cannot be flattered, but it only exists where
+  ground truth is checkable, and its coverage is the new attack surface.
+  Cheap-and-broad and trustworthy-but-narrow are the two ends.
+- **On-policy versus borrowed data.** Filtering the model's own samples
+  (rejection sampling, self-play) trains on what the model actually
+  generates, closing the train-serve gap. Distilling a teacher is
+  off-policy: cheaper and more stable, but it drifts from the live model and
+  caps at the teacher.
+- **One pass versus a flywheel.** A single generate-filter-train pass is
+  simple and bounded. Iterating compounds gains but also compounds errors: a
+  small bias in the filter, applied every round, becomes a learned habit, and
+  the model can collapse onto whatever the filter rewards. The flywheel needs
+  a filter sound enough to survive repetition.
 
 ## Implementation
 
+The minimal loop is short enough to state directly. Rejection-sampling
+fine-tuning, the RAFT recipe (Dong et al., 2023), is: for each prompt, sample
+a group of responses from the current policy, score them, keep the highest
+within the group, and fine-tune on the kept set, then repeat with the updated
+model.
+
+```python
+# Rejection-sampling fine-tuning, one round (sketch).
+data = []
+for prompt in prompts:
+    cands = [model.sample(prompt) for _ in range(n)]
+    scored = [(judge(prompt, c), c) for c in cands]
+    best = max(scored)[1]            # judge: reward model, AI critic, or verifier
+    if keep(best):                   # threshold or verified-correct
+        data.append((prompt, best))
+model = finetune(model, data)        # iterate: next round samples from this model
+```
+
+The single line that determines everything is `judge`. Swap in a stronger
+model and the loop is distillation; a reward model or AI critic and it is
+rejection sampling or AI feedback; a unit-test or answer checker and it is
+verifier-based self-improvement. The surrounding machinery is identical; the
+trust you can place in the result is entirely a property of `judge`.
+
+Two operational realities matter. First, the filter's false negatives starve
+the loop: a verifier that rejects correct-but-unusual answers, or a scorer
+miscalibrated against good outputs, removes exactly the data you wanted.
+Second, the loop's failures are quiet. A flywheel running on a gameable
+filter shows rising filtered-set quality by the filter's own measure while
+held-out quality stalls or regresses, the same Goodhart signature that
+reward over-optimization produces in @sec-rlhf. The defense is to keep an
+independent evaluation outside the loop, which is the job of
+@sec-benchmarks, and to prefer a verifier wherever the domain admits one.
+
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Bai et al., "Constitutional AI: Harmlessness from AI Feedback," 2022 (Anthropic). [arXiv:2212.08073](https://arxiv.org/abs/2212.08073)
+- Zhou et al., "LIMA: Less Is More for Alignment," 2023 (NeurIPS). [arXiv:2305.11206](https://arxiv.org/abs/2305.11206)
+- Dong et al., "RAFT: Reward rAnked FineTuning for Generative Foundation Model Alignment" (rejection-sampling fine-tuning), 2023 (TMLR). [arXiv:2304.06767](https://arxiv.org/abs/2304.06767)
+- DeepSeek-AI, "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning," 2025. [arXiv:2501.12948](https://arxiv.org/abs/2501.12948)
+- Lightman et al., "Let's Verify Step by Step" (process reward models / PRMs), 2023. [arXiv:2305.20050](https://arxiv.org/abs/2305.20050)

@@ -1,25 +1,77 @@
 # 加速器与网络 {#sec-accelerators-networking}
 
-加速器族系、互连、为什么张量并行度很少超过 NVLink 边界，以及模型 FLOPs 利用率。
-
-::: {.callout-note}
-## 状态
-提纲。来源：`research/llm-training/06-infrastructure-and-systems`。参见 [`INTEGRATION.md`](../../INTEGRATION.md)。
-:::
+一次训练运行的成败取决于带宽，而非峰值 FLOPs。读完本章，读者应能解释每个加速器族系与每一层互连提供了什么、为何一个张量并行组几乎从不溢出 NVLink 边界，以及模型 FLOPs 利用率如何衡量硬件底座是否被用上。
 
 ## 问题
 
+一次前沿运行把一个模型铺在数千张加速器上连续数周，而卡住它的，很少是规格表上印着的峰值算术速率。卡住它的是机器每一层级的带宽：一块芯片够到它自己显存有多快、机箱内两块芯片对话有多快、以及大厅另一头两个机箱对话有多快。这三个数字每往外走一步就相差一个数量级以上，而一个需要的对话量超出其层级所能负担的并行轴，会让整个集合通信停摆。本章负责这一硬件底座：加速器、互连层级，以及说明这一底座是否被用上的那个唯一数字，MFU。骑在其上的并行算法属于 @sec-training-at-scale；集群编排、检查点与数据层属于 @sec-orchestration-data-infra。
+
 ## 设计
+
+这台机器是一个带宽层级的层次结构，而每一个设计选择都可以追溯到某次交换能负担得起哪一层级。
+
+最内的一层是芯片及其显存。一块加速器把巨大的矩阵乘法吞吐与紧贴着裸片的高带宽显存（HBM）配对。前向与反向的矩阵乘法由 HBM 喂入，因此往往是 HBM 带宽，而非裸 FLOPs，决定了一个内核可达的速率。
+
+下一层是节点内：一个机箱内的那几块加速器。在 NVIDIA 硬件上，它们用 NVLink，一种专用的芯片到芯片底座，连同 NVSwitch 连接起来，后者让节点内每块加速器都能以完整的 NVLink 带宽够到其它每一块，而不必走更慢的 PCIe 总线。这一层是最饥渴于通信的轴能够安身之处，因为 NVLink 带宽足够高，可以把一次集合通信隐藏在计算之后。
+
+最外的一层是节点间：跨越一个数据中心网络的机箱与机箱对话。这里的底座是 InfiniBand 或 RoCE（RDMA over Converged Ethernet），以胖树或 rail-optimized 这样的拓扑连接，每块加速器配一张网卡（NIC）来设定每设备的注入带宽。这一层每字节比 NVLink 慢一个数量级，因此只有那些通信节俭的轴才负担得起跨越它。
+
+```mermaid
+flowchart TD
+  subgraph chip["芯片 + HBM"]
+    A["加速器裸片"] -->|HBM 带宽| M["高带宽显存"]
+  end
+  subgraph node["节点内（一个机箱）"]
+    G1["GPU"] ---|NVLink / NVSwitch| G2["GPU"]
+  end
+  subgraph cluster["节点间（跨大厅）"]
+    N1["节点"] ---|InfiniBand / RoCE| N2["节点"]
+  end
+  chip --> node --> cluster
+```
+
+并行轴到层级的映射由此直接得出。张量并行（TP）把单个矩阵乘法切分到各设备上，并以每层两次 all-reduce 交换激活，因此它是最饥渴于带宽的轴，被钉在节点内的 NVLink 层。数据并行与流水线并行每步通信少得多，DP 每步一次梯度归约、PP 每个阶段边界一次激活交接，因此它们是被允许跨越节点间网络的轴。MoE 的专家并行骑在它自己的 all-to-all 组上，在 @sec-moe-ssm-hybrids 中处理。由此得出的经验法则，TP 在节点内、DP/PP 跨节点，并非一种约定，而是带宽鸿沟的一个后果。
+
+TPU pod 是 JAX/XLA 一侧的对应物，具有不同的成本模型。这些芯片通过芯片间互连（ICI）与一个光路交换（OCS）连成一个环面拓扑，而非一个交换式胖树，因此邻居到邻居的带宽充裕，切分是通过 GSPMD 风格的注解与环面形状协同设计，而非映射到一个胖树上。
+
+说明这一切是否奏效的那个唯一数字，是模型 FLOPs 利用率。MFU 是模型实际所需的 FLOPs，除以硬件在同一段实际耗时内本可交付的峰值 FLOPs：
+
+$$
+\mathrm{MFU} = \frac{\text{每步的模型 FLOPs}}{\text{硬件峰值 FLOPs} \times \text{每步耗时}}
+$$
+
+它只计入模型有用的算术。它的同胞，硬件 FLOPs 利用率（HFU），还计入硬件确实做了、但模型并非严格需要的工作，最显著的是激活重算的那些额外前向传播，这也正是为何只要开启重算，HFU 就超过 MFU。MFU 是诚实的那个数字，因为它回答了预算所关心的问题：在我付费的算术中，有多少推动了模型。
 
 ## 演化
 
+互连层级是带宽鸿沟扩大得比任何单一底座所能弥合的速度更快的产物。早期的多 GPU 训练倚靠 PCIe，而它对切分一个矩阵乘法已经太慢，于是 NVLink、继而 NVSwitch 被引入，正是为了让节点内这一层快到足以容纳张量并行。加速器族系也抬高了精度底线：每一代都拓宽了矩阵乘法单元原生执行的格式集合，Hopper 级及更新硬件加入了 fp8，让同一块硅每搬运一字节交付更多矩阵乘法吞吐（其内核层面的后果在 @sec-quantization-kernels 中）。在网络一侧，InfiniBand 与 RoCE 收敛到 RDMA 以及 rail-optimized 拓扑上，后者给每块加速器一条到其它节点对端的专用路径，使节点间这一层得以增长，而不必让每条流争抢同一批交换端口。TPU pod 则沿一条完全平行的轨道演化，选择环面而非交换式底座，使带宽随局部性而扩展。
+
+::: {.callout-important}
+## 争议所在
+本章赖以建立的节点内对节点间的边界，本身正在移动。scale-up 域，即那组能以 NVLink 级带宽彼此够到的加速器，一直在越过单个机箱，朝机架级底座扩张。随着这个域增长，可负担的最大张量并行度也随之增长，而 TP 留在一个小节点内的那条由来已久的法则随之削弱。未来是不断变大的 scale-up 域让 TP 横跨一个机架，还是继续倚靠更廉价的节点间网络、配以容忍它的并行轴，尚无定论，且取决于厂商。这条边界是今年硬件的一个属性，而非一条定律。
+:::
+
 ## 权衡
+
+每个并行轴买来一种不同的资源，并以一种不同的币种付账，而互连层级设定了汇率。
+
+- **张量并行对带宽。** TP 削减每设备显存与延迟，但在每层两次 all-reduce 上花掉节点内带宽。这笔花费只有在 NVLink 上才负担得起，因此 TP 度以 NVLink 域为上限。把它推过节点，all-reduce 就落到节点间网络上，在那里它无法隐藏在计算之下，并表现为损失掉的 MFU。
+- **流水线并行对气泡。** PP 在带宽上廉价，每个阶段边界只有一次激活交接，因此能从容跨越节点，但要在每步的填充与排空处付出一个流水线气泡。
+- **MFU 对显存。** 重算通过在反向传播中重做前向工作，让一个更大的模型或更长的序列塞得下，这抬高 HFU 却降低 MFU。你优化哪个数字，取决于约束在显存还是在吞吐。
+
+::: {.callout-tip}
+## 约束箭头
+这是本书中下层支配上层最清晰的一例。互连带宽鸿沟，NVLink 每字节比 InfiniBand 或 RoCE 快一个数量级，正是设定 @sec-training-at-scale 所能选取的最大张量并行度的东西。一个并行布局并非在白板上选定、然后映射到硬件。是硬件层级决定了哪个轴被允许放在何处，而 TP 留在 NVLink 边界之内，就是这一决定在其上方算法上的直接印记。
+:::
 
 ## 实现
 
+在这些层级之间搬运字节的集合通信，由 NVIDIA 硬件上的 NCCL（在 AMD 上为 RCCL）提供，它把每个集合通信映射到拓扑上，根据各 rank 所在之处选择环或树，并把它路由到 NVLink 或网络上。从业者很少直接调用它；并行框架在调用。从业者所读的是每步的剖析，因为 MFU 是从时间线诊断出来的，而非从损失曲线。未能隐藏在计算之下的暴露通信、过大的流水线气泡、过多的重算，以及未融合的内核，各自在达成与峰值 FLOPs 之间的差距里占去一份，而时间线正是每一份可见之处。
+
 ## 延伸阅读
 
-::: {.callout-note}
-## 待办
-确立本章的奠基性、前沿与一手来源锚点。
-:::
+- Shoeybi et al., "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism," 2019. [arXiv:1909.08053](https://arxiv.org/abs/1909.08053)
+- Narayanan et al., "Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM," 2021 (SC'21; PTD-P 3D parallelism). [arXiv:2104.04473](https://arxiv.org/abs/2104.04473)
+- Micikevicius et al., "FP8 Formats for Deep Learning," 2022. [arXiv:2209.05433](https://arxiv.org/abs/2209.05433)
+- NCCL (NVIDIA Collective Communications Library): optimized inter-GPU collective primitives (all-reduce, all-gather, reduce-scatter, all-to-all) over NVLink/PCIe/InfiniBand. Engineering library, not a single canonical paper. [NVIDIA/nccl](https://github.com/NVIDIA/nccl)
+- Xu et al., "GSPMD: General and Scalable Parallelization for ML Computation Graphs," 2021 (XLA/TPU sharding annotations underlying JAX `pjit`). [arXiv:2105.04663](https://arxiv.org/abs/2105.04663)

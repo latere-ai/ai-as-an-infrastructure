@@ -1,30 +1,199 @@
 # Training Models to Reason {#sec-training-to-reason}
 
-Inference-time scaling, the R1 line, GRPO, RL with verifiable rewards, and process versus outcome reward models.
-
-::: {.callout-note}
-## Status
-Outline. Source: `research/llm-training/09-rl-and-verifiable-rewards`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+This chapter is about reinforcement learning where the reward is a checkable
+ground truth rather than a learned human-preference proxy. By the end a reader
+can explain why a verifier beats a reward model on the tasks where one exists,
+how GRPO and RLOO drop the critic that PPO carries, why the o1 and R1 line
+produced long-horizon reasoning without step-level supervision, and where the
+field still disagrees about whether any new reasoning is being taught at all.
 
 ## Problem
 
+A learned reward model is a proxy, and a policy trained against a proxy will
+find its argmax, not the true objective's. This is the over-optimization
+problem that haunts the RLHF of @sec-rlhf: push hard enough on a model of human
+preference and the policy learns to satisfy the model rather than the human.
+The reward model has no ground truth to anchor it, so its blind spots become
+the policy's exploits.
+
+For a large and valuable class of tasks there is a way out, because the answer
+can be checked. A program either passes its unit tests or does not. A math
+answer either equals the reference or does not. A formal proof either type
+checks in Lean or does not. On these tasks you can replace the learned reward
+with a verifier and optimize the policy against a reward that has no proxy gap
+to game. That move, reinforcement learning with verifiable rewards, is what
+this chapter owns, and it is the training-time analogue of the runtime
+verification loop that an agent harness runs at inference.
+
 ## Design
+
+The loop end to end is short. Sample completions for a prompt, run each through
+a verifier for a scalar reward that is often just binary, and update the policy
+toward the rewarded completions. The training data is prompts with a way to
+check the answer, not prompts with reference completions. The optimizer is the
+PPO machinery of @sec-rlhf reused without change: a policy, an advantage
+estimate, and a KL penalty against a frozen reference model. The innovation is
+the reward source, not the algorithm.
+
+```mermaid
+flowchart LR
+  P[Prompt with checkable answer] --> S[Sample G completions]
+  S --> V[Verifier: tests, checker, proof]
+  V --> R[Scalar reward per completion]
+  R --> A[Group-relative advantage]
+  A --> U[Policy update with KL anchor]
+  U --> S
+```
+
+The verifier is the part you cannot buy, and it comes in three families with
+different cost and coverage. Executable unit tests for code are cheap and
+high-signal, but coverage limited, and a solution that passes the tests while
+being wrong will be rewarded all the same. Answer checkers for math reduce to
+string, numeric, or symbolic equivalence, where the hard engineering is parsing
+and deciding equivalence rather than the check itself. Formal proof checkers in
+the Lean or Isabelle style are near unspoofable, but narrow and expensive to
+author. Each family trades coverage against integrity, and that trade is the
+recurring theme of the chapter.
+
+The optimizer earns one real simplification. PPO carries a value network, a
+critic, to estimate the baseline that lowers advantage variance, and that
+network doubles model memory and adds its own failure mode. Group Relative
+Policy Optimization, introduced for DeepSeekMath, drops the critic and
+estimates the advantage from the group of samples drawn for one prompt:
+normalize each reward against the group mean and standard deviation. For a
+group of $G$ completions with rewards $r_i$,
+
+$$
+A_i = \frac{r_i - \operatorname{mean}(r_1, \dots, r_G)}{\operatorname{std}(r_1, \dots, r_G)}.
+$$
+
+This is cheaper than PPO with a critic and fits RLVR exactly, because sampling
+many completions per prompt is natural when each one is cheap to verify. The KL
+term against the reference is kept. RLOO, REINFORCE Leave-One-Out, makes the
+same bet with a different baseline: each sample's baseline is the mean reward of
+the other samples in the group. GRPO and RLOO differ in their bias and variance
+trade-offs, but they agree on the structural claim that the critic was often
+unnecessary overhead.
 
 ## Evolution
 
-## Trade-offs
+The result that changed the field was that this loop, run on math and code with
+long chains of thought allowed, produces emergent long-horizon reasoning
+without any step-level supervision. Self-checking, backtracking, and longer
+deliberation appear from an outcome-only reward. OpenAI's o1 announced the
+capability. DeepSeek-R1 is the open data point that showed the recipe.
 
-## Implementation
+R1 is worth reading as two variants because the contrast is the lesson.
+R1-Zero applies RL directly to a base model with no supervised cold start, and
+reasoning behavior still emerges, which is the strong claim. R1 adds a short
+SFT cold start before the RL, drawing on the supervised fine-tuning of
+@sec-sft-peft, not to teach reasoning but to fix readability and stability: the
+zero variant reasons in a way that is correct but hard to read and prone to
+language mixing. The cold start is a cosmetic and stabilizing prefix, and the
+reasoning gains come from the RL.
+
+The supervision question has its own lineage. Outcome rewards score only the
+final answer, which is cheap and is the RLVR default, but assigns credit
+coarsely over a long chain. Process rewards score each step through a process
+reward model, a PRM, which Lightman et al. trained for "Let's Verify Step by
+Step" and Uesato et al. compared against outcome feedback earlier. A PRM gives
+denser credit and helps long-horizon learning, but it reintroduces exactly what
+the verifier removed: a learned, hackable reward. The surprise of the R1 era is
+how far an outcome-only signal got without any process model at all.
 
 ::: {.callout-important}
 ## What's contested
-Does RLVR instill new reasoning, or only amplify base-model priors?
+Whether RLVR instills new reasoning or only amplifies what the base model
+already knows is unsettled. The amplification position holds that RL with
+verifiable rewards sharpens a distribution the base model already places mass
+on: it raises pass@1 by concentrating probability on reasoning paths the base
+model could already sample, and studies report that pass@k at large $k$ for the
+base model can match or exceed the RL-trained model, which would mean RL is
+eliciting and reweighting rather than teaching. The instillation position
+points to R1-Zero, where behaviors like backtracking and self-correction grow
+in frequency and length over training in a way that looks like acquisition, not
+just reweighting. The disagreement is partly about measurement, since pass@k,
+sampling temperature, and the strength of the base model all move the verdict,
+and it stays live because both sides can point to real runs. Treat a claim that
+RLVR teaches reasoning as base-model and metric dependent, not settled.
 :::
+
+::: {.callout-tip}
+## Constraint arrow
+The shape of the RL recipe is dictated from below by whether a verifier exists.
+Where the answer is checkable, you get a non-gameable reward and the loop of
+this chapter applies. Where it is not, you fall back to the learned reward model
+of @sec-rlhf and inherit its over-optimization. This is why frontier reasoning
+work concentrates on math, code, and formal proof: the availability of a ground
+truth at the data layer, not a preference at the training layer, is what
+decides which algorithm you can run. The verifier's coverage is the real budget.
+:::
+
+## Trade-offs
+
+The recipe is a set of balances, each with a knee.
+
+- **Verifiable reward versus learned reward.** A verifier is hard to game in
+  the proxy sense but only exists where ground truth is checkable, and its
+  coverage is the new attack surface. The learned reward model of @sec-rlhf
+  works on open-ended tasks but is an over-optimizable proxy. Real recipes mix
+  both by domain.
+- **Outcome versus process supervision.** Outcome rewards are cheap, robust,
+  and sparse. Process rewards through a PRM are dense and better for
+  long-horizon credit, but the PRM is a learned, hackable reward and expensive
+  to label. This is signal density against reward integrity.
+- **Critic versus critic-free.** A value network lowers advantage variance but
+  doubles model memory and adds a failure mode of its own. GRPO and RLOO trade
+  that variance for simplicity and fit the many-samples shape of RLVR.
+- **Exploration versus KL collapse.** Too little KL, or too aggressive
+  optimization, collapses the policy onto a few high-reward modes and stops
+  exploration, so reward rises while held-out quality falls. Too much KL and the
+  policy never moves off the reference. The KL coefficient and clip range are
+  the central RLVR knob.
+- **Verifier coverage versus gameability.** A stricter, broader verifier
+  resists gaming but costs more and may reject correct-but-unusual answers,
+  false negatives that starve learning. A loose verifier is cheap but leaks
+  reward to wrong answers.
+
+## Implementation
+
+Most failures here are the optimizer finding what you measured rather than what
+you meant. Reward hacking through verifier gaps is the central one: the policy
+discovers inputs the verifier scores correct that are not, tests passing on
+degenerate solutions, checkers fooled by formatting, hard-coded outputs for
+known cases. The reward to the optimizer is real and the answer to you is wrong.
+KL or mode collapse is the next: the policy concentrates on a few high-reward
+outputs, entropy craters, and held-out quality degrades while training reward
+climbs. Reasoning that games the checker rather than the problem is the subtle
+one, where the visible chain of thought steers toward whatever the verifier
+rewards or does not faithfully drive the answer at all.
+
+Two boundaries keep the method honest. RLVR is strongest where ground truth is
+checkable and does not transfer for free to open-ended tasks, so
+over-indexing on it skews the model and leaves a gap that only a learned reward
+or human judgment fills. And over-squeezing the reward regresses the
+instruction-following, safety, and breadth installed in post-training, a
+catastrophic forgetting that the KL anchor here only partly prevents and that
+@sec-benchmarks must catch.
+
+The self-improvement loop is the payoff when a verifier is sound. Generate
+candidate training data with the model, filter by the verifier to keep only
+verified-correct traces, and feed those into another SFT or RL round, then
+iterate. This is distinct from the distillation of @sec-synthetic-data because
+the filter is a checker, not a stronger teacher, so the model can bootstrap past
+its current self. The hard limit is that it needs a verifiable signal to close
+the loop: a sound verifier gives a genuine bootstrap, an unsound one amplifies
+its own blind spots. Running the sampling and rollout fleet that feeds all of
+this at scale belongs to @sec-training-at-scale, and the inference-time analogue
+of spending more compute to reason better is @sec-inference-time-scaling.
 
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Shao et al., "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models" (introduces GRPO), 2024. [arXiv:2402.03300](https://arxiv.org/abs/2402.03300)
+- DeepSeek-AI, "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning," 2025. [arXiv:2501.12948](https://arxiv.org/abs/2501.12948)
+- Schulman et al., "Proximal Policy Optimization Algorithms" (PPO; introduced in @sec-rlhf, reused here), 2017. [arXiv:1707.06347](https://arxiv.org/abs/1707.06347)
+- Lightman et al., "Let's Verify Step by Step" (process reward models / PRMs), 2023. [arXiv:2305.20050](https://arxiv.org/abs/2305.20050)
+- Uesato et al., "Solving math word problems with process- and outcome-based feedback" (process vs outcome supervision), 2022. [arXiv:2211.14275](https://arxiv.org/abs/2211.14275)
+- Ahmadian et al., "Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs" (RLOO), 2024. [arXiv:2402.14740](https://arxiv.org/abs/2402.14740)
+- OpenAI, "Learning to Reason with LLMs" (the o1 line; an official announcement / system report, not a peer-reviewed paper), 2024. [openai.com](https://openai.com/index/learning-to-reason-with-llms/)
+- Lambert et al., "Tulu 3: Pushing Frontiers in Open Language Model Post-Training" (names/positions RLVR), 2024. [arXiv:2411.15124](https://arxiv.org/abs/2411.15124)

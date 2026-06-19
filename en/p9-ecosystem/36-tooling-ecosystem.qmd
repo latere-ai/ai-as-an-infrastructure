@@ -1,25 +1,258 @@
 # The Tooling Ecosystem {#sec-tooling-ecosystem}
 
-Training frameworks, serving engines, agent frameworks, and standards, with the Latere stack as a running case study.
-
-::: {.callout-note}
-## Status
-Outline. Source: `new + blog/introducing-{lux,cella,topos,wallfacer}`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+The stack from earlier parts is realized by software others wrote: training
+frameworks, serving engines, agent frameworks, and the standards that let
+them interoperate. By the end of this chapter a reader can explain what each
+layer of the tooling ecosystem owns, and why every layer faces the same
+shift once the caller stops being an application and becomes an agent: the
+control point has to move back into the layer itself.
 
 ## Problem
 
+A capability does not run on a paper. It runs on tooling, and the tooling
+ecosystem divides into a few layers, each owning one stage of the lifecycle
+this book has traced. Training frameworks turn FLOPs into weights and own the
+parallelism and memory of @sec-training-at-scale. Serving engines turn
+weights into tokens under a latency and throughput budget, the subject of
+@sec-serving-problem. Agent frameworks turn a model into something that
+plans, calls tools, and acts over many steps, the harness of
+@sec-the-harness and the architectures of @sec-agent-architectures. Standards
+let a tool written once be reached by any of them.
+
+The reason these layers deserve a chapter of their own, rather than living
+inside the chapters that use them, is that a single change in who calls them
+reshapes all four at once. The first generation of this tooling assumed a
+tidy caller: an application server, long-lived, holding its own credentials,
+calling a model once per request and logging the result. An agent breaks
+that assumption. It runs in a sandbox, invokes a CLI, writes a script, spawns
+a helper, hands work to another agent, and keeps going after the chat window
+that started it is gone. The important caller is no longer the application.
+It is a process the agent chose, a background task it spawned, a session that
+outlives the request.
+
+When the caller moves like that, every control point that sat in the
+application is now in the wrong place. A provider key in a config file is a
+key the model can read. A permission compiled into the app is a permission no
+reviewer can see. A plan that lives in a chat history is a plan no one can
+edit. The problem this chapter studies is what each tooling layer does when
+the caller becomes an agent, and the answer, repeated four times, is the same
+move: pull the control point back out of the caller and into the layer.
+
+We use the Latere stack as the running case study because its four products
+map cleanly onto four primitives of the agent-facing tooling layer: model
+access, the execution sandbox, governance, and orchestration. They are an
+example of the move, not the only way to make it.
+
 ## Design
+
+The core idea of the agent-facing tooling layer is that the layer must own
+its own control point, because the caller can no longer be trusted to hold
+it. Four primitives carry that idea.
+
+**Model access as a scoped front door.** A gateway routes calls to OpenAI,
+Anthropic, Gemini, OpenRouter, or Ollama, tracks usage, and caps spend. The
+first generation stopped there. The agent-facing version, exemplified by
+Latere Lux, adds one rule: the real provider key lives in the gateway and
+never reaches the calling process. The agent connects to the gateway, not to
+the provider, so model choice becomes configuration and every call can be
+attributed to an organisation, person, product, session, and model. Revoking
+or narrowing the gateway credential stops a runaway task without rotating the
+provider key. The control point is model access itself, not a key in a file.
+
+**Execution as a durable-or-disposable sandbox.** Cloud compute is sold in
+two shapes that do not fit agent work: a function that vanishes when it
+returns, and a machine you must babysit. The sandbox primitive, exemplified
+by Latere Cella, sits between them by separating what you keep from what you
+throw away. State persists in a named workspace; compute stops when idle and
+resumes in under half a second, so losing it costs nothing. Secrets stay in a
+locked store, are injected only at the moment a command needs them, never
+appear in a process listing, and are wiped before the workspace's own code
+runs. Network egress is deny-by-default behind an allowlist that travels with
+the workspace, and every command, secret use, and start or stop is logged
+against whoever caused it. That last property is what the governance layer
+above will consume.
+
+**Governance as an agent-is-a-document substrate.** Once more than one agent
+runs, autonomy bought visibility away: an answer and a bill arrive, the steps
+between them do not. The governance primitive, exemplified by Latere Topos,
+refuses that trade by making an agent a document: a name, a human owner, the
+model, the tools, a budget, and the approval steps, all in version-controlled
+plain text a reviewer can read before and after a run. Every action is an
+append-only log line with a timestamp and an actor, so a session that fans
+out across a dozen agents reconstructs as one family tree. Two rules give the
+document teeth. Permissions can only attenuate as work is delegated: a child
+agent inherits its parent's permissions minus whatever was withdrawn, and can
+never grant itself back what it lost. And a human can be placed at any step
+where a decision matters, so the agent pauses until a sign-off arrives.
+
+**Orchestration as a plan you steer.** A model that plans and acts over many
+steps needs a structure between the request and the code. The orchestration
+primitive, exemplified by Latere Wallfacer, makes that structure an explicit
+artifact: turn an idea into a plan, the plan into scoped tasks, the tasks into
+agent execution, and the output into reviewable changes.
+
+```
+idea -> spec -> tasks -> execution -> review -> commit -> ship
+```
+
+The plan, not the chat history, is the thing a human reads, edits, and pushes
+back on, and the tasks underneath stay within what the plan describes. Each
+arrow is a point where a person can pause and take the reins.
+
+The four primitives share one shape. Each takes a control point that used to
+sit inside the caller, a key, a runtime, a permission, a plan, and moves it
+into a layer the caller cannot bypass. Standards are what keep those layers
+composable: a tool exposed once through the Model Context Protocol can be
+reached by any harness, so the agent framework does not re-implement the tool
+for every model.
 
 ## Evolution
 
+Each layer reached its current shape by superseding an earlier one, and the
+lineage is worth tracing because it shows the same caller-shift driving all
+of them.
+
+Training frameworks came first and are the most settled. Megatron-LM
+established intra-layer tensor parallelism in native PyTorch, and ZeRO, the
+optimizer behind DeepSpeed, removed the memory redundancy of data-parallel
+training so model size could scale with device count. Their internals belong
+to @sec-training-at-scale; here they matter as the layer whose caller never
+moved. A training run is still launched by an operator, so this layer felt
+the agent shift least.
+
+Serving engines moved next. The decisive step was treating the key-value
+cache like operating-system memory: PagedAttention, the algorithm behind
+vLLM, stores the cache in fixed-size blocks mapped to non-contiguous physical
+memory, which removed the fragmentation that capped throughput. That story is
+@sec-serving-problem and @sec-memory-scheduling. The serving layer's caller
+is shifting now, from an application that sends one prompt to an agent that
+holds a long, branching session, which is why session-aware routing and
+attribution are becoming serving concerns and not only gateway ones.
+
+The agent-facing layers show the shift in the open, because they are new
+enough that their first generation is still visible. The gateway began as a
+cost-and-routing tool: one connection address for a messy multi-provider
+bill. That solved a software problem, and it assumed the key could safely sit
+in a config file because the caller was an app. Lux is the second generation,
+built once the caller became an agent and the key could no longer be trusted
+to the caller. The sandbox evolved from the serverless-versus-VM split toward
+a middle that keeps state and discards compute. And agent orchestration
+evolved through a sharper empirical detour, recorded in the goalless-agents
+experiment behind Wallfacer: a structured crew of role-specialized agents
+kept shipping but stopped discovering, polishing trivia inside its lane,
+while a single goalless agent with full freedom ballooned a project past
+60,000 lines and collapsed. The resolution was neither more rules nor fewer,
+but a deliberate rhythm, roughly 80% improving what exists and 20% exploring,
+with a human present at each change of direction.
+
+::: {.callout-important}
+## What's contested
+How much structure an agent framework should impose is unsettled, and the
+poles are real. One camp builds rigid orchestration: a fixed workflow graph,
+typed steps, every transition specified, which is legible and safe but, as
+the goalless-agents experiment found, can suppress discovery until an agent
+only polishes inside its lane. The other camp runs open-ended agent loops
+with broad freedom, which discover more but, past a point, collapse into
+unmaintainable sprawl. The 80/20 improve-versus-explore rhythm is one
+empirical data point, not a settled law, and the same tension recurs in
+@sec-multi-agent-systems as the choice between a scripted pipeline and an
+autonomous swarm. Treat the right amount of structure as task-dependent, not
+a constant the framework can fix once.
+:::
+
 ## Trade-offs
+
+Each primitive buys its property by giving something up.
+
+- **Model access: a hop for control.** Routing every call through a gateway
+  adds a network hop and makes the gateway a dependency on the critical path.
+  What it buys is that the provider key never reaches the process and spend is
+  attributable per session. For agent traffic, where the caller is untrusted,
+  the hop is worth it; for a single trusted application server it can be pure
+  overhead.
+- **Sandbox: durability versus cost.** Keeping a named workspace warm enough
+  to resume in half a second is not free, and the deny-by-default allowlist
+  and secret injection add friction that a throwaway function does not pay.
+  The trade is sound exactly when the work is long, stateful, or touches real
+  secrets, and wasteful for a stateless one-shot that a plain function would
+  serve.
+- **Governance: overhead versus auditability.** Agent-as-a-document and an
+  append-only log cost write amplification and a review step in the loop. The
+  return is that a compliance reviewer who has never seen the code can read
+  the whole picture, and that no refused request goes unrecorded. The cost is
+  justified once more than one agent runs unattended, and is mostly ceremony
+  for a single supervised one.
+- **Orchestration: planning latency versus rework.** Inserting a plan between
+  the request and the code is slower to first output than a coding agent that
+  jumps straight to code. It pays back by giving a human one artifact to steer
+  instead of a chat history or a wall of diffs, and by keeping the tasks
+  inside a reviewed scope. For a one-line change the plan is overhead; for
+  multi-step work it is the only thing you can hold.
+
+The boundary between these primitives is itself a design choice. Lux is kept
+separate from Cella and Wallfacer on purpose: model access is not runtime
+lifecycle and not task orchestration, so the provider keys, routing, and
+spend policy live in one place rather than piling up inside the sandbox or the
+task runner. Clean layer boundaries are what let standards like the Model
+Context Protocol connect the layers without each one absorbing the others.
+
+::: {.callout-tip}
+## Constraint arrow
+The security rule that a provider key must never reach the agent process,
+from @sec-security-authorization, is what forces the shape of the agent
+framework's call path. Because the key cannot live with the caller, the
+framework cannot call the provider directly: it must route through a gateway
+that holds the key and exposes only scoped access. A lower layer's
+authorization constraint thus dictates an upper layer's architecture. The
+same arrow runs from the sandbox to governance: the audit log can only record
+what the runtime surfaces, so what @sec-oversight-control can review is
+bounded by what the execution layer chose to log.
+:::
 
 ## Implementation
 
+The implementation reality is that these layers compose, and the composition
+is where the value is. An agent under Topos runs inside a Cella workspace,
+reaches models through Lux, and is owned by a real identity, so a single
+session links a permission document, a runtime log, a model-usage trail, and
+a named owner. Each layer cites the one below: governance consumes the
+sandbox's audit log (`Cella` start/stop and secret-use records), and the
+gateway's attribution feeds the same session id the governance log keys on.
+
+A reader implementing any one layer should hold two invariants. First, the
+control point stays in the layer, never in the caller: the key in the
+gateway, the secret in the locked store injected at use, the permission in
+the document, the scope in the plan. Second, every privileged action is
+logged against an actor at the moment it happens, because an append-only
+record is what makes oversight possible after the fact. Capability
+attenuation is the one rule worth stating in code terms: a delegated context
+is the parent's minus a withdrawal, never a superset.
+
+```
+child.permissions = parent.permissions - withdrawn
+assert child.permissions <= parent.permissions   # can only shrink
+```
+
+Beyond the case study, the honest scope of this chapter is narrow on the
+lower layers. Training frameworks and serving engines are named here as
+ecosystem categories and owned in depth by @sec-training-at-scale and
+@sec-serving-problem. The depth here is on the agent-facing layers and the
+standards that bind them, because that is where the caller-shift is live and
+where the case study has something to show.
+
+Read through the book's closing lens, the four primitives separate cleanly.
+Model access and the sandbox are efficiency layers: they make agent compute
+cheap to attribute and cheap to discard. Governance and the human-in-the-loop
+handoff are trust layers: they make autonomy reviewable. Orchestration is
+where capability lives, the rhythm that lets an agent go deep without
+collapsing. The tooling ecosystem is the place where capability, efficiency,
+and trust stop being chapter themes and become software a team runs.
+
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Shoeybi et al., "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism," 2019. [arXiv:1909.08053](https://arxiv.org/abs/1909.08053)
+- Rajbhandari et al., "ZeRO: Memory Optimizations Toward Training Trillion Parameter Models" (DeepSpeed), 2019. [arXiv:1910.02054](https://arxiv.org/abs/1910.02054)
+- Kwon et al., "Efficient Memory Management for Large Language Model Serving with PagedAttention" (vLLM), 2023. [arXiv:2309.06180](https://arxiv.org/abs/2309.06180)
+- Yao et al., "ReAct: Synergizing Reasoning and Acting in Language Models," 2022. [arXiv:2210.03629](https://arxiv.org/abs/2210.03629)
+- Anthropic, "Model Context Protocol" (open standard for tool and data connections), 2024. [modelcontextprotocol.io](https://modelcontextprotocol.io)
+- Ou, "Goalless Agents" (the experiment behind Wallfacer's improve-versus-explore rhythm), 2026. [changkun.de/blog/posts/goalless-agents](https://changkun.de/blog/posts/goalless-agents)

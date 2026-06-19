@@ -1,25 +1,218 @@
 # Agent Architectures {#sec-agent-architectures}
 
-The planning, memory, tool, and action decomposition, the reason-and-act pattern, and tool use.
-
-::: {.callout-note}
-## Status
-Outline. Source: `blog/agent-harness + agent-harness-runtime`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+An agent is a language model placed inside a loop that lets it act, observe
+the result, and act again. This chapter is about the shape of that loop and
+the parts it decomposes into. By the end a reader can explain the standard
+four-part decomposition of an agent, why the control loop interleaves
+reasoning with action rather than separating them, and why tool use is the
+capability that turns a text generator into something that changes the world.
 
 ## Problem
 
+A base model maps a prompt to a continuation. That is enough to answer a
+question whose answer is already latent in the weights, and useless for a
+task whose answer depends on the state of the world: the current contents of
+a file, the result of a query, whether a test passes after an edit. The
+model cannot read that state, and it cannot change it. It emits text and
+stops.
+
+The essential problem of an agent is to close that gap. The model needs a
+way to take an action in the world, see what the action produced, and feed
+that observation back into its next decision. It also needs to do this over
+many steps, because real tasks are not one action long: fixing a bug is
+read, hypothesize, edit, test, and very likely repeat. The constraints are
+the familiar ones. The model has a bounded context window, so a long task
+cannot keep every observation in view at once. Each step costs a model call,
+so the loop has a latency and a price. And the model is probabilistic, so any
+single action can be wrong, which means the architecture has to tolerate and
+recover from mistakes rather than assume them away.
+
 ## Design
+
+The dominant framing decomposes an agent into four parts around a model that
+acts as the controller. The decomposition is Lilian Weng's, and it has
+become the common vocabulary: **planning**, **memory**, **tool use**, and the
+**action** loop that ties them together.
+
+- **Planning** turns a goal into a sequence of steps. At its simplest this is
+  the model deciding, one step at a time, what to do next. At its most
+  structured it is explicit task decomposition into subgoals, with
+  self-reflection on past steps to correct course.
+- **Memory** is what survives across steps. Short-term memory is the context
+  window itself, the running transcript of what has happened. Long-term
+  memory is an external store the agent reads from and writes to, because the
+  window is too small to hold a long task. Memory as a system is the subject
+  of @sec-memory-systems; here it is one of the four parts the loop relies on.
+- **Tool use** is how the agent reaches outside its weights: a function it can
+  call to fetch a page, run code, query a database, or edit a file. A tool
+  call is the agent's only way to read or change external state.
+- **Action** is the loop that drives the other three: send the current
+  context to the model, let it choose a tool call, execute the call, append
+  the result, and repeat.
+
+The loop is the heart of the architecture, and its specific shape is what
+separates an agent from a single model call. The naive design would separate
+the phases: have the model plan the whole task up front, then execute the
+plan step by step. This fails because the plan is written before any
+observation exists, so the first surprising tool result invalidates it. The
+design that works interleaves reasoning and acting. The model produces a
+short reasoning trace, then an action, observes the result, then reasons
+again with that observation in hand. This is the **reason-and-act** pattern,
+named ReAct by Yao et al. (2023), and the synergy is the point: the reasoning
+lets the model decide and adjust its plan as it goes, and the actions let it
+pull in facts that the reasoning alone would have to hallucinate.
+
+```mermaid
+graph LR
+    M["Model: reason"] --> A["Choose action"]
+    A --> T["Execute tool"]
+    T --> O["Observation"]
+    O --> M
+    M -.->|done| F["Final answer"]
+```
+
+The runtime contract that implements this loop is small to state. Create a
+session bound to an agent definition. Send the context to the model, dispatch
+the tool calls it returns, append the results, and repeat until the model
+signals done or the loop is interrupted. That sequence is the reason-and-act
+pattern in operational form. The mechanism that makes this contract survive
+production, durability across crashes, scheduling, interruption, is the
+harness, and it is the subject of @sec-the-harness. This chapter owns the
+architecture; that one owns the engineering.
 
 ## Evolution
 
+The decomposition did not arrive fully formed. The first capability to
+mature was tool use as a learned skill. Toolformer (Schick et al., 2023)
+showed that a model could teach itself, in a self-supervised way, when to
+call an API and how to splice the result back into its generation, which
+established that tool use is something a model can be trained to do rather
+than a feature bolted on at inference time.
+
+In parallel, the reasoning side matured. Chain-of-thought prompting showed
+that letting a model write intermediate steps before an answer improved
+performance on multi-step problems, a thread @sec-eliciting-reasoning follows
+in depth. ReAct's contribution was to fuse that reasoning with action in one
+interleaved trace, which directly attacked chain-of-thought's weakness: a
+pure reasoning chain has no way to check itself against the world, so it
+propagates its own errors and hallucinations, while interleaving a Wikipedia
+lookup between reasoning steps lets the model ground each step in a fact it
+just retrieved. The four-part decomposition above was the synthesis that
+named the pieces, with planning and memory as first-class components
+alongside tool use rather than implicit features of a prompt.
+
+What has changed most recently is where the reasoning lives. Early agents
+carried their reasoning in the prompt: the harness instructed the model to
+think step by step and to interleave thoughts with actions. Reasoning models
+trained to deliberate internally, covered in @sec-training-to-reason, move
+some of that work below the loop. The agent architecture is the same shape,
+a model in a reason-and-act loop, but the planning component is increasingly
+something the model does in its own trained reasoning rather than something
+the harness has to scaffold with prompting.
+
 ## Trade-offs
+
+The architecture's choices are balances, and each has a cost worth naming.
+
+- **Explicit planning versus letting the model reason as it goes.** Up-front
+  task decomposition gives a legible plan a person can inspect, and it can
+  keep a long task on track. It also commits to a structure before any
+  observation exists, so a plan that meets a surprising result is a plan that
+  has to be torn up. Step-at-a-time reasoning adapts to every observation but
+  has no global view and can wander. Most production agents lean toward the
+  reason-and-act middle: a light plan, revised every step against what the
+  last action returned.
+
+- **Tool count versus model attention.** Every tool the agent can call is a
+  schema in the model's context and a candidate it must consider. A handful
+  of well-chosen tools is easy for the model to select among. A large catalog
+  costs context on every turn and degrades selection accuracy, because the
+  model's attention is finite and irrelevant tools actively hurt. This is the
+  pressure that forces a tool-selection strategy, discussed below and in
+  @sec-the-harness.
+
+- **Short-term versus long-term memory.** Keeping everything in the context
+  window is simple and lossless until the window fills, at which point the
+  task stalls. Externalizing memory lets the task run indefinitely but makes
+  the agent's recall only as good as what it chose to write down and can
+  retrieve. The boundary, what stays in the window and what moves to a store,
+  is a design decision this chapter points at and @sec-memory-systems owns.
+
+::: {.callout-important}
+## What's contested
+How much planning should be explicit is unsettled. One camp builds agents
+that decompose a task into a written plan of subgoals and reflect on it
+between steps, on the argument that a legible plan is more reliable and more
+auditable. The other camp argues that a capable reasoning model plans better
+implicitly, inside its own trained reasoning, than any prompt-level scaffold
+the harness can impose, and that explicit planning machinery adds brittleness
+for a benefit the model now provides on its own. The same debate runs through
+tool discovery: whether the harness should curate the tools the model sees
+each turn, or hand the model a way to discover tools and trust it to choose.
+Neither is settled, and the right answer moves as the underlying model's
+reasoning improves.
+:::
 
 ## Implementation
 
+The action loop is short to write and unforgiving in its details. In
+pseudocode it is a `while` over model calls:
+
+```text
+loop:
+    response = model(context)
+    if response has no tool call:
+        return response            # the model is done
+    result = execute(response.tool_call)
+    context = context + response + result
+```
+
+Everything hard is hidden in `execute` and in the management of `context`.
+
+The tools a loop dispatches are not uniform, and a loop that treats them all
+alike mishandles most of them. Tools divide by statefulness into three kinds.
+**Stateless** tools hold no
+state on the agent's side: a web fetch, a sandbox command given a sandbox ID,
+a plain REST call. They are the easy case and scale trivially.
+**Stateful-connection** tools, the Model Context Protocol (MCP) being the
+canonical one, carry negotiated capabilities and cursor state in a connection
+the loop must hold across calls. **Stateful-resource** tools keep their state
+in an external system, a database session or a long-running job, that the
+loop must correlate to across turns. The architectural point is that these
+three answer the question "what happens on restart?" differently: nothing,
+reconnect, or rediscover. The engineering of holding those connections alive
+through reconnects and token refreshes is the harness's job and lives in
+@sec-the-harness; the architecture's job is to know the three classes exist
+and not collapse them into one.
+
+The other recurring implementation question is which tools the model sees in
+a given turn. A static flat list, every tool in every prompt, is the simplest
+design and runs out at roughly thirty to fifty tools, because context cost
+and selection accuracy both degrade as the catalog grows. Past that point the
+options are to retrieve a relevant subset per turn, to show a pruned set per
+phase, or to let the model discover tools on demand. The selection mechanism
+is harness machinery; the reason it is forced is a model property, which is
+the constraint the next box names.
+
+::: {.callout-tip}
+## Constraint arrow
+The model's tool-selection accuracy degrading as the tool count rises is a
+lower-layer property that dictates an upper-layer architecture. The Berkeley
+Function Calling Leaderboard and ACEBench both measure function-calling
+accuracy falling as the number of available tools grows, with robustness
+suffering specifically when irrelevant tools are present. That measured
+degradation is why an agent cannot simply register every tool it might ever
+need and send the whole catalog each turn. The model's finite attention
+forces tool-RAG, phased mounting, or model-driven discovery up at the
+architecture layer. A capability limit at the model sets a structural choice
+at the agent.
+:::
+
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Weng, "LLM Powered Autonomous Agents," 2023. [lilianweng.github.io](https://lilianweng.github.io/posts/2023-06-23-agent/)
+- Yao et al., "ReAct: Synergizing Reasoning and Acting in Language Models," 2023. [arXiv:2210.03629](https://arxiv.org/abs/2210.03629)
+- Schick et al., "Toolformer: Language Models Can Teach Themselves to Use Tools," 2023. [arXiv:2302.04761](https://arxiv.org/abs/2302.04761)
+- F. Yan et al. "The Berkeley Function Calling Leaderboard (BFCL): From Tool Use to Agentic Evaluation of Large Language Models." *ICML*, 2025. [OpenReview](https://openreview.net/forum?id=2GmDdhBdDk)
+- "ACEBench: A Comprehensive Evaluation of LLM Tool Usage." *Findings of EMNLP*, 2025. [ACL Anthology](https://aclanthology.org/2025.findings-emnlp.697.pdf)
+- Model Context Protocol. "The 2026 MCP Roadmap." [MCP Blog](https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/)

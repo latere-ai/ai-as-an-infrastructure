@@ -1,30 +1,250 @@
 # Data Curation and Quality {#sec-data-curation}
 
-Sourcing, dedup, quality filtering, decontamination, and data mixtures: the foundations of model behavior.
-
-::: {.callout-note}
-## Status
-Outline. Source: `research/llm-training/01-data-pipeline`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+At fixed compute and architecture, the corpus is what separates a strong
+model from a mediocre one. By the end of this chapter a reader can explain
+where training data comes from, how raw web bytes become a clean
+deduplicated corpus, why mixture and curriculum are decided early and
+expensive to revisit, what synthetic data buys and risks, and why a
+contamination leak invalidates every downstream number.
 
 ## Problem
 
+A pre-training run consumes a fixed compute budget set by @sec-scaling-laws.
+That budget buys a token count, and the corpus that fills it is the single
+biggest lever on final quality and the one least transferable from open
+recipes. The difficulty is that the failures here are silent. A duplicated
+shard, a filter that strips a dialect, a benchmark question that leaked
+through a synthetic-data step: none of these throw an error, and all of them
+surface only at evaluation, where they are expensive to diagnose and often
+impossible to undo without re-running. So the corpus must be built as a
+system whose every stage is auditable and whose hand-offs to the rest of the
+stack are explicit contracts.
+
+Two of those hand-offs bind the rest of the book. The **vocabulary** is
+consumed by the architecture in @sec-tokenization (this chapter treats the
+tokenizer only as a pointer; its design lives there). The
+**decontamination report** is consumed by evaluation in @sec-benchmarks,
+which supplies the eval registry this chapter checks against.
+
+A reader may wonder why this is not just a scripting problem. The reason is
+scale. Everything below runs at petabyte volume as distributed batch or
+stream jobs (Apache Spark, Ray, or custom MapReduce-style clusters) across
+large CPU fleets, separate from and ahead of the GPU training cluster. The
+hard parts are throughput, determinism, and resumability, not the
+per-document algorithms. A re-run must produce byte-identical shards, or the
+mixture and decontamination contracts become unverifiable.
+
 ## Design
+
+The pipeline is a sequence of narrowing filters, each cheap relative to the
+training run it feeds, arranged so the cheapest cuts come first.
+
+```mermaid
+flowchart LR
+  A[Raw web<br/>CommonCrawl] --> B[Extract +<br/>language ID]
+  C[Curated /<br/>code / multilingual] --> D[Clean +<br/>normalize]
+  B --> D
+  D --> E[Dedup<br/>exact / fuzzy]
+  E --> F[Quality filter<br/>heuristic + classifier]
+  F --> G[Synthetic<br/>augmentation]
+  G --> H[Mixture +<br/>curriculum]
+  H --> I[Decontaminate<br/>vs eval registry]
+  I --> J[Tokenize<br/>see sec-tokenization]
+  J --> K[(Token-id shards)]
+```
+
+**Sourcing.** The bulk substrate is the web. CommonCrawl is the raw input:
+WARC/WET extraction, boilerplate stripping, language identification, and
+URL/host-level filtering. CommonCrawl is raw and noisy, and the value is in
+the pipeline applied to it, not the crawl itself. Around that web core sit
+curated sources, books, papers, encyclopedic and reference text, source code
+with license and quality signals, and non-English text at deliberate ratios.
+Each source has different licensing, quality, and dedup characteristics, and
+each competes for the same token budget.
+
+**Cleaning and normalization.** Unicode normalization, repair of text
+extraction artifacts, PII handling, and toxicity and safety pre-filtering.
+The goal is to remove garbage without scrubbing legitimate distributional
+variety: the registers, dialects, and domains that a model needs to see to
+generalize.
+
+**Deduplication.** Three mechanisms at three granularities. Exact hashing
+removes identical documents. Suffix-array or substring methods remove
+near-duplicate spans inside otherwise distinct documents. MinHash with
+locality-sensitive hashing (LSH) does fuzzy document-level dedup at corpus
+scale: it estimates Jaccard similarity between documents from a small set of
+hashed shingles, so the cost is sub-quadratic rather than all-pairs. Dedup
+recovers wasted compute and reduces verbatim memorization. The standing
+tension is aggressiveness against losing genuinely distinct content.
+
+**Quality filtering.** Two families. Heuristic gates are rule-based: length,
+symbol-to-word ratio, repetition, stop-word presence, and a perplexity
+threshold from a reference model. They are cheap, auditable, and high-recall
+for obvious junk, but brittle at the margins. Classifier filters are learned:
+a model scores each document against a reference of "good" text, for example
+a classifier trained to distinguish curated text from raw web. Classifiers
+have higher precision but carry a structural risk, they encode the reference
+set's notion of quality into the entire corpus.
+
+**Mixture.** The ratios across web, code, curated, and multilingual, plus
+per-source weights. The mixture can be hand-tuned, scaled from small-proxy
+ablations, or optimized directly. DoReMi frames mixture selection as group
+distributionally robust optimization: train a small proxy, use it to find
+weights that minimize worst-case excess loss across domains, then apply those
+weights to the full run. The mixture is locked early and expensive to
+revisit, because changing it means re-deriving the curriculum and often
+re-running proxy ablations.
+
+**Curriculum.** The ordering and phasing of data over training: easy-to-hard,
+domain phasing, or saving a high-quality slice for late. This is the ordering
+*within* the data plane. It is distinct from the annealing *phase*, which
+up-weights high-quality data near the end of training and belongs to
+mid-training, covered alongside @sec-training-at-scale.
+
+**Synthetic data.** Model-generated and templated text: rephrasing or
+augmenting web text, textbook-style generation, and distillation targets.
+The principle is that a small amount of dense, clean, on-distribution text
+can be worth far more than its token count in raw web. It is powerful for
+filling capability gaps, and @sec-synthetic-data treats it as a first-class
+post-training tool. The risks are distributional collapse, factual drift, and
+laundering eval content back into training.
+
+**Decontamination.** N-gram or substring overlap detection against the eval
+registry, an overlap threshold, a drop-or-flag decision, and a report emitted
+as the contract to evaluation. This is the stage that earns the chapter its
+place in the stack. The report, not a shared implementation, is the hand-off.
 
 ## Evolution
 
-## Trade-offs
+Early corpora were assembled, not engineered. The Pile (2020) curated 800GB
+from twenty-two diverse sources and made the components explicit. C4 (2020),
+built for T5, showed that a handful of heuristic cleaning rules over
+CommonCrawl already moved downstream quality. The pivot to pipeline-as-product
+came with CCNet (2020), which combined language identification with a
+perplexity filter from a reference language model, and then with RefinedWeb
+(2023), whose claim was sharper: web data alone, filtered and deduplicated
+hard enough, can match or beat curated corpora. FineWeb (2024) carried this
+further with public ablations that fixed compute and architecture and varied
+only the data, turning corpus construction into a measurable science rather
+than folklore.
 
-## Implementation
+Deduplication earned its own line of evidence. Lee et al. (2022) showed that
+deduplicating training data makes models better, not merely cheaper: it cuts
+memorization and improves held-out loss. SemDeDup (2023) pushed dedup into
+embedding space, removing semantic near-duplicates that surface-form hashing
+misses.
+
+The synthetic turn arrived through two results. TinyStories (2023) showed
+that a narrow, fully synthetic corpus could teach small models coherent
+English. The phi line, opened by "Textbooks Are All You Need" (2023), argued
+that textbook-quality synthetic and filtered data could reach strong
+reasoning at a fraction of the usual token count. Rephrasing the Web (WRAP,
+2024) made the cheaper version of the bet: rephrase existing web text into
+cleaner styles rather than generating from scratch, gaining compute and data
+efficiency without inventing content. The newest and least-documented source
+is agent transcripts, tool-use traces and verified multi-step trajectories
+recycled as training signal, foreshadowed by datasets like ToolBench. The
+open questions there are provenance, dedup against the source model's own
+outputs, and contamination from embedded eval tasks.
 
 ::: {.callout-important}
 ## What's contested
-Quality filtering versus scale, and how much decontamination rigor is enough.
+Whether to chase scale or quality is not settled. One camp, traced through
+RefinedWeb and FineWeb, holds that aggressively filtered and deduplicated web
+data is sufficient and that curated corpora add little once filtering is good
+enough. The other, traced through the phi line, holds that synthetic
+textbook-quality data is worth a large multiple of its token count and that
+the future of the corpus is generated, not crawled. The disagreement is live
+because the two positions imply different infrastructure, different cost
+structures, and different contamination risks, and because synthetic-heavy
+recipes are the hardest to evaluate cleanly: the same models that generate
+the data also sit near the benchmarks. Treat the synthetic share as a bet on
+diversity versus control, not a solved ratio.
 :::
+
+## Trade-offs
+
+- **Quantity versus quality.** More tokens help only if they are not junk or
+  duplicates. Past a point, aggressive filtering and dedup beat raw volume.
+  The hard part is knowing where that point is for a given compute budget,
+  and that point moves with the budget set in @sec-scaling-laws.
+- **Dedup aggressiveness.** Stronger fuzzy dedup removes memorization risk
+  and wasted compute, but can delete legitimately rare-but-distinct content.
+  The threshold is a recall-precision dial with no universally right setting.
+- **Heuristic versus classifier filtering.** Heuristics are cheap, auditable,
+  and bias-light but coarse. Classifiers are precise but import the biases of
+  their reference set into the entire corpus, stripping registers, dialects,
+  or domains wholesale.
+- **Synthetic share.** Synthetic data fills gaps cheaply but risks collapse,
+  factual drift, and eval laundering. The ratio trades diversity against
+  control.
+- **Decontamination strictness.** A loose threshold leaks benchmarks and
+  inflates scores. A strict one over-removes legitimate near-duplicates and
+  shrinks the corpus. The threshold is a contract term, not an internal
+  detail.
+
+::: {.callout-tip}
+## Constraint arrow
+The evaluation layer reaches down and sets a hard constraint on this one. The
+decontamination threshold is not a data-team preference: it is dictated by
+the eval registry that @sec-benchmarks defines and must supply. If evaluation
+does not hand down which held-out sets to protect, this chapter cannot
+guarantee the numbers reported later are real. The worst-case failure, a
+contamination leak through a dedup gap, a synthetic pipeline, or an agent
+transcript that embedded a benchmark task, inflates every downstream score at
+once. The decontamination contract exists precisely so a lower layer cannot
+silently corrupt an upper one.
+:::
+
+## Implementation
+
+Most of this chapter is a set of design decisions. The operational reality is
+a determinism discipline. Because mixture and decontamination are contracts,
+every stage must be reproducible to the byte. In practice that means
+content-addressed inputs, pinned filter thresholds and model versions, and a
+manifest that records, for each output shard, the exact transforms that
+produced it. A representative dedup step is fuzzy document matching by MinHash
+and LSH, sketched here against its method rather than any one codebase:
+
+```python
+# Fuzzy dedup: bucket by LSH, then drop near-duplicates within a bucket.
+def dedup(docs, threshold=0.8, num_perm=128):
+    seen = LSHIndex(threshold=threshold, num_perm=num_perm)
+    for doc in docs:
+        sig = minhash(shingles(doc.text), num_perm=num_perm)
+        if not seen.query(sig):      # no near-duplicate already kept
+            seen.insert(doc.id, sig)
+            yield doc                 # else: drop, counted in the manifest
+```
+
+The decontamination step is the same shape with a different index: build
+n-gram signatures for every item in the eval registry, then drop or flag any
+training document whose overlap exceeds the contract threshold, and write the
+count and identities of removed documents into the report that evaluation
+consumes.
+
+The failure modes are worth naming because each bites at a different time. A
+contamination leak inflates results and is detected late, if at all. A dedup
+gap wastes compute and raises memorization risk, while over-dedup silently
+removes rare content. Filter bias amplification strips legitimate variety
+across the whole corpus. Synthetic collapse or drift narrows the distribution
+or propagates the generator's errors. A mixture mistake under- or over-trains
+a capability, and because the mixture is locked early and surfaces only at
+evaluation, it is the costliest to diagnose and redo.
 
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Penedo et al., "The FineWeb Datasets," 2024. [arXiv:2406.17557](https://arxiv.org/abs/2406.17557)
+- Penedo et al., "The RefinedWeb Dataset for Falcon LLM," 2023. [arXiv:2306.01116](https://arxiv.org/abs/2306.01116)
+- Wenzek et al., "CCNet: Extracting High Quality Monolingual Datasets from Web Crawl Data," 2020 (LREC). [ACL Anthology](https://aclanthology.org/2020.lrec-1.494/)
+- Lee et al., "Deduplicating Training Data Makes Language Models Better," 2022 (ACL). [ACL Anthology](https://aclanthology.org/2022.acl-long.577/)
+- Abbas et al., "SemDeDup: Data-efficient learning at web-scale through semantic deduplication," 2023. [arXiv:2303.09540](https://arxiv.org/abs/2303.09540)
+- Xie et al., "DoReMi: Optimizing Data Mixtures Speeds Up Language Model Pretraining," 2023 (NeurIPS). [OpenReview](https://openreview.net/forum?id=lXuByUeHhd)
+- Gao et al., "The Pile: An 800GB Dataset of Diverse Text for Language Modeling," 2020. [arXiv:2101.00027](https://arxiv.org/abs/2101.00027)
+- Raffel et al., "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer" (T5 / C4), 2020 (JMLR). [JMLR](https://www.jmlr.org/papers/v21/20-074.html)
+- Soldaini et al., "Dolma: an Open Corpus of Three Trillion Tokens for Language Model Pretraining Research," 2024 (ACL). [ACL Anthology](https://aclanthology.org/2024.acl-long.840/)
+- Gunasekar et al., "Textbooks Are All You Need" (phi-1), 2023. [arXiv:2306.11644](https://arxiv.org/abs/2306.11644)
+- Eldan & Li, "TinyStories: How Small Can Language Models Be and Still Speak Coherent English?," 2023. [arXiv:2305.07759](https://arxiv.org/abs/2305.07759)
+- Maini et al., "Rephrasing the Web: A Recipe for Compute and Data-Efficient Language Modeling" (WRAP), 2024. [arXiv:2401.16380](https://arxiv.org/abs/2401.16380)
+- Yang et al., "Rethinking Benchmark and Contamination for Language Models with Rephrased Samples" (LLM decontaminator; on n-gram overlap thresholds and their limits), 2023. [arXiv:2311.04850](https://arxiv.org/abs/2311.04850)
+- Qin et al., "ToolLLM: Facilitating Large Language Models to Master 16000+ Real-world APIs" (ToolBench tool-use trajectories as training data), 2023. [arXiv:2307.16789](https://arxiv.org/abs/2307.16789)

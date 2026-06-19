@@ -1,30 +1,112 @@
 # Transformer 架构及其变体 {#sec-transformer-architecture}
 
-前向传播、从 MHA 到 GQA 再到 MLA 的注意力变体、归一化与激活的取舍，以及作为架构驱动因素的 KV 缓存。
-
-::: {.callout-note}
-## 状态
-提纲。来源：`research/llm-training/02-architecture + 03-attention`。参见 [`INTEGRATION.md`](../../INTEGRATION.md)。
-:::
+一个前沿稠密模型是一摞几乎完全相同的 Transformer 块，而这个块自 2023 年以来几乎没有变化。读完本章，读者应能解释单次前向传播的形状、为何前置归一化、RMSNorm、SwiGLU 与 RoPE 成为共识堆叠，以及为何架构仍在移动的唯一之处是 KV 缓存的成本，正是它驱动了从 MHA 经 MQA、GQA 到 MLA 的注意力变体。
 
 ## 问题
 
+一个 Transformer 块要做两件不同的事，而且要以一种能在被堆叠上百层之后仍然存活的方式去做。它必须让词元之间交换信息，因为如果位置 $i$ 看不到位置 $j$，一个语言模型就毫无用处；它还必须变换每个词元的特征，模型的大部分知识就活在那里。把这两个操作朴素地堆起来行不通：一个深层残差网络很难保持可训练，激活与归一化的选择决定了梯度能否存活到最底层，而注意力，这个唯一跨位置混合的操作，在计算上花费 $O(n^2)$，并在生成期间留下一个无界增长的缓存。
+
+最后这笔成本，正是现代架构仍在搏斗的对象。前向传播的形状已经定型。解码期间注意力的内存占用却没有，而它正是解释一位架构师为何要去动一个能用的块的约束。
+
 ## 设计
+
+读懂一个块的正确方式不是「先注意力，再 MLP」，而是两个子层，它们各自读取一条共享的残差流、计算一个增量、再把它写回：
+
+$$
+x = x + \text{sublayer}(\text{norm}(x))
+$$
+
+残差流是模型的工作记忆，一个宽度为 $d_{\text{model}}$ 的向量，从嵌入一路携带到最后一层。每个块得到一次读取它并向它累加的机会。深度就是这样的读取/修改/写回传递有多少次；宽度则是这条流一次能容纳多少。这一框架让其余的设计自然推导出来。
+
+第一个子层是注意力，唯一让词元之间交换信息的地方，下文详述。第二个是逐位置的 MLP，对每个词元独立施加，它持有大部分参数：一个前馈层扩展到约 $d_{\text{model}}$ 的四倍再投影回来，每个块花费约 $8 \cdot d_{\text{model}}^2$，使注意力的投影相形见绌。
+
+两个选择让这个深层堆叠保持可训练。第一个是归一化，它有两条正交的轴线。形式是 LayerNorm，用可学习的增益与偏置做重新居中与重新缩放，对 RMSNorm，只做重新缩放，弃用均值减除与偏置。均值居中带来的收益很小，所以 RMSNorm 更便宜，如今是默认。位置是后置归一化，原始设计把归一化放在残差相加*之后*，对前置归一化，把归一化放在分支*内部*，让一条恒等路径笔直沿残差流而下。前置归一化保持一条从堆叠顶端到底端的干净梯度高速路，正是它让深层模型无需精心设计的预热即可训练。
+
+第二个选择是激活函数。这条谱系是 ReLU，简单但易出死单元，然后是 GeLU，平滑的 BERT 与 GPT-2 时代默认，再然后是门控线性单元，其中 SwiGLU 是现代赢家。SwiGLU 计算 $(\text{Swish}(xW_1) \odot xV)\, W_2$，是三个矩阵而非两个。读者常弄错的细节：隐藏维度被按约 $2/3$ 缩放，使门控前馈网络（FFN）保持与普通 $4\times$ 前馈网络相同的参数量，这正是让同等条件比较公平的原因。
+
+第三个是位置。注意力本身对置换不变，所以块必须被告知词元位于何处。RoPE 把查询与键向量按与绝对位置成正比的角度旋转，在二维子空间成对地进行，使得点积 $q \cdot k$ 只依赖于相对偏移 $i - j$。一个基础频率参数 theta 设定旋转转得多快，并悄然支配着上下文随后能扩展多远。ALiBi 走另一条路：在 softmax 之前的分数上加一个静态的、每个头特定的线性惩罚 $-m \cdot (i - j)$，完全不带可学习的位置参数。两者的对比是向量上的旋转对分数上的偏置。RoPE 成为稠密模型的默认。
+
+嵌入与反嵌入夹住整个堆叠：输入嵌入把词元 id 映射为向量，LM 头把最终的残差状态映射为词表 logits。权重绑定让两者共享一个矩阵。这是一种真实的张力，而非默认。绑定省下 $\text{vocab} \cdot d$ 个参数并对小模型起正则化作用，但一旦词表很大，节省就微不足道，大多数现代大模型让两者不绑定。
+
+现在是注意力本身，那个跨位置混合的子层，也是本章活跃约束的来源。缩放点积注意力把每个词元投影为一个查询、键与值，然后计算
+
+$$
+\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d}}\right) V
+$$
+
+$\sqrt{d}$ 这个除数防止 logit 随维度增长而使 softmax 饱和。一个因果掩码把上三角清零，使一个词元只关注过去。成本在计算与分数矩阵两方面都是 $O(n^2)$，这正是下游每一个效率技巧背后的压力。
+
+多头注意力把 $d$ 切分为 $h$ 个头，使注意力能同时关注多个子空间，拼接它们的输出再投影一次。头在参数上廉价，却在推理时并非免费，因为每个头都携带自己的键和值，而这些必须被保留。
+
+这笔成本是本章的脊梁。在自回归解码期间，所有过去词元的键和值都会被缓存，以免在每一步重算。缓存大小是
+
+$$
+2 \cdot \text{layers} \cdot \text{heads} \cdot d_{\text{head}} \cdot \text{seq} \cdot \text{batch} \cdot \text{dtype}
+$$
+
+它随上下文长度与批大小线性增长，在长上下文下超过模型权重本身。这一个事实正是解释 MQA、GQA 与 MLA 的关键。它们各自回答的问题是：在质量崩坏之前，你能删掉多少 KV 缓存？
 
 ## 演化
 
-## 权衡
+稠密块通过一连串小而近乎免费的胜利达到当前的形状。Vaswani 等（2017）交付了带后置归一化与普通前馈网络的原始 Transformer。后置归一化在深度上若无大量预热则发散，于是由 Xiong 等（2020）分析的前置归一化取而代之。RMSNorm（Zhang 与 Sennrich，2019）以无可测质量代价弃用了 LayerNorm 的均值减除。SwiGLU（Shazeer，2020）在 $2/3$ 重新缩放下略胜 GeLU。RoPE（Su 等，2021）取代 ALiBi 成为位置默认。到 LLaMA 与 Qwen 之时，共识已经定型：前置归一化、RMSNorm、SwiGLU 前馈网络、RoPE，以及任何地方都没有偏置项。稠密块自 2023 年以来变化之少令人瞩目。重头戏转移到了数据、规模与后训练。
 
-## 实现
+块中持续移动的唯一部分是注意力，而它之所以移动，是因为 KV 缓存。多查询注意力（Shazeer，2019）让所有查询头共享单个键/值头，把缓存削减 $h$ 倍。削减是巨大的，但坍缩到单个 KV 头会破坏训练稳定性，并使质量非平滑地下降。分组查询注意力（Ainslie 等，2023）做了插值：它在 $g$ 个查询头组内共享 K 与 V，一端恢复 MHA（$g = h$），另一端恢复 MQA（$g = 1$），并能从一个现有的 MHA 检查点廉价地续训。GQA 以多数节省换回多数质量，成为 LLaMA 与 Qwen 家族的默认。
+
+多头潜在注意力（DeepSeek-V2，2024）从另一个角度攻击同一笔成本。它不共享头，而是把 K 与 V 向下投影到一个低秩潜在向量，*以此替代*缓存完整的逐头 K 与 V，并在使用时即时解压，配以一个并行携带的解耦 RoPE 分量。其卖点是以 MHA 级质量实现 GQA 级（或更优）的缓存节省。它是缓存压缩前沿上的另一个点。
+
+```mermaid
+flowchart LR
+  MHA["MHA<br/>h 个 KV 头<br/>完整质量、完整缓存"] --> GQA["GQA<br/>g 个 KV 组<br/>多数质量、缓存的一小部分"]
+  GQA --> MQA["MQA<br/>1 个 KV 头<br/>最小缓存、质量风险"]
+  MHA --> MLA["MLA<br/>低秩潜在<br/>压缩缓存、声称 MHA 质量"]
+```
+
+FlashAttention 进入这个故事，仅作为对这些变体所未解决之物的提醒。它让注意力保持确切，并通过从不把 $O(n^2)$ 的分数矩阵写入高带宽内存，使之变得可负担，但它并不缩小 KV 缓存，那是一种内存占用，而非计算核。该核以及缓存分页的服务期机制属于 @sec-faster-decoding 与 @sec-memory-scheduling。
 
 ::: {.callout-tip}
 ## 约束箭头
-The KV cache footprint at serving time motivates GQA and MLA at design time.
+KV 缓存大小促成了一种注意力变体。MHA 的缓存随头数增长，在长上下文与大批量下超过权重，于是架构师用头的独立性换取更小的缓存：MQA 共享一个 KV 头，GQA 在组内共享，MLA 压缩为一个潜在表示。这些原则上都不改变注意力所计算的内容。它们之所以存在，是因为一笔下游成本，即解码服务器必须为每个序列持有的内存，向上触及并重塑了块。@sec-serving-problem 中的服务压力，正是让一个能用的块值得去动的原因。
 :::
+
+::: {.callout-important}
+## 争议所在
+MLA 是否真的打破了质量对缓存的权衡，并未定论。DeepSeek 的立场是潜在压缩以 MHA 级质量交付缓存节省，在前沿上压倒 GQA。保守的立场是 GQA 更简单、能从现有 MHA 检查点续训、并已在众多已上线模型中得到验证，仍是安全的默认，而 MLA 的优势与 DeepSeek 配方的其余部分纠缠在一起，比单一比较所暗示的更难迁移。两者今天在生产中并存：大多数开源模型用 GQA，DeepSeek 用 MLA。把这个选择当作开放的，而非任一方已成定局的胜利。
+:::
+
+## 权衡
+
+块是一组平衡，每个都有一个拐点。
+
+- **归一化位置，前置对后置。** 后置归一化在能训练起来时可以达到略好的最终损失，但在深度上若无大量预热与谨慎初始化则不稳定。前置归一化用一丝峰值质量换来一条稳健可训练的梯度高速路，在实践中胜出。
+- **归一化形式，LayerNorm 对 RMSNorm。** 均值居中带来的收益很小。RMSNorm 弃用它以换取更低成本与少一组参数，近乎免费的胜利，如今为默认。
+- **激活函数选择。** SwiGLU 的增益虽小但稳定，并且在 $2/3$ 隐藏维度重新缩放下实际上免费。代价是第三个权重矩阵以及对核函数与并行而言略不规整的形状。
+- **位置方案是一道单向门。** 基础方案在运行起始时选定，更改代价高昂。它约束着上下文随后能扩展多远以及模型外推得多好。RoPE 的 theta 基数是一个小旋钮，却有巨大的长上下文后果，其机制见 @sec-structured-long-context。
+- **权重绑定。** 真实的张力：参数节省与小模型正则化，对那些让大模型选择不绑定的自由度与规模下的边际成本。
+- **深度对宽度。** 在固定参数预算下，更深意味着更多的顺序组合，但训练与并行更难，伴随流水线气泡与串行延迟；更宽意味着每步更多算力，对张量并行更友好，更易保持稳定。它在 @sec-training-at-scale 中与系统层协同设计，而非孤立求解，其中每 FLOP 质量的一面由 @sec-scaling-laws 设定。
+- **KV 缓存对质量，主导性的轴线。** MHA 以完整缓存给出完整质量，GQA 以缓存的一小部分给出多数质量，MQA 以质量与稳定性风险给出最小缓存，而 MLA 声称通过潜在压缩打破这一权衡。正确的取舍点取决于目标上下文长度与批量，因为缓存随两者一同扩展。
+
+## 实现
+
+一旦上述选择做定，装配共识稠密块大体上只是核算：在每个子层的输入上用 RMSNorm 做前置归一化、一个隐藏维度按 $2/3$ 重新缩放的 SwiGLU 前馈网络、在点积之前对查询与键施加 RoPE、为 KV 头做 GQA 分组，以及任何地方都没有偏置项。读者能在自 LLaMA 以来几乎每一个开源稠密模型中识别出这一形状。
+
+失效模式值得逐一点名，因为它们各在不同时刻咬人。深度上的后置归一化会在训练早期爆掉或停滞，这是前置归一化被发明出来要修复的经典症状。为短上下文选定的位置方案或过小的 RoPE theta，会限制日后的长上下文行为，其代价只在第一次上下文窗口提升时浮现。切换到门控前馈网络时忘记 $2/3$ 重新缩放，会悄悄地放大或缩小参数预算并破坏同等条件的比较。不绑定、未正则化的输出 logits 可能无界漂移，这正是 z-loss 防护它们的原因，机制见 @sec-scaling-laws。而过度坍缩到 MQA 会破坏训练稳定性并使质量非平滑地下降，这正是 GQA 之所以存在的原因：最便宜的缓存并不安全地等于最好的缓存。
 
 ## 延伸阅读
 
-::: {.callout-note}
-## 待办
-确立本章的奠基性、前沿与一手来源锚点。
-:::
+- Vaswani et al., "Attention Is All You Need," 2017 (NeurIPS)。[arXiv:1706.03762](https://arxiv.org/abs/1706.03762)
+- Ba, Kiros & Hinton, "Layer Normalization," 2016。[arXiv:1607.06450](https://arxiv.org/abs/1607.06450)
+- Zhang & Sennrich, "Root Mean Square Layer Normalization" (RMSNorm), 2019 (NeurIPS)。[arXiv:1910.07467](https://arxiv.org/abs/1910.07467)
+- Xiong et al., "On Layer Normalization in the Transformer Architecture," 2020 (ICML)。[arXiv:2002.04745](https://arxiv.org/abs/2002.04745)
+- Hendrycks & Gimpel, "Gaussian Error Linear Units (GELUs)," 2016。[arXiv:1606.08415](https://arxiv.org/abs/1606.08415)
+- Shazeer, "GLU Variants Improve Transformer" (SwiGLU), 2020。[arXiv:2002.05202](https://arxiv.org/abs/2002.05202)
+- Su et al., "RoFormer: Enhanced Transformer with Rotary Position Embedding" (RoPE), 2021。[arXiv:2104.09864](https://arxiv.org/abs/2104.09864)
+- Press, Smith & Lewis, "Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation" (ALiBi), 2022 (ICLR)。[arXiv:2108.12409](https://arxiv.org/abs/2108.12409)
+- Press & Wolf, "Using the Output Embedding to Improve Language Models" (weight tying), 2017 (EACL)。[arXiv:1608.05859](https://arxiv.org/abs/1608.05859)
+- Shazeer, "Fast Transformer Decoding: One Write-Head is All You Need" (MQA), 2019 (arXiv)。[arXiv:1911.02150](https://arxiv.org/abs/1911.02150)
+- Ainslie et al., "GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints," 2023 (EMNLP)。[aclanthology.org/2023.emnlp-main.298](https://aclanthology.org/2023.emnlp-main.298/)
+- Dao et al., "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness," 2022 (NeurIPS)。[arXiv:2205.14135](https://arxiv.org/abs/2205.14135)
+- DeepSeek-AI, "DeepSeek-V2: A Strong, Economical, and Efficient Mixture-of-Experts Language Model," 2024 (arXiv)，提出多头潜在注意力（MLA）。[arXiv:2405.04434](https://arxiv.org/abs/2405.04434)
+- Touvron et al., "LLaMA: Open and Efficient Foundation Language Models," 2023。[arXiv:2302.13971](https://arxiv.org/abs/2302.13971)
+- Bai et al., "Qwen Technical Report," 2023。[arXiv:2309.16609](https://arxiv.org/abs/2309.16609)
+- Yang et al., "Qwen2 Technical Report," 2024。[arXiv:2407.10671](https://arxiv.org/abs/2407.10671)
+- Qwen Team, "Qwen2.5 Technical Report," 2024。[arXiv:2412.15115](https://arxiv.org/abs/2412.15115)
