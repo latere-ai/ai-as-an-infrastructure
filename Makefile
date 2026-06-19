@@ -1,27 +1,28 @@
-.PHONY: preview render render-html render-pdf render-epub check clean
+.PHONY: preview preview-zh render render-en render-zh render-html check clean
 
-# Live-reloading local preview.
+# Live preview, one language at a time (Quarto previews a single project).
 preview:
-	quarto preview
+	quarto preview en
 
-# Render every configured format (HTML, PDF, ePub).
-render:
-	quarto render
+preview-zh:
+	quarto preview zh
 
-# HTML only. Matches what CI builds as a smoke test.
+# Render both language books (HTML, PDF, ePub) into _book/en and _book/zh.
+render: render-en render-zh
+
+render-en:
+	quarto render en
+
+render-zh:
+	quarto render zh
+
+# HTML-only smoke test for both, matching CI.
 render-html:
-	quarto render --to html
+	quarto render en --to html
+	quarto render zh --to html
 
-# PDF requires a LaTeX toolchain (quarto install tinytex).
-render-pdf:
-	quarto render --to pdf
-
-render-epub:
-	quarto render --to epub
-
-# Verify the local Quarto installation and dependencies.
 check:
 	quarto check
 
 clean:
-	rm -rf _book .quarto _freeze
+	rm -rf _book en/.quarto zh/.quarto
