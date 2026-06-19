@@ -1,20 +1,34 @@
 # AI as an Infrastructure
 
-A book on treating AI as an infrastructure: inference, training, and
-evaluation, covered first as engineering practice and then as theoretical
-foundation. Released under [latere.ai](https://latere.ai).
+From Systems to Agents: history, design decisions, and foundations.
 
-The book looks at each of the three activities twice. Part I builds and
-operates them as dependable production systems. Part II explains the
-behavior Part I asks you to operate.
+A book that treats AI as an infrastructure and explains it design-first: it
+traces how each piece got the shape it has, what trade-offs that shape
+encodes, and the theory underneath. Released under
+[latere.ai](https://latere.ai).
+
+The book is organized as a stack, bottom to top. Each chapter establishes
+the practice and then the foundations that explain it, following the arc in
+[`CONVENTIONS.md`](CONVENTIONS.md).
 
 ## Structure
 
-- `index.qmd`: preface.
-- `engineering/`: Part I, Engineering Practices (`inference`, `training`, `eval`).
-- `theory/`: Part II, Theoretical Foundations (`inference`, `training`, `eval`).
-- `summary.qmd`, `references.qmd`, `references.bib`: closing and bibliography.
-- `_quarto.yml`: book configuration.
+- Part I, Systems (`systems/`): inference, training, evaluation.
+- Part II, Applications (`applications/`): chat completion, assistants,
+  agentic agents.
+- Part III, Frontiers (`frontiers/`): autonomous agents, self-improvement.
+- `index.qmd`, `summary.qmd`, `references.qmd`, `references.bib`: preface,
+  closing, and bibliography.
+- `_quarto.yml`: book configuration. `CONVENTIONS.md`: how chapters are
+  written.
+
+## Philosophy
+
+Design-first, after [golang.design/under-the-hood](https://golang.design/under-the-hood):
+every section moves through Problem, Design, Evolution, Trade-offs, and
+Implementation, so a reader finishes able to answer "why is it built this
+way?". History is traced through primary sources, code is kept minimal, and
+each chapter ends with Further reading. See [`CONVENTIONS.md`](CONVENTIONS.md).
 
 ## Build
 

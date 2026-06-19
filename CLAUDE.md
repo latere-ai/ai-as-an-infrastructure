@@ -1,9 +1,23 @@
 # AI as an Infrastructure
 
-A Quarto book. Inference, training, and evaluation, covered first as
-engineering practice (Part I, `engineering/`) and then as theoretical
-foundation (Part II, `theory/`). Released under latere.ai, licensed
-CC BY-NC-ND 4.0.
+A Quarto book covering AI as an infrastructure across three stack layers,
+each written design-first: history, design decisions, trade-offs, and the
+foundations underneath.
+
+- Part I, Systems (`systems/`): inference, training, evaluation.
+- Part II, Applications (`applications/`): chat completion, assistants,
+  agentic agents.
+- Part III, Frontiers (`frontiers/`): autonomous agents, self-improvement.
+
+Released under latere.ai, licensed CC BY-NC-ND 4.0.
+
+## Authoring philosophy
+
+Read [`CONVENTIONS.md`](CONVENTIONS.md) before writing. In short: every
+section follows Problem, Design, Evolution, Trade-offs, Implementation, and
+leaves the reader able to answer "why is it built this way?". Trace history
+through primary sources. Keep code minimal and cite it as `symbol, path`.
+Close each chapter with Further reading.
 
 ## Build and verify
 
@@ -15,13 +29,12 @@ CC BY-NC-ND 4.0.
 
 ## Writing conventions
 
-- Do not use em dashes. Use commas, periods, or colons.
-- Each chapter opens with what the reader will be able to do or explain by
-  the end.
+- No em dashes. Use commas, periods, or colons. No filler, no intensifiers.
+- Each chapter opens with what the reader will be able to explain by the
+  end, and closes with Further reading.
 - Math is LaTeX, diagrams are Mermaid, cross-references use Quarto labels
-  (for example `@sec-eng-inference`).
-- Cite by adding entries to `references.bib` and using `[@key]`. Cited
-  entries flow into `references.qmd` automatically.
+  (for example `@sec-sys-inference`).
+- Cite by adding entries to `references.bib` and using `[@key]`.
 
 ## Commits
 
@@ -31,4 +44,5 @@ CC BY-NC-ND 4.0.
 
 ## Related
 
-Other latere projects and shared infrastructure are in `../`.
+Other latere projects and shared infrastructure are in `../`. The reference
+for this book's style is `../../golang.design/under-the-hood`.
