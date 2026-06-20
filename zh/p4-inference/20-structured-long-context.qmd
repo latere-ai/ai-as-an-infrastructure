@@ -31,6 +31,28 @@ flowchart LR
   A -.下一步.-> M
 ```
 
+试着把 `allowed` 改成另一组合法词元，看着被禁词元的概率塌缩到恰好为零，而合法词元的概率重新归一化。
+
+:::: {.runnable}
+```python
+import numpy as np
+vocab = ['{', '}', '"', 'name', 'age', ':', ',', 'true', 'hello', '42']
+logits = np.array([2.1, 0.3, 3.0, 1.2, 1.0, 0.5, 0.4, 0.8, 2.5, 1.1])
+# FSM is just after '{' : the only legal next token is an opening quote.
+allowed = {'"'}
+mask = np.array([t in allowed for t in vocab])
+masked = np.where(mask, logits, -np.inf)
+def softmax(x):
+    x = x - np.max(x[np.isfinite(x)])
+    e = np.exp(np.where(np.isfinite(x), x, -np.inf))
+    return e / e.sum()
+p_free, p_masked = softmax(logits), softmax(masked)
+for t, a, b in zip(vocab, p_free, p_masked):
+    print(f'{t:>6}  unconstrained={a:.3f}  masked={b:.3f}')
+print('masked mass on legal tokens:', round(p_masked[mask].sum(), 3))
+```
+::::
+
 让这件事成为一个工程问题而非一行代码的症结，在于自动机与模型之间的错配：自动机定义在字符之上，而模型吐出的是来自 @sec-tokenization 的字节流的多字符片段，即词元。一个词元可能跨越多次自动机转移，且从某个给定状态出发只有部分词元合法。朴素地计算合法词元集，意味着在每一步都把自动机在数万个词表条目中每一个的拼写上走一遍，这会压过解码本身的成本。于是这个想法的第一版实现正确但慢，是对照一台手写自动机做每步词表扫描，而这条线索的历史就是一连串消去那项代价的过程。
 
 ### 消去每步扫描：一张预计算索引
@@ -148,6 +170,13 @@ KV 缓存压缩用内存换取对完整注意力的一种近似，而这种近�
 - **索引构建与复用。** 预计算索引要付一次前置成本，把正则表达式或语法对照分词器编译出来 [@willard2023guided]。对一个被许多请求共用的格式，这摊薄到几乎为零；但对一个每请求即时生成的一次性 schema，构建可能与它所省下的生成不相上下。引擎正因如此而按格式缓存已编译的语法。
 - **跳跃式前向的正确性。** 不调用模型就吐出被强制的词元，只有在自动机确实只有一条续接时才安全，而分词边界使之复杂：被跳过的文本必须以模型本会产出的同一方式重新分词，否则缓存与输出会发散 [@yin2024compressed]。加速是真的，但边界处理正是 bug 的栖身处。
 - **压缩预算与召回。** 更小的缓存预算省下更多内存、容纳更多并发请求，却抬高了某个被驱逐词元恰是答案所需的概率。预算就是吞吐与长程事实召回之间的旋钮，而安全的设定因工作负载而异。
+
+```{=html}
+<figure>
+<div class="viz" data-viz="curve" data-family="diminishing" data-xlabel="cache budget (fraction of full)" data-ylabel="task quality recovered" data-plabel="eviction sensitivity" data-pmin="0.5" data-pmax="6" data-p="2.5"></div>
+<figcaption>示意而非实测：恢复的质量随缓存预算的第一段急升而后趋平，于是零头内存就恢复了大部分质量，而敏感度旋钮设定一个检索密集的任务为某个被驱逐词元付出代价的快慢。</figcaption>
+</figure>
+```
 - **汇的数量与窗口大小。** 汇词元太少，停放的洞见就失效；窗口太大，省下的内存就缩水。已发表的那些小默认值，一把汇与上千量级的窗口，是起点而非常数 [@xiao2023streaming]。
 
 ## 把它放进引擎

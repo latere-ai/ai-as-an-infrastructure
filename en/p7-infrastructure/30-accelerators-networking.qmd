@@ -14,6 +14,15 @@ The machine is a hierarchy of bandwidth tiers, and tracing a byte from the die o
 
 The innermost tier is a chip and its memory. An accelerator pairs a large matrix-multiply throughput with high-bandwidth memory (HBM) sitting next to the die. The forward and backward matmuls are fed from HBM, so HBM bandwidth, not raw FLOPs, often sets the achievable rate for a kernel.
 
+Drag the ceiling to see why a kernel that does little work per byte fetched stays bandwidth-bound and never reaches the peak FLOPs the spec sheet promises.
+
+```{=html}
+<figure>
+<div class="viz" data-viz="curve" data-family="roofline" data-xlabel="FLOPs per byte fetched" data-ylabel="achievable FLOPs" data-plabel="peak FLOPs ceiling" data-pmin="2" data-pmax="12" data-p="6"></div>
+<figcaption>A kernel ramps with how much arithmetic it does per byte it pulls from HBM, then flattens once it hits the hardware's peak FLOPs ceiling.</figcaption>
+</figure>
+```
+
 The next tier is intra-node: the few accelerators inside one chassis. On NVIDIA hardware these are wired with NVLink, a dedicated chip-to-chip fabric, and NVSwitch, which lets every accelerator in the node reach every other at full NVLink bandwidth rather than over the slower PCIe bus. This tier is where the most communication-hungry axis can live, because NVLink bandwidth is high enough to hide a collective behind compute. Whether a collective hides at all is a ratio, as @fig-30-accelerators-networking-2 sketches: as long as a step does more compute than communication the collective vanishes entirely under it, and the inter-node network falls short precisely because its bytes are dear enough to leave some communication exposed.
 
 ![Schematic of how much of a collective hides under compute as a function of the compute-to-communication ratio, after Shoeybi et al. (2019) and Narayanan et al. (2021). The NVLink tier sits where the ratio is high and the collective vanishes entirely; the inter-node network sits where bytes are dearer, so some communication stays exposed.](/figures/30-accelerators-networking-2.svg){#fig-30-accelerators-networking-2}
@@ -102,6 +111,28 @@ Every parallelism axis buys a different resource and pays in a different currenc
 - **Tensor parallelism against bandwidth.** TP cuts per-device memory and latency but spends intra-node bandwidth on two all-reduces per layer. That spend is affordable only on NVLink, so the TP degree caps at the NVLink domain. Push it past the node and the all-reduce falls onto the inter-node network, where it cannot hide under compute and shows up as lost MFU. @fig-30-accelerators-networking-1 makes the cliff visible: MFU holds a plateau while TP fits inside the NVLink domain, then falls away the moment the degree spills onto the inter-node network.
 
 ![Schematic of model FLOPs utilization as the tensor-parallel degree grows, after Shoeybi et al. (2019) and Narayanan et al. (2021). MFU holds a plateau while TP fits inside the NVLink domain, then falls off a cliff once the all-reduce spills onto the inter-node network an order of magnitude slower per byte.](/figures/30-accelerators-networking-1.svg){#fig-30-accelerators-networking-1}
+
+Change `nvlink_size` and `slowdown` and watch where the plateau breaks and how steep the cliff becomes.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+nvlink_size = 8       # accelerators reachable at NVLink bandwidth
+peak = 0.55           # MFU plateau when communication hides under compute
+slowdown = 10.0       # inter-node bytes are this many times dearer than NVLink
+tp = np.arange(1, 33)
+# fraction of the step lost to exposed (un-hidden) all-reduce once TP spills
+comm = np.where(tp <= nvlink_size, 0.0, (tp - nvlink_size) / tp * (1 - 1 / slowdown))
+mfu = peak * (1 - comm)
+plt.plot(tp, mfu, marker='o')
+plt.axvline(nvlink_size, ls='--', color='gray', label='NVLink boundary')
+plt.xlabel('tensor-parallel degree'); plt.ylabel('MFU')
+plt.ylim(0, 0.6); plt.legend(); plt.title('TP past the node falls off a cliff')
+print('MFU at TP=8:', round(mfu[7], 3), ' at TP=16:', round(mfu[15], 3))
+plt.show()
+```
+::::
 - **Pipeline parallelism against the bubble.** PP is bandwidth-cheap, a single activation hand-off per stage boundary, so it crosses nodes comfortably, but it pays a pipeline bubble at the fill and drain of each step.
 - **MFU against memory.** Recomputation lets a bigger model or longer sequence fit by redoing forward work in the backward pass, which raises HFU but lowers MFU. The number you optimize depends on whether memory or throughput is the binding constraint.
 

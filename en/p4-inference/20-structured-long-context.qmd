@@ -31,6 +31,28 @@ flowchart LR
   A -.next step.-> M
 ```
 
+Try changing `allowed` to a different set of legal tokens and watch the disallowed probabilities collapse to exactly zero while the legal ones renormalize.
+
+:::: {.runnable}
+```python
+import numpy as np
+vocab = ['{', '}', '"', 'name', 'age', ':', ',', 'true', 'hello', '42']
+logits = np.array([2.1, 0.3, 3.0, 1.2, 1.0, 0.5, 0.4, 0.8, 2.5, 1.1])
+# FSM is just after '{' : the only legal next token is an opening quote.
+allowed = {'"'}
+mask = np.array([t in allowed for t in vocab])
+masked = np.where(mask, logits, -np.inf)
+def softmax(x):
+    x = x - np.max(x[np.isfinite(x)])
+    e = np.exp(np.where(np.isfinite(x), x, -np.inf))
+    return e / e.sum()
+p_free, p_masked = softmax(logits), softmax(masked)
+for t, a, b in zip(vocab, p_free, p_masked):
+    print(f'{t:>6}  unconstrained={a:.3f}  masked={b:.3f}')
+print('masked mass on legal tokens:', round(p_masked[mask].sum(), 3))
+```
+::::
+
 The catch that makes this an engineering problem rather than a one-liner is the mismatch between the automaton, which is defined over characters, and the model, which emits tokens that are multi-character pieces of the byte stream from @sec-tokenization. A token may span several automaton transitions, and only some tokens are valid from a given state. Computing the allowed-token set naively means walking the automaton over the spelling of every one of tens of thousands of vocabulary entries, at every step, which would dominate the cost of decoding. So the first implementation of this idea was correct but slow, a per-step vocabulary scan against a hand-written automaton, and the history of the track is a chain of removing that cost.
 
 ### Removing the per-step scan: a precomputed index
@@ -148,6 +170,13 @@ Each technique buys its benefit at a stated cost.
 - **Index build versus reuse.** The precomputed index pays an up-front cost to compile the regular expression or grammar against the tokenizer [@willard2023guided]. For a format used across many requests this amortizes to nothing, but for a one-off schema generated per request the build can rival the generation it saves. Engines cache compiled grammars by format for exactly this reason.
 - **Jump-forward correctness.** Emitting forced tokens without a model call is only safe where the automaton truly has a single continuation, and tokenizer boundaries complicate that: the jumped text must re-tokenize the same way the model would have produced it, or the cache and the output diverge [@yin2024compressed]. The speedup is real but the boundary handling is where the bugs live.
 - **Compression budget versus recall.** A smaller cache budget saves more memory and fits more concurrent requests, but raises the chance that an evicted token was the one the answer needed. The budget is the dial between throughput and the recall of long-range facts, and the safe setting is workload-specific.
+
+```{=html}
+<figure>
+<div class="viz" data-viz="curve" data-family="diminishing" data-xlabel="cache budget (fraction of full)" data-ylabel="task quality recovered" data-plabel="eviction sensitivity" data-pmin="0.5" data-pmax="6" data-p="2.5"></div>
+<figcaption>Schematic, not measured: recovered quality rises steeply with the first slice of cache budget and flattens, so a fraction of the memory recovers most of the quality, while the sensitivity dial sets how fast a retrieval-heavy task pays for an evicted token.</figcaption>
+</figure>
+```
 - **Sink count and window size.** Too few sink tokens and the parking insight fails; too large a window and the memory saving shrinks. The small published defaults, a handful of sinks and a window in the thousands, are starting points, not constants [@xiao2023streaming].
 
 ## Putting it in the engine
