@@ -5,9 +5,13 @@ import { renderToString } from "react-dom/server";
 import { createElement } from "react";
 import Reader from "./Reader.tsx";
 import { page } from "./html.ts";
-import { sampleChapter } from "./sample.ts";
+import { loadBook } from "./pipeline/book.ts";
+import { compileChapter } from "./pipeline/compile.ts";
 
 const css = await Bun.file(new URL("./theme.css", import.meta.url)).text();
+const repoRoot = new URL("../../", import.meta.url).pathname;
+const book = loadBook("en", repoRoot);
+const devChapter = compileChapter(book, book.chapters.find((c) => c.href.includes("06-transformer"))!);
 
 async function buildClient(): Promise<string> {
   const out = await Bun.build({
@@ -34,8 +38,8 @@ Bun.serve({
       clientJs = await buildClient(); // rebuild each load in dev
       return new Response(clientJs, { headers: { "content-type": "text/javascript" } });
     }
-    const bodyHtml = renderToString(createElement(Reader, { chapter: sampleChapter }));
-    const html = page({ chapter: sampleChapter, bodyHtml, css, clientSrc: "/client.js" });
+    const bodyHtml = renderToString(createElement(Reader, { chapter: devChapter }));
+    const html = page({ chapter: devChapter, bodyHtml, css, clientSrc: "/client.js" });
     return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
   },
 });
