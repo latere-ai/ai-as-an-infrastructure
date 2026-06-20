@@ -36,6 +36,23 @@ export function expandDivs(src: string): string {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    // Pandoc raw HTML block: ```{=html} … ``` → emit the inner HTML verbatim
+    // (markdown-it-attrs would otherwise strip the {=html} info and render it as
+    // a code block). Surrounding blank lines let html:true pass it through.
+    const htmlFence = !inCode && line.match(/^(`{3,})\{=html\}\s*$/);
+    if (htmlFence) {
+      const marker = htmlFence[1];
+      out.push("");
+      for (i++; i < lines.length; i++) {
+        const t = lines[i].trim();
+        if (/^`{3,}$/.test(t) && t.length >= marker.length) break;
+        out.push(lines[i]);
+      }
+      out.push("");
+      continue;
+    }
+
     const codeOpen = line.match(/^(`{3,}|~{3,})/);
     if (inCode) {
       out.push(line);

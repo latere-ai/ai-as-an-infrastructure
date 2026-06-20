@@ -47,6 +47,7 @@ function createMd(ctx: RenderContext): MarkdownIt {
   const defFence = md.renderer.rules.fence!.bind(md.renderer.rules);
   md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     const info = tokens[idx].info.trim();
+    if (info === "{=html}") return tokens[idx].content; // Pandoc raw HTML block (cover, viz)
     if (info === "{dot}" || info === "dot") return renderDot(ctx.graphviz, tokens[idx].content, ctx.xref, ctx.currentHref);
     if (info === "{mermaid}" || info === "mermaid") return renderMermaid(tokens[idx].content, ctx.xref, ctx.currentHref);
     return defFence(tokens, idx, options, env, self);
