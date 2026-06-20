@@ -1,0 +1,236 @@
+# The Machine That Breaks at Scale {#sec-machine-breaks}
+
+The previous three chapters built and powered a machine of a hundred thousand
+accelerators. This chapter asks what happens when you run it. By the end a
+reader can explain why a frontier training job is failing somewhere almost all
+the time, why the engineering discipline pivoted from preventing failures to
+amortizing them, why the most dangerous failures are the ones that raise no
+alarm, why the network's latency hierarchy and the decode bandwidth wall set
+hard ceilings on training and serving, and why an agent that runs for hours
+hits the same compounding-failure logic one layer up. The argument is that
+fault tolerance, silent corruption, the networking ceiling, inference
+economics, and agent reliability are not five problems but one phenomenon seen
+at five layers: each is a place where a lower physical limit dictates an upper
+architectural choice, and where the field has not yet agreed where the
+tolerance should live.
+
+## A statistical certainty of failure
+
+Synchronous training is a single distributed transaction. Every accelerator
+must finish its share of a step before the next step begins, so if any one of
+$N$ devices fails, all $N$ stall. The per-device failure rate is roughly
+fixed by the silicon and its memory, which makes the math of large $N$
+unforgiving: the mean time between failures for the whole job falls in
+proportion to the device count.
+
+The public ledger that made this concrete is Meta's Llama 3 405B run. On
+16,384 H100s over 54 days it logged 419 unexpected interruptions, about one
+every three hours, with roughly 59 percent traced to GPU or high-bandwidth-
+memory faults [@grattafiori2024llama]. Hold the per-device rate fixed and scale
+the job past a hundred thousand accelerators, and the expected interval
+between failures drops under half an hour. A job that takes tens of minutes to
+recover from each failure would then spend more time recovering than computing.
+The frontier is past the point where failure is an exception to plan around; it
+is the steady state.
+
+```{mermaid}
+%%| label: fig-machine-mtbf
+%%| fig-cap: "Why the steady state is failure. A fixed per-device fault rate times a synchronous job of N devices drives the whole-job mean-time-between-failures below the recovery time, so the discipline shifts from preventing failures to amortizing them. The Llama 3 405B run is the public anchor."
+flowchart TB
+  dev["fixed per-device fault rate<br/>(silicon + HBM)"]
+  n["× N synchronous devices<br/>(any one fails → all stall)"]
+  mtbf["whole-job MTBF falls<br/>Llama 3: ~1 per 3h at 16k GPUs<br/>→ under 30 min at 100k+"]
+  pivot["pivot: amortize, don't prevent<br/>measure ETTR, not peak FLOPs"]
+  dev --> n --> mtbf --> pivot
+```
+
+The response is not to prevent failures, which is impossible at this rate, but
+to make recovery cheap enough that frequent failures barely dent throughput.
+The metric that captures this is the effective training time ratio, the
+fraction of wall-clock time the job spends making real progress rather than
+recovering. A production system reporting 97 percent effective training time
+across a three-month run on nearly ten thousand GPUs, atop a platform of
+hundreds of thousands, is the state of the art [@byterobust2025], and it gets
+there by replacing periodic disk checkpoints with in-memory and peer-replicated
+checkpoints so a restart costs seconds rather than the tens of minutes a
+multi-terabyte reload from storage would take.
+
+::: {.callout-tip}
+## Constraint arrow
+
+The fixed per-device failure rate dictates the training-software architecture.
+At a hundred thousand accelerators it forces sub-minute recovery, in-memory
+checkpointing, and redundant nodes, because the alternative, periodic disk
+checkpoints, would let recovery overwhelm computation. The parallelism of
+@sec-training-at-scale is the thing this layer must keep alive through constant
+interruption.
+:::
+
+## The failures that raise no alarm
+
+The failures counted in that ledger announce themselves: a GPU falls off the
+bus, a process crashes, a collective times out. The harder problem is the
+failure that does not. Silent data corruption is a fault that produces a wrong
+number with no crash and no error, a bit that flips in an arithmetic unit or a
+memory cell and quietly poisons a result. At the scale of a frontier run, with
+that many devices computing for that many weeks, such an event is not a
+possibility but a near certainty, and the danger is specific: corruption during
+training can steer the model toward a different optimum, degrading the result
+without ever tripping a flag [@ma2025sdc].
+
+What makes this unsolved rather than merely hard is that the cheap detectors
+miss most of it. A gate-level study of data-center GPUs found that
+not-a-number and infinity values, the signals a naive guard watches for,
+account for only about one percent of silent-corruption outcomes, and that
+single-bit flips, the model most error-correcting codes assume, are under forty
+percent of bit-flip events [@anatomy2026sdc]. The corruption that matters is the
+plausible wrong answer, a finite number in the right range that is simply
+incorrect, and catching it requires algorithm-level checks on the matrix
+multiplies or deterministic replay to localize the offending node, both of
+which cost compute and neither of which has an agreed coverage standard. The
+open question is not how to detect a crash but how to detect a lie.
+
+## The latency hierarchy is a wall
+
+@sec-accelerators-networking established the bandwidth tiers; here they impose
+a ceiling. A measurement study of collective communication across more than a
+hundred thousand GPUs put hard numbers on the hierarchy: relative to the
+latency inside a rack, crossing to another rack costs about seven times,
+crossing to another zone about fifteen times, and crossing to another building
+about thirty times [@meta2025ncclx]. Those multipliers are physics, not
+tuning, and they decide the parallelism map. The most communication-hungry
+axis must stay inside the high-bandwidth scale-up domain, which, as
+@sec-compute-frontier described, has grown from a node to a rack but stops
+hard at the domain's edge. Past that edge, only axes that communicate sparingly
+can afford to cross, and the further they cross the more they pay.
+
+This ceiling is why one of the field's live debates is shifting under it. A
+job that outgrows a single building's power, the constraint @sec-powering-ai
+described, must span buildings or sites, and across that distance the
+thirty-times latency penalty makes strict global synchronization
+uneconomical. The orthodox answer is to keep synchronous training and engineer
+around the latency; the challenger is to relax synchrony, taking local steps
+and reconciling occasionally. What changed recently is that the challenger
+acquired evidence: a cross-datacenter training method reported keeping the
+useful-work fraction near 88 percent while training across regions over
+ordinary wide-area links, under high failure rates [@diloco2026]. Asynchronous
+cross-site training moved from a theoretical option to a demonstrated one,
+driven less by a wish to relax synchrony than by the simple fact that the
+power does not fit in one place.
+
+## The decode wall and the serving split
+
+Serving has its own version of the same story, and it traces to the memory wall
+of @sec-compute-frontier. Generating a token requires reading the model's
+weights and the accumulated key-value cache out of memory, so decode throughput
+is set by memory bandwidth divided by the bytes that must be read, not by
+arithmetic [@erdil2025inference]. Adding FLOPs to a decode step buys nothing,
+because the step is waiting on bytes. Prefill, the processing of the prompt, is
+the opposite: it is compute-bound and tolerates cheaper memory.
+
+```{dot}
+//| label: fig-machine-disagg
+//| fig-cap: "Why serving splits in two. Prefill is compute-bound and tolerates cheap memory; decode is bandwidth-bound and wants scarce HBM. Disaggregating them onto differently-provisioned pools lets each run on cost-optimal silicon, at the cost of streaming the KV cache between them. Whether that trade pays is contested."
+digraph disagg {
+  rankdir=LR;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+
+  prompt [label="prompt"];
+  prefill [label="prefill pool\ncompute-bound\ncheaper memory ok"];
+  decode  [label="decode pool\nbandwidth-bound\nscarce HBM", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  out [label="tokens"];
+  prompt -> prefill -> decode -> out;
+  prefill -> decode [label="stream KV cache\n(the contested cost)", style=dashed];
+}
+```
+
+The structural response is to disaggregate: run prefill and decode on separate,
+differently-provisioned pools and stream the key-value cache between them, a
+pattern a production serving system shipped in 2026 with direct
+memory-to-memory cache transfer and large reported throughput gains on
+reasoning workloads. The cross-references for the mechanics are
+@sec-serving-problem and @sec-memory-scheduling; the long-context pressure that
+makes the cache so large belongs to @sec-structured-long-context. The frontier
+question is whether the split always pays, because moving a multi-gigabyte
+cache between pools is itself a cost that only the right workload mix and
+context length repay.
+
+## The agent breaks the same way
+
+One layer up, the same compounding logic governs how long an agent can run. If
+a model succeeds at each step of a task with probability $p$, then a task of
+$t$ independent steps succeeds with probability $p^t$, which decays fast even
+for high $p$. Long-horizon reliability is therefore not a smooth extension of
+single-step accuracy; it is a product that collapses. Recent work formalized
+this and named a sharper effect: self-conditioning, where a model's own earlier
+mistakes, sitting in its context, raise the probability of later mistakes, so
+the decay is worse than independent steps would predict, and scaling parameters
+does not remove it [@longhorizon2025]. Measuring agents accordingly has its own
+emerging vocabulary, reliability-decay curves and degradation scores rather
+than a single pass rate [@reliability2026agents], because a number that
+describes one attempt says little about an agent asked to work for hours.
+
+Whether this is a model problem or a systems problem is the debate, and the
+chapter's framing comes down on the systems side: if raw reliability decays
+super-linearly with task length, the fix is the harness, checkpointing the
+agent's state, verifying intermediate results, and scaffolding recovery, rather
+than waiting for a model that never errs (cross-ref @sec-the-harness,
+@sec-multi-agent-systems, @sec-evaluating-agents). The capability trend in the
+underlying models is real and is the subject of @sec-capability-horizon; the
+point here is that the machine fails the same way at every layer, and the
+answer is the same at every layer, which is to amortize failure rather than to
+assume it away.
+
+::: {.callout-important}
+## What's contested
+
+- **Is silent corruption a tail risk or a routine hazard?** A classical view
+  holds it is rare per device and absorbed by gradient noise. The frontier-lab
+  view holds it is near-certain at scale and can alter convergence, so it
+  demands always-on detection. The real disagreement is coverage versus
+  overhead: nobody agrees what fraction must be caught or what cost is
+  acceptable.
+- **Synchronous or asynchronous at extreme scale?** The orthodox camp keeps
+  bulk-synchronous training and fixes it with fast recovery and faster
+  collectives. The challenger camp accepts stale gradients and local steps to
+  survive failures and cross-site latency, and now has demonstrated goodput to
+  point to. Whether async matches frontier loss curves is still open.
+- **Where should fault tolerance live?** Silicon vendors push better
+  error-correction and telemetry; the network camp wants self-healing
+  collectives that treat a flapping link as first-class; the framework camp
+  argues only the application knows the checkpoint and parallelism structure,
+  so recovery belongs there. The layers are not mutually exclusive, and the
+  field has not settled the division.
+- **Does prefill/decode disaggregation win?** Its proponents say each phase
+  runs on cost-optimal silicon and both latency metrics improve. Skeptics say
+  moving the cache only pays at high context lengths and specific mixes, and
+  that a unified deployment is cheaper for short prompts.
+:::
+
+## Reading the machine
+
+The capability, efficiency, trust lens reads this layer as one theme.
+Capability is bounded by survival: a run that cannot recover faster than it
+fails does not finish, so the frontier capability is staying alive, not going
+fast. Efficiency is the effective training time ratio and the tokens per second
+per accelerator, both of which are won by attacking failure and the bandwidth
+wall rather than by adding arithmetic. Trust is the literal trust that the
+numbers are right, which silent corruption quietly undermines, and the trust
+that an agent left to run will not compound itself into nonsense. The machine
+breaks at every layer in the same way, and the discipline of the frontier is
+the unglamorous work of making a machine that is always partly broken behave as
+if it were whole. Having followed the physical and engineering stack to its
+limits, the next chapter turns to a different kind of limit, the one inside the
+learning itself.
+
+## Further reading
+
+- Meta AI (Llama Team), "The Llama 3 Herd of Models," 2024 (the public failure ledger: 419 interruptions in 54 days on 16,384 H100s). [arXiv:2407.21783](https://arxiv.org/abs/2407.21783)
+- ByteDance Seed, "Robust LLM Training Infrastructure (ByteRobust)," 2025 (97% effective training time ratio across a three-month run). [arXiv:2509.16293](https://arxiv.org/abs/2509.16293)
+- Ma, Pei, Lausen, Karypis, "Understanding Silent Data Corruption in LLM Training," 2025, with "The Anatomy of Silent Data Corruption," 2026 (the ~1% NaN/INF and under-40% single-bit-flip statistics). [arXiv:2502.12340](https://arxiv.org/abs/2502.12340) / [arXiv:2605.04213](https://arxiv.org/abs/2605.04213)
+- Meta, "Collective Communication for 100k+ GPUs," 2025 (the 7x / 15x / 30x latency hierarchy and a fault-tolerant all-reduce). [arXiv:2510.20171](https://arxiv.org/abs/2510.20171)
+- Google DeepMind, "Decoupled DiLoCo," 2026 (cross-datacenter training at ~88% goodput, the shipping counter-evidence in the sync-versus-async debate). [arXiv:2604.21428](https://arxiv.org/abs/2604.21428)
+- Erdil (Epoch AI), "Inference Economics of Language Models," 2025 (the decode memory-bandwidth ceiling and the batch trade-off). [arXiv:2506.04645](https://arxiv.org/abs/2506.04645)
+- "The Illusion of Diminishing Returns: Measuring Long Horizon Execution in LLMs," 2025 (compounding error and self-conditioning). [arXiv:2509.09677](https://arxiv.org/abs/2509.09677)
