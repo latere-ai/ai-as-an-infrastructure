@@ -15,7 +15,7 @@ import { join } from "node:path";
 const css = await Bun.file(new URL("./theme.css", import.meta.url)).text();
 const repoRoot = new URL("../../", import.meta.url).pathname;
 const book = loadBook("en", repoRoot);
-const ctx = { bib: loadBibliography(join(repoRoot, "references.bib")), xref: buildCrossref(book), graphviz: await loadGraphviz() };
+const ctx = { bib: loadBibliography(join(repoRoot, "references.bib")), xref: buildCrossref(book), graphviz: await loadGraphviz(), refsDir: join(repoRoot, "refs") };
 const devChapter = compileChapter(book, book.chapters.find((c) => c.href.includes("03-scaling-laws"))!, ctx);
 
 async function buildClient(): Promise<string> {

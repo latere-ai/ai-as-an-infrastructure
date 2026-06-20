@@ -49,7 +49,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
   const book = loadBook(lang, repoRoot);
   const bib = loadBibliography(join(repoRoot, "references.bib"));
   const xref = buildCrossref(book);
-  const ctx = { bib, xref, graphviz };
+  const ctx = { bib, xref, graphviz, refsDir: join(repoRoot, "refs") };
   const langOut = join(outRoot, lang);
   mkdirSync(langOut, { recursive: true });
 

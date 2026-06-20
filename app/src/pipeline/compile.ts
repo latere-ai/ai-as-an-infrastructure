@@ -9,6 +9,7 @@ import { navFor, prevNext } from "./book.ts";
 import { renderMarkdown } from "./markdown.ts";
 import { stripCjkSoftBreaks } from "./cjk.ts";
 import { renderBibliography, type Bibliography } from "./citations.ts";
+import { renderFurtherReading } from "./further-reading.ts";
 import type { CrossrefMap } from "./crossref.ts";
 import type { GraphvizInstance } from "./diagrams.ts";
 import type { ChapterData, Lang } from "../types.ts";
@@ -17,6 +18,7 @@ export interface CompileContext {
   bib: Bibliography;
   xref: CrossrefMap;
   graphviz: GraphvizInstance;
+  refsDir: string; // path to refs/, the per-chapter literature store
 }
 
 // Depth of a chapter's output file relative to the language root, for building
@@ -76,6 +78,12 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   // References page: fill the ::: {#refs} slot with the cited-only bibliography.
   if (ch.href === "references.html") {
     html = html.replace(/(<div class="rdr-block"[^>]*id="refs"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderBibliography(ctx.bib)}$3`);
+  }
+  // Chapter "Further reading": fill the ::: {#further-reading} slot from
+  // refs/<slug>.bib (the per-chapter literature store).
+  if (html.includes('id="further-reading"')) {
+    const slug = ch.href.split("/").pop()!.replace(/\.html$/, "");
+    html = html.replace(/(<div class="rdr-block"[^>]*id="further-reading"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderFurtherReading(ctx.refsDir, slug, book.lang)}$3`);
   }
   const { prev, next } = prevNext(book, ch.href);
   // nav hrefs are lang-root-relative; make them relative to this page.

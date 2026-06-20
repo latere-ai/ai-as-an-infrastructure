@@ -80,7 +80,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
 
   let body = "";
   book.chapters.forEach((ch, i) => {
-    const data = compileChapter(book, ch, { bib, xref, graphviz });
+    const data = compileChapter(book, ch, { bib, xref, graphviz, refsDir: join(repoRoot, "refs") });
     const opener = renderToStaticMarkup(createElement(ChapterOpenerExport, { chapter: data }));
     body += `<section class="pchap">${nsChapter(opener + `<div class="rdr-article">${data.contentHtml}</div>`, i)}</section>\n`;
   });
