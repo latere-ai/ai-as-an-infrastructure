@@ -1,4 +1,8 @@
-.PHONY: preview preview-zh render render-en render-zh render-html check clean
+.PHONY: preview preview-zh render render-en render-zh render-html check test clean
+
+# Unit tests for the pandoc filters (needs pandoc; skips cleanly without it).
+test:
+	bash test/cjk-softbreak.test.sh
 
 # Live preview, one language at a time (Quarto previews a single project).
 preview:
