@@ -240,15 +240,52 @@ function ChapterOpener({ chapter, layout }: { chapter: ChapterData; layout: Layo
   );
 }
 
+interface SearchDoc { href: string; num: string; title: string; headings: string[]; text: string }
+
+function SearchBox({ t, prefix }: { t: Strings; prefix: string }) {
+  const [q, setQ] = useState("");
+  const [docs, setDocs] = useState<SearchDoc[] | null>(null);
+  const load = () => {
+    if (docs) return;
+    fetch(`${prefix}search.json`).then((r) => r.json()).then((d: SearchDoc[]) => setDocs(d)).catch(() => setDocs([]));
+  };
+  const results = useMemo(() => {
+    const query = q.trim().toLowerCase();
+    if (!query || !docs) return [];
+    return docs
+      .map((d) => {
+        const hay = `${d.num} ${d.title} ${d.headings.join(" ")} ${d.text}`.toLowerCase();
+        const score = (d.title.toLowerCase().includes(query) ? 3 : 0) + (hay.includes(query) ? 1 : 0);
+        return { d, score };
+      })
+      .filter((r) => r.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+  }, [q, docs]);
+
+  return (
+    <div style={{ padding: "0 16px 14px", position: "relative" }}>
+      <input value={q} onFocus={load} onChange={(e) => setQ(e.target.value)} placeholder={t.search} style={{
+        width: "100%", height: 36, padding: "0 12px", border: "1px solid var(--border-strong)", background: "var(--bg)",
+        borderRadius: "var(--radius-md)", color: "var(--fg-1)", fontFamily: "var(--font-ui)", fontSize: 13, outline: "none",
+      }} />
+      {results.length > 0 && (
+        <div style={{ position: "absolute", left: 16, right: 16, top: 40, zIndex: 20, background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)", overflow: "hidden" }}>
+          {results.map(({ d }) => (
+            <a key={d.href} href={`${prefix}${d.href}`} style={{ display: "block", padding: "8px 12px", textDecoration: "none", borderBottom: "1px solid var(--border)", color: "var(--fg-1)", fontSize: 13 }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>{d.title}
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SidebarTree({ t, chapter, embedded, onNavigate }: { t: Strings; chapter: ChapterData; embedded?: boolean; onNavigate?: () => void }) {
   return (
     <aside style={{ flex: "none", width: 264, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: "var(--bg-surface)", overflowY: "auto", padding: "18px 0 60px", alignSelf: "stretch" }}>
-      <div style={{ padding: "0 16px 14px" }}>
-        <input placeholder={t.search} disabled style={{
-          width: "100%", height: 36, padding: "0 12px", border: "1px solid var(--border-strong)", background: "var(--bg)",
-          borderRadius: "var(--radius-md)", color: "var(--fg-1)", fontFamily: "var(--font-ui)", fontSize: 13, outline: "none",
-        }} />
-      </div>
+      <SearchBox t={t} prefix={chapter.prefix} />
       <nav>
         {chapter.toc.map((part) => (
           <div key={part.id} style={{ marginBottom: 2 }}>
