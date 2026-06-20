@@ -1,25 +1,236 @@
 # Context Engineering {#sec-context-engineering}
 
-The shift from prompt to context engineering, in-context learning, context-window budgeting, and tool protocols.
-
-::: {.callout-note}
-## Status
-Outline. Source: `new`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+A frontier model does not act on the world. It acts on its context window,
+the bounded sequence of tokens it can attend to in a single forward pass.
+Everything the model knows about a task at the moment of generation, the
+instructions, the retrieved documents, the conversation so far, the tool
+results, must be assembled into that window by something outside the model.
+By the end of this chapter a reader can explain why the field renamed this
+work from prompt engineering to context engineering in 2025, why a longer
+context window does not by itself solve the problem, and how token budgets
+and tool protocols shape what an agent can actually do.
 
 ## Problem
 
+The context window is a fixed, scarce resource, and it is the only channel
+through which a model perceives a task. Two facts make managing it the
+central engineering problem of any serious LLM application.
+
+The first is that the window is finite and every token in it competes for
+the same space. A system prompt, a tool catalog, retrieved passages, and a
+long conversation history all draw from one budget. When the budget is
+exceeded, something must be dropped, summarized, or retrieved on demand, and
+each of those choices changes what the model can answer.
+
+The second fact is more surprising: a model does not use the tokens in its
+window uniformly. Even when the relevant information is present, a model
+tends to attend most reliably to the beginning and the end of its input and
+least reliably to the middle. Liu et al. (2023, published in TACL 2024)
+named this the lost-in-the-middle effect, measuring a characteristic
+U-shaped accuracy curve on multi-document question answering and key-value
+retrieval: performance is highest when the needed fact sits near the start
+or the end of the context and degrades, sometimes below the closed-book
+baseline, when it sits in the middle. A bigger window does not repeal this.
+It enlarges the middle.
+
+So the problem is not only "how do I fit everything in," it is "what do I
+put in, in what order, so the model uses it." That is a budgeting and
+placement problem, and it is the work this chapter is about.
+
 ## Design
+
+The core idea is to treat the context window as a managed buffer, not a
+prompt. The model's weights are fixed at inference time; the only lever left
+is what enters the window and where. Context engineering is the discipline of
+pulling that lever well.
+
+The lever is real because of in-context learning. Brown et al. (2020) showed
+with GPT-3 that a sufficiently large autoregressive model can perform a task
+from demonstrations placed in its context, with no weight update at all. They
+distinguished three regimes by how many demonstrations the prompt carries:
+zero-shot, an instruction with no examples; one-shot, a single example; and
+few-shot, a handful, typically ten to one hundred, that fit in the window. The
+finding that mattered for everything since is that the context is a
+programming surface. You can change a model's behavior by changing its input,
+within one session, at the cost of the tokens the demonstrations consume.
+
+Once the context is a programming surface, the assembly of it becomes the
+artifact worth engineering. Andrej Karpathy made this argument in mid-2025,
+proposing context engineering over prompt engineering on the grounds that a
+"prompt" connotes a short instruction, while real applications perform "the
+delicate art and science of filling the context window with just the right
+information for each step." Tobi Lutke framed it from the application side the
+same week: context engineering is "the art of providing all the context for
+the task to be plausibly solvable by the LLM." The rename is not cosmetic. It
+moves the unit of work from a single string a human writes to a pipeline a
+system assembles: system prompt, retrieved documents, conversation history,
+distilled memory, and tool outputs, composed for each step of a running
+agent.
+
+Three design moves follow directly from the two problem facts.
+
+**Budgeting.** Treat the window as a cost-accounted resource. Account for the
+fixed overhead first, the system prompt and the tool definitions, then divide
+what remains among history, retrieval, and headroom for the model's own
+output. Retrieval (@sec-rag-retrieval) exists precisely so that not
+everything has to live in the window at once; the corpus stays outside and
+only the relevant slice is paged in per query.
+
+**Placement.** Because the middle is the weak position, order matters.
+Put the instruction the model must follow and the highest-value evidence
+where attention is reliable, near the boundaries, not buried in a long
+undifferentiated dump. Lost-in-the-middle is a property of the model, and it
+dictates a choice in the layer above it.
+
+**Compression over accumulation.** A conversation or an agent trajectory grows
+without bound, but the window does not. Old turns are summarized into distilled
+state, tool outputs are filtered before they re-enter the window, and durable
+facts are written to an external memory (@sec-memory-systems) and retrieved
+when needed rather than carried forward verbatim.
+
+::: {.callout-tip}
+## Constraint arrow
+Context budgeting is not a stylistic preference; it is forced from below by
+the cost of a token. Every token in the window must sit in the key-value
+cache and be attended to, and the serving problem in @sec-serving-problem and
+the cache scheduling in @sec-memory-scheduling show that this cost grows with
+context length, in memory and in compute. A longer window is not free
+capacity you may as well fill. The per-token serving cost is what makes a
+tight, well-ordered context the right design even when a larger window is
+technically available.
+:::
 
 ## Evolution
 
+The lineage runs from a single string toward a managed pipeline.
+
+The first era was prompt engineering. With in-context learning established,
+practitioners learned to coax behavior from a model by wording: phrasing an
+instruction carefully, adding a few worked examples, appending "let's think
+step by step" to elicit a chain of thought (@sec-eliciting-reasoning). The
+artifact was a prompt template, and the skill was writing it.
+
+The limits of that era showed up as applications grew. A single hand-written
+string cannot hold a large knowledge base, a long conversation, or the output
+of tools the model calls. Retrieval-augmented generation (@sec-rag-retrieval)
+answered the knowledge-base limit by fetching relevant passages at query
+time. Agent harnesses (@sec-the-harness, @sec-agent-architectures) answered
+the action limit by letting the model call tools and feeding the results back
+into the window. Both turned the context into something assembled at runtime
+from many sources, which is the moment prompt engineering became too small a
+word for the job.
+
+The rename to context engineering in 2025 was the field naming what it had
+already started doing. Karpathy and Lutke gave it a label; the practice of
+budgeting, retrieving, ordering, and compressing the window predated the term.
+
+Tools created their own integration problem and their own protocol. Before
+late 2024, every application wired each model to each data source with bespoke
+glue, an N-times-M problem. Anthropic released the Model Context Protocol
+(MCP) in November 2024 as an open standard for that wiring: a model speaks one
+protocol, and any MCP server, for a filesystem, a database, an issue tracker,
+exposes its tools and data through it. MCP standardized how external context
+and capabilities enter the window.
+
+The protocol then revealed the budgeting problem at the layer above it. As
+agents connected to dozens of MCP servers, the tool definitions themselves
+filled the context before the agent read a single request. In November 2025
+Anthropic described code execution with MCP as the response: rather than
+loading every tool definition upfront, present MCP servers as code APIs that
+the model discovers and calls by writing code, loading only the definitions a
+task needs and filtering tool results in the execution environment before they
+return to the window. Their illustrative example reduces a workflow from about
+150,000 tokens of loaded definitions and intermediate results to roughly
+2,000, a 98.7 percent reduction. The lesson is the recurring one of this
+chapter: the constraint is the context budget, and the design moves to defend
+it.
+
 ## Trade-offs
+
+Context engineering is a set of balances, each with a knee.
+
+- **Few-shot versus zero-shot.** Demonstrations raise reliability on a
+  task but cost tokens, and every demonstration token is a token unavailable
+  for retrieval, history, or output. As instruction-tuned models improved,
+  the break-even shifted: many tasks that once needed several examples now run
+  zero-shot, and examples are worth their cost only where they pin down a
+  format or a corner case the instruction cannot convey concisely.
+- **More context versus better context.** Stuffing the window with everything
+  plausibly relevant is the easy move and often the wrong one. It raises cost
+  per call, and it pushes high-value evidence into the lost-in-the-middle dead
+  zone where the model underuses it. A smaller, well-selected, well-ordered
+  context frequently beats a larger indiscriminate one.
+- **Static prompt versus assembled pipeline.** A fixed template is simple,
+  debuggable, and cheap to reason about. A pipeline that retrieves, ranks,
+  summarizes, and orders per step is more capable but introduces moving parts
+  that fail in their own ways: a bad retrieval poisons the context, a faulty
+  summary drops the fact the next step needed.
+- **Tool breadth versus token cost.** Connecting many tools makes an agent
+  more capable in principle, but loading all their definitions upfront spends
+  the budget before work begins. Progressive disclosure, loading definitions
+  on demand as in code execution with MCP, recovers the budget at the cost of
+  an extra discovery step and a more complex runtime.
+
+::: {.callout-important}
+## What's contested
+The live disagreement is whether long-context models make context curation
+obsolete. One camp argues that as windows grow to hundreds of thousands or
+millions of tokens, you can simply load everything and let attention sort it
+out, so retrieval and careful ordering become legacy workarounds. The other
+camp points to lost-in-the-middle and to per-token cost: a model that
+underuses its middle and a window that is paid for on every call mean that
+selecting and placing context still wins, regardless of how large the window
+grows. A second, sharper dispute is whether "context engineering" names a
+real discipline or rebrands prompt engineering; Karpathy answered directly
+that he is not coining a term but resisting the oversimplification that
+"prompt" invites. A third concerns MCP's original load-everything design:
+Anthropic's own code-execution follow-up suggests that loading all tool
+definitions upfront was the wrong default, and the right abstraction for
+exposing tools to a model is still unsettled.
+:::
 
 ## Implementation
 
+In practice the context for one model call is built, not written. A
+budget-aware assembler is the minimal shape:
+
+```python
+def build_context(task, history, tools, retriever, window):
+    budget = window - reserve_for_output(window)
+    parts = []
+    parts.append(system_prompt(task))          # fixed, goes first
+    parts.append(tool_manifest(tools))         # load on demand if large
+    evidence = retriever.search(task.query)    # only the relevant slice
+    parts.append(rank_and_trim(evidence, budget))
+    parts.append(summarize_old(history, budget))  # compress, do not accumulate
+    return order_for_attention(parts)          # high-value near boundaries
+```
+
+Three properties of this sketch carry the chapter's argument. The output
+reserve comes off the top, because a context that fills the window leaves the
+model no room to answer. Retrieval returns a slice, not the corpus, so the
+knowledge base lives outside the window and only its relevant part is paged
+in. And `order_for_attention` is not cosmetic: it places the instruction and
+the strongest evidence where lost-in-the-middle says the model will actually
+read them.
+
+The failure modes are worth naming because each bites at a different place.
+Context overflow truncates silently and drops whatever fell off the end,
+often the very history the next turn needed. Lost-in-the-middle degradation is
+invisible in a green build: the fact is present, the model just does not use
+it, and the only way to see it is to vary placement and watch the score move.
+Retrieval poisoning puts a confidently wrong passage in the window and the
+model treats it as evidence. Tool-definition bloat spends the budget before
+the agent starts, which is the problem code execution with MCP exists to
+solve. Each of these is a budgeting or placement failure, which is why
+budgeting and placement, not wording, are the substance of the discipline.
+
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Brown et al., "Language Models are Few-Shot Learners" (GPT-3, in-context learning), 2020. [arXiv:2005.14165](https://arxiv.org/abs/2005.14165)
+- Liu et al., "Lost in the Middle: How Language Models Use Long Contexts," TACL 2024. [arXiv:2307.03172](https://arxiv.org/abs/2307.03172)
+- Karpathy, "+1 for context engineering over prompt engineering," 2025. [x.com/karpathy](https://x.com/karpathy/status/1937902205765607626)
+- Lutke, "context engineering over prompt engineering," 2025. [x.com/tobi](https://x.com/tobi/status/1935533422589399127)
+- Anthropic, "Introducing the Model Context Protocol," 2024. [anthropic.com](https://www.anthropic.com/news/model-context-protocol)
+- Anthropic, "Code execution with MCP: building more efficient AI agents," 2025. [anthropic.com](https://www.anthropic.com/engineering/code-execution-with-mcp)
+- Mei et al., "A Survey of Context Engineering for Large Language Models," 2025. [arXiv:2507.13334](https://arxiv.org/abs/2507.13334)

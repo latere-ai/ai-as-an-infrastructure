@@ -1,25 +1,233 @@
 # Eliciting Reasoning {#sec-eliciting-reasoning}
 
-Chain-of-thought, self-consistency, tree-of-thoughts, search-guided generation, and best-of-N.
-
-::: {.callout-note}
-## Status
-Outline. Source: `new`. See [`INTEGRATION.md`](../../INTEGRATION.md).
-:::
+A base model already holds far more reasoning ability than greedy decoding
+reveals, and you can draw it out at inference time without touching a single
+weight. This chapter is about that elicitation: the prompting and decoding
+methods that turn one forward pass into a deliberation. By the end a reader can
+explain why a chain of thought helps, why sampling many chains and voting beats
+sampling one, when a tree or a search is worth its cost, and why a verifier is
+the quiet workhorse behind best-of-N. Teaching the weights to reason is the
+sibling problem of @sec-training-to-reason; here nothing is trained.
 
 ## Problem
 
+Ask a model a multi-step question and decode greedily, and it commits to an
+answer token before it has done the work that answer depends on. The
+autoregressive objective of @sec-scaling-laws spends a fixed, equal slice of
+compute on every token, so a problem that needs ten steps of arithmetic gets the
+same single pass as a problem that needs none. The model has the sub-skills,
+since pre-training saw the additions, the lookups, and the deductions, but the
+decode gives them nowhere to run. The answer position is asked to integrate
+everything at once.
+
+The problem this chapter owns is how to spend more inference compute, and spend
+it in the right shape, so that latent ability surfaces, without changing the
+model. Two levers exist at inference time. One is the prompt, which can ask the
+model to externalize intermediate steps into tokens it can then condition on.
+The other is the decoding procedure, which can sample, branch, score, and select
+instead of greedily taking the top token. Every method in this chapter is a
+combination of those two levers.
+
 ## Design
+
+The core idea is to make the model write its working, then exploit that the
+working is now part of the context. A chain of thought is the minimal form:
+prompt the model to produce intermediate reasoning steps before the final
+answer, and each step becomes a token sequence the later steps attend over. This
+converts a single hard prediction into a sequence of easier ones, and it gives
+the model room to allocate more forward passes, one per reasoning token, to a
+harder problem. Wei et al. (2022) showed that a few worked examples in the
+prompt elicit this, and Kojima et al. (2022) showed that even the instruction
+"Let's think step by step" elicits it zero-shot. No weights move. The ability
+was latent; the prompt unlocks the decode.
+
+Once reasoning lives in tokens, the decoding procedure becomes a design space.
+The cleanest idea is to stop trusting a single sample. A greedy chain can take a
+wrong turn early and never recover. Self-consistency (Wang et al. 2022) samples
+many chains at non-zero temperature, then marginalizes over the reasoning paths
+by taking a majority vote on the final answers. The reasoning path is treated as
+a latent variable to integrate out, not an output to return:
+
+$$
+\hat{y} = \arg\max_{y} \sum_{i=1}^{N} \mathbb{1}\left[ a(z_i) = y \right], \quad z_i \sim p_\theta(z \mid x)
+$$
+
+where each $z_i$ is a sampled chain and $a(z_i)$ is the answer it reaches. Many
+paths can reach the right answer by different routes, while wrong answers tend to
+scatter, so the mode of the answer distribution is a better estimate than any one
+sample. This is the highest value-per-line method in the chapter: it needs no
+verifier, no extra model, only more samples and a vote.
+
+When a problem decomposes, you can shape the chain instead of just sampling it.
+Least-to-most prompting (Zhou et al. 2022) asks the model first to break a
+problem into ordered subproblems and then to solve them in sequence, each
+conditioned on the solved ones, which lets the model generalize to problems
+harder than any single exemplar in the prompt.
+
+The richest design treats reasoning as search over a space of partial solutions.
+Tree of Thoughts (Yao et al. 2023) makes each node a coherent intermediate
+thought, expands several children per node, has the model self-evaluate each as
+promising or not, and explores the tree with breadth-first or depth-first search,
+including lookahead and backtracking. A chain is then the degenerate tree with
+one child per node and no backtracking. Pushing this further, AlphaZero-style
+methods (Feng et al. 2023) run Monte Carlo Tree Search over the reasoning tree,
+using value estimates to decide where to expand, so compute concentrates on
+promising branches rather than spreading evenly.
+
+```mermaid
+flowchart TB
+  Q[Question] --> M{Decoding shape}
+  M -->|one chain| CoT[Chain of thought]
+  M -->|N chains, vote| SC[Self-consistency]
+  M -->|branch + evaluate + backtrack| ToT[Tree of thoughts]
+  M -->|N candidates, score, pick| BoN[Best-of-N]
+  CoT --> A[Answer]
+  SC --> A
+  ToT --> A
+  BoN --> A
+```
+
+Self-consistency votes, but a vote only works when the answer is a discrete label
+to count. Best-of-N replaces the vote with a score. Sample $N$ candidate
+solutions, score each with a verifier or reward model, and return the highest.
+Cobbe et al. (2021) introduced this for grade-school math: train a verifier to
+judge candidate solutions, generate many, and keep the one the verifier ranks
+highest. The same scorer can guide the search rather than just rank the finished
+output, evaluating partial states inside a tree, which is what self-evaluation
+guided beam search (Xie et al. 2023) does. The verifier is the component that
+turns raw samples into a selected answer, and its quality is the ceiling on what
+selection can buy. That ceiling, and how it bounds test-time scaling, is the
+subject of @sec-inference-time-scaling.
 
 ## Evolution
 
+The lineage runs from prompt to decode to search, each step adding inference
+compute in a more structured shape. Few-shot chain-of-thought prompting came
+first (Wei et al. 2022), establishing that the ability was latent and a prompt
+could surface it. Zero-shot CoT (Kojima et al. 2022) removed even the exemplars,
+showing a single instruction sufficed and that the effect was about eliciting,
+not demonstrating. Self-consistency (Wang et al. 2022) then changed the decode
+rather than the prompt, trading a single greedy chain for many sampled chains and
+a vote, and it remains the strongest simple baseline because it needs nothing but
+samples.
+
+Decomposition methods like least-to-most (Zhou et al. 2022) shaped the chain so
+that hard problems became sequences of easy ones. Tree of Thoughts (Yao et al.
+2023) generalized the chain to a branching search with self-evaluation and
+backtracking, and AlphaZero-style tree search (Feng et al. 2023) brought a
+principled value-guided expansion to that tree. In parallel, the verifier line
+ran from Cobbe et al. (2021), where best-of-N reranking with a trained verifier
+beat a fine-tuning baseline on math, to self-evaluation guided search (Xie et al.
+2023), where the score guides the search itself rather than only ranking the
+output.
+
+The arc closes back into training. Everything here elicits, at inference, what a
+fixed model already contains. The natural next move is to take the traces these
+methods produce, the verified-correct chains and the high-value search paths, and
+train on them so the model internalizes the behavior and needs less scaffolding
+at inference. That move crosses into @sec-training-to-reason, and many of its
+ingredients, sampling many completions, scoring them with a verifier, keeping the
+good ones, are the same ingredients seen here, now wired into a weight update
+instead of a decode.
+
+::: {.callout-important}
+## What's contested
+Whether chain-of-thought tokens are a faithful account of the computation that
+produced the answer is unsettled. The optimistic reading treats the chain as the
+model's actual reasoning, which would make it both a performance lever and a
+window for oversight. The skeptical reading holds that the chain can be a
+post-hoc rationalization: the answer is determined by computation the tokens do
+not reflect, and the model can reach the same answer when the stated reasoning is
+perturbed, or state reasoning that does not drive the answer. If chains are
+unfaithful, then the accuracy gain is real but the interpretability it seems to
+offer is not, which matters directly for the oversight argument of
+@sec-oversight-control. The evidence cuts both ways and depends on task, model,
+and how faithfulness is probed, so treat a visible chain as a help to accuracy
+first and a faithful trace only when tested.
+:::
+
+::: {.callout-tip}
+## Constraint arrow
+The verifier you can build at the data layer decides which elicitation method you
+can run. Self-consistency needs only a discrete answer to vote on, so it works
+wherever answers are comparable. Best-of-N and search need a scorer, and the best
+scorer is a ground-truth checker, a unit test, a numeric or symbolic equality, a
+proof checker, exactly the checkable-answer condition that defines
+@sec-training-to-reason. Where a sound verifier exists, search and best-of-N pay
+off and their ceiling is high. Where only a learned reward model exists, the same
+methods inherit its over-optimization from @sec-rlhf and a stronger search can
+make the answer worse by driving harder on a flawed score. The availability of a
+verifier, a property of the task and not the decoder, is what sets how far
+inference-time compute can be spent profitably.
+:::
+
 ## Trade-offs
+
+Each method buys accuracy with inference compute, and the exchange rate differs.
+
+- **Single chain versus voting.** One chain is cheapest and lowest latency but
+  brittle to an early wrong turn. Self-consistency multiplies token cost by the
+  sample count $N$ for a robust majority answer, with diminishing returns as $N$
+  grows. It needs a discrete, comparable answer, so it does not apply to
+  open-ended generation where there is nothing to vote on.
+- **Voting versus scoring.** A vote needs no extra model but cannot rank
+  free-form outputs and cannot tell a confidently-wrong consensus from a correct
+  one. Best-of-N needs a verifier or reward model but ranks anything that scorer
+  covers, and its ceiling rises with verifier quality. A vote rewards agreement; a
+  score rewards correctness, and they diverge when the model is consistently
+  wrong.
+- **Chain versus tree versus search.** A chain spends compute in one line. A tree
+  spends it on breadth and can backtrack out of dead ends, at the cost of many
+  self-evaluation calls per node, which are themselves model calls that can be
+  wrong. MCTS-style search concentrates compute on high-value branches but adds
+  the machinery and the dependence on a value estimate that, if miscalibrated,
+  steers the search wrong. The gain over self-consistency is real but smaller than
+  its cost on many tasks, so the simpler method is often the right default.
+- **Compute now versus training once.** Every method here pays its cost on every
+  query, forever. Training the behavior in, per @sec-training-to-reason, pays once
+  and amortizes, but costs a training run and the data to do it. Elicitation is
+  the right tool when the model is fixed, the task is new, or the volume is low;
+  internalization wins at scale.
 
 ## Implementation
 
+The methods compose more than they compete, and the practical recipe stacks them.
+Chain-of-thought is the substrate: get the model to externalize steps, by
+exemplars or by a step-by-step instruction. On top of it, self-consistency is the
+first upgrade, sample a handful to a few dozen chains and vote, because it is
+cheap to add and needs no other component. When a verifier exists, best-of-N over
+the same samples replaces the vote with a score and lifts the ceiling. A tree or
+a search is the heaviest tool, justified when the problem has a real branching
+structure and dead ends that backtracking escapes, and when the per-node
+self-evaluation is reliable enough to trust.
+
+The failure modes are specific. A vote over an unreliable model can be
+confidently wrong, since self-consistency reports the consensus, not the truth,
+and a biased model agrees with itself. A weak verifier makes best-of-N worse than
+a single sample once $N$ is large, because selection pressure finds the
+verifier's blind spots, the inference-time face of the reward hacking in
+@sec-rlhf. A tree search with a miscalibrated self-evaluation spends its budget
+exploring bad branches and pruning good ones, so the search can underperform the
+plain chain it generalizes. And the cost is real on every call: a method that
+multiplies token count by tens for a few points of accuracy may not survive the
+economics of @sec-economics, which is why the field's center of gravity moved
+toward training the behavior in.
+
+Two structural boundaries keep elicitation honest. It cannot exceed what the
+fixed model can produce, only surface and select among it, so a problem the model
+never solves in any sample is out of reach no matter how many you draw or how
+hard you search. And the visible chain is a lever on accuracy, not a guaranteed
+account of the computation, so reading it as oversight, per
+@sec-oversight-control, is a claim that needs its own test, not a free byproduct
+of asking the model to think out loud.
+
 ## Further reading
 
-::: {.callout-note}
-## TODO
-Establish the seminal, frontier, and primary-source anchors for this chapter.
-:::
+- Wei et al., "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models," 2022. [arXiv:2201.11903](https://arxiv.org/abs/2201.11903)
+- Kojima et al., "Large Language Models are Zero-Shot Reasoners" (zero-shot CoT), 2022. [arXiv:2205.11916](https://arxiv.org/abs/2205.11916)
+- Wang et al., "Self-Consistency Improves Chain of Thought Reasoning in Language Models," 2022. [arXiv:2203.11171](https://arxiv.org/abs/2203.11171)
+- Zhou et al., "Least-to-Most Prompting Enables Complex Reasoning in Large Language Models," 2022. [arXiv:2205.10625](https://arxiv.org/abs/2205.10625)
+- Yao et al., "Tree of Thoughts: Deliberate Problem Solving with Large Language Models," 2023. [arXiv:2305.10601](https://arxiv.org/abs/2305.10601)
+- Xie et al., "Self-Evaluation Guided Beam Search for Reasoning," 2023. [arXiv:2305.00633](https://arxiv.org/abs/2305.00633)
+- Feng et al., "Alphazero-like Tree-Search can Guide Large Language Model Decoding and Training," 2023. [arXiv:2309.17179](https://arxiv.org/abs/2309.17179)
+- Cobbe et al., "Training Verifiers to Solve Math Word Problems" (best-of-N reranking with a trained verifier), 2021. [arXiv:2110.14168](https://arxiv.org/abs/2110.14168)

@@ -1,25 +1,189 @@
 # 量化与算子 {#sec-quantization-kernels}
 
-训练后量化族系、低精度格式，以及让它们高效运行的融合算子。
-
-::: {.callout-note}
-## 状态
-提纲。来源：`new`。参见 [`INTEGRATION.md`](../../INTEGRATION.md)。
-:::
+解码受限于内存：受限于每生成一个词元必须穿过总线的权重与缓存字节数，也受限于必须写出
+再读回的注意力中间结果字节数。本章讲的是攻击这一瓶颈的两个杠杆，用量化把数变小，用融合
+算子拒绝搬动中间结果。读完本章，读者应能解释为何 GPTQ、AWQ 与 SmoothQuant 下的赌注
+各不相同，为何一个模型能在 INT4 或 FP8 下运行而不垮掉，为何 FlashAttention 从不
+物化分数矩阵，以及为何在 vLLM、SGLang 与 TensorRT-LLM 之间的选择，其实是在选择引擎
+已经替你做出的哪一边取胜。
 
 ## 问题
 
+一个 FP16 权重花两个字节。因此一个七百亿参数的模型，在服务第一个词元之前就已是一百四十
+吉字节，这已经超过单个加速器的容量。@sec-serving-problem 的服务问题与
+@sec-memory-scheduling 的调度都从这个事实出发：容量被花在静态的权重占用与不断增长的
+键值缓存上，剩下的部分界定了批大小。
+
+更深的麻烦是带宽，而不只是容量。解码一次只发出一个词元，于是每一步都要读完整套权重，
+才产出一列激活。算术强度很低，加速器的计算单元空转，实际耗时由字节从高带宽内存搬运的快慢
+决定，而非由它们相乘的快慢决定。@sec-faster-decoding 从算法一侧攻击这一点，让每一趟做更多
+有用功。本章从下方攻击它，让每个字节承载更少，并搬动更少的字节。
+
+注意力有它自己版本的同一种病。朴素计算会形成完整的 $n \times n$ 分数矩阵，把它写入内存，
+读回来施加 softmax，再写一次，再读一次来为值加权。对一条长序列，这个矩阵比输入大得多，
+算子把时间花在内存流量上，而非花在真正要紧的矩阵乘上。@sec-transformer-architecture 的
+架构让注意力居于核心，@sec-structured-long-context 又把序列长度推高，于是搬动这些中间结果
+的代价，比模型本身的代价增长得更快。
+
 ## 设计
+
+两个想法回应这个问题。量化把每个数变小。融合算子不再写出那些只会被读回的中间结果。
+
+**量化**把一个高精度张量映射到一小组量级上，存下这些量级加一个 scale。对整数量化，规则
+是一个 scale 加一次取整，
+
+$$
+\hat{w} = s \cdot \mathrm{round}\!\left(\frac{w}{s}\right), \qquad
+s = \frac{\max |w|}{2^{b-1} - 1},
+$$
+
+于是一块权重变成 $b$ 位整数加一个浮点 scale。$s$ 的粒度是第一条设计维度：每张量一个 scale
+存储最省、对分布散开的处理最差，每个输出通道或每一小组权重一个 scale 会多花一点元数据，
+却能找回大部分精度。浮点量化在这个小预算里保留符号、指数与尾数，而非一个均匀网格，这用
+零附近的一些精度换取动态范围，而且硬件能原生地对这个小格式做乘法。
+
+量化之所以不平凡，根源在离群值。权重有一个良好的分布，量化得很干净。一个训练好的
+transformer 里的激活则不然：少数通道携带的数值比其余大上若干数量级，而为覆盖它们而选的
+单个每张量 scale，会把其余部分的全部精度都丢掉。每一种严肃的方法，都是对离群值的一种
+不同回答。
+
+- **GPTQ** 只量化权重，一次一层，并把它当作一个重建问题。它用近似二阶信息，即该层输出
+  误差的 Hessian，逐列量化权重，同时更新尚未量化的全精度权重，以吸收刚引入的误差。这把
+  位宽推到每权重三到四位而几乎无质量损失，且完全不触碰激活。
+- **AWQ** 同样只量化权重，但起点是这样一个观察：并非所有权重都同等重要。保护大约最重要的
+  那百分之一的显著权重通道，通过观察激活量级而非权重来识别它们，便能去掉大部分误差。AWQ
+  把这种保护折叠进一个通过搜索找到的每通道缩放里，无反向传播、无重建，因此不会过拟合那个
+  小型校准集。
+- **SmoothQuant** 瞄准更难的情形，即激活也被量化。它施加一个数学上等价的变换，把激活除以
+  一个每通道因子，并把权重乘以同一个因子，从而把难度迁出尖刺的激活、迁入平滑的权重。经此
+  平滑后，两者都可以取到 INT8，这就为整层解锁了整数矩阵乘，而不只是整数存储。
+
+最后这条区分是第二条设计维度：**只量化权重，对比量化权重与激活**。只量化权重（GPTQ、AWQ）
+缩小占用与解码必须读取的字节，这正是带宽受限的解码情形。它本身并不加速大批次预填充中
+受计算约束的矩阵乘，因为激活仍是高精度，而权重在相乘之前已被反量化。量化权重与激活
+（SmoothQuant、FP8）让矩阵乘本身在小格式下运行，这才是计算而非带宽成为瓶颈时所需的。
+
+这些**格式**是上述方法书写所用的字母表。INT8 与 INT4 是带一个 scale 的均匀整数网格，
+便宜且支持良好。FP8 有两种 NVIDIA 规定的编码，E4M3 尾数更多以求精度、E5M2 指数更多以求
+范围，在近期硬件上原生支持，因此能加速乘法本身。GGUF 不是一个数值格式而是一个容器：
+llama.cpp 生态的文件标准，把权重以分块的“k-quant”方案与全部元数据一起打包，于是一个
+量化模型就是一个可移植文件，在 CPU 与 Apple silicon 上运行得和在 GPU 上一样顺畅。
+
+**融合算子**回应内存流量那一半。FlashAttention 计算精确的注意力，却从不物化分数矩阵。
+它把查询、键、值矩阵切成能装进快速片上 SRAM 的块，并在线计算 softmax：每到来一个键块，
+它就维护一个运行中的最大值与一个运行中的归一化因子，重新缩放部分输出，使最终结果等于完整
+softmax，而完整矩阵从未存在过。
+
+$$
+m_i = \max(m_{i-1}, \tilde{m}_i), \qquad
+\ell_i = e^{m_{i-1}-m_i}\,\ell_{i-1} + e^{\tilde{m}_i - m_i}\,\tilde{\ell}_i
+$$
+
+输出在成为最终结果之前从不离开 SRAM，$n \times n$ 矩阵从不触及高带宽内存，反向传播则
+即时重算各块而非存储它们。这是该算子做的核心取舍：花额外的算术以避免内存流量，而这恰恰
+是正确的取舍，因为注意力本就受内存约束。
+
+```mermaid
+flowchart TD
+  A["FP16 weights and activations"] --> B{"What is the bottleneck?"}
+  B -->|"decode: bandwidth"| C["weight-only: GPTQ, AWQ"]
+  B -->|"prefill: compute"| D["weight + activation: SmoothQuant, FP8"]
+  C --> E["small footprint, fewer bytes read"]
+  D --> F["small-format matmul"]
+  E --> G["fused attention kernel: FlashAttention"]
+  F --> G
+  G --> H["serving engine: vLLM, SGLang, TensorRT-LLM"]
+```
 
 ## 演化
 
+语言模型的量化有一段短而尖锐的历史，由离群值驱动。从视觉模型沿用过来的朴素每张量 INT8，
+一旦在某个规模之上出现涌现的激活离群值，就在大型 transformer 上崩塌。第一波修补把离群值
+隔离在更高精度里，而量化其余部分。GPTQ（2022）随后表明，细致的二阶权重重建能到三到四位
+而损失可忽略，使只量化权重的低位服务变得可行。SmoothQuant（2022）从激活一侧入手，把难度
+迁入权重，从而实现完整的 INT8，据报告有约一倍半的加速、内存大致减半。AWQ（2023）围绕
+显著性与每通道缩放重新构想只量化权重，据报告相对 FP16 基线有超过三倍的加速，同时避开重建
+的过拟合风险。格式的前沿同时在移动，权重一侧从 FP16 到 INT8 到 INT4，并在硬件让小浮点
+原生之后转向 FP8。
+
+算子沿一条独立的轨道演化，瞄准同一个瓶颈。FlashAttention（Dao et al., 2022）确立了
+IO 感知、绝不物化的设计。FlashAttention-2（Dao, 2023）重新平衡工作量，沿序列维度并行化，
+并减少非矩阵乘运算以把利用率推得更高。FlashAttention-3（Shah et al., 2024）专门瞄准
+Hopper 代，重叠异步的张量核与内存引擎，并加入低精度 FP8 路径，于是算子与量化的故事在
+同一硬件上收敛。
+
+引擎把这些进展打包成系统。FasterTransformer 是早期手工优化的基线。vLLM（Kwon et al.,
+2023）把分页的键值缓存管理作为核心，像操作系统的虚拟内存那样对待缓存内存以削减碎片，并
+将其与量化权重和 FlashAttention 风格的算子配对。SGLang（Zheng et al., 2023）加入
+RadixAttention，在请求之间复用共享前缀，这对后续章节的结构化与智能体工作负载很重要。
+TensorRT-LLM 是 NVIDIA 的编译驱动引擎，为自家硬件融合算子并选择低精度路径，以一个开放
+仓库而非一篇论文的形式分发。
+
 ## 权衡
+
+本章中的每一个选择都花掉一种资源来买另一种，而正确的点取决于服务情形，而非某个普适的最优。
+
+- **只量化权重，对比量化权重与激活。** 只量化权重是带宽受限解码的正确工具：它缩小占用与
+  每词元读取的字节，而矩阵乘在反量化之后仍在更高精度下运行。它对计算受限的预填充帮助甚微。
+  连激活也量化，用 SmoothQuant 或 FP8，让矩阵乘在小格式下运行，帮助计算受限的情形，代价是
+  正面迎战激活离群值。
+- **粒度，对比开销。** 更细的 scale，每通道或每一小组，能找回每张量缩放丢掉的精度，但每一块
+  都带自己的 scale，每一次矩阵乘都付一步反量化。更粗者更快更小，更细者更准。拐点取决于张量
+  数值散开的程度。
+- **精度，对比能力。** 更低的位宽总会减小占用、通常会提高吞吐，但它扰动模型的输出。这个扰动
+  代价几何，取决于你测量什么，这正是下面约束箭头的主题。
+- **算子算术，对比内存流量。** FlashAttention 在反向传播中重算、做额外的重新缩放，而非存储
+  分数矩阵。这只有因为注意力本就受内存约束才是净胜；同样的重算在计算受限的算子上会是浪费。
+
+::: {.callout-important}
+## 争议所在
+低位量化是否一致地保住能力，并未定论。困惑度这类聚合指标在四位时往往仍贴近全精度基线，这正是
+四位只量化权重的服务常见的原因。但有证据表明损伤并不均匀：长上下文召回、多步推理、多语种
+覆盖与稀有事实知识，可能比一个困惑度数字所暗示的退化得更多，而受创最重的情形，可能恰是一项
+部署所在意的能力。活跃的问题是：位宽能降到多低，特定能力才崩；只量化权重与量化权重加激活的
+方案是否损伤相同的技能；以及标准基准是否根本能暴露出这种损失。把“四位无损”当作一个关于平均
+指标的断言，而非一个关于某项任务的保证。
+:::
+
+::: {.callout-tip}
+## 约束箭头
+量化用数值精度换取占用与速度，而这笔交易的账，是在上面一层、在评估处结清的。一个量化模型
+是一个不同的模型：它的 logits 被扰动，而唯一要紧的问题是它是否仍产出 @sec-benchmarks 所
+测量的那些输出。占用的胜利可以立刻从权重文件上读出；能力的代价则在 @sec-benchmarks 与
+@sec-judging-holistic 的基准与评判框架对量化权重重跑之前都是不可见的。一个看似纯粹是系统
+工程的服务决策，因此被一项位于其上的评估所把关，而不重跑就发布一个量化模型，就是发布一个
+未经测量的模型。
+:::
 
 ## 实现
 
+实践中，本章归结为一个路由决策与一小组杠杆。情形挑选方法：带宽受限的解码偏向只量化权重的
+GPTQ 或 AWQ；计算受限的预填充或吞吐优先的部署偏向 FP8 或 SmoothQuant，让矩阵乘在小格式下
+运行；CPU 与 Apple silicon 目标偏向 GGUF k-quant 以求可移植；NVIDIA 生产栈则伸手去取
+TensorRT-LLM，把算子融合并编译到硬件上。
+
+引擎把这些接到一起，而非重新发明它们。vLLM 在其分页缓存之上把量化暴露为一个服务选项
+（`LLM`，`vllm/entrypoints/llm.py`），并把注意力派发给一个 FlashAttention 后端；SGLang 在
+其上叠加前缀复用（`RadixCache`，`python/sglang/srt/mem_cache/radix_cache.py`）；
+TensorRT-LLM 把一个模型定义编译成面向目标 GPU 的融合、低精度引擎
+（`github.com/NVIDIA/TensorRT-LLM`）。共同的模式都一样：把权重校准或转换一次，成为一个
+量化工件，把它加载进一个已经拥有融合注意力算子与缓存管理器的引擎，然后服务。
+
+运维上的告诫正是箭头所点名的那条。一个量化工件生产起来很便宜，也容易被误当作免费。占用的
+节省是真实而即时的；能力问题则要等到 @sec-benchmarks 的评估对量化权重重跑、而非对原始权重
+重跑，才有答案。让这件事保持诚实的纪律，是把每一份量化配方都当作一次受同样测量约束的模型
+变更，并把格式、位宽与粒度连同分数一并记录，使这笔交易可审计。
+
 ## 延伸阅读
 
-::: {.callout-note}
-## 待办
-确立本章的奠基性、前沿与一手来源锚点。
-:::
+- Frantar et al., "GPTQ: Accurate Post-Training Quantization for Generative Pre-trained Transformers," 2022. [arXiv:2210.17323](https://arxiv.org/abs/2210.17323)
+- Lin et al., "AWQ: Activation-aware Weight Quantization for LLM Compression and Acceleration," 2023. [arXiv:2306.00978](https://arxiv.org/abs/2306.00978)
+- Xiao et al., "SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models," 2022. [arXiv:2211.10438](https://arxiv.org/abs/2211.10438)
+- Micikevicius et al., "FP8 Formats for Deep Learning," 2022. [arXiv:2209.05433](https://arxiv.org/abs/2209.05433)
+- Dao et al., "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness," 2022. [arXiv:2205.14135](https://arxiv.org/abs/2205.14135)
+- Dao, "FlashAttention-2: Faster Attention with Better Parallelism and Work Partitioning," 2023. [arXiv:2307.08691](https://arxiv.org/abs/2307.08691)
+- Shah et al., "FlashAttention-3: Fast and Accurate Attention with Asynchrony and Low-precision," 2024. [arXiv:2407.08608](https://arxiv.org/abs/2407.08608)
+- Kwon et al., "Efficient Memory Management for Large Language Model Serving with PagedAttention" (vLLM), 2023. [arXiv:2309.06180](https://arxiv.org/abs/2309.06180)
+- Zheng et al., "SGLang: Efficient Execution of Structured Language Model Programs," 2023. [arXiv:2312.07104](https://arxiv.org/abs/2312.07104)
+- NVIDIA, "TensorRT-LLM," 2023. [github.com/NVIDIA/TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM)
+- llama.cpp project, "GGUF format," 2023. [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)

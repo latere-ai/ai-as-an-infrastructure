@@ -1,30 +1,171 @@
 # 机械可解释性 {#sec-interpretability}
 
-叠加、电路、字典学习与稀疏自编码器，以及归因图。
-
-::: {.callout-note}
-## 状态
-提纲。来源：`new`。参见 [`INTEGRATION.md`](../../INTEGRATION.md)。
-:::
+一个训练好的 Transformer 是几千亿个数字，它们产出无人写下的行为。机械可解释性试图把这些
+数字读作计算：找出模型所表示的特征，以及连接它们的电路，就像有人会把一个二进制反编译回
+源代码那样。读完本章，读者应能解释为什么单个神经元很少只意味一件事，为什么稀疏字典成了
+这个领域拆开特征的主要工具，以及为什么这个工具是否正确的问题至今未决。
 
 ## 问题
 
+神经网络的天然单位是神经元，天然的指望是每个神经元都意味着某种东西：这个对 Python 代码
+激活，那个对红色激活。早期的视觉工作确实找到了几个这样的神经元。语言模型却不配合。探测
+Transformer 里的一个神经元，它会对一堆互不相关的东西激活，同时是一个曲线检测器、一个
+车轮、又是一行法语。这就是多义性（polysemanticity），是阻止朴素解释的那堵墙。如果你能
+读到的单位不携带单一含义，读它便一无所获。
+
+问题不在于模型没有概念，而在于模型拥有的概念远多于它的神经元，却照样把它们都存了下来。
+一条宽度为 $d$ 的残差流只有 $d$ 个正交方向，而模型似乎在追踪数以万计的不同特征。总得有
+所取舍。这些特征无法各得一个私有方向，于是只能共享。可解释性的任务就是解开这种共享：从
+把概念糊在一起的激活中，把模型所用的概念恢复出来，再展示这些概念如何彼此供给以产出一个
+输出。它的回报是 @sec-oversight-control 的输入：只能观察行为的监督，对一个一直循规蹈矩
+直到不再如此的模型是盲目的，而能读特征的监督，则有机会在一个计划执行之前就抓住它。
+
 ## 设计
+
+核心想法有两个半部，一个关于模型如何存储特征的假说，一个恢复它们的方法。
+
+假说是叠加（superposition）。模型表示的特征多于它的维度，办法是给每个特征指派激活空间里
+的一个方向，并让这些方向相互重叠。这之所以可行，是因为特征是稀疏的：在任一给定词元上，
+数千个可能特征里只有少数几个激活，于是模型能容忍那些很少同时开启的方向之间的干扰。Elhage
+等（2022）在 "Toy Models of Superposition" 里造出了最干净的演示：一个被迫把 $n$ 个稀疏
+特征塞进少于 $n$ 个维度的微型自编码器，正是这样做的，它把特征方向排布成规则的几何结构，
+并把重构误差与干扰之间的权衡作为稀疏度的函数来取舍。在这幅图景里，多义性不是缺陷，而是
+模型用叠加去容纳多于神经元数量的特征所投下的可见阴影。
+
+如果特征沿方向存在，而非落在神经元上，那么正确的分析单位就是方向，正确的工具就是能找出
+方向的那个。这个工具是字典学习，以稀疏自编码器（SAE）实现。一个 SAE 取一个模型激活
+$x \in \mathbb{R}^{d}$，学习一个由 $m \gg d$ 个特征方向组成的过完备字典，把 $x$ 编码为
+一个稀疏的特征激活向量，再解码回去：
+
+$$
+f = \sigma(W_{\text{enc}} x + b_{\text{enc}}), \qquad
+\hat{x} = W_{\text{dec}} f + b_{\text{dec}}
+$$
+
+训练目标是最小化重构误差加上一个稀疏惩罚，使得任一输入上只有少数 $m$ 个特征激活。
+$W_{\text{dec}}$ 的各列就是恢复出的特征方向。因为 $m$ 超过 $d$，字典是过完备的：它有空间
+给每个底层特征一个独立的槽位，尽管模型不得不把它们挤进 $d$ 个拥挤的维度。SAE 恢复出的
+特征远比原始神经元更常是单义的，这正是要点所在。
+
+特征本身只是名词。要解释行为，你需要动词，即把一个特征的激活传到另一个特征的那些连接。
+这就是电路。电路是模型计算的一个子图，一小组特征加上它们之间的权重，共同实现一个可辨认
+的算法。视觉之外最早被完整做出的例子是归纳头（induction head），一个由两个注意力头组成
+的电路，实现这条规则：“如果词元 $A$ 在上下文中较早处后面跟着 $B$，而我刚又看到 $A$，就
+预测 $B$。”Olsson 等（2022）追踪了这个电路，并把它的形成与训练中一次相变联系起来，那次
+相变恰与上下文学习的出现同步。这个领域的纲领，是把归纳头对复制所做的事，对任意行为也做
+一遍：给特征命名，给连线命名，通过干预来检验这个解释。
 
 ## 演化
 
+这条谱系从手工追踪的电路，走到学习出的特征，再到因果图，每一步都被上一步的极限所逼出。
+
+它始于视觉。Olah 等在 Distill 线上的 "Zoom In: An Introduction to Circuits"（2020）主张
+特征是真实的、连接它们的电路也是真实的，并在卷积网络里手工把两者都展示了出来。把这一点
+带到 Transformer 需要一套关于该架构的代数。Elhage 等（2021）的 "A Mathematical Framework
+for Transformer Circuits" 提供了它：残差流作为每层都从中读取、又向其写入的共享通信通道，
+注意力头作为在位置之间搬运信息的操作，以及让头组成多步电路的组合规则。归纳头是那个框架
+解释的第一个大结果。
+
+随后是那堵墙：手工追踪无法扩展，而叠加意味着你想追踪的神经元本来就是多义的。Elhage 等
+（2022）给这个障碍命了名。脱身之道是不再读神经元，转而学习特征。Cunningham 等（2023）的
+"Sparse Autoencoders Find Highly Interpretable Features in Language Models"（arXiv:2309.08600），
+以及 Anthropic 的 "Towards Monosemanticity"（Bricken 等，2023），在同一时间落到了同一个
+想法上：在一个模型的激活上训练一个 SAE，恢复出的字典远比神经元基底更可解释。Bricken 等
+在一个带 512 神经元 MLP 的单层 Transformer 上工作，展示了字典特征挑出了清晰的概念，比如
+阿拉伯文字或 DNA 序列，而没有任何单个神经元能干净地持有它们。
+
+悬而未决的问题是这是否在规模上幸存。"Scaling Monosemanticity"（Templeton 等，2024）把
+SAE 推到了 Claude 3 Sonnet 这个生产级模型，在其中间层残差流上训练字典，恢复出抽象、
+多语言、多模态的特征，其中包括金门大桥特征：把它钳制在开启状态，就产出了那个把每段对话
+都引向大桥的 “Golden Gate Claude”。比演示更重要的是干预：它表明这些特征是因果的，而非
+仅仅相关。与此同时，SAE 的工程也在收紧。Gao 等（2024）的 "Scaling and Evaluating Sparse
+Autoencoders"（arXiv:2406.04093）用一个 top-$k$ 激活替换了软 L1 惩罚，直接固定激活特征
+的数量，这消除了一个调参的头疼之处，削减了死潜元（dead latent）的数量，并产出了把字典
+规模与稀疏度同重构联系起来的干净扩展律。
+
+最新的一步把名词与动词重新拼回一起。Anthropic 2025 年的工作，"Circuit Tracing"（Ameisen
+等）与 "On the Biology of a Large Language Model"（Lindsey 等），构建归因图（attribution
+graph）：它把模型的 MLP 替换为跨层转码器（cross-layer transcoder），即从某一层读取、向
+其后所有层写入的稀疏可解释特征，然后为单个提示追踪穿过这些特征的线性因果通路。结果是一
+张图，其节点是特征，其边是因果影响，是针对一个输入的局部电路图。在 Claude 3.5 Haiku 上
+研究时，这些图浮现出多步推理、在押韵中提前规划，以及跨语言共享的机制。
+
 ## 权衡
 
-## 实现
+本章里每一份收益都以一份对应的代价换来。
+
+- **单义性与完备性。** 稀疏性买来干净、单一含义的特征，但字典只恢复它被赋予的规模与训练
+  所能找到的特征。把稀疏性推得太狠，特征就会分裂或被彼此吸收；推得太软，它们又会回到
+  多义。SAE 对激活的重构并不完美，而那个差距，即重构误差，恰是字典未能解释的那部分模型
+  计算。
+- **忠实性与可解释性。** 一个替换模型部分的转码器或 SAE，只在它对原模型所计算的东西保持
+  忠实的程度上才可解释。归因图把这种取舍摆明了：它冻结注意力、近似 MLP，于是图是一个关于
+  某个模型的可读故事，而那个模型并不完全是你部署的那个。
+- **局部与全局。** 一张归因图解释一个提示。一部特征字典描述一个模型在一个训练检查点上的
+  样子。两者都还没有给出关于模型在你未曾追踪的输入上做什么的全局、可复用的说明，而这正是
+  监督最终想要的。
+- **投入与覆盖。** 读一个电路是缓慢的人力活。自动解释，即用一个模型给特征打标签，把劳力
+  规模化，却也引入了打标者的错误，而这个领域对于一个特征何时被正确理解还没有一个定下来的
+  度量。
 
 ::: {.callout-important}
 ## 争议所在
-Are sparse autoencoders the right interpretability primitive?
+稀疏自编码器究竟是正确的可解释性原语，还是一条易生伪影的弯路，正被激烈争论。反方有若干
+具名的结果。Kantamneni 等（2025）的 "Are Sparse Autoencoders Useful? A Case Study in
+Sparse Probing"（arXiv:2502.16681）发现，在下游探测任务上，一旦把简单基线做强，SAE 特征
+就很少胜过它们，这让其实际回报受到质疑。Chanin 等（2024）记录了特征吸收（feature
+absorption）：一个像 “以 L 开头” 这样的一般特征，会在像 “lion” 这样的特定词元上沉默，
+因为一个更特定的特征把它吞了，于是字典表面上的干净，部分是训练目标造成的伪影。另一些人
+主张 L1 稀疏惩罚把 SAE 推向去学习高频组合，而非真正中介计算的原子特征，并且转码器在
+可解释性上胜过 SAE（arXiv:2501.18823）。辩护方以 Anthropic 的可解释性团队，以及扩展与
+归因工作的作者们为中心，反驳说 SAE 是可改进的工程，而非死胡同，像 Golden Gate Claude
+那样的因果干预表明这些特征是真实的，而归因图已经产出了裸探测无法给出的机械解释。分歧
+不在于叠加是否真实，而在于字典学习是不是我们读取它的方式。
 :::
+
+::: {.callout-tip}
+## 约束箭头
+叠加是关于 @sec-transformer-architecture 中那个架构的事实，它支配着本章每一件工具的形状。
+因为残差流装进的特征多于它的维度，任何直接读神经元的方法都行不通，这个领域便被逼向过完备
+的字典学习。模型如何存储信息的一个性质，设定了我们如何读取它的整个方法栈。
+:::
+
+## 实现
+
+工作回路是机械的，值得看个轮廓。在模型的某一处采集一大批激活，即某个选定层之后的残差流，
+或一个 MLP 的隐藏激活。在它们上面训练字典。用一个 top-$k$ 编码器，前向过程很小：
+
+```python
+# x: model activation, shape (batch, d)
+pre = x @ W_enc + b_enc            # (batch, m), m >> d
+f   = topk(pre, k)                  # keep k largest, zero the rest
+x_hat = f @ W_dec + b_dec           # reconstruct
+loss = mse(x_hat, x)                # no separate L1 term: k fixes sparsity
+```
+
+固定的 $k$ 消除了 L1 形式逼你去调的那个稀疏系数，这正是 top-$k$ SAE 取代旧的软惩罚的
+实际原因。训练之后，字典的每一列都是一个候选特征。你通过收集最能激活它的输入来解释它，
+读出那个模式，并且关键地，通过把特征钳制为开或关、观察输出移动，来检验这个解读。一个
+你无法用来操控的特征，是一个你尚未理解的特征。归因图把同样的纪律扩展到整个计算：把 MLP
+换成训练好的转码器，跑一个提示，读出活跃特征之间的因果图，再通过扰动节点、确认下游效果
+来验证边。
+
+失效模式是具体的。死潜元是从不激活、也学不到任何东西的字典特征，浪费容量。死潜元与过度
+激活的潜元一起，把你推向 top-$k$ 与谨慎的初始化。特征分裂交给你几个狭窄特征，而模型本
+只有一个；吸收把一个一般特征藏进一个特定特征里，于是字典看起来比模型更干净。而重构误差
+不是可以忽略的噪声：它是未被解释的残余，是你的字典没有捕获的那部分计算，一个在留下大量
+误差的同时还报告高可解释性的方法，解释的东西比它声称的要少。
 
 ## 延伸阅读
 
-::: {.callout-note}
-## 待办
-确立本章的奠基性、前沿与一手来源锚点。
-:::
+- Olah et al., "Zoom In: An Introduction to Circuits," Distill, 2020. [distill.pub/2020/circuits/zoom-in](https://distill.pub/2020/circuits/zoom-in/)
+- Elhage et al., "A Mathematical Framework for Transformer Circuits," 2021. [transformer-circuits.pub/2021/framework](https://transformer-circuits.pub/2021/framework/index.html)
+- Olsson et al., "In-context Learning and Induction Heads," 2022. [transformer-circuits.pub/2022/in-context-learning-and-induction-heads](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html)
+- Elhage et al., "Toy Models of Superposition," 2022. [arXiv:2209.10652](https://arxiv.org/abs/2209.10652)
+- Cunningham et al., "Sparse Autoencoders Find Highly Interpretable Features in Language Models," 2023. [arXiv:2309.08600](https://arxiv.org/abs/2309.08600)
+- Bricken et al., "Towards Monosemanticity: Decomposing Language Models with Dictionary Learning," 2023. [transformer-circuits.pub/2023/monosemantic-features](https://transformer-circuits.pub/2023/monosemantic-features/index.html)
+- Templeton et al., "Scaling Monosemanticity: Extracting Interpretable Features from Claude 3 Sonnet," 2024. [transformer-circuits.pub/2024/scaling-monosemanticity](https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html)
+- Gao et al., "Scaling and Evaluating Sparse Autoencoders," 2024. [arXiv:2406.04093](https://arxiv.org/abs/2406.04093)
+- Ameisen et al., "Circuit Tracing: Revealing Computational Graphs in Language Models," 2025. [transformer-circuits.pub/2025/attribution-graphs/methods](https://transformer-circuits.pub/2025/attribution-graphs/methods.html)
+- Lindsey et al., "On the Biology of a Large Language Model," 2025. [transformer-circuits.pub/2025/attribution-graphs/biology](https://transformer-circuits.pub/2025/attribution-graphs/biology.html)
+- Kantamneni et al., "Are Sparse Autoencoders Useful? A Case Study in Sparse Probing," 2025. [arXiv:2502.16681](https://arxiv.org/abs/2502.16681)
