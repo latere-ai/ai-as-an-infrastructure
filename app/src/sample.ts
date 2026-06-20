@@ -8,7 +8,11 @@ export const sampleChapter: ChapterData = {
   partLabel: "Part I: Foundations and Pretraining",
   chapterNum: "6",
   eyebrow: "Part 1 · Chapter 6",
+  crumbChapter: "Chapter 6",
   title: "Transformer Architecture and Its Variants",
+  author: "Changkun Ou",
+  updated: "June 20, 2026",
+  readtime: "~14 min",
   langHref: "../zh/p1-foundations/06-transformer-architecture.html",
   prefix: "../",
   headings: [

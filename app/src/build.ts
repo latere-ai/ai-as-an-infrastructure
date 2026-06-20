@@ -36,7 +36,9 @@ const runtime = (f: string) => existsSync(join(repoRoot, f)) ? readFileSync(join
 const mermaidInit = `<script type="module">
 import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
 mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
-mermaid.run({ querySelector: ".mermaid" }).catch(() => {});
+// The reader calls this after hydration (it owns the article DOM).
+window.__rdrMermaid = () => mermaid.run({ querySelector: ".mermaid:not([data-processed='true'])" }).catch(() => {});
+if (window.__rdrRuntimesReady) window.__rdrRuntimesReady();
 </script>`;
 const afterBody = runtime("live-runtime.html") + runtime("viz-runtime.html") + mermaidInit;
 

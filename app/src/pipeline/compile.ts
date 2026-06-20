@@ -3,6 +3,7 @@
 // from the book model.
 
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import type { Book, BookChapter } from "./book.ts";
 import { navFor, prevNext } from "./book.ts";
 import { renderMarkdown } from "./markdown.ts";
@@ -26,14 +27,40 @@ function langHrefFor(lang: Lang, href: string): string {
   return `${up}${other}/${href}`;
 }
 
+function chapterWord(lang: string, num: string): string {
+  return lang === "zh" ? `第 ${num} 章` : `Chapter ${num}`;
+}
+
 function eyebrowFor(book: Book, ch: BookChapter): string {
   if (!ch.num) return ch.title;
-  // "Part 1 · Chapter 6" (en) / "第一部分 · 第 6 章" (zh) — derive part ordinal
-  const partIdx = book.parts.filter((p) => !p.single).findIndex((p) => p.label === ch.partLabel);
-  if (book.lang === "zh") {
-    return `${ch.partLabel} · 第 ${ch.num} 章`;
+  return `${ch.partLabel} · ${chapterWord(book.lang, ch.num)}`;
+}
+
+// Reading time from the de-tagged body: ~220 wpm (en) / ~400 cpm CJK (zh).
+function readingTime(lang: string, html: string): string {
+  const text = html.replace(/<[^>]+>/g, " ").replace(/&[a-z#0-9]+;/g, " ");
+  if (lang === "zh") {
+    const chars = (text.match(/[㐀-鿿]/g) || []).length;
+    return `约 ${Math.max(1, Math.round(chars / 400))} 分钟`;
   }
-  return `${ch.partLabel} · Chapter ${ch.num}`;
+  const words = text.split(/\s+/).filter(Boolean).length;
+  return `~${Math.max(1, Math.round(words / 220))} min`;
+}
+
+// Last-modified date from git (stable across builds; only changes with content).
+const dateCache = new Map<string, string>();
+function gitDate(lang: string, qmdPath: string): string {
+  if (dateCache.has(qmdPath)) return dateCache.get(qmdPath)!;
+  let iso = "";
+  try { iso = execFileSync("git", ["log", "-1", "--format=%cs", "--", qmdPath], { encoding: "utf8" }).trim(); } catch {}
+  let out = iso;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    const [y, m, d] = iso.split("-").map(Number);
+    out = lang === "zh" ? `${y} 年 ${m} 月 ${d} 日`
+      : new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" });
+  }
+  dateCache.set(qmdPath, out);
+  return out;
 }
 
 export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext): ChapterData {
@@ -53,7 +80,11 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     partLabel: ch.partLabel || book.title,
     chapterNum: ch.num,
     eyebrow: eyebrowFor(book, ch),
+    crumbChapter: ch.num ? chapterWord(book.lang, ch.num) : ch.title,
     title: ch.title,
+    author: book.author,
+    updated: gitDate(book.lang, ch.qmdPath),
+    readtime: readingTime(book.lang, html),
     contentHtml: html,
     headings,
     prev: prev ? { label: `${prev.num ? prev.num + " · " : ""}${prev.title}`, href: prefix + prev.href } : null,

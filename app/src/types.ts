@@ -37,7 +37,11 @@ export interface ChapterData {
   partLabel: string; // breadcrumb part, e.g. "Part I: Foundations and Pretraining"
   chapterNum: string; // "6" or ""
   eyebrow: string; // "Part 1 · Chapter 6"
+  crumbChapter: string; // breadcrumb tail, "Chapter 6" / "第 6 章"
   title: string;
+  author: string;
+  updated: string; // last-modified date, localized
+  readtime: string; // "~14 min" / "约 14 分钟"
   contentHtml: string; // compiled article body
   headings: Heading[];
   prev: PrevNext | null;

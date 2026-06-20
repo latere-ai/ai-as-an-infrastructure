@@ -12,6 +12,7 @@ type Strings = {
   palette: string; ink: string; clay: string; theme: string; light: string; dark: string;
   body: string; sans: string; kai: string; size: string; layout: string;
   codex: string; manuscript: string; atlas: string; prev: string; next: string; lang: string; resize: string; download: string;
+  author: string; updated: string; readtimeLabel: string;
 };
 
 const STRINGS: Record<Lang, Strings> = {
@@ -20,12 +21,14 @@ const STRINGS: Record<Lang, Strings> = {
     palette: "配色", ink: "墨纸", clay: "靛蓝", theme: "主题", light: "浅色", dark: "深色",
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
     codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", lang: "EN", resize: "拖动调整宽度", download: "下载",
+    author: "作者", updated: "更新于", readtimeLabel: "阅读时长",
   },
   en: {
     sidebar: "Sidebar", onThisPage: "On this page", settings: "Reading settings", search: "Search chapters…",
     palette: "Palette", ink: "Ink", clay: "Azure", theme: "Theme", light: "Light", dark: "Dark",
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
     codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", lang: "中", resize: "Drag to resize", download: "Download",
+    author: "Author", updated: "Updated", readtimeLabel: "Reading time",
   },
 } as const;
 
@@ -113,6 +116,26 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     return () => { el.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onScroll); };
   }, [chapter.headings]);
 
+  // Initialize the article runtimes (mermaid, interactive viz/3d, runnable
+  // Python, table wrapping) AFTER React has hydrated the article — they operate
+  // on dangerouslySetInnerHTML nodes that React owns, so booting them on
+  // DOMContentLoaded (the old Quarto path) races hydration and leaves them dead.
+  useEffect(() => {
+    let cancelled = false;
+    const w = window as unknown as Record<string, (() => void) | undefined>;
+    const boot = () => {
+      if (cancelled) return;
+      w.__rdrViz?.();
+      w.__rdrLive?.();
+      w.__rdrTables?.();
+      w.__rdrMermaid?.();
+    };
+    // mermaid loads as an async CDN module; let it re-run once ready.
+    w.__rdrRuntimesReady = () => { if (!cancelled) w.__rdrMermaid?.(); };
+    const raf = requestAnimationFrame(() => requestAnimationFrame(boot));
+    return () => { cancelled = true; cancelAnimationFrame(raf); delete w.__rdrRuntimesReady; };
+  }, [chapter.contentHtml]);
+
   // Drag-to-resize the sidebar / mini-TOC (design: nav 200-460, toc 170-360).
   function startDrag(which: "nav" | "toc", e: React.PointerEvent) {
     e.preventDefault();
@@ -183,8 +206,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             letterSpacing: ".02em", color: "var(--fg-3)", whiteSpace: "nowrap", overflow: "hidden",
           }}>
             <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{chapter.partLabel}</span>
-            <span style={{ opacity: 0.5 }}>/</span>
-            <span style={{ color: "var(--fg-1)" }}>{chapter.title}</span>
+            <span style={{ opacity: 0.5 }}>·</span>
+            <span style={{ color: "var(--fg-1)", whiteSpace: "nowrap" }}>{chapter.crumbChapter}</span>
           </nav>
         )}
 
@@ -229,7 +252,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             padding: mobile ? "26px 18px 60px" : "40px 56px 80px",
             fontFamily: bodyFont, lineHeight: 1.85, color: "var(--fg-2)",
           }}>
-            <ChapterOpener chapter={chapter} layout={s.layout} />
+            <ChapterOpener chapter={chapter} layout={s.layout} t={t} />
             <div className="rdr-article" dangerouslySetInnerHTML={{ __html: chapter.contentHtml }} />
             <PrevNextNav chapter={chapter} t={t} />
           </article>
@@ -254,7 +277,26 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   );
 }
 
-function ChapterOpener({ chapter, layout }: { chapter: ChapterData; layout: Layout }) {
+function MetaRow({ chapter, t }: { chapter: ChapterData; t: Strings }) {
+  const items = [
+    { l: t.author, v: chapter.author },
+    { l: t.updated, v: chapter.updated },
+    { l: t.readtimeLabel, v: chapter.readtime },
+  ].filter((i) => i.v);
+  if (!items.length) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 24, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+      {items.map((i) => (
+        <div key={i.l}>
+          <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 3 }}>{i.l}</div>
+          <div style={{ fontSize: 14, color: "var(--fg-1)" }}>{i.v}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ChapterOpener({ chapter, layout, t }: { chapter: ChapterData; layout: Layout; t: Strings }) {
   if (layout === "manuscript") {
     return (
       <div style={{ textAlign: "center", margin: "8px 0 40px" }}>
@@ -278,7 +320,8 @@ function ChapterOpener({ chapter, layout }: { chapter: ChapterData; layout: Layo
   return (
     <div style={{ marginBottom: 26 }}>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: ".15em", textTransform: "uppercase", color: "var(--accent)", marginBottom: 10 }}>{chapter.eyebrow}</div>
-      <h1 style={{ fontFamily: "var(--font-ui)", fontWeight: 600, letterSpacing: "-.025em", lineHeight: 1.1, fontSize: "clamp(2rem,4vw,2.9rem)", color: "var(--fg-1)", marginBottom: 0 }}>{chapter.title}</h1>
+      <h1 style={{ fontFamily: "var(--font-ui)", fontWeight: 600, letterSpacing: "-.025em", lineHeight: 1.1, fontSize: "clamp(2rem,4vw,2.9rem)", color: "var(--fg-1)", marginBottom: 14 }}>{chapter.title}</h1>
+      <MetaRow chapter={chapter} t={t} />
     </div>
   );
 }
@@ -326,32 +369,48 @@ function SearchBox({ t, prefix }: { t: Strings; prefix: string }) {
 }
 
 function SidebarTree({ t, chapter, embedded, onNavigate, width = 264 }: { t: Strings; chapter: ChapterData; embedded?: boolean; onNavigate?: () => void; width?: number }) {
+  // Parts collapse; the part holding the active chapter starts open.
+  const [closed, setClosed] = useState<Record<string, boolean>>({});
+  const isOpen = (part: { id: string; chapters: { active?: boolean }[] }) =>
+    closed[part.id] === undefined ? true : !closed[part.id];
   return (
     <aside style={{ flex: "none", width: embedded ? "100%" : width, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: "var(--bg-surface)", overflowY: "auto", padding: "18px 0 60px", alignSelf: "stretch" }}>
       <SearchBox t={t} prefix={chapter.prefix} />
       <nav>
-        {chapter.toc.map((part) => (
-          <div key={part.id} style={{ marginBottom: 2 }}>
-            {part.single ? (
-              part.chapters.map((ch) => (
-                <a key={ch.href} href={ch.href} onClick={onNavigate} style={{ display: "block", padding: "7px 18px", fontSize: 13.5, fontWeight: 500, color: ch.active ? "var(--accent)" : "var(--fg-2)", textDecoration: "none", borderLeft: `2px solid ${ch.active ? "var(--accent)" : "transparent"}` }}>{ch.label}</a>
-              ))
-            ) : (
-              <>
-                <div style={{ padding: "9px 16px 6px", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--fg-2)" }}>{part.label}</div>
+        {chapter.toc.map((part) => {
+          if (part.single) {
+            return (
+              <div key={part.id} style={{ marginBottom: 2 }}>
                 {part.chapters.map((ch) => (
-                  <a key={ch.href} href={ch.href} onClick={onNavigate} style={{
-                    display: "flex", gap: 9, padding: "6px 16px 6px 18px", textDecoration: "none",
-                    borderLeft: `2px solid ${ch.active ? "var(--accent)" : "transparent"}`, background: ch.active ? "var(--accent-subtle)" : "transparent",
-                  }}>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--fg-3)", flex: "none", minWidth: 15 }}>{ch.n}</span>
-                    <span style={{ fontSize: 13.5, lineHeight: 1.35, color: ch.active ? "var(--accent)" : "var(--fg-2)", fontWeight: ch.active ? 600 : 400 }}>{ch.label}</span>
-                  </a>
+                  <a key={ch.href} href={ch.href} onClick={onNavigate} style={{ display: "block", padding: "7px 18px", fontSize: 13.5, fontWeight: 500, color: ch.active ? "var(--accent)" : "var(--fg-2)", textDecoration: "none", borderLeft: `2px solid ${ch.active ? "var(--accent)" : "transparent"}` }}>{ch.label}</a>
                 ))}
-              </>
-            )}
-          </div>
-        ))}
+              </div>
+            );
+          }
+          const open = isOpen(part);
+          return (
+            <div key={part.id} style={{ marginBottom: 2 }}>
+              <button onClick={() => setClosed((c) => ({ ...c, [part.id]: open }))} style={{
+                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                padding: "9px 16px 6px", background: "none", border: "none", cursor: "pointer", textAlign: "left",
+              }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--fg-2)" }}>{part.label}</span>
+                <svg width={12} height={12} viewBox="0 0 12 12" fill="none" stroke="var(--fg-3)" strokeWidth={1.5} style={{ flex: "none", transform: open ? "none" : "rotate(-90deg)", transition: "transform .2s" }}>
+                  <path d="M3 4.5L6 7.5L9 4.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+              {open && part.chapters.map((ch) => (
+                <a key={ch.href} href={ch.href} onClick={onNavigate} style={{
+                  display: "flex", gap: 9, padding: "6px 16px 6px 18px", textDecoration: "none",
+                  borderLeft: `2px solid ${ch.active ? "var(--accent)" : "transparent"}`, background: ch.active ? "var(--accent-subtle)" : "transparent",
+                }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--fg-3)", flex: "none", minWidth: 15 }}>{ch.n}</span>
+                  <span style={{ fontSize: 13.5, lineHeight: 1.35, color: ch.active ? "var(--accent)" : "var(--fg-2)", fontWeight: ch.active ? 600 : 400 }}>{ch.label}</span>
+                </a>
+              ))}
+            </div>
+          );
+        })}
       </nav>
     </aside>
   );

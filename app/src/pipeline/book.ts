@@ -20,6 +20,7 @@ export interface BookChapter {
 export interface Book {
   lang: Lang;
   title: string;
+  author: string;
   langDir: string; // absolute path to en/ or zh/
   parts: { label: string; single: boolean; chapters: BookChapter[] }[];
   chapters: BookChapter[]; // flat, in order
@@ -50,6 +51,7 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
   const langDir = join(repoRoot, lang);
   const yml = parseYaml(readFileSync(join(langDir, "_quarto.yml"), "utf8"));
   const bookTitle: string = yml?.book?.title ?? "AI as an Infrastructure";
+  const bookAuthor: string = yml?.book?.author ?? "Changkun Ou";
   const rawChapters: unknown[] = yml?.book?.chapters ?? [];
 
   const parts: Book["parts"] = [];
@@ -91,7 +93,7 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
     ...back.map((c) => ({ label: "", single: true, chapters: [c] })),
   ];
 
-  return { lang, title: bookTitle, langDir, parts: navParts, chapters: flat };
+  return { lang, title: bookTitle, author: bookAuthor, langDir, parts: navParts, chapters: flat };
 }
 
 // Build the shell's NavPart[] for a given current chapter href.
