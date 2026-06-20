@@ -12,6 +12,7 @@ export interface RefContext {
   bib: Bibliography;
   xref: CrossrefMap;
   currentHref: string;
+  prefix: string;
 }
 
 const KEY = /^[A-Za-z][\w:.-]*/;
@@ -37,7 +38,7 @@ export function quartoRefs(md: MarkdownIt, ctx: RefContext) {
       if (!segs.every((s) => /^-?@[A-Za-z][\w:.-]*$/.test(s))) return false;
       if (!silent) {
         const keys = segs.map((s) => s.replace(/^-?@/, ""));
-        push(state, renderCite(ctx.bib, { keys, bare: false }));
+        push(state, renderCite(ctx.bib, { keys, bare: false }, ctx.prefix));
       }
       state.pos = end + 1;
       return true;
@@ -54,7 +55,7 @@ export function quartoRefs(md: MarkdownIt, ctx: RefContext) {
       if (!silent) {
         if (key.startsWith("sec-") || key.startsWith("fig-")) {
           const target = ctx.xref.get(key);
-          if (target) push(state, `<a href="${relHref(target, ctx.currentHref)}" class="rdr-xref">${target.label}</a>`);
+          if (target) push(state, `<a href="${relHref(target, ctx.currentHref, ctx.prefix)}" class="rdr-xref">${target.label}</a>`);
           else push(state, `<span class="rdr-xref rdr-xref-missing">?@${key}</span>`);
         } else {
           push(state, renderCite(ctx.bib, { keys: [key], bare: true }));

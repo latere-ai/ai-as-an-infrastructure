@@ -39,12 +39,15 @@ function eyebrowFor(book: Book, ch: BookChapter): string {
 export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext): ChapterData {
   let src = readFileSync(ch.qmdPath, "utf8");
   if (book.lang === "zh") src = stripCjkSoftBreaks(src);
-  let { html, headings } = renderMarkdown(src, { bib: ctx.bib, xref: ctx.xref, currentHref: ch.href, graphviz: ctx.graphviz });
+  const prefix = "../".repeat(ch.href.split("/").length - 1); // page depth → "../"*
+  let { html, headings } = renderMarkdown(src, { bib: ctx.bib, xref: ctx.xref, currentHref: ch.href, prefix, graphviz: ctx.graphviz });
   // References page: fill the ::: {#refs} slot with the cited-only bibliography.
   if (ch.href === "references.html") {
     html = html.replace(/(<div class="rdr-block"[^>]*id="refs"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderBibliography(ctx.bib)}$3`);
   }
   const { prev, next } = prevNext(book, ch.href);
+  // nav hrefs are lang-root-relative; make them relative to this page.
+  const toc = navFor(book, ch.href).map((p) => ({ ...p, chapters: p.chapters.map((c) => ({ ...c, href: prefix + c.href })) }));
   return {
     lang: book.lang,
     partLabel: ch.partLabel || book.title,
@@ -53,9 +56,10 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     title: ch.title,
     contentHtml: html,
     headings,
-    prev: prev ? { label: `${prev.num ? prev.num + " · " : ""}${prev.title}`, href: prev.href } : null,
-    next: next ? { label: `${next.num ? next.num + " · " : ""}${next.title}`, href: next.href } : null,
+    prev: prev ? { label: `${prev.num ? prev.num + " · " : ""}${prev.title}`, href: prefix + prev.href } : null,
+    next: next ? { label: `${next.num ? next.num + " · " : ""}${next.title}`, href: prefix + next.href } : null,
     langHref: langHrefFor(book.lang, ch.href),
-    toc: navFor(book, ch.href),
+    prefix,
+    toc,
   };
 }

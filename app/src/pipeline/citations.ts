@@ -63,9 +63,9 @@ export interface CiteToken {
   bare: boolean; // bare @key (in-text "Author (Year)") vs bracketed "(Author Year)"
 }
 
-export function renderCite(bib: Bibliography, tok: CiteToken): string {
+export function renderCite(bib: Bibliography, tok: CiteToken, prefix = ""): string {
   const link = (e: BibEntry, text: string) =>
-    `<a href="references.html#ref-${e.key}" class="rdr-cite">${text}</a>`;
+    `<a href="${prefix}references.html#ref-${e.key}" class="rdr-cite">${text}</a>`;
   const parts = tok.keys.map((k) => {
     const e = bib.entries.get(k);
     if (!e) return `<span class="rdr-cite rdr-cite-missing">?${k}</span>`;

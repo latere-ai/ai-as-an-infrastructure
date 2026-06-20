@@ -10,6 +10,7 @@ export const sampleChapter: ChapterData = {
   eyebrow: "Part 1 · Chapter 6",
   title: "Transformer Architecture and Its Variants",
   langHref: "../zh/p1-foundations/06-transformer-architecture.html",
+  prefix: "../",
   headings: [
     { id: "one-block-two-jobs", text: "One block, two jobs", level: 2 },
     { id: "three-questions", text: "Three questions the field has closed", level: 2 },

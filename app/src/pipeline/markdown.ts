@@ -17,6 +17,7 @@ export interface RenderContext {
   bib: Bibliography;
   xref: CrossrefMap;
   currentHref: string;
+  prefix: string; // "../" * depth for page-relative hrefs
   graphviz: GraphvizInstance;
 }
 
@@ -40,7 +41,7 @@ function createMd(ctx: RenderContext): MarkdownIt {
   const md = new MarkdownIt({ html: true, linkify: false, typographer: false, breaks: false });
   md.use(attrs, { allowedAttributes: ["id", "class", /^data-/] });
   md.use(katex);
-  md.use(quartoRefs, { bib: ctx.bib, xref: ctx.xref, currentHref: ctx.currentHref });
+  md.use(quartoRefs, { bib: ctx.bib, xref: ctx.xref, currentHref: ctx.currentHref, prefix: ctx.prefix });
 
   // Diagram fences: ```{dot}``` and ```{mermaid}```.
   const defFence = md.renderer.rules.fence!.bind(md.renderer.rules);

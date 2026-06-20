@@ -54,9 +54,10 @@ export function buildCrossref(book: Book): CrossrefMap {
 }
 
 // Make a target's href relative to the chapter currently being rendered: links
-// within the same chapter become bare "#anchor".
-export function relHref(target: RefTarget, currentHref: string): string {
+// within the same chapter become bare "#anchor"; cross-page links get the
+// page's depth prefix so the lang-root-relative path resolves correctly.
+export function relHref(target: RefTarget, currentHref: string, prefix = ""): string {
   const [path] = target.href.split("#");
   if (path === currentHref) return target.href.slice(path.length); // "#anchor"
-  return target.href;
+  return prefix + target.href;
 }

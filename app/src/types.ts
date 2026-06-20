@@ -43,6 +43,7 @@ export interface ChapterData {
   prev: PrevNext | null;
   next: PrevNext | null;
   langHref: string; // the same page in the other language
+  prefix: string; // "../" * depth, to make lang-root-relative hrefs page-relative
   toc: NavPart[]; // full-book nav
 }
 

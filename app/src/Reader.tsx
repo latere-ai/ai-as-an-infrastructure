@@ -132,7 +132,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           <Icon d={<><rect x="2" y="3" width="12" height="10" rx="1.5" /><line x1="6.5" y1="3" x2="6.5" y2="13" /></>} />
         </button>
 
-        <a href="./index.html" style={{ display: "flex", alignItems: "center", gap: 9, flex: "none", color: "var(--fg-1)", textDecoration: "none" }}>
+        <a href={`${chapter.prefix}index.html`} style={{ display: "flex", alignItems: "center", gap: 9, flex: "none", color: "var(--fg-1)", textDecoration: "none" }}>
           <svg width={22} height={22} viewBox="0 0 32 32" fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
             <path d="M8 16c0-5 3.5-8 8-8s8 3 8 8-3.5 8-8 8M16 24c-5 0-8-3.5-8-8" />
           </svg>
