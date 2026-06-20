@@ -156,6 +156,15 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     window.addEventListener("pointerup", up);
   }
 
+  // Memoize the article body so scroll/settings re-renders keep the SAME element
+  // reference. React then bails out of reconciling this subtree, so it never
+  // re-sets innerHTML over the SVG that mermaid mutated into the .mermaid nodes
+  // (the boot effect only runs once per chapter, so a reset would never recover).
+  const articleBody = useMemo(
+    () => <div className="rdr-article" dangerouslySetInnerHTML={{ __html: chapter.contentHtml }} />,
+    [chapter.contentHtml],
+  );
+
   const set = (patch: Partial<ReaderSettings>) => setS((p) => ({ ...p, ...patch }));
   const fontScale = Math.min(1.4, Math.max(0.8, s.fontScale));
 
@@ -253,7 +262,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             fontFamily: bodyFont, lineHeight: 1.85, color: "var(--fg-2)",
           }}>
             <ChapterOpener chapter={chapter} t={t} />
-            <div className="rdr-article" dangerouslySetInnerHTML={{ __html: chapter.contentHtml }} />
+            {articleBody}
             <PrevNextNav chapter={chapter} t={t} />
           </article>
         </main>
