@@ -78,9 +78,13 @@ export function expandDivs(src: string): string {
         out.push("");
         stack.push({ classes, id, isCallout, titlePulled: false });
       } else {
-        // CLOSE
+        // CLOSE. The trailing blank line matters: without it, content that
+        // immediately follows `::::` (no author blank line) gets absorbed into
+        // the `</div>` CommonMark HTML block and emitted verbatim, so a list /
+        // bold / citations right after a closing fence render as literal text.
         out.push("");
         out.push("</div>");
+        out.push("");
         stack.pop();
       }
       continue;
