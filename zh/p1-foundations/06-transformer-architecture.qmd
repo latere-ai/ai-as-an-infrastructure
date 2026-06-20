@@ -16,7 +16,33 @@ $$
 x = x + \text{sublayer}(\text{norm}(x))
 $$
 
-残差流是模型的工作记忆，一个宽度为 $d_{\text{model}}$ 的向量，从嵌入一路携带到最后一层。每个块得到一次读取它并向它累加的机会。深度就是这样的读取/修改/写回传递有多少次；宽度则是这条流一次能容纳多少。这一框架让其余的设计自然推导出来。
+残差流是模型的工作记忆，一个宽度为 $d_{\text{model}}$ 的向量，从嵌入一路携带到最后一层。每个块得到一次读取它并向它累加的机会。深度就是这样的读取/修改/写回传递有多少次；宽度则是这条流一次能容纳多少。这一框架让其余的设计自然推导出来。@fig-transformer-block 以这种方式画出一个前置归一化块：残差流作为一条恒等路径笔直向下，每个子层从它分叉而出，经过一次归一化，计算一个增量，再把增量加回去。
+
+```{dot}
+//| label: fig-transformer-block
+//| fig-cap: "把单个前置归一化 Transformer 块读作共享残差流上的两个读取/修改/写回子层。每个分支归一化残差流的一份副本，计算一个增量，再加回去，而正中央向下的恒等路径就是梯度高速路。"
+digraph block {
+  rankdir=TB;
+  node [shape=box, fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=10];
+
+  xin   [label="残差流 x", shape=box, style=rounded];
+  add1  [label="+", shape=circle, width=0.3];
+  add2  [label="+", shape=circle, width=0.3];
+  xout  [label="残差流 x", shape=box, style=rounded];
+
+  n1    [label="归一化"];
+  attn  [label="注意力\n跨位置混合"];
+  n2    [label="归一化"];
+  mlp   [label="SwiGLU MLP\n逐词元变换"];
+
+  xin -> add1 [label="恒等路径"];
+  xin -> n1 -> attn -> add1 [label="增量"];
+  add1 -> add2 [label="恒等路径"];
+  add1 -> n2 -> mlp -> add2 [label="增量"];
+  add2 -> xout;
+}
+```
 
 第一个子层是注意力，唯一让词元之间交换信息的地方，下文详述。第二个是逐位置的 MLP，对每个词元独立施加，它持有大部分参数：一个前馈层扩展到约 $d_{\text{model}}$ 的四倍再投影回来，每个块花费约 $8 \cdot d_{\text{model}}^2$，使注意力的投影相形见绌。
 
@@ -50,11 +76,52 @@ $$
 
 稠密块通过一连串小而近乎免费的胜利达到当前的形状。Vaswani 等（2017）交付了带后置归一化与普通前馈网络的原始 Transformer。后置归一化在深度上若无大量预热则发散，于是由 Xiong 等（2020）分析的前置归一化取而代之。RMSNorm（Zhang 与 Sennrich，2019）以无可测质量代价弃用了 LayerNorm 的均值减除。SwiGLU（Shazeer，2020）在 $2/3$ 重新缩放下略胜 GeLU。RoPE（Su 等，2021）取代 ALiBi 成为位置默认。到 LLaMA 与 Qwen 之时，共识已经定型：前置归一化、RMSNorm、SwiGLU 前馈网络、RoPE，以及任何地方都没有偏置项。稠密块自 2023 年以来变化之少令人瞩目。重头戏转移到了数据、规模与后训练。
 
-块中持续移动的唯一部分是注意力，而它之所以移动，是因为 KV 缓存。多查询注意力（Shazeer，2019）让所有查询头共享单个键/值头，把缓存削减 $h$ 倍。削减是巨大的，但坍缩到单个 KV 头会破坏训练稳定性，并使质量非平滑地下降。分组查询注意力（Ainslie 等，2023）做了插值：它在 $g$ 个查询头组内共享 K 与 V，一端恢复 MHA（$g = h$），另一端恢复 MQA（$g = 1$），并能从一个现有的 MHA 检查点廉价地续训。GQA 以多数节省换回多数质量，成为 LLaMA 与 Qwen 家族的默认。
+块中持续移动的唯一部分是注意力，而它之所以移动，是因为 KV 缓存。多查询注意力（Shazeer，2019）让所有查询头共享单个键/值头，把缓存削减 $h$ 倍。削减是巨大的，但坍缩到单个 KV 头会破坏训练稳定性，并使质量非平滑地下降。分组查询注意力（Ainslie 等，2023）做了插值：它在 $g$ 个查询头组内共享 K 与 V，一端恢复 MHA（$g = h$），另一端恢复 MQA（$g = 1$），并能从一个现有的 MHA 检查点廉价地续训。GQA 以多数节省换回多数质量，成为 LLaMA 与 Qwen 家族的默认。@fig-kv-sharing 展示了其机制：缓存为每个不同的 KV 头持有一份 K 与 V，因此节省完全来自让多少个查询头去共享同一个 KV 头。
 
-多头潜在注意力（DeepSeek-V2，2024）从另一个角度攻击同一笔成本。它不共享头，而是把 K 与 V 向下投影到一个低秩潜在向量，*以此替代*缓存完整的逐头 K 与 V，并在使用时即时解压，配以一个并行携带的解耦 RoPE 分量。其卖点是以 MHA 级质量实现 GQA 级（或更优）的缓存节省。它是缓存压缩前沿上的另一个点。
+```{dot}
+//| label: fig-kv-sharing
+//| fig-cap: "MHA、GQA 与 MQA 如何把查询头接线到被缓存的键/值头。只有 KV 头位于缓存中，所以把多个查询头坍缩到一个 KV 头正是缓存缩小的原因。"
+digraph kv {
+  rankdir=TB;
+  node [shape=box, fontname="Helvetica", fontsize=10];
+  edge [arrowsize=0.6];
+  nodesep=0.2;
+
+  subgraph cluster_mha {
+    label="MHA：每个查询头一份 KV";
+    fontname="Helvetica"; color="gray70";
+    q1 [label="Q1"]; q2 [label="Q2"]; q3 [label="Q3"]; q4 [label="Q4"];
+    k1 [label="KV1", style=filled, fillcolor="#dbe9ff"];
+    k2 [label="KV2", style=filled, fillcolor="#dbe9ff"];
+    k3 [label="KV3", style=filled, fillcolor="#dbe9ff"];
+    k4 [label="KV4", style=filled, fillcolor="#dbe9ff"];
+    q1 -> k1; q2 -> k2; q3 -> k3; q4 -> k4;
+  }
+
+  subgraph cluster_gqa {
+    label="GQA：每组一份 KV";
+    fontname="Helvetica"; color="gray70";
+    g1 [label="Q1"]; g2 [label="Q2"]; g3 [label="Q3"]; g4 [label="Q4"];
+    gk1 [label="KV1", style=filled, fillcolor="#dbe9ff"];
+    gk2 [label="KV2", style=filled, fillcolor="#dbe9ff"];
+    g1 -> gk1; g2 -> gk1; g3 -> gk2; g4 -> gk2;
+  }
+
+  subgraph cluster_mqa {
+    label="MQA：所有头共享一份 KV";
+    fontname="Helvetica"; color="gray70";
+    m1 [label="Q1"]; m2 [label="Q2"]; m3 [label="Q3"]; m4 [label="Q4"];
+    mk [label="KV1", style=filled, fillcolor="#dbe9ff"];
+    m1 -> mk; m2 -> mk; m3 -> mk; m4 -> mk;
+  }
+}
+```
+
+多头潜在注意力（DeepSeek-V2，2024）从另一个角度攻击同一笔成本。它不共享头，而是把 K 与 V 向下投影到一个低秩潜在向量，*以此替代*缓存完整的逐头 K 与 V，并在使用时即时解压，配以一个并行携带的解耦 RoPE 分量。其卖点是以 MHA 级质量实现 GQA 级（或更优）的缓存节省。它是 @fig-cache-frontier 所勾勒的缓存压缩前沿上的另一个点。
 
 ```{mermaid}
+%%| label: fig-cache-frontier
+%%| fig-cap: "缓存压缩前沿。从 MHA 出发，GQA 与 MQA 沿一条分支用 KV 头换取更小的缓存，而 MLA 沿另一条分支把缓存压缩为一个低秩潜在表示。"
 flowchart LR
   MHA["MHA<br/>h 个 KV 头<br/>完整质量、完整缓存"] --> GQA["GQA<br/>g 个 KV 组<br/>多数质量、缓存的一小部分"]
   GQA --> MQA["MQA<br/>1 个 KV 头<br/>最小缓存、质量风险"]

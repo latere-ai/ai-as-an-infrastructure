@@ -55,15 +55,21 @@ untouched. This is what makes the method safe to deploy: it is not an
 approximation of the model, it is the same model sampled in a different order.
 
 ```{mermaid}
+%%| label: fig-faster-decoding-spec-loop
+%%| fig-cap: "The speculative decoding loop: a cheap draft proposes a run of tokens, one target pass scores them all, and a modified rejection rule keeps the longest valid prefix while preserving the target's distribution. After Leviathan et al. (2023) and Chen et al. (2023)."
 flowchart LR
-  A[context] --> D[draft: propose gamma tokens]
-  D --> V[target: score all positions in one pass]
-  V --> R{accept under p over q?}
-  R -->|accept run| O[emit accepted tokens]
-  R -->|first reject| C[resample from residual p minus q]
+  A[context] --> D["draft: propose gamma tokens"]
+  D --> V["target: score all positions in one pass"]
+  V --> R{"accept under p over q?"}
+  R -->|accept run| O["emit accepted tokens"]
+  R -->|first reject| C["resample from residual p minus q"]
   C --> O
   O --> A
 ```
+
+@fig-faster-decoding-spec-loop draws this loop. The line of accept/reject
+decisions it shows is the simplest case, a single linear continuation. The
+self-draft methods below replace that line with a tree.
 
 Two quantities govern the payoff. The acceptance rate $\alpha$ is the
 fraction of draft tokens the target keeps; the draft cost is how much cheaper
@@ -132,13 +138,17 @@ decoding, reported to accept its second predicted token 80% to 90% of the
 time and to raise generation throughput by roughly 1.8 times.
 
 ```{mermaid}
+%%| label: fig-faster-decoding-lineage
+%%| fig-cap: "Where the guess comes from: the lineage moves from a separate draft model, into parts of the target itself, and finally into how the target is trained, with a draft-free branch off to the side."
 flowchart TD
-  S[separate draft model<br/>Leviathan, Chen] --> H[self-draft heads<br/>Medusa, Hydra]
-  H --> E[feature and token drafting<br/>EAGLE 1/2/3]
-  S --> J[draft-free Jacobi iteration<br/>lookahead]
-  H --> M[train the draft in<br/>multi-token prediction, DeepSeek-V3]
+  S["separate draft model<br/>Leviathan, Chen"] --> H["self-draft heads<br/>Medusa, Hydra"]
+  H --> E["feature and token drafting<br/>EAGLE 1/2/3"]
+  S --> J["draft-free Jacobi iteration<br/>lookahead"]
+  H --> M["train the draft in<br/>multi-token prediction, DeepSeek-V3"]
   E --> M
 ```
+
+@fig-faster-decoding-lineage traces that search.
 
 ## Trade-offs
 
@@ -162,6 +172,33 @@ stops paying.
   shortcut is acceptable is an application decision, not a free lunch.
 - **Latency versus throughput.** This is the trade that most often surprises
   practitioners, and it is the subject of the contested box below.
+
+@fig-faster-decoding-regime shows why the same method can help or hurt. At
+small batch the accelerator's compute units sit idle waiting on weights, so
+the FLOPs speculation spends to verify candidates were going to waste anyway,
+and they are free. At large batch the weights are amortized across many
+sequences and the compute units are already saturated, so verifying tokens
+that then get rejected competes with real work for FLOPs and can lower total
+throughput. The premise of the whole chapter, that decode is memory-bound,
+holds only in the small-batch regime.
+
+```{mermaid}
+%%| label: fig-faster-decoding-regime
+%%| fig-cap: "Why a speedup is a property of the serving regime. At small batch the compute units idle on memory, so speculation's extra FLOPs are free. At large batch the units are saturated, so verifying rejected tokens competes for FLOPs and can cost throughput."
+flowchart TB
+  subgraph L["small batch: memory-bound"]
+    direction TB
+    L1["compute units idle, waiting on weights"] --> L2["spare FLOPs available"]
+    L2 --> L3["verify candidates for free"]
+    L3 --> L4["fewer sequential steps, speculation wins"]
+  end
+  subgraph R["large batch: compute-bound"]
+    direction TB
+    R1["weights amortized across many sequences"] --> R2["compute units saturated"]
+    R2 --> R3["rejected tokens still consume FLOPs"]
+    R3 --> R4["verification competes with real work, can lose"]
+  end
+```
 
 ::: {.callout-important}
 ## What's contested
@@ -217,6 +254,51 @@ they are what the distribution-preservation theorem requires. For the
 self-draft and tree-based methods, the same accept logic runs over a tree
 rather than a line: a tree attention mask lets the single target pass score
 every branch, and the longest accepted path through the tree is emitted.
+@fig-faster-decoding-tree shows why this beats a linear draft. A linear draft
+commits to one continuation, so a single early rejection wastes everything
+after it. A tree hedges across several continuations at each position, and the
+tree attention mask scores all of them in the one target pass for almost the
+cost of one. The target then emits the longest path whose every token was
+accepted.
+
+```{dot}
+//| label: fig-faster-decoding-tree
+//| fig-cap: "Tree-structured drafting and verification. From the context, draft heads propose several candidate tokens per position rather than one. A tree attention mask scores every branch in a single target pass, and the longest fully accepted path (bold) is emitted. After Cai et al. (2024) and Li et al. (2024)."
+digraph {
+  rankdir=LR;
+  node [shape=box, style=rounded, fontname="Helvetica"];
+  ctx [label="context"];
+
+  a1 [label="The"];
+  a2 [label="A"];
+
+  b1 [label="cat"];
+  b2 [label="dog"];
+  b3 [label="cat"];
+
+  c1 [label="sat"];
+  c2 [label="ran"];
+  c3 [label="barked"];
+
+  ctx -> a1;
+  ctx -> a2;
+  a1 -> b1;
+  a1 -> b2;
+  a2 -> b3;
+  b1 -> c1;
+  b1 -> c2;
+  b2 -> c3;
+
+  // longest accepted path, emitted
+  ctx -> a1 [penwidth=2.5, color="#1a7f37"];
+  a1 -> b1 [penwidth=2.5, color="#1a7f37"];
+  b1 -> c1 [penwidth=2.5, color="#1a7f37"];
+  ctx [color="#1a7f37"];
+  a1 [color="#1a7f37"];
+  b1 [color="#1a7f37"];
+  c1 [color="#1a7f37"];
+}
+```
 
 Operationally, serving stacks expose this as a drafter choice. A separate
 draft model is a second checkpoint to load and schedule. EAGLE-style and

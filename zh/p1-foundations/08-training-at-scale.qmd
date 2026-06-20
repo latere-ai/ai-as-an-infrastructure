@@ -41,7 +41,26 @@ reduce-scatter 与 all-gather）。这一代价只有在最快的互连上才用
 
 *流水线并行（PP）*把层栈拆成若干阶段、放到不同节点上，并把微批流式穿过它们，于是第二阶段
 处理第一个微批时，第一阶段已在处理第二个微批。它在带宽上廉价，只搬运各阶段边界处的激活，
-但要付一个流水线气泡：每步两端的填充与排空期间，部分阶段处于空闲。
+但要付一个流水线气泡：每步两端的填充与排空期间，部分阶段处于空闲。@fig-training-bubble
+展示了这段空闲时间落在何处。
+
+```{dot}
+//| label: fig-training-bubble
+//| fig-cap: "四个阶段、四个微批上的流水线气泡：起始处的填充与末尾处的排空让各阶段空闲。仿照 Huang 等，2019。"
+digraph bubble {
+  rankdir=LR;
+  node [shape=plaintext];
+  t [label=<
+    <table border="0" cellborder="1" cellspacing="0" cellpadding="6">
+      <tr><td bgcolor="#e8e8e8"><b>时间</b></td><td bgcolor="#e8e8e8">1</td><td bgcolor="#e8e8e8">2</td><td bgcolor="#e8e8e8">3</td><td bgcolor="#e8e8e8">4</td><td bgcolor="#e8e8e8">5</td><td bgcolor="#e8e8e8">6</td><td bgcolor="#e8e8e8">7</td></tr>
+      <tr><td><b>阶段 1</b></td><td bgcolor="#bdd7e7">mb1</td><td bgcolor="#bdd7e7">mb2</td><td bgcolor="#bdd7e7">mb3</td><td bgcolor="#bdd7e7">mb4</td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#f0f0f0">空闲</td></tr>
+      <tr><td><b>阶段 2</b></td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#bdd7e7">mb1</td><td bgcolor="#bdd7e7">mb2</td><td bgcolor="#bdd7e7">mb3</td><td bgcolor="#bdd7e7">mb4</td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#f0f0f0">空闲</td></tr>
+      <tr><td><b>阶段 3</b></td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#bdd7e7">mb1</td><td bgcolor="#bdd7e7">mb2</td><td bgcolor="#bdd7e7">mb3</td><td bgcolor="#bdd7e7">mb4</td><td bgcolor="#f0f0f0">空闲</td></tr>
+      <tr><td><b>阶段 4</b></td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#f0f0f0">空闲</td><td bgcolor="#bdd7e7">mb1</td><td bgcolor="#bdd7e7">mb2</td><td bgcolor="#bdd7e7">mb3</td><td bgcolor="#bdd7e7">mb4</td></tr>
+    </table>
+  >];
+}
+```
 
 *序列与上下文并行（SP/CP）*沿序列维度切分。SP，如 Korthikanti 等所引入，把一层中被 TP
 留作复制的部分（归一化与 dropout）沿序列切分，以削减激活显存；CP，其典范形式是 ring
@@ -49,6 +68,26 @@ attention，切分注意力计算本身，使一个对单张设备而言过长�
 让键与值的瓦片绕环传递。
 
 对每个轴而言，设计问题都相同：它切分什么、在通信上花费多少，以及它用得起互连的哪一层级。
+@fig-training-axes 把答案并排铺开。
+
+```{dot}
+//| label: fig-training-axes
+//| fig-cap: "四个并行轴外加专家并行，各自按它切分什么、运行哪种集合通信，以及用得起哪一层级的互连。"
+digraph axes {
+  rankdir=LR;
+  node [shape=plaintext];
+  t [label=<
+    <table border="0" cellborder="1" cellspacing="0" cellpadding="6">
+      <tr><td bgcolor="#e8e8e8"><b>轴</b></td><td bgcolor="#e8e8e8"><b>切分</b></td><td bgcolor="#e8e8e8"><b>集合通信</b></td><td bgcolor="#e8e8e8"><b>互连层级</b></td></tr>
+      <tr><td>DP / ZeRO</td><td>批、优化器状态</td><td>all-reduce、reduce-scatter、all-gather</td><td>跨节点</td></tr>
+      <tr><td>TP</td><td>层内矩阵乘法</td><td>每层 all-reduce</td><td>节点内，NVLink</td></tr>
+      <tr><td>PP</td><td>层栈阶段</td><td>点对点激活</td><td>跨节点</td></tr>
+      <tr><td>SP / CP</td><td>序列维</td><td>all-gather、环式交换</td><td>随 TP 或跨节点</td></tr>
+      <tr><td>EP</td><td>专家</td><td>all-to-all 派发与合并</td><td>自己的 all-to-all 组</td></tr>
+    </table>
+  >];
+}
+```
 
 ### 专家并行
 
@@ -70,6 +109,29 @@ fp8（E4M3 与 E5M2 格式）在 Hopper 级及更新的硬件上把矩阵乘法�
 地重新缩放，才能把数值留在可表示的区间内。它被有选择地应用，矩阵乘法用 fp8，而数值敏感的
 算子，即归一化、残差相加与注意力 softmax，则保持在更高精度。推得过远时，fp8 不会崩溃；它
 悄悄地损耗质量，这正是它难以用好的原因。
+
+@fig-training-precision 展示了为何指数位至关重要。bf16 保留了 fp32 的八个指数位，因此跨越
+相同的动态范围，从不需要 fp16 的损失缩放；fp8 把它那寥寥几位花在范围（E5M2）与精度（E4M3）
+之间的取舍上。
+
+```{dot}
+//| label: fig-training-precision
+//| fig-cap: "各训练精度的位布局。符号、指数与尾数字段按宽度绘制。bf16 继承了 fp32 的八个指数位，这正是它无需损失缩放即可跨越相同范围的原因。"
+digraph precision {
+  rankdir=LR;
+  node [shape=plaintext];
+  t [label=<
+    <table border="0" cellborder="1" cellspacing="0" cellpadding="5">
+      <tr><td bgcolor="#e8e8e8"><b>格式</b></td><td bgcolor="#e8e8e8"><b>符号</b></td><td bgcolor="#e8e8e8"><b>指数</b></td><td bgcolor="#e8e8e8"><b>尾数</b></td></tr>
+      <tr><td>fp32</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">8 位</td><td bgcolor="#c7e9c0">23 位</td></tr>
+      <tr><td>fp16</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">5 位</td><td bgcolor="#c7e9c0">10 位</td></tr>
+      <tr><td>bf16</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">8 位</td><td bgcolor="#c7e9c0">7 位</td></tr>
+      <tr><td>fp8 E4M3</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">4 位</td><td bgcolor="#c7e9c0">3 位</td></tr>
+      <tr><td>fp8 E5M2</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">5 位</td><td bgcolor="#c7e9c0">2 位</td></tr>
+    </table>
+  >];
+}
+```
 
 ### 集合通信与重叠
 
@@ -160,7 +222,11 @@ SP 叠加在 TP 之上。排序的经验法则直接源自约束箭头：把 TP 
 @sec-transformer-architecture 和 @sec-moe-ssm-hybrids 的模型形态协同设计，并随模型规模、
 序列长度与互连而变化。
 
+@fig-training-mesh 勾勒了惯常的布局。
+
 ```{mermaid}
+%%| label: fig-training-mesh
+%%| fig-cap: "惯常的设备网格布局：通信密集的 TP 与 SP 留在节点内的 NVLink 之下，而更易被隐藏的 DP、PP 与 EP 跨节点。"
 flowchart TB
   subgraph across["跨节点"]
     DP["DP / ZeRO-FSDP：切分批与优化器状态"]

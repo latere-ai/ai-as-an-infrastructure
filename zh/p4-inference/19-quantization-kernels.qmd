@@ -81,18 +81,45 @@ $$
 
 输出在成为最终结果之前从不离开 SRAM，$n \times n$ 矩阵从不触及高带宽内存，反向传播则
 即时重算各块而非存储它们。这是该算子做的核心取舍：花额外的算术以避免内存流量，而这恰恰
-是正确的取舍，因为注意力本就受内存约束。
+是正确的取舍，因为注意力本就受内存约束。@fig-quantization-kernels-flashattention
+对比两条数据路径：朴素算子把完整的分数矩阵停放在高带宽内存里，而融合算子把每一个
+中间结果都留在片上 SRAM 内，只让最终输出返回。
 
 ```{mermaid}
+%%| label: fig-quantization-kernels-flashattention
+%%| fig-cap: "朴素注意力把完整的分数矩阵经 HBM 写出再读回，而 FlashAttention 让 Q、K、V 块流经 SRAM，维护一个运行中的最大值与归一化因子，使该矩阵从不落入 HBM。据 Dao et al. (2022)。"
+flowchart LR
+  subgraph HBM_naive["HBM 中的朴素注意力"]
+    direction TB
+    QN["Q, K, V"] --> SC["完整的 n 乘 n 分数矩阵"]
+    SC --> SM["对完整矩阵做 softmax"]
+    SM --> ON["加权输出"]
+  end
+  subgraph SRAM["SRAM 片上的 FlashAttention"]
+    direction TB
+    TILE["载入 Q, K, V 块"] --> ONLINE["在线 softmax: 运行中的最大值 m, 归一化因子 l"]
+    ONLINE --> RESCALE["按每个键块重新缩放部分输出"]
+    RESCALE --> TILE
+    RESCALE --> OUT["最终输出写回 HBM"]
+  end
+  HBM_naive -. "结果完全相同, 流量远少" .-> SRAM
+```
+
+两个杠杆合成为单一的路由决策。引擎正在对抗的瓶颈挑选量化方案，融合注意力算子随后
+位于所选路径之下，如 @fig-quantization-kernels-routing 所示。
+
+```{mermaid}
+%%| label: fig-quantization-kernels-routing
+%%| fig-cap: "服务情形为量化选择做路由，一个融合注意力算子位于两条路径之下，然后才抵达引擎。"
 flowchart TD
-  A["FP16 weights and activations"] --> B{"What is the bottleneck?"}
-  B -->|"decode: bandwidth"| C["weight-only: GPTQ, AWQ"]
-  B -->|"prefill: compute"| D["weight + activation: SmoothQuant, FP8"]
-  C --> E["small footprint, fewer bytes read"]
-  D --> F["small-format matmul"]
-  E --> G["fused attention kernel: FlashAttention"]
+  A["FP16 权重与激活"] --> B{"瓶颈是什么?"}
+  B -->|"解码: 带宽"| C["只量化权重: GPTQ, AWQ"]
+  B -->|"预填充: 计算"| D["权重 + 激活: SmoothQuant, FP8"]
+  C --> E["占用更小, 读取字节更少"]
+  D --> F["小格式矩阵乘"]
+  E --> G["融合注意力算子: FlashAttention"]
   F --> G
-  G --> H["serving engine: vLLM, SGLang, TensorRT-LLM"]
+  G --> H["服务引擎: vLLM, SGLang, TensorRT-LLM"]
 ```
 
 ## 演化

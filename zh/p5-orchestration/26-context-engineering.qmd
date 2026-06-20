@@ -21,6 +21,35 @@
 曲线：当所需事实位于上下文的开头或结尾附近时表现最高，而当它位于中间时则下降，有时甚至
 低于闭卷基线。更大的窗口并不能废除这一点。它只是把中间拉长了。
 
+@fig-ce-position 把这一后果勾勒成一张摆放图。可靠性在两端最高，沿着漫长的中间塌陷，
+于是一个事实在窗口中的位置，而不仅仅是它是否在场，决定了模型是否会用上它。
+
+```{dot}
+//| label: fig-ce-position
+//| fig-cap: "上下文窗口的示意摆放图。注意力在两端可靠，在中间最弱，源自 Liu 等（2024）的 lost-in-the-middle 效应。形状为示意，非实测。"
+digraph position {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fontsize=11, fontname="Helvetica"];
+  edge [arrowhead=none, color="#bbbbbb"];
+
+  head [label="窗口开头\n高价值证据,\n关键指令", fillcolor="#e8f0e8", color="#5a7a5a"];
+  mid  [label="中间\n注意力弱,\n事实被少用", fillcolor="#f0e8e8", color="#7a5a5a"];
+  tail [label="窗口结尾\n最近的回合,\n当前的问题", fillcolor="#e8f0e8", color="#5a7a5a"];
+
+  head -> mid -> tail;
+
+  reliable_l [shape=plaintext, label="可靠"];
+  weak [shape=plaintext, label="lost in the middle"];
+  reliable_r [shape=plaintext, label="可靠"];
+  reliable_l -> head [style=invis];
+  weak -> mid [style=invis];
+  reliable_r -> tail [style=invis];
+  { rank=same; reliable_l; head; }
+  { rank=same; weak; mid; }
+  { rank=same; reliable_r; tail; }
+}
+```
+
 所以问题不只是「我如何把所有东西塞进去」，而是「我放什么进去、以什么顺序放，才能让模型
 用上它」。这是一个预算与摆放的问题，也正是本章要谈的工作。
 
@@ -88,7 +117,35 @@ LLM 而言看起来可解的艺术」。这次改名并非装饰。它把工作�
 每个模型接到每个数据源上，这是一个 N 乘 M 的问题。Anthropic 在 2024 年 11 月发布了模型
 上下文协议（MCP），作为这套接线的开放标准：模型只说一种协议，而任何 MCP 服务器，无论是
 面向文件系统、数据库还是问题追踪器，都通过它暴露自己的工具与数据。MCP 标准化了外部上下文
-与能力进入窗口的方式。
+与能力进入窗口的方式。@fig-ce-mcp 对比了两种接线：每个模型直接集成每个数据源的定制网格，
+对比每一侧只说一次协议的枢纽。
+
+```{dot}
+//| label: fig-ce-mcp
+//| fig-cap: "从 N 乘 M 的集成网格到单一协议。MCP 用一套两侧各说一次的标准，取代逐对定制的胶水，源自 Anthropic（2024）。"
+digraph mcp {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fontsize=10, fontname="Helvetica", fillcolor="#eef2f7", color="#456789"];
+  edge [color="#999999", arrowsize=0.6];
+
+  subgraph cluster_before {
+    label="之前: 定制胶水, N 乘 M"; labeljust=l; color="#7a5a5a"; fontsize=11;
+    mA [label="模型 A"]; mB [label="模型 B"];
+    sA [label="文件系统"]; sB [label="数据库"]; sC [label="问题追踪器"];
+    mA -> sA; mA -> sB; mA -> sC;
+    mB -> sA; mB -> sB; mB -> sC;
+  }
+
+  subgraph cluster_after {
+    label="之后: 单一协议"; labeljust=l; color="#5a7a5a"; fontsize=11;
+    m2A [label="模型 A"]; m2B [label="模型 B"];
+    hub [label="MCP", shape=hexagon, fillcolor="#e8f0e8", color="#5a7a5a"];
+    s2A [label="文件系统"]; s2B [label="数据库"]; s2C [label="问题追踪器"];
+    m2A -> hub; m2B -> hub;
+    hub -> s2A; hub -> s2B; hub -> s2C;
+  }
+}
+```
 
 随后这个协议在其上一层暴露出了预算问题。当智能体连上数十个 MCP 服务器时，工具定义本身就在
 智能体读到任何一个请求之前填满了上下文。2025 年 11 月，Anthropic 把代码执行配合 MCP
@@ -144,6 +201,32 @@ def build_context(task, history, tools, retriever, window):
     parts.append(rank_and_trim(evidence, budget))
     parts.append(summarize_old(history, budget))  # compress, do not accumulate
     return order_for_attention(parts)          # high-value near boundaries
+```
+
+@fig-ce-pipeline 把同一个装配器画成一条数据流。许多来源汇入一个有预算的缓冲区：固定开销
+先被核算，检索只把语料的一片调入，历史被压缩而非向前携带，最后一个排序步骤把价值最高的
+部分提到边界处，即 @fig-ce-position 所说模型会去读的地方。
+
+```{mermaid}
+%%| label: fig-ce-pipeline
+%%| fig-cap: "上下文作为一条装配流水线。来源被核算预算、按片检索、压缩，再排序，使高价值部分落在靠近边界处。"
+flowchart LR
+  sys["系统提示<br/>+ 工具定义<br/>(固定开销)"]
+  corpus[("知识库<br/>(留在外面)")]
+  hist["对话<br/>+ 工具输出"]
+  mem[("外部<br/>记忆")]
+
+  corpus --> ret["检索一片<br/>排序并裁剪"]
+  hist --> comp["摘要旧回合<br/>过滤工具结果"]
+  mem --> ret
+
+  sys --> budget{"预算<br/>= 窗口减去<br/>输出余量"}
+  ret --> budget
+  comp --> budget
+
+  budget --> order["为注意力排序"]
+  order --> win["上下文窗口<br/>高价值靠近边界"]
+  win --> model["模型前向传播"]
 ```
 
 这段草图的三个属性承载着本章的论点。输出余量从最上面先扣掉，因为一段填满窗口的上下文会让

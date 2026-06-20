@@ -14,13 +14,33 @@ So the problem has two halves that this chapter treats together: pack the key-va
 
 ## Design
 
-The first design idea is to schedule at the granularity of an iteration rather than a request. An iteration is one forward pass that advances every active request by a single token. After each iteration the scheduler is free to remove requests that just emitted their stop token and admit waiting requests into the next iteration's batch. This is **continuous batching**, also called iteration-level scheduling, introduced by Orca (Yu et al., OSDI 2022). The batch is no longer a fixed cohort that lives and dies together; it is a sliding window over the active set, refilled every step. A request that finishes at token twenty leaves immediately and its slot is reused, instead of padding out the batch until the longest member finishes.
+The first design idea is to schedule at the granularity of an iteration rather than a request. An iteration is one forward pass that advances every active request by a single token. After each iteration the scheduler is free to remove requests that just emitted their stop token and admit waiting requests into the next iteration's batch. This is **continuous batching**, also called iteration-level scheduling, introduced by Orca (Yu et al., OSDI 2022). The batch is no longer a fixed cohort that lives and dies together; it is a sliding window over the active set, refilled every step. A request that finishes at token twenty leaves immediately and its slot is reused, instead of padding out the batch until the longest member finishes. @fig-memory-scheduling-continuous shows the loop: every iteration retires whatever just emitted its stop token and admits waiting requests, so the batch composition changes each step.
+
+```{mermaid}
+%%| label: fig-memory-scheduling-continuous
+%%| fig-cap: "The continuous-batching loop. The scheduler forms a batch, runs one forward pass that advances every active request by one token, retires those that emitted a stop token, and admits waiting requests before the next iteration, so the batch is a sliding window refilled every step. After Yu et al., 2022."
+flowchart TB
+  waiting["Waiting queue"]
+  form["Form batch from active set"]
+  fwd["One forward pass, advance each request by one token"]
+  sample["Sample one token per request"]
+  done{"Emitted stop token?"}
+  retire["Retire request, free its blocks"]
+  waiting -->|admit| form
+  form --> fwd --> sample --> done
+  done -->|yes| retire
+  done -->|no, keep in active set| form
+  retire -.->|slot reused| form
+```
+
 
 Continuous batching exposes a memory problem. If admission happens every iteration, the engine must allocate and free key-value cache space every iteration, for requests whose final length it does not know. Reserving a contiguous maximum-length buffer per request, the obvious scheme, fragments memory: a finished request leaves a hole too small for the next, and reserved-but-unused tail space is dead weight. Measurements in the vLLM paper put the waste from this fragmentation and over-reservation at the majority of cache memory in prior systems.
 
-The second design idea removes that waste by borrowing virtual memory from operating systems. **PagedAttention** (Kwon et al., SOSP 2023) stores the key-value cache in fixed-size blocks, each holding the keys and values for a fixed number of tokens, and lets a request's logical sequence of blocks map to physically non-contiguous blocks through a block table. The attention kernel is rewritten to gather keys and values through that table instead of assuming contiguity. Now allocation is per block, not per request: a request grows by appending a block when its current block fills, memory is shared at block granularity across all requests, and the only internal waste is the partial final block. The analogy is exact. The block is a page, the block table is a page table, and the engine is a memory manager that hands out and reclaims pages as sequences grow and finish. vLLM is the serving system built on this idea, and it reported two to four times the throughput of the prior generation at the same latency by lifting the achievable batch size.
+The second design idea removes that waste by borrowing virtual memory from operating systems. **PagedAttention** (Kwon et al., SOSP 2023) stores the key-value cache in fixed-size blocks, each holding the keys and values for a fixed number of tokens, and lets a request's logical sequence of blocks map to physically non-contiguous blocks through a block table. The attention kernel is rewritten to gather keys and values through that table instead of assuming contiguity. Now allocation is per block, not per request: a request grows by appending a block when its current block fills, memory is shared at block granularity across all requests, and the only internal waste is the partial final block. The analogy is exact. The block is a page, the block table is a page table, and the engine is a memory manager that hands out and reclaims pages as sequences grow and finish. vLLM is the serving system built on this idea, and it reported two to four times the throughput of the prior generation at the same latency by lifting the achievable batch size. @fig-memory-scheduling-paging shows the indirection: a request's logical sequence of token blocks maps through a block table to physically scattered blocks in a shared pool.
 
 ```{mermaid}
+%%| label: fig-memory-scheduling-paging
+%%| fig-cap: "PagedAttention indirection. A request's logical token blocks map through a block table to non-contiguous physical blocks in a shared pool, so allocation is per block and the only waste is the partial final block. After Kwon et al., 2023."
 flowchart LR
   subgraph logical["Logical KV (per request)"]
     t0["tokens 0-15"] --> t1["tokens 16-31"] --> t2["tokens 32-47"]
@@ -40,9 +60,47 @@ flowchart LR
   t2 -.-> e2 -.-> b9
 ```
 
-Paging also makes sharing cheap, which is the third design idea. Two requests that begin with the same prompt, a shared system prompt or a few-shot preamble, compute identical keys and values for that prefix. Under paging, they can point their block tables at the same physical blocks for the shared prefix and diverge only where their tokens diverge, with copy-on-write when one writes into a shared block. **RadixAttention** (Zheng et al., NeurIPS 2024, the SGLang runtime) makes this systematic by storing all cached prefixes in a radix tree keyed by token sequence, with least-recently-used eviction. A new request walks the tree to find the longest cached prefix of its prompt, reuses those blocks, and computes only the uncached suffix. Prefix caching turns the repeated structure of real workloads, shared system prompts, multi-turn chat history, branching agent calls, into reused computation rather than recomputed computation.
+Paging also makes sharing cheap, which is the third design idea. Two requests that begin with the same prompt, a shared system prompt or a few-shot preamble, compute identical keys and values for that prefix. Under paging, they can point their block tables at the same physical blocks for the shared prefix and diverge only where their tokens diverge, with copy-on-write when one writes into a shared block. **RadixAttention** (Zheng et al., NeurIPS 2024, the SGLang runtime) makes this systematic by storing all cached prefixes in a radix tree keyed by token sequence, with least-recently-used eviction. A new request walks the tree to find the longest cached prefix of its prompt, reuses those blocks, and computes only the uncached suffix. Prefix caching turns the repeated structure of real workloads, shared system prompts, multi-turn chat history, branching agent calls, into reused computation rather than recomputed computation. @fig-memory-scheduling-radix shows two requests sharing a system-prompt prefix: they point at the same cached blocks up to the branch point and compute only their divergent suffixes.
 
-The fourth design idea separates the two phases onto different hardware. Prefill is compute-bound and bursty; decode is memory-bandwidth-bound and steady. Running them in the same batch on the same device means a long prefill stalls the decodes waiting behind it, and the two phases want different parallelism and different batch shapes. **Prefill/decode disaggregation** (DistServe, Zhong et al., OSDI 2024; Mooncake, Qin et al., 2024) runs prefill on one pool of machines and decode on another, transferring the key-value cache between them over the network. Each pool is provisioned and parallelized for its own phase, and neither interferes with the other's latency. DistServe optimizes the placement for goodput, the rate of requests that meet both a time-to-first-token target for prefill and a time-per-output-token target for decode. Mooncake centers the whole architecture on the key-value cache, pooling CPU DRAM and SSD across the cluster into a disaggregated cache that prefill writes and decode reads.
+```{dot}
+//| label: fig-memory-scheduling-radix
+//| fig-cap: "Prefix sharing in a radix tree. Two requests with the same system prompt share its cached blocks up to the branch point and compute only the suffix where their tokens diverge. The shared node is reference-counted and copied on first write past it. After Zheng et al., 2024."
+digraph radix {
+  rankdir=LR;
+  node [shape=box, fontname="Helvetica", fontsize=10];
+  root [label="root", shape=circle, width=0.3];
+  shared [label="shared system prompt\n(cached blocks, refcount 2)", style=filled, fillcolor="#dde7f0"];
+  sufA [label="request A suffix\n(computed)"];
+  sufB [label="request B suffix\n(computed)"];
+  root -> shared;
+  shared -> sufA [label="branch"];
+  shared -> sufB [label="branch"];
+}
+```
+
+The fourth design idea separates the two phases onto different hardware. Prefill is compute-bound and bursty; decode is memory-bandwidth-bound and steady. Running them in the same batch on the same device means a long prefill stalls the decodes waiting behind it, and the two phases want different parallelism and different batch shapes. **Prefill/decode disaggregation** (DistServe, Zhong et al., OSDI 2024; Mooncake, Qin et al., 2024) runs prefill on one pool of machines and decode on another, transferring the key-value cache between them over the network. Each pool is provisioned and parallelized for its own phase, and neither interferes with the other's latency. DistServe optimizes the placement for goodput, the rate of requests that meet both a time-to-first-token target for prefill and a time-per-output-token target for decode. Mooncake centers the whole architecture on the key-value cache, pooling CPU DRAM and SSD across the cluster into a disaggregated cache that prefill writes and decode reads. @fig-memory-scheduling-disagg sketches the split: the prompt enters a prefill pool, the resulting key-value cache crosses the network, and the decode pool reads it to emit tokens, each pool sized and parallelized for its own phase.
+
+```{mermaid}
+%%| label: fig-memory-scheduling-disagg
+%%| fig-cap: "Prefill/decode disaggregation. A compute-bound prefill pool produces the first token and the key-value cache, which transfers over the network to a memory-bandwidth-bound decode pool that streams the remaining tokens. Each pool is provisioned and parallelized for its own phase. After Zhong et al., 2024 and Qin et al., 2024."
+flowchart LR
+  prompt["Prompt"] --> pp
+  subgraph prefillpool["Prefill pool (compute-bound)"]
+    pp["Read full prompt, one pass"]
+    ft["First token"]
+    kv["Build KV cache"]
+    pp --> ft
+    pp --> kv
+  end
+  kv -->|"KV cache transfer over network"| dp
+  subgraph decodepool["Decode pool (bandwidth-bound)"]
+    dp["Read KV cache"]
+    step["Emit one token per pass"]
+    dp --> step
+    step -->|append to KV| dp
+  end
+  step --> out["Output stream"]
+```
 
 ## Evolution
 

@@ -40,6 +40,32 @@ past keys and values out of memory, and that streaming, not the math,
 dominates the time. TPOT is essentially the per-step decode latency, and an
 idle decode step leaves most of the accelerator's compute unused.
 
+@fig-serving-problem-phases traces one request through both phases and lines up,
+for each, the shape of its arithmetic, the resource it saturates, and the latency
+metric it sets.
+
+```{mermaid}
+%%| label: fig-serving-problem-phases
+%%| fig-cap: "One request through prefill and decode. The two phases saturate different resources and set different latency metrics."
+flowchart LR
+  req["Request arrives"] --> pf
+  subgraph pf["Prefill (one pass)"]
+    pfa["All prompt tokens together"]
+    pfb["Matrix-matrix multiply"]
+    pfc["Compute-bound"]
+    pfa --> pfb --> pfc
+  end
+  pf -->|"sets TTFT"| dec
+  subgraph dec["Decode (one token per step)"]
+    deca["Newest token only"]
+    decb["Matrix-vector multiply"]
+    decc["Memory-bandwidth-bound"]
+    deca --> decb --> decc
+  end
+  dec -->|"loop until stop, sets TPOT"| dec
+  dec --> done["Answer streamed"]
+```
+
 A reader may wonder why this split matters so much. It matters because the two
 phases want opposite things from the hardware, and they run on the same
 hardware. Prefill wants to be fed enough work to keep the arithmetic units
@@ -89,6 +115,29 @@ take a fixed slice of memory, and whatever is left over is divided among the
 KV caches of the requests currently in flight. The number of requests you can
 batch, and therefore your throughput and goodput ceiling, is set by how much
 KV cache memory remains and how efficiently you use it.
+@fig-serving-problem-memory shows the partition.
+
+```{dot}
+//| label: fig-serving-problem-memory
+//| fig-cap: "Accelerator memory splits into a fixed weights slice and a leftover KV pool shared by in-flight requests. The pool caps how many requests can be batched, and so the goodput ceiling."
+digraph memory {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11];
+  mem [label="Accelerator memory (fixed total)", fillcolor="#eeeeee"];
+  weights [label="Weights (fixed slice)", fillcolor="#cfe8fc"];
+  pool [label="Leftover KV pool", fillcolor="#d7f0d7"];
+  mem -> weights;
+  mem -> pool;
+  r1 [label="Request 1 KV cache", fillcolor="#fde9c8"];
+  r2 [label="Request 2 KV cache", fillcolor="#fde9c8"];
+  rn [label="Request N KV cache", fillcolor="#fde9c8"];
+  pool -> r1;
+  pool -> r2;
+  pool -> rn;
+  cap [label="N capped by pool size, so is goodput ceiling", shape=note, fillcolor="#f5f5f5"];
+  rn -> cap [style=dashed, arrowhead=none];
+}
+```
 
 This is why the architecture chapter's attention variants matter to a serving
 engineer. Multi-query and grouped-query attention shrink $n_{\text{kv}}$, and

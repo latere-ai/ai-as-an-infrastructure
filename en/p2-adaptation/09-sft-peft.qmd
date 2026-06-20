@@ -51,6 +51,25 @@ tokenizer reserves and the template inserts. The template is a contract: the
 same markers must be used at inference, or the model is served off the
 distribution it was tuned on. This is the smallest example of a recurring
 truth in this part, that adaptation is as much about format as about weights.
+@fig-sft-peft-masking traces a single example from template to scored loss.
+
+```{mermaid}
+%%| label: fig-sft-peft-masking
+%%| fig-cap: "An SFT example flows from chat template through the token stream to a masked loss. Role markers split the stream, and only response tokens contribute gradients."
+flowchart TB
+  ex["(prompt, response) pair"] --> tmpl["Chat template wraps each turn"]
+  tmpl --> stream["Token stream with role markers"]
+  stream --> pm["user tokens<br/>What is the capital of France?"]
+  stream --> rm["assistant tokens<br/>Paris."]
+  pm --> mask["Masked, no gradient"]
+  rm --> score["Scored, next-token loss"]
+  mask --> upd["Weight update"]
+  score --> upd
+  classDef frozen fill:#eee,stroke:#999,color:#555;
+  classDef active fill:#dff0d8,stroke:#3c763d,color:#234;
+  class pm,mask frozen;
+  class rm,score active;
+```
 
 The surprising part is how little data this takes. The superficial-alignment
 hypothesis, named by the LIMA paper, holds that a model's knowledge and
@@ -83,6 +102,23 @@ hypothesis behind it is that the update a fine-tune wants to apply has low
 intrinsic rank, so a rank-8 or rank-16 factorization captures most of it. At
 inference the product $BA$ can be folded back into $W_0$, so a served LoRA
 model has zero added latency, unlike methods that bolt on extra layers.
+@fig-sft-peft-lora shows the two parallel paths and what each holds.
+
+```{mermaid}
+%%| label: fig-sft-peft-lora
+%%| fig-cap: "LoRA adds a trainable low-rank branch beside the frozen weight. The input feeds both paths and their outputs sum. Only A and B carry gradients, so the trained parameter count drops from d times k to r times the sum of d and k."
+flowchart LR
+  x["input x"] --> W0["W0 (d x k)<br/>frozen"]
+  x --> A["A (r x k)<br/>trained"]
+  A --> B["B (d x r)<br/>trained"]
+  W0 --> sum(("+"))
+  B -->|"scale alpha/r"| sum
+  sum --> h["output h"]
+  classDef frozen fill:#eee,stroke:#999,color:#555;
+  classDef active fill:#dff0d8,stroke:#3c763d,color:#234;
+  class W0 frozen;
+  class A,B active;
+```
 
 QLoRA pushes the memory cost down far enough to fine-tune a large model on a
 single accelerator. It quantizes the frozen base weights to 4-bit (an
@@ -109,7 +145,35 @@ and vectors compose.
 ## Evolution
 
 The line runs from full fine-tuning to ever-cheaper approximations of it,
-then to composing the cheap pieces.
+then to composing the cheap pieces. @fig-sft-peft-lineage lays out the two
+lineages, the efficiency spine and the merging branch.
+
+```{dot}
+//| label: fig-sft-peft-lineage
+//| fig-cap: "Two lineages of adaptation. The efficiency spine drives the per-task cost down from a full copy to a single card; the merging branch composes finished checkpoints with no further training."
+digraph {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fillcolor="#eef3fa", color="#5a7", fontname="Helvetica"];
+  edge [color="#777"];
+
+  full [label="Full fine-tune\n(BERT, GPT)\nevery weight, full copy"];
+  adapt [label="Adapters\nbottleneck sublayers\nadds inference depth"];
+  lora [label="LoRA\nlow-rank update\nmerges into base"];
+  qlora [label="QLoRA\n4-bit NF4 base\nsingle accelerator"];
+
+  soup [label="Model soups\naverage same-init runs"];
+  task [label="Task arithmetic\nsigned task vectors"];
+  ties [label="TIES-merging\ntrim, elect sign, merge"];
+  dare [label="DARE\ndrop and rescale delta"];
+
+  full -> adapt;
+  adapt -> lora;
+  lora -> qlora [label="cheaper per task"];
+  full -> soup [style=dashed, label="compose"];
+  soup -> task -> ties;
+  task -> dare;
+}
+```
 
 The earliest transfer-learning recipe was to fine-tune all the weights of a
 pre-trained model on a downstream task, the approach that BERT and GPT made

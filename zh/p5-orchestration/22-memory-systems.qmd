@@ -23,55 +23,110 @@
 **追加式事件日志**把每一条用户消息、模型响应、工具调用和工具结果都写入一个持久存储。日志是唯一的恢复产物：任何副本都可以通过重放它来服务任何会话。这换来了干净的重放、干净的审计，以及与传输无关的恢复，而它也是把意图与结果之间的缝隙以最纯粹形式暴露出来的模型。仅从日志看，"请求过但从未运行"和"运行过但从未被记录"是相同的：一次没有结果的工具调用。
 
 ```{mermaid}
+%%| label: fig-memory-crash-replay
+%%| fig-cap: "在副作用与持久化之间崩溃，会使重放重新发出一次非幂等的提交，这是意图与结果之缝隙最纯粹的形式。"
 sequenceDiagram
     participant LLM
-    participant R as Runner
-    participant SB as Sandbox
-    participant SS as Session store
+    participant R as 运行框架
+    participant SB as 沙箱
+    participant SS as 会话存储
 
     R->>LLM: prompt
     LLM-->>R: tool_use: sandbox_exec("git commit -m 'feat'")
     R->>SB: gRPC Exec("git commit ...")
-    SB-->>R: OK (commit created)
-    Note over R: ✕ Runner crashes here
-    Note over SS: Event NOT persisted
+    SB-->>R: OK（提交已创建）
+    Note over R: ✕ 运行框架在此崩溃
+    Note over SS: 事件未被持久化
 
-    Note over R,SS: Recovery
+    Note over R,SS: 恢复
     R->>SS: GetSession
-    SS-->>R: last known state (pre-commit)
-    R->>LLM: replay from last checkpoint
+    SS-->>R: 最后已知状态（提交前）
+    R->>LLM: 从最后检查点重放
     LLM-->>R: tool_use: sandbox_exec("git commit -m 'feat'")
     R->>SB: gRPC Exec("git commit ...")
-    Note over SB: ✕ Duplicate commit or error:<br/>nothing to commit, working tree clean
+    Note over SB: ✕ 重复提交或报错：<br/>nothing to commit, working tree clean
 ```
 
 **持久步日志**通过在意图和结果之间加入第三条记录来弥合这道缝隙：一道在副作用执行**之前**写下的持久**步边界**。重放会跳过任何结果已经持久化的步，于是"我们请求做 X"和"X 已完成"成了两个分开、各自持久的事实，重放可以问"这一步是否已经完成？"，而不是默认它没完成。
 
 **文件系统即状态**模型采取了相反的极端：工作上下文是临时的，而**文件系统**才是任务状态的唯一权威记录 [6]。事件日志降格为一份次要的意图日志；文件系统持有真相，通常通过一种由智能体维护的有主张的约定（`progress.md`、`plan.md`）。这对任何文件系统能表示的东西都绕开了意图与结果之间的缝隙，文件要么有新内容要么没有，但它只是把缝隙挪了个位置，而非消除了它：一次 `git push`、一次外部 API 调用、一次 MCP 服务端游标推进，仍然在文件系统的触及范围之外。
 
+@fig-memory-durability-models 把这三种模型放到同一条轴上，即每种模型相对副作用记录了什么，并显示意图与结果之间的缝隙在每种模型里落在何处。
+
+```{dot}
+//| label: fig-memory-durability-models
+//| fig-cap: "三种持久性模型在相对副作用记录什么上各有不同，这决定了意图与结果之缝隙落在何处。"
+digraph durability {
+    rankdir=TB;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11];
+    edge [fontname="Helvetica", fontsize=10];
+
+    subgraph cluster_log {
+        label="追加式事件日志";
+        labeljust="l";
+        style="rounded";
+        color="#2980b9";
+        a_intent [label="记录意图", fillcolor="#d6eaf8", color="#2980b9"];
+        a_effect [label="运行副作用", fillcolor="#ffffff", color="#2980b9"];
+        a_result [label="记录结果", fillcolor="#d6eaf8", color="#2980b9"];
+        a_intent -> a_effect -> a_result;
+        a_gap [label="缝隙敞开：崩溃时\n意图与结果无从区分", shape=note, fillcolor="#f9d6d6", color="#c0392b"];
+        a_effect -> a_gap [style=dashed, color="#c0392b", arrowhead=none];
+    }
+
+    subgraph cluster_step {
+        label="持久步日志";
+        labeljust="l";
+        style="rounded";
+        color="#27ae60";
+        b_intent [label="记录意图", fillcolor="#d5f5e3", color="#27ae60"];
+        b_bound [label="持久步边界", fillcolor="#d5f5e3", color="#27ae60"];
+        b_effect [label="运行副作用", fillcolor="#ffffff", color="#27ae60"];
+        b_result [label="记录结果", fillcolor="#d5f5e3", color="#27ae60"];
+        b_intent -> b_bound -> b_effect -> b_result;
+        b_gap [label="缝隙闭合：重放追问\n这一步是否已完成", shape=note, fillcolor="#d5f5e3", color="#27ae60"];
+        b_bound -> b_gap [style=dashed, color="#27ae60", arrowhead=none];
+    }
+
+    subgraph cluster_fs {
+        label="文件系统即状态";
+        labeljust="l";
+        style="rounded";
+        color="#e67e22";
+        c_fs [label="文件系统才是真相\nprogress.md, plan.md", fillcolor="#fdebd0", color="#e67e22"];
+        c_log [label="事件日志降格\n为次要的意图", fillcolor="#ffffff", color="#e67e22"];
+        c_fs -> c_log [style=invis];
+        c_gap [label="缝隙挪位：git push、\nMCP 游标仍在文件系统之外", shape=note, fillcolor="#f9d6d6", color="#c0392b"];
+        c_fs -> c_gap [style=dashed, color="#c0392b", arrowhead=none];
+    }
+}
+```
+
 ### 记忆的形态
 
 记忆是那个活得比会话久的存储，而它有一种值得点名的结构。短期记忆是单次对话内的会话上下文。长期记忆分为情景记忆（过去的交互）、语义记忆（关于用户或领域的事实）和程序记忆（学到的工作流）。外部知识，即检索增强生成（@sec-rag-retrieval）背后的语料和知识图谱，与之并列但是另一回事：记忆是按用户的、经整理的、可写的，而 RAG 是从一个智能体并不拥有的共享语料里检索。
 
 ```{mermaid}
+%%| label: fig-memory-taxonomy
+%%| fig-cap: "记忆分为短期与长期（情景、语义、程序），不同于 RAG 所检索的那种共享的外部知识。"
 graph TB
     classDef short fill:#d6eaf8,stroke:#2980b9
     classDef long fill:#fdebd0,stroke:#e67e22
     classDef external fill:#d5f5e3,stroke:#27ae60
 
-    subgraph "Short-term"
-        ST[Session context<br/>within one conversation]
+    subgraph "短期"
+        ST["会话上下文<br/>单次对话内"]
     end
 
-    subgraph "Long-term"
-        EM[Episodic memory<br/>past interactions]
-        SM[Semantic memory<br/>facts about user / domain]
-        PM[Procedural memory<br/>learned workflows]
+    subgraph "长期"
+        EM["情景记忆<br/>过去的交互"]
+        SM["语义记忆<br/>关于用户或领域的事实"]
+        PM["程序记忆<br/>学到的工作流"]
     end
 
-    subgraph "External knowledge"
-        RAG[RAG indexes<br/>documentation, tickets, code]
-        KG[Knowledge graphs<br/>entities, relationships]
+    subgraph "外部知识"
+        RAG["RAG 索引<br/>文档、工单、代码"]
+        KG["知识图谱<br/>实体、关系"]
     end
 
     class ST short
@@ -105,23 +160,25 @@ graph TB
 **分支在对话上分得廉价，在工作区上分得昂贵。** 给对话状态分支是一次指针操作：日志是一棵事件 ID 的树，而 fork 一棵树是廉价的。给**工作区**分支则不然，因为工作区是一个真实的文件系统，而两条分支不可能都拥有它。
 
 ```{mermaid}
+%%| label: fig-memory-branching
+%%| fig-cap: "给对话状态分支是一次廉价的指针操作，而共享工作区则逼出一个二选一：要么分支相互干扰，要么每次 fork 都付克隆代价。"
 graph LR
     classDef easy fill:#d5f5e3,stroke:#27ae60
     classDef hard fill:#f9d6d6,stroke:#c0392b
 
-    CK[Checkpoint]
-    CK --> B1[Branch A: conversation]
-    CK --> B2[Branch B: conversation]
-    CK --> W[Workspace / sandbox state]
-    W --> C{Shared or cloned?}
-    C -->|shared| RACE[Branches interfere]
-    C -->|cloned| COST[Clone cost per fork]
+    CK["检查点"]
+    CK --> B1["分支 A：对话"]
+    CK --> B2["分支 B：对话"]
+    CK --> W["工作区 / 沙箱状态"]
+    W --> C{"共享还是克隆？"}
+    C -->|"共享"| RACE["分支相互干扰"]
+    C -->|"克隆"| COST["每次 fork 的克隆代价"]
 
     class B1,B2 easy
     class RACE,COST hard
 ```
 
-这个选择坍缩成一道两难：**共享**工作区的 fork 会在它上面竞态，分支 A 的写入对分支 B 可见，而**克隆**工作区的 fork 要付克隆代价。由此引出三种故障模式。一条分支无法 fork 它所触及的外部系统，git 远端、问题追踪器、MCP 游标，于是可分支的状态和不可分支的状态会渐行渐远。合并回去是结构性未解决的：文件在检查点处有一个共同祖先，于是三方合并就适用了，但两段分叉的对话没有合并基点，因为其内容是一条推理轨迹而非可编辑的行，这就是为什么必须由**智能体**而非运行框架来解决文件合并。而孤儿分支会把工作区和会话日志资源钉住，直到某个 TTL 把它们回收，所以没有 TTL，这种泄漏就会无声地累积。单凭回退就足以应对交互式编码；可 fork 的树在用户并行探索多个备选方案、或一条评估流水线用改过的 prompt 重放一次会话时才划算。
+如 @fig-memory-branching 所示，这个选择坍缩成一道两难：**共享**工作区的 fork 会在它上面竞态，分支 A 的写入对分支 B 可见，而**克隆**工作区的 fork 要付克隆代价。由此引出三种故障模式。一条分支无法 fork 它所触及的外部系统，git 远端、问题追踪器、MCP 游标，于是可分支的状态和不可分支的状态会渐行渐远。合并回去是结构性未解决的：文件在检查点处有一个共同祖先，于是三方合并就适用了，但两段分叉的对话没有合并基点，因为其内容是一条推理轨迹而非可编辑的行，这就是为什么必须由**智能体**而非运行框架来解决文件合并。而孤儿分支会把工作区和会话日志资源钉住，直到某个 TTL 把它们回收，所以没有 TTL，这种泄漏就会无声地累积。单凭回退就足以应对交互式编码；可 fork 的树在用户并行探索多个备选方案、或一条评估流水线用改过的 prompt 重放一次会话时才划算。
 
 **记忆在成本与简单之间、在写时安全与读时便利之间做权衡。** 记忆要么被环境式地加载进每一个 prompt（简单、昂贵），要么作为一个工具暴露出来由智能体按需查询（更便宜、扩展性更好，但智能体得知道何时该问）。更换嵌入模型会使现有索引失效并迫使一次昂贵的重建索引，所以嵌入的选择是一项长期承诺。最锋利的权衡是租户归属。针对一个共享向量存储、没有强制租户过滤的 top-k 相似度查询，可能返回另一个租户的数据，而防御必须住在索引里，而不是在应用代码里。在写入时分区，按租户的命名空间、pgvector 的行级安全或独立 schema，使一次查询在物理上无法触及另一个租户的向量。给每个分块都打归因、在查询之后再过滤是较弱的选项，因为读时过滤离一次泄露只差一个 bug，而写时分区是失败即关闭的。这正是记忆最直接地消费身份模型的地方（@sec-security-authorization）：租户归属来源于身份，而分区强制执行它。
 

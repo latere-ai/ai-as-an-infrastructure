@@ -29,6 +29,36 @@ which actions require a human (oversight, @sec-oversight-control). It decides
 how those decisions are carried out, and the most consequential mechanism it
 owns is the ability to stop the loop.
 
+The loop drawn bare is one box and a back-edge. What @fig-harness-loop adds is
+where each of those production frictions bites the loop, which is the whole
+argument of this chapter in one picture: four unrelated-sounding problems land
+at four distinct points on a structure that looked like it had none.
+
+```{mermaid}
+%%| label: fig-harness-loop
+%%| fig-cap: "The agent loop with the four production frictions mapped to where each one bites. The bare loop is the solid cycle; the dashed callouts are the points where reality breaks the abstraction."
+flowchart TB
+    classDef friction fill:#f9d6d6,stroke:#c0392b,color:#000
+
+    CTX["Send context to model"] --> CALL["Model returns tool calls"]
+    CALL --> DISP["Dispatch tool calls"]
+    DISP --> APP["Append results to context"]
+    APP -->|not done| CTX
+    APP -->|done| END["Return to caller"]
+
+    F1["Tool holds a connection across turns: loop is no longer stateless between steps"]
+    F2["Context window fills: loop must decide what to forget"]
+    F3["User cancels mid-execution: loop must stop work it does not directly control"]
+    F4["Two replicas own one scheduled tick: loop must coordinate with a copy it cannot see"]
+
+    F1 -.-> DISP
+    F2 -.-> APP
+    F3 -.-> DISP
+    F4 -.-> CTX
+
+    class F1,F2,F3,F4 friction
+```
+
 ## Design
 
 The core idea is that each verb in the contract is a separate mechanism with
@@ -64,6 +94,26 @@ cancel cosmetic. This is why interruption is a primitive and not a feature: the
 pause a human-in-the-loop approval depends on is threaded through every hop or
 it is theater. The decision about what requires approval belongs to oversight;
 the pause that lets the approval happen is the runtime's verb.
+@fig-harness-cancel-cascade traces the cascade and the latency each uncooperative
+hop adds, so the claim that cancel is only as real as its most-blind hop becomes
+a property of the chain rather than an assertion.
+
+```{mermaid}
+%%| label: fig-harness-cancel-cascade
+%%| fig-cap: "The cancellation cascade. The interrupt flag is instant, but the cancel is only effective once every downstream hop honors it. One uncooperative hop bounds the whole result, so the dangling delays mark where a cancel goes cosmetic."
+flowchart TB
+    classDef bad fill:#f9d6d6,stroke:#c0392b,color:#000
+
+    FLAG["Harness sets interrupt flag: instant"] --> MODEL["Model call honors context deadline"]
+    MODEL --> TOOL["Tool dispatch propagates cancellation"]
+    TOOL --> SBX["Sandbox command respects SIGTERM"]
+    SBX --> RPC["Stateful protocol call respects RPC cancellation"]
+
+    MODEL -.->|ignored: holds session tens of seconds| D1["Cosmetic cancel"]
+    SBX -.->|ignored: holds for full grace period| D2["Cosmetic cancel"]
+
+    class D1,D2 bad
+```
 
 **A lock prevents overlap, not duplication.** When the loop runs on a schedule,
 every replica runs its own scheduler, so without coordination every replica
@@ -83,20 +133,22 @@ the same agent touching the same external resource. Two coding sessions push
 conflicting commits to one branch. A user session and a scheduled tick target
 the same external state, neither aware of the other. The lock is in the
 harness; the conflict is at the resource, and the harness lock does not reach
-it.
+it. @fig-harness-lock-altitude shows the mismatch directly.
 
 ```{mermaid}
+%%| label: fig-harness-lock-altitude
+%%| fig-cap: "Session-level locking is the wrong altitude for a resource conflict. Each session is individually locked, yet two sessions of the same agent collide at a shared external resource the harness lock never reaches."
 graph TB
     classDef locked fill:#d5f5e3,stroke:#27ae60
     classDef unlocked fill:#f9d6d6,stroke:#c0392b
 
-    A[Agent: acme-api] --> S1[Session 1]
-    A --> S2[Session 2]
-    A --> S3[Scheduled tick]
+    A["Agent: acme-api"] --> S1["Session 1"]
+    A --> S2["Session 2"]
+    A --> S3["Scheduled tick"]
 
-    S1 -->|git push main| GIT[git repo: acme/api]
+    S1 -->|git push main| GIT["git repo: acme/api"]
     S2 -->|git push main| GIT
-    S3 -->|create ticket| JIRA[Jira: ACME project]
+    S3 -->|create ticket| JIRA["Jira: ACME project"]
     S1 -->|create ticket| JIRA
 
     class S1,S2,S3 locked
@@ -175,7 +227,24 @@ subset per phase, read-only tools while understanding a problem and write tools
 while fixing it, which requires the runtime to track phase. Model-driven
 discovery gives the model a `list_available_tools` tool and lets it ask, which
 raises the ceiling but makes discovery quality a function of model capability
-the runtime does not own.
+the runtime does not own. @fig-harness-tool-ladder lays the four rungs against
+the scaling ceiling each one buys and the cost it adds.
+
+```{dot}
+//| label: fig-harness-tool-ladder
+//| fig-cap: "The tool-selection ladder. Each rung raises the catalog ceiling and adds a cost the runtime must then own, from a static prompt list to model-driven discovery."
+digraph tool_ladder {
+    rankdir=TB;
+    node [shape=box, style=rounded, fontname="Helvetica"];
+
+    R1 [label="Static flat list\nceiling 30 to 50 tools\nirrelevant tools hurt accuracy"];
+    R2 [label="Dynamic tool-RAG\nscales to thousands\ncost: a retrieval layer with its own errors"];
+    R3 [label="Hierarchical namespacing\nmount and unmount per phase\ncost: runtime must track phase"];
+    R4 [label="Model-driven discovery\nmodel calls list_available_tools\ncost: quality follows model capability"];
+
+    R1 -> R2 -> R3 -> R4 [label="  catalog grows"];
+}
+```
 
 The scheduler followed the same pressure. In-process and external-cron
 schedulers give way to durable execution frameworks (Temporal, Inngest,

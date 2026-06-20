@@ -22,7 +22,23 @@ top = topk(weights, k)               # indices and gate values
 y = sum(g_i * Expert_i(h) for i, g_i in top)
 ```
 
-这个微小的映射是唯一真正新增的组件，也几乎是所有 MoE 病理的源头。设计的其余全部，都是为了让路由器保持诚实而存在。
+这个微小的映射是唯一真正新增的组件，也几乎是所有 MoE 病理的源头。设计的其余全部，都是为了让路由器保持诚实而存在。@fig-moe-routing 追踪一个词元穿过该层：门控为所有专家打分，选出 top-$k$ 并组合，而一个共享专家（一项后来的改进）则在旁路上始终在线。
+
+```{mermaid}
+%%| label: fig-moe-routing
+%%| fig-cap: "一个词元穿过 MoE 层。路由器为全部 N 个专家打分，被选中的 top-k 路由专家加权求和，一个始终在线的共享专家在旁并行。取材自 Shazeer 等，2017 与 Dai 等，2024。"
+flowchart TD
+  h["词元隐藏状态 h"] --> gate["路由器 W_gate<br/>对 N 个专家打分"]
+  gate --> sm["softmax / sigmoid<br/>再选出 top-k"]
+  sm -->|"被选中"| e1["专家 i<br/>（被路由）"]
+  sm -->|"被选中"| e2["专家 j<br/>（被路由）"]
+  sm -.->|"未被选中"| eN["专家 ...<br/>（闲置，无 FLOPs）"]
+  h --> shared["共享专家<br/>（始终在线）"]
+  e1 --> sum["按门控值<br/>加权求和"]
+  e2 --> sum
+  shared --> sum
+  sum --> y["输出 y"]
+```
 
 路由器靠自己最先出错的地方是均衡。放任不管，门控会在一个赢者通吃的回路里坍缩到少数几个受偏爱的专家上：被选中的专家获得更多梯度、得到改进、被选中得更多，而其余专家挨饿，沦为死参数。有两类修复方法。辅助负载均衡损失，源自 Shazeer 等（2017），并在 GShard 与 Switch 中得到改进，添加一个惩罚项，惩罚「路由到每个专家的词元比例」与「落在其上的门控质量」之乘积，把分布推向均匀。它有效，但注入了一个损失，其权重使均衡与任务质量之间产生权衡。更新的答案，即来自 DeepSeek-V3 的无辅助损失（loss-free）/ 基于偏置的均衡，彻底去掉辅助损失。它改为为每个专家维护一个路由*偏置*，在两步之间对使用不足者上调、对使用过度者下调，从而在不增加干扰性梯度的情况下引导选择。这绕开了辅助损失所制造的均衡与质量之间的张力。
 
@@ -38,7 +54,20 @@ $$
 
 由于状态的大小固定，其代价随序列长度线性增长，且没有不断增长的 KV 缓存要服务，只有一个常数大小的状态。代价是一个词元的全部过去都必须被概括进那个固定状态，而注意力保持每一个过去词元都可寻址。设计问题在于，一个学习得到的、依赖输入的递归，能否把过去压缩得足够好以与之竞争。Mamba 的贡献在于让递归具有选择性，让 $A$、$B$、$C$ 依赖输入，使模型能选择保留什么、遗忘什么，在保持线性的同时，恢复出基于内容的注意力所做的大部分工作。
 
-实践中，前沿并不二者择一。*混合*堆叠把少数全注意力层与多数 SSM 或线性递归层交错排布，于是少数几个全局混合层保留精确召回，而线性层廉价地承载序列的主体代价。MoE 与 SSM 也是正交的：一个混合体可以同时把它的前馈块置于一个 MoE 路由器之后，把它的序列混合置于一个状态空间递归之后。
+实践中，前沿并不二者择一。*混合*堆叠把少数全注意力层与多数 SSM 或线性递归层交错排布，于是少数几个全局混合层保留精确召回，而线性层廉价地承载序列的主体代价。MoE 与 SSM 也是正交的：一个混合体可以同时把它的前馈块置于一个 MoE 路由器之后，把它的序列混合置于一个状态空间递归之后。@fig-moe-hybrid-stack 展示了这三种思想如何组合进同一个堆叠：序列混合的位置在 SSM 与注意力之间交替，而前馈的位置是一个 MoE 层。
+
+```{mermaid}
+%%| label: fig-moe-hybrid-stack
+%%| fig-cap: "一个混合堆叠组合了全部三种思想。多数层用线性 SSM 递归混合序列，少数层用全注意力实现精确召回，前馈的位置则是一个 MoE 层。取材自 Lieber 等，2024。"
+flowchart TD
+  in["输入序列"] --> L1
+  subgraph block["重复的块"]
+    L1["SSM 层<br/>（线性，廉价混合）"] --> L2["SSM 层<br/>（线性，廉价混合）"]
+    L2 --> L3["注意力层<br/>（全局，精确召回）"]
+    L3 --> L4["MoE 前馈<br/>（被路由的专家）"]
+  end
+  L4 --> rep["……块重复……"] --> out["输出"]
+```
 
 ## 演化
 
@@ -49,6 +78,45 @@ $$
 一条平行的线让 MoE 无需为一次从零训练付费即可实用。稀疏升级改造（Komatsuzaki 等，2022）把每个专家初始化为一个已训练稠密前馈块的副本，添加一个全新的路由器，并继续训练；随着路由使专家专业化，它们逐渐分化。它以从零训练的一小部分算力换取强劲的质量，其失效模式是：若路由压力太弱，专家可能保持几乎相同，那便只有 MoE 的成本而无其收益。
 
 状态空间这条线作为认真的注意力竞争者更为年轻。结构化状态空间模型 S4（Gu 等，2021）表明，一个经过精心参数化的线性递归能够处理非常长的序列，而 Mamba（Gu 与 Dao，2023）让递归具有选择性且对硬件高效，使其触及规模化语言建模。Mamba-2（Dao 与 Gu，2024）通过一种对偶，把状态空间模型与注意力重新联系起来，让它们得以复用注意力的硬件。混合的答案很快到来：Jamba（Lieber 等，2024）交错排布 Mamba 与注意力层，并在其上加了 MoE，演示出这三种思想能组合进同一个堆叠。
+
+@fig-moe-lineage 把这些线索铺陈为一张谱系图：一条路由线、一条专业化线、升级改造这条捷径，以及独立的状态空间线，全部汇聚于混合堆叠。
+
+```{dot}
+//| label: fig-moe-lineage
+//| fig-cap: "本章诸思想的谱系。一条路由线与一条专业化线改进 MoE 层，稀疏升级改造是通往它的一条训练捷径，而一条独立的状态空间线在混合堆叠处与注意力及 MoE 汇聚。"
+digraph lineage {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#eeeeee"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  shazeer [label="Shazeer 2017\ntop-k 门控", fillcolor="#ffe2cc"];
+  gshard [label="GShard 2020", fillcolor="#ffe2cc"];
+  switch [label="Switch 2021\nk=1", fillcolor="#ffe2cc"];
+  glam [label="GLaM / Mixtral\n2022 至 2024", fillcolor="#ffe2cc"];
+  echoice [label="专家选择 2022", fillcolor="#ffe2cc"];
+  base [label="BASE Layers 2021", fillcolor="#ffe2cc"];
+
+  dsmoe [label="DeepSeekMoE 2024\n细粒度 + 共享", fillcolor="#d9e8ff"];
+  dsv3 [label="DeepSeek-V3 2024\n偏置均衡", fillcolor="#d9e8ff"];
+
+  upcycle [label="稀疏升级改造 2022\n稠密到 MoE", fillcolor="#fff2b2"];
+
+  s4 [label="S4 2021", fillcolor="#d9ffd9"];
+  mamba [label="Mamba 2023\n选择性", fillcolor="#d9ffd9"];
+  mamba2 [label="Mamba-2 2024\nSSM 与注意力对偶", fillcolor="#d9ffd9"];
+
+  jamba [label="Jamba 2024\n混合堆叠", fillcolor="#f0d9ff"];
+
+  shazeer -> gshard -> switch -> glam;
+  switch -> echoice;
+  switch -> base;
+  glam -> dsmoe -> dsv3;
+  switch -> upcycle;
+  s4 -> mamba -> mamba2;
+  dsv3 -> jamba;
+  mamba -> jamba;
+}
+```
 
 ## 权衡
 

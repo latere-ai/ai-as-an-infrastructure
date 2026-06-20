@@ -71,6 +71,29 @@ its pace, and *silent data corruption* lets the run continue while producing
 subtly wrong numbers, which no checkpoint will save you from because the
 checkpoint faithfully records the corruption.
 
+The split in @fig-orchestration-recovery is the design point: a clean crash
+travels the fast path of detect, fence, and resume on a pre-warmed spare, while
+the faults that never trip the crash detector are the ones that have to be
+caught by observability or are beyond recovery entirely.
+
+```{mermaid}
+%%| label: fig-orchestration-recovery
+%%| fig-cap: "A clean crash is caught and routed to elastic restart on spare capacity. The faults that do not crash cleanly escape that path and must be caught by observability or, in the case of silent corruption, are unrecoverable from any checkpoint."
+flowchart TD
+  H["Healthy step loop"] --> F{"Fault type"}
+  F -->|Node crash| D["Detect dead node"]
+  D --> N["Fence out of collective"]
+  N --> R["Resume survivors from last checkpoint"]
+  R --> W["Place on pre-warmed spare"]
+  W --> H
+  F -->|Straggler| SL["Slow rank drags every collective"]
+  SL --> O["Caught by per-step telemetry"]
+  O --> H
+  F -->|Silent data corruption| SC["Wrong numbers, no crash"]
+  SC --> X["Checkpoint records the corruption"]
+  X --> U["Unrecoverable without external check"]
+```
+
 The data-loading plane is the second pillar. The corpus is tokenized into many
 shards on a high-throughput storage fabric, a parallel filesystem or
 NVMe-over-Fabrics tier sized to feed the cluster at multiple TB/s, usually with
@@ -84,15 +107,18 @@ The property that ties the data plane back to checkpointing is reproducibility.
 A resume must continue the exact data order the run would have followed without
 the failure, which means the sampler and shuffle state, the position in the
 permutation, the epoch, the per-source draw counters, are part of the
-checkpoint, not derived fresh on restart. Without that, a resume re-feeds or
-skips data and silently breaks the mixture contract.
+checkpoint, not derived fresh on restart, as @fig-orchestration-dataplane shows.
+Without that, a resume re-feeds or skips data and silently breaks the mixture
+contract.
 
 ```{mermaid}
+%%| label: fig-orchestration-dataplane
+%%| fig-cap: "The data plane feeds each rank from sharded storage through a local cache, and the checkpoint captures the sampler state so a resume continues the exact same data order."
 flowchart LR
-  S[Sharded corpus on storage fabric] --> C[Local NVMe cache]
-  C --> P[Per-rank prefetch and pipeline]
-  P --> T[Training step]
-  T -->|every N steps| K[Checkpoint:<br/>params, optimizer,<br/>schedule, sampler state]
+  S["Sharded corpus on storage fabric"] --> C["Local NVMe cache"]
+  C --> P["Per-rank prefetch and pipeline"]
+  P --> T["Training step"]
+  T -->|every N steps| K["Checkpoint:<br/>params, optimizer,<br/>schedule, sampler state"]
   K -.resume.-> P
   K -.resume.-> T
 ```
@@ -179,7 +205,40 @@ checkpointing, keeping recent state in host memory or sharded across redundant
 nodes so a restart restores from RAM in seconds, falling back to durable storage
 only against a correlated failure. The two imply different cost structures and
 different tolerances for correlated failure, and there is no settled default
-across frontier stacks.
+across frontier stacks. @fig-orchestration-checkpoint-tiers lays the two camps
+side by side on the axes that separate them.
+
+```{dot}
+//| label: fig-orchestration-checkpoint-tiers
+//| fig-cap: "The two checkpoint camps. The durable storage tier is slow to write and restore but survives a correlated failure; the in-memory or peer-replicated tier is fast both ways but is lost if enough of the cluster goes down at once. Most runs combine them."
+digraph {
+  rankdir=LR;
+  node [shape=box, style=rounded, fontname="Helvetica"];
+  edge [fontname="Helvetica"];
+
+  subgraph cluster_durable {
+    label="Durable storage tier";
+    style=dashed;
+    DW [label="Write to storage fabric\nslow"];
+    DR [label="Restore from storage\nslow"];
+    DS [label="Survives correlated failure\nyes"];
+  }
+
+  subgraph cluster_fast {
+    label="In-memory / peer-replicated tier";
+    style=dashed;
+    FW [label="Write to host RAM or peers\nfast"];
+    FR [label="Restore from RAM\nseconds"];
+    FS [label="Survives correlated failure\nno"];
+  }
+
+  State [label="Checkpoint state\nparams, optimizer, sampler", shape=box, style="rounded,filled", fillcolor="#eeeeee"];
+  State -> DW [label="occasional durable"];
+  State -> FW [label="frequent cheap"];
+  DW -> DR -> DS [style=invis];
+  FW -> FR -> FS [style=invis];
+}
+```
 :::
 
 ## Implementation

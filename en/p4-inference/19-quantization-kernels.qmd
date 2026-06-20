@@ -123,9 +123,39 @@ The output never leaves SRAM until it is final, the $n \times n$ matrix
 never touches high-bandwidth memory, and the backward pass recomputes blocks
 on the fly rather than storing them. This is the core trade the kernel makes:
 spend extra arithmetic to avoid memory traffic, which is the right trade
-precisely because attention was memory-bound.
+precisely because attention was memory-bound. @fig-quantization-kernels-flashattention
+contrasts the two data paths: the naive kernel parks the full score matrix in
+high-bandwidth memory, while the fused kernel keeps every intermediate inside
+on-chip SRAM and lets only the final output return.
 
 ```{mermaid}
+%%| label: fig-quantization-kernels-flashattention
+%%| fig-cap: "Naive attention writes and reads the full score matrix through HBM, while FlashAttention streams Q, K, V tiles through SRAM and keeps a running max and normalizer so the matrix never lands in HBM. After Dao et al. (2022)."
+flowchart LR
+  subgraph HBM_naive["Naive attention in HBM"]
+    direction TB
+    QN["Q, K, V"] --> SC["full n by n score matrix"]
+    SC --> SM["softmax over full matrix"]
+    SM --> ON["weighted output"]
+  end
+  subgraph SRAM["FlashAttention on-chip in SRAM"]
+    direction TB
+    TILE["load Q, K, V tiles"] --> ONLINE["online softmax: running max m, normalizer l"]
+    ONLINE --> RESCALE["rescale partial output per key block"]
+    RESCALE --> TILE
+    RESCALE --> OUT["final output to HBM"]
+  end
+  HBM_naive -. "same exact result, far less traffic" .-> SRAM
+```
+
+The two levers compose into a single routing decision. The bottleneck the
+engine is fighting picks the quantization scheme, and the fused attention
+kernel then sits underneath whichever path is chosen, as @fig-quantization-kernels-routing
+lays out.
+
+```{mermaid}
+%%| label: fig-quantization-kernels-routing
+%%| fig-cap: "The serving regime routes the quantization choice, and a fused attention kernel sits beneath both paths before reaching the engine."
 flowchart TD
   A["FP16 weights and activations"] --> B{"What is the bottleneck?"}
   B -->|"decode: bandwidth"| C["weight-only: GPTQ, AWQ"]

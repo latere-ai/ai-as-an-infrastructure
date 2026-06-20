@@ -16,7 +16,33 @@ $$
 x = x + \text{sublayer}(\text{norm}(x))
 $$
 
-The residual stream is the model's working memory, a vector of width $d_{\text{model}}$ carried from the embedding to the final layer. Each block gets one pass to read it and add to it. Depth is the number of such read-modify-write passes; width is how much the stream can hold at once. This framing makes the rest of the design fall out.
+The residual stream is the model's working memory, a vector of width $d_{\text{model}}$ carried from the embedding to the final layer. Each block gets one pass to read it and add to it. Depth is the number of such read-modify-write passes; width is how much the stream can hold at once. This framing makes the rest of the design fall out. @fig-transformer-block draws one pre-norm block this way: the residual stream runs straight down as an identity path, and each sublayer branches off it through a norm, computes a delta, and adds the delta back.
+
+```{dot}
+//| label: fig-transformer-block
+//| fig-cap: "A single pre-norm transformer block read as two read-modify-write sublayers on a shared residual stream. Each branch normalizes a copy of the stream, computes a delta, and adds it back, while the identity path down the middle is the gradient highway."
+digraph block {
+  rankdir=TB;
+  node [shape=box, fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=10];
+
+  xin   [label="residual stream x", shape=box, style=rounded];
+  add1  [label="+", shape=circle, width=0.3];
+  add2  [label="+", shape=circle, width=0.3];
+  xout  [label="residual stream x", shape=box, style=rounded];
+
+  n1    [label="norm"];
+  attn  [label="attention\nmix across positions"];
+  n2    [label="norm"];
+  mlp   [label="SwiGLU MLP\nper-token transform"];
+
+  xin -> add1 [label="identity path"];
+  xin -> n1 -> attn -> add1 [label="delta"];
+  add1 -> add2 [label="identity path"];
+  add1 -> n2 -> mlp -> add2 [label="delta"];
+  add2 -> xout;
+}
+```
 
 The first sublayer is attention, the only place tokens exchange information, covered in detail below. The second is a position-wise MLP applied to each token independently, and it holds most of the parameters: a feed-forward layer that expands to roughly four times $d_{\text{model}}$ and projects back costs about $8 \cdot d_{\text{model}}^2$ per block, dwarfing attention's projections.
 
@@ -50,11 +76,52 @@ It grows linearly with context length and batch size, and at long context it ove
 
 The dense block reached its current shape through a sequence of small, near-free wins. Vaswani et al. (2017) shipped the original transformer with post-norm and a plain FFN. Post-norm diverges at depth without heavy warmup, so pre-norm, analyzed by Xiong et al. (2020), replaced it. RMSNorm (Zhang and Sennrich, 2019) dropped LayerNorm's mean subtraction at no measured quality cost. SwiGLU (Shazeer, 2020) edged out GeLU under the $2/3$ rescaling. RoPE (Su et al., 2021) became the positional default over ALiBi. By the time of LLaMA and Qwen, the consensus had set: pre-norm, RMSNorm, a SwiGLU FFN, RoPE, and no bias terms anywhere. Strikingly little has changed in the dense block since 2023. The action moved to data, scale, and post-training.
 
-The one part of the block that kept moving is attention, and it moved because of the KV cache. Multi-query attention (Shazeer, 2019) shares a single key/value head across all query heads, cutting the cache by a factor of $h$. The cut is dramatic, but collapsing to one KV head can destabilize training and drop quality non-gracefully. Grouped-query attention (Ainslie et al., 2023) interpolates: it shares K and V within $g$ groups of query heads, recovering MHA ($g = h$) at one extreme and MQA ($g = 1$) at the other, and it can be uptrained cheaply from an existing MHA checkpoint. GQA recovers most of the quality at most of the savings and became the default in the LLaMA and Qwen families.
+The one part of the block that kept moving is attention, and it moved because of the KV cache. Multi-query attention (Shazeer, 2019) shares a single key/value head across all query heads, cutting the cache by a factor of $h$. The cut is dramatic, but collapsing to one KV head can destabilize training and drop quality non-gracefully. Grouped-query attention (Ainslie et al., 2023) interpolates: it shares K and V within $g$ groups of query heads, recovering MHA ($g = h$) at one extreme and MQA ($g = 1$) at the other, and it can be uptrained cheaply from an existing MHA checkpoint. GQA recovers most of the quality at most of the savings and became the default in the LLaMA and Qwen families. @fig-kv-sharing shows the mechanism: the cache holds one K and V per distinct KV head, so the savings come entirely from how many query heads are made to share each one.
 
-Multi-head latent attention (DeepSeek-V2, 2024) attacks the same cost from a different angle. Instead of sharing heads, it projects K and V down into a low-rank latent vector that is cached in place of the full per-head K and V, decompressing on the fly, with a decoupled RoPE component carried alongside. The pitch is GQA-class cache savings, or better, at MHA-class quality. It is the other point on the cache-compression frontier.
+```{dot}
+//| label: fig-kv-sharing
+//| fig-cap: "How MHA, GQA, and MQA wire query heads to cached key/value heads. Only the KV heads sit in the cache, so collapsing many query heads onto one KV head is what shrinks it."
+digraph kv {
+  rankdir=TB;
+  node [shape=box, fontname="Helvetica", fontsize=10];
+  edge [arrowsize=0.6];
+  nodesep=0.2;
+
+  subgraph cluster_mha {
+    label="MHA: one KV per query head";
+    fontname="Helvetica"; color="gray70";
+    q1 [label="Q1"]; q2 [label="Q2"]; q3 [label="Q3"]; q4 [label="Q4"];
+    k1 [label="KV1", style=filled, fillcolor="#dbe9ff"];
+    k2 [label="KV2", style=filled, fillcolor="#dbe9ff"];
+    k3 [label="KV3", style=filled, fillcolor="#dbe9ff"];
+    k4 [label="KV4", style=filled, fillcolor="#dbe9ff"];
+    q1 -> k1; q2 -> k2; q3 -> k3; q4 -> k4;
+  }
+
+  subgraph cluster_gqa {
+    label="GQA: one KV per group";
+    fontname="Helvetica"; color="gray70";
+    g1 [label="Q1"]; g2 [label="Q2"]; g3 [label="Q3"]; g4 [label="Q4"];
+    gk1 [label="KV1", style=filled, fillcolor="#dbe9ff"];
+    gk2 [label="KV2", style=filled, fillcolor="#dbe9ff"];
+    g1 -> gk1; g2 -> gk1; g3 -> gk2; g4 -> gk2;
+  }
+
+  subgraph cluster_mqa {
+    label="MQA: one KV for all";
+    fontname="Helvetica"; color="gray70";
+    m1 [label="Q1"]; m2 [label="Q2"]; m3 [label="Q3"]; m4 [label="Q4"];
+    mk [label="KV1", style=filled, fillcolor="#dbe9ff"];
+    m1 -> mk; m2 -> mk; m3 -> mk; m4 -> mk;
+  }
+}
+```
+
+Multi-head latent attention (DeepSeek-V2, 2024) attacks the same cost from a different angle. Instead of sharing heads, it projects K and V down into a low-rank latent vector that is cached in place of the full per-head K and V, decompressing on the fly, with a decoupled RoPE component carried alongside. The pitch is GQA-class cache savings, or better, at MHA-class quality. It is the other point on the cache-compression frontier that @fig-cache-frontier lays out.
 
 ```{mermaid}
+%%| label: fig-cache-frontier
+%%| fig-cap: "The cache-compression frontier. From MHA, GQA and MQA trade KV heads for a smaller cache along one branch, while MLA compresses the cache into a low-rank latent along the other."
 flowchart LR
   MHA["MHA<br/>h KV heads<br/>full quality, full cache"] --> GQA["GQA<br/>g KV groups<br/>most quality, fraction of cache"]
   GQA --> MQA["MQA<br/>1 KV head<br/>smallest cache, quality risk"]

@@ -17,6 +17,8 @@
 最外的一层是节点间：跨越一个数据中心网络的机箱与机箱对话。这里的底座是 InfiniBand 或 RoCE（RDMA over Converged Ethernet），以胖树或 rail-optimized 这样的拓扑连接，每块加速器配一张网卡（NIC）来设定每设备的注入带宽。这一层每字节比 NVLink 慢一个数量级，因此只有那些通信节俭的轴才负担得起跨越它。
 
 ```{mermaid}
+%%| label: fig-accelerators-networking-tiers
+%%| fig-cap: "训练集群的三层带宽层级。每往外走一步，从 HBM 到 NVLink 再到节点间网络，每字节带宽大致下降一个数量级。"
 flowchart TD
   subgraph chip["芯片 + HBM"]
     A["加速器裸片"] -->|HBM 带宽| M["高带宽显存"]
@@ -30,7 +32,34 @@ flowchart TD
   chip --> node --> cluster
 ```
 
-并行轴到层级的映射由此直接得出。张量并行（TP）把单个矩阵乘法切分到各设备上，并以每层两次 all-reduce 交换激活，因此它是最饥渴于带宽的轴，被钉在节点内的 NVLink 层。数据并行与流水线并行每步通信少得多，DP 每步一次梯度归约、PP 每个阶段边界一次激活交接，因此它们是被允许跨越节点间网络的轴。MoE 的专家并行骑在它自己的 all-to-all 组上，在 @sec-moe-ssm-hybrids 中处理。由此得出的经验法则，TP 在节点内、DP/PP 跨节点，并非一种约定，而是带宽鸿沟的一个后果。
+并行轴到层级的映射由此直接得出。张量并行（TP）把单个矩阵乘法切分到各设备上，并以每层两次 all-reduce 交换激活，因此它是最饥渴于带宽的轴，被钉在节点内的 NVLink 层。数据并行与流水线并行每步通信少得多，DP 每步一次梯度归约、PP 每个阶段边界一次激活交接，因此它们是被允许跨越节点间网络的轴。MoE 的专家并行骑在它自己的 all-to-all 组上，在 @sec-moe-ssm-hybrids 中处理。由此得出的经验法则，TP 在节点内、DP/PP 跨节点，并非一种约定，而是带宽鸿沟的一个后果，正如 @fig-accelerators-networking-axis-map 所铺陈。
+
+```{dot}
+//| label: fig-accelerators-networking-axis-map
+//| fig-cap: "并行轴按每步通信量排序，每个落到仍能把其集合通信隐藏在计算之下的最廉价层级。是带宽鸿沟而非约定，把 TP 指派给 NVLink、把 DP/PP 指派给节点间网络。"
+digraph axis_map {
+  rankdir=LR;
+  node [shape=box, style=rounded, fontsize=11];
+  edge [fontsize=10];
+
+  subgraph cluster_axes {
+    label="并行轴（通信由重到轻）";
+    style=dashed;
+    color=gray60;
+    TP [label="TP\n每层两次 all-reduce"];
+    DP [label="DP\n每步一次梯度 all-reduce"];
+    PP [label="PP\n每阶段一次激活交接"];
+    TP -> DP -> PP [style=invis];
+  }
+
+  NVLink [label="NVLink 层\n节点内，带宽最高", shape=box, style="rounded,filled", fillcolor="#e8f0fe"];
+  Network [label="节点间网络\nInfiniBand / RoCE，慢一个数量级", shape=box, style="rounded,filled", fillcolor="#fde8e8"];
+
+  TP -> NVLink [label="必须留在内部"];
+  DP -> Network [label="可以跨越"];
+  PP -> Network [label="可以跨越"];
+}
+```
 
 TPU pod 是 JAX/XLA 一侧的对应物，具有不同的成本模型。这些芯片通过芯片间互连（ICI）与一个光路交换（OCS）连成一个环面拓扑，而非一个交换式胖树，因此邻居到邻居的带宽充裕，切分是通过 GSPMD 风格的注解与环面形状协同设计，而非映射到一个胖树上。
 
@@ -67,6 +96,33 @@ $$
 ## 实现
 
 在这些层级之间搬运字节的集合通信，由 NVIDIA 硬件上的 NCCL（在 AMD 上为 RCCL）提供，它把每个集合通信映射到拓扑上，根据各 rank 所在之处选择环或树，并把它路由到 NVLink 或网络上。从业者很少直接调用它；并行框架在调用。从业者所读的是每步的剖析，因为 MFU 是从时间线诊断出来的，而非从损失曲线。未能隐藏在计算之下的暴露通信、过大的流水线气泡、过多的重算，以及未融合的内核，各自在达成与峰值 FLOPs 之间的差距里占去一份，而时间线正是每一份可见之处。
+
+@fig-accelerators-networking-flops-gap 把时间线读作一次从峰值 FLOPs 下降到 MFU 的过程。空闲时间，即一块设备等待暴露通信或停在流水线气泡里之处，是纯粹的损失。在硬件随后实际运行的 FLOPs 中，重算做了模型并非严格需要的工作：这些工作把 HFU 抬到 MFU 之上，但只有有用的算术才计入诚实的那个数字。
+
+```{dot}
+//| label: fig-accelerators-networking-flops-gap
+//| fig-cap: "把每步时间线读作一次从峰值 FLOPs 到 MFU 的下降。暴露通信与流水线气泡是空闲损失；重算与未融合内核是硬件确实运行的工作，这正是 HFU 高于 MFU 的原因。"
+digraph flops_gap {
+  rankdir=TB;
+  node [shape=box, fontsize=11];
+  edge [fontsize=10];
+
+  peak [label="硬件峰值 FLOPs", style="filled", fillcolor="#e8f0fe"];
+  busy [label="忙碌 FLOPs\n（设备未空闲）"];
+  hfu  [label="HFU：硬件运行的全部 FLOPs", style="filled", fillcolor="#fff4e0"];
+  mfu  [label="MFU：仅有用的模型 FLOPs", style="filled", fillcolor="#e6f4ea"];
+
+  idle    [label="空闲损失\n暴露通信 + 流水线气泡", shape=note, fillcolor="#fde8e8", style="filled"];
+  recomp  [label="重算 + 未融合内核\n运行了但并非严格需要", shape=note, fillcolor="#fde8e8", style="filled"];
+
+  peak -> busy [label="减去空闲"];
+  busy -> hfu;
+  hfu  -> mfu [label="减去额外工作"];
+
+  peak -> idle [style=dashed, color=gray50, dir=none];
+  hfu  -> recomp [style=dashed, color=gray50, dir=none];
+}
+```
 
 ## 延伸阅读
 

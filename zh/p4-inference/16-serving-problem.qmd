@@ -27,6 +27,31 @@ TPOT，好让文本不结巴。这两者映射到同一次前向传播的两个�
 读出，主导时间的是这次流式读取而非算术。TPOT 本质上就是每步的解码延迟，而一个空转的
 解码步会让加速器的大部分算力闲置。
 
+@fig-serving-problem-phases 把一个请求追踪着穿过两个阶段，并为每个阶段对齐其算术的形状、
+它榨满的资源、以及它设定的延迟指标。
+
+```{mermaid}
+%%| label: fig-serving-problem-phases
+%%| fig-cap: "一个请求穿过预填充与解码。两个阶段榨满不同的资源，并设定不同的延迟指标。"
+flowchart LR
+  req["请求到来"] --> pf
+  subgraph pf["预填充（一次传播）"]
+    pfa["所有提示词词元一起"]
+    pfb["矩阵-矩阵乘法"]
+    pfc["计算受限"]
+    pfa --> pfb --> pfc
+  end
+  pf -->|"设定 TTFT"| dec
+  subgraph dec["解码（每步一个词元）"]
+    deca["只有最新词元"]
+    decb["矩阵-向量乘法"]
+    decc["内存带宽受限"]
+    deca --> decb --> decc
+  end
+  dec -->|"循环至停止，设定 TPOT"| dec
+  dec --> done["答案流式输出"]
+```
+
 读者也许会问，这个分裂为何如此要紧。它要紧，是因为两个阶段想从硬件那里得到相反的东西，
 而它们跑在同一份硬件上。预填充想被喂以足够的工作量来让算术单元保持忙碌。解码想把更多
 请求批在一起，好让一次昂贵的权重流式读取一次为许多用户产出词元。批处理是那根杠杆，它把
@@ -59,6 +84,29 @@ $$
 请求数线性增长，而且它住在与权重同一份稀缺加速器内存里。读者现在能看见那道挤压：权重占去
 一块固定的内存切片，剩下的全部在当前在飞的各请求的 KV 缓存之间瓜分。你能批进的请求数，
 从而你的吞吐量与有效吞吐量上限，由剩下多少 KV 缓存内存、以及你用得多有效来设定。
+@fig-serving-problem-memory 展示了这道划分。
+
+```{dot}
+//| label: fig-serving-problem-memory
+//| fig-cap: "加速器内存分成固定的权重切片与剩下的、由在飞请求共享的 KV 池。池的大小为能批进多少请求封顶，从而为有效吞吐量上限封顶。"
+digraph memory {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11];
+  mem [label="加速器内存（固定总量）", fillcolor="#eeeeee"];
+  weights [label="权重（固定切片）", fillcolor="#cfe8fc"];
+  pool [label="剩下的 KV 池", fillcolor="#d7f0d7"];
+  mem -> weights;
+  mem -> pool;
+  r1 [label="请求 1 的 KV 缓存", fillcolor="#fde9c8"];
+  r2 [label="请求 2 的 KV 缓存", fillcolor="#fde9c8"];
+  rn [label="请求 N 的 KV 缓存", fillcolor="#fde9c8"];
+  pool -> r1;
+  pool -> r2;
+  pool -> rn;
+  cap [label="N 由池大小封顶，有效吞吐量上限亦然", shape=note, fillcolor="#f5f5f5"];
+  rn -> cap [style=dashed, arrowhead=none];
+}
+```
 
 这就是为什么架构章的注意力变体对一个服务工程师如此要紧。多查询注意力（MQA）与分组查询
 注意力（GQA）缩小 $n_{\text{kv}}$，而多头潜在注意力（MLA）压缩被缓存的状态，每一种都

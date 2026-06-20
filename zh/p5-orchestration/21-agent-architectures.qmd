@@ -20,12 +20,53 @@
 循环是架构的核心，而它具体的形状正是把一个智能体与一次单独的模型调用区分开的东西。朴素的设计会把各个阶段分开：让模型在前期规划好整个任务，然后一步步执行计划。这会失败，因为计划是在任何观察存在之前写下的，所以第一个出人意料的工具结果就让它作废。管用的设计把推理与行动交错起来。模型产出一段简短的推理，然后一个动作，观察结果，再带着那次观察去推理。这就是**先推理后行动**的范式，由 Yao 等（2023）命名为 ReAct，而协同正是要点所在：推理让模型边走边决定并调整它的计划，而动作让它拉进那些单凭推理只能去幻觉的事实。
 
 ```{mermaid}
+%%| label: fig-agent-architectures-react-loop
+%%| fig-cap: "先推理后行动的循环。每个回合模型先推理、选择一个动作，再把观察折回去然后重新推理，依据 Yao 等（2023）。"
 graph LR
     M["模型：推理"] --> A["选择动作"]
     A --> T["执行工具"]
     T --> O["观察"]
     O --> M
     M -.->|完成| F["最终答案"]
+```
+
+@fig-agent-architectures-react-loop 里的循环，正是这四个部分所驱动的，而把
+这些部分按它们各自所处的位置摆出来，有助于看清它们本身。规划是模型在自己的
+前向传递内部所做的推理。短期记忆是上下文窗口，也在模型的视野之内。工具使用是
+唯一一条越出权重之外、通向世界的边，而长期记忆是那条边另一侧的一个存储。
+
+```{dot}
+//| label: fig-agent-architectures-four-parts
+//| fig-cap: "按每个部分所处的位置看四部分分解。规划与短期记忆位于模型边界之内；工具使用是唯一一条通向外部状态与长期记忆的边。依据 Weng（2023）。"
+digraph {
+    rankdir=LR;
+    node [shape=box, fontname="Helvetica", style=rounded];
+    edge [fontname="Helvetica"];
+
+    subgraph cluster_model {
+        label="模型内部";
+        style=dashed;
+        color="#888888";
+        ctrl [label="控制器\n(推理模型)", style="rounded,filled", fillcolor="#e8eef7"];
+        plan [label="规划"];
+        stm [label="短期记忆\n(上下文窗口)"];
+    }
+
+    subgraph cluster_world {
+        label="外部状态";
+        style=dashed;
+        color="#888888";
+        ltm [label="长期记忆\n(外部存储)"];
+        world [label="文件、查询、\n代码、网络"];
+    }
+
+    ctrl -> plan [label="决定步骤"];
+    ctrl -> stm [label="读/写", dir=both];
+    ctrl -> tooluse [label="调用"];
+    tooluse [label="工具使用", style="rounded,filled", fillcolor="#f7efe8"];
+    tooluse -> world [label="行动/观察", dir=both];
+    tooluse -> ltm [label="回忆/持久化", dir=both];
+}
 ```
 
 实现这个循环的运行时契约说起来很小。创建一个绑定到智能体定义的会话。把上下文送给模型，分发它返回的工具调用，追加结果，重复，直到模型示意完成或循环被中断。那个序列就是先推理后行动范式的运行形态。让这份契约在生产中存活下来的机制，即跨崩溃的持久性、调度、中断，是运行框架，它是 @sec-the-harness 的主题。本章负责架构；那一章负责工程。
@@ -66,7 +107,36 @@ loop:
 
 所有难处都藏在 `execute` 里，以及对 `context` 的管理里。
 
-一个循环所分发的工具并不一致，而一个把它们全都一视同仁的循环，会对其中大多数处理失当。工具按有状态性分成三类。**无状态**工具在智能体这一侧不持有任何状态：一次网页抓取、一次给定沙箱 ID 的沙箱命令、一次普通的 REST 调用。它们是简单的情形，平凡地扩展。**有状态连接**工具，以模型上下文协议（MCP）为典型，在一个循环必须跨调用持有的连接里，携带着协商好的能力与游标状态。**有状态资源**工具把它们的状态保存在一个外部系统里，一个数据库会话或一个长跑作业，循环必须跨回合关联到它。架构上的要点是，这三者对「重启时会发生什么？」给出不同的回答：什么都不发生、重连，或重新发现。让那些连接熬过重连与令牌刷新而存活的工程，是运行框架的活儿，住在 @sec-the-harness；架构的活儿是知道这三个类别存在，并且不把它们坍缩成一个。
+一个循环所分发的工具并不一致，而一个把它们全都一视同仁的循环，会对其中大多数处理失当。工具按有状态性分成三类。**无状态**工具在智能体这一侧不持有任何状态：一次网页抓取、一次给定沙箱 ID 的沙箱命令、一次普通的 REST 调用。它们是简单的情形，平凡地扩展。**有状态连接**工具，以模型上下文协议（MCP）为典型，在一个循环必须跨调用持有的连接里，携带着协商好的能力与游标状态。**有状态资源**工具把它们的状态保存在一个外部系统里，一个数据库会话或一个长跑作业，循环必须跨回合关联到它。架构上的要点是，这三者对「重启时会发生什么？」给出不同的回答：什么都不发生、重连，或重新发现。让那些连接熬过重连与令牌刷新而存活的工程，是运行框架的活儿，住在 @sec-the-harness；架构的活儿是知道这三个类别存在，并且不把它们坍缩成一个。@fig-agent-architectures-tool-classes
+把这三者对着那个判别性的问题排开来看。
+
+```{dot}
+//| label: fig-agent-architectures-tool-classes
+//| fig-cap: "三类工具，按它们的状态住在哪里、以及各自在重启时必须做什么来划分：什么都不做、重连，或重新发现。"
+digraph {
+    rankdir=TB;
+    node [fontname="Helvetica"];
+    edge [fontname="Helvetica"];
+
+    q [label="工具的状态住在哪里？", shape=diamond, style=filled, fillcolor="#eeeeee"];
+
+    stateless [label="无状态\n网页抓取、REST 调用、\n按 ID 的沙箱命令", shape=box, style=rounded];
+    conn [label="有状态连接\nMCP 会话：能力与游标\n保存在一条活的链路里", shape=box, style=rounded];
+    res [label="有状态资源\n数据库会话、长跑作业\n在一个外部系统里", shape=box, style=rounded];
+
+    r1 [label="重启时：什么都不做", shape=note, style=filled, fillcolor="#e7f3e7"];
+    r2 [label="重启时：重连", shape=note, style=filled, fillcolor="#fbf3e0"];
+    r3 [label="重启时：重新发现", shape=note, style=filled, fillcolor="#f7e7e7"];
+
+    q -> stateless [label="哪里都不"];
+    q -> conn [label="在连接里"];
+    q -> res [label="在外部系统里"];
+
+    stateless -> r1;
+    conn -> r2;
+    res -> r3;
+}
+```
 
 另一个反复出现的实现问题，是模型在某个给定回合里看见哪些工具。一份静态扁平清单，即每个回合都发出每个工具，是最简单的设计，并在大约三十到五十个工具时用到头，因为上下文成本与选择准确率都随目录增长而退化。过了那个点，选项就是每回合检索一个相关子集、每个阶段展示一个被裁剪的集合，或让模型按需发现工具。选择机制是运行框架的机件；它之所以被逼出来，是一个模型属性，那正是下一个框名出的约束。
 

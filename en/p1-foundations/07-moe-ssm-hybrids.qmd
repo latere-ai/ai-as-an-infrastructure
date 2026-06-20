@@ -22,7 +22,23 @@ top = topk(weights, k)               # indices and gate values
 y = sum(g_i * Expert_i(h) for i, g_i in top)
 ```
 
-This tiny map is the only genuinely new component, and it is the source of almost every MoE pathology. The whole rest of the design exists to keep the router honest.
+This tiny map is the only genuinely new component, and it is the source of almost every MoE pathology. The whole rest of the design exists to keep the router honest. @fig-moe-routing traces one token through the layer: the gate scores all experts, top-$k$ are selected and combined, while a shared expert (a later refinement) stays always-on in parallel.
+
+```{mermaid}
+%%| label: fig-moe-routing
+%%| fig-cap: "One token through an MoE layer. The router scores all N experts, the top-k routed experts are weighted and summed, and an always-on shared expert runs in parallel. After Shazeer et al., 2017 and Dai et al., 2024."
+flowchart TD
+  h["Token hidden state h"] --> gate["Router W_gate<br/>scores over N experts"]
+  gate --> sm["softmax / sigmoid<br/>then top-k select"]
+  sm -->|"selected"| e1["Expert i<br/>(routed)"]
+  sm -->|"selected"| e2["Expert j<br/>(routed)"]
+  sm -.->|"not selected"| eN["Experts ...<br/>(idle, no FLOPs)"]
+  h --> shared["Shared expert<br/>(always-on)"]
+  e1 --> sum["Weighted sum<br/>by gate values"]
+  e2 --> sum
+  shared --> sum
+  sum --> y["Output y"]
+```
 
 The first thing the router gets wrong on its own is balance. Left alone, the gate collapses onto a few favored experts in a winner-take-all loop: an expert that is chosen gets more gradient, improves, and is chosen more, while the rest starve and become dead parameters. Two families of fix exist. The auxiliary load-balancing loss, from Shazeer et al. (2017) and refined in GShard and Switch, adds a penalty term on the product of the fraction of tokens routed to each expert and the gate mass placed on it, pushing the distribution toward uniform. It works, but it injects a loss whose weight trades balance against task quality. The newer answer, loss-free or bias-based balancing from DeepSeek-V3, drops the auxiliary loss entirely. Instead it keeps a per-expert routing *bias*, nudged up for under-used experts and down for over-used ones between steps, steering selection without adding an interfering gradient. That sidesteps the balance-versus-quality tension the auxiliary loss creates.
 
@@ -38,7 +54,20 @@ $$
 
 Because the state is fixed in size, the cost is linear in sequence length and there is no growing key-value cache to serve, only a constant-size state. The price is that all of a token's past must be summarized into that fixed state, where attention keeps every past token addressable. The design question is whether a learned, input-dependent recurrence can compress the past well enough to compete. Mamba's contribution was to make the recurrence selective, letting $A$, $B$, and $C$ depend on the input so the model can choose what to keep and what to forget, recovering much of what content-based attention does while staying linear.
 
-In practice the frontier does not choose one or the other. *Hybrid* stacks interleave a minority of full-attention layers with a majority of SSM or linear-recurrence layers, so a few global-mixing layers preserve exact recall while the linear layers carry the bulk of the sequence cheaply. MoE and SSM are also orthogonal: a hybrid can put its feed-forward blocks behind an MoE router and its sequence-mixing behind a state-space recurrence at the same time.
+In practice the frontier does not choose one or the other. *Hybrid* stacks interleave a minority of full-attention layers with a majority of SSM or linear-recurrence layers, so a few global-mixing layers preserve exact recall while the linear layers carry the bulk of the sequence cheaply. MoE and SSM are also orthogonal: a hybrid can put its feed-forward blocks behind an MoE router and its sequence-mixing behind a state-space recurrence at the same time. @fig-moe-hybrid-stack shows the three ideas composing in one stack: the sequence-mixing slot alternates SSM and attention, while the feed-forward slot is an MoE layer.
+
+```{mermaid}
+%%| label: fig-moe-hybrid-stack
+%%| fig-cap: "A hybrid stack composes all three ideas. Most layers mix the sequence with a linear SSM recurrence, a minority use full attention for exact recall, and the feed-forward slot is an MoE layer. After Lieber et al., 2024."
+flowchart TD
+  in["Input sequence"] --> L1
+  subgraph block["Repeated block"]
+    L1["SSM layer<br/>(linear, cheap mixing)"] --> L2["SSM layer<br/>(linear, cheap mixing)"]
+    L2 --> L3["Attention layer<br/>(global, exact recall)"]
+    L3 --> L4["MoE feed-forward<br/>(routed experts)"]
+  end
+  L4 --> rep["...block repeats..."] --> out["Output"]
+```
 
 ## Evolution
 
@@ -49,6 +78,45 @@ Two threads then refined the layer. On routing, expert-choice (Zhou et al., 2022
 A parallel thread made MoE practical without paying for a from-scratch run. Sparse upcycling (Komatsuzaki et al., 2022) initializes each expert as a copy of a trained dense feed-forward block, adds a fresh router, and continues training; the experts diverge as routing specializes them. It buys strong quality for a fraction of from-scratch compute, with the failure mode that experts can stay near-identical if routing pressure is too weak, leaving MoE's cost without its benefit.
 
 The state-space line is younger as a serious attention competitor. The structured state-space model S4 (Gu et al., 2021) showed a carefully parametrized linear recurrence could handle very long sequences, and Mamba (Gu and Dao, 2023) made the recurrence selective and hardware-efficient, bringing it within reach of language modeling at scale. Mamba-2 (Dao and Gu, 2024) tied state-space models back to attention through a duality that let them reuse attention's hardware. The hybrid answer arrived quickly: Jamba (Lieber et al., 2024) interleaved Mamba and attention layers and added MoE on top, demonstrating that the three ideas compose into one stack.
+
+@fig-moe-lineage lays out these threads as a genealogy: a routing line, a specialization line, the upcycling shortcut, and the separate state-space line, all converging on the hybrid stack.
+
+```{dot}
+//| label: fig-moe-lineage
+//| fig-cap: "Genealogy of the ideas in this chapter. A routing thread and a specialization thread refine the MoE layer, sparse upcycling is a training shortcut into it, and a separate state-space line converges with attention and MoE at the hybrid stack."
+digraph lineage {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#eeeeee"];
+  edge [fontname="Helvetica", fontsize=9];
+
+  shazeer [label="Shazeer 2017\ntop-k gating", fillcolor="#ffe2cc"];
+  gshard [label="GShard 2020", fillcolor="#ffe2cc"];
+  switch [label="Switch 2021\nk=1", fillcolor="#ffe2cc"];
+  glam [label="GLaM / Mixtral\n2022 to 2024", fillcolor="#ffe2cc"];
+  echoice [label="Expert-choice 2022", fillcolor="#ffe2cc"];
+  base [label="BASE Layers 2021", fillcolor="#ffe2cc"];
+
+  dsmoe [label="DeepSeekMoE 2024\nfine-grained + shared", fillcolor="#d9e8ff"];
+  dsv3 [label="DeepSeek-V3 2024\nbias balancing", fillcolor="#d9e8ff"];
+
+  upcycle [label="Sparse upcycling 2022\ndense to MoE", fillcolor="#fff2b2"];
+
+  s4 [label="S4 2021", fillcolor="#d9ffd9"];
+  mamba [label="Mamba 2023\nselective", fillcolor="#d9ffd9"];
+  mamba2 [label="Mamba-2 2024\nSSM-attention duality", fillcolor="#d9ffd9"];
+
+  jamba [label="Jamba 2024\nhybrid stack", fillcolor="#f0d9ff"];
+
+  shazeer -> gshard -> switch -> glam;
+  switch -> echoice;
+  switch -> base;
+  glam -> dsmoe -> dsv3;
+  switch -> upcycle;
+  s4 -> mamba -> mamba2;
+  dsv3 -> jamba;
+  mamba -> jamba;
+}
+```
 
 ## Trade-offs
 

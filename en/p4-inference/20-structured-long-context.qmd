@@ -21,6 +21,8 @@ The core idea for structure is small. At each decode step the model produces a l
 The work is in knowing the legal set at every step. Express the target format as a formal language: a regular expression for a phone number or an enum, a context-free grammar for JSON or for a programming language. Compile that into an automaton, a finite-state machine for a regular language or a pushdown automaton for a context-free one. The automaton has a current state; from that state, only some tokens keep the string within the language. The mask at each step is the set of vocabulary tokens whose first character, or whose whole spelling, the automaton accepts from its current state. After a token is sampled, advance the automaton and repeat.
 
 ```{mermaid}
+%%| label: fig-slc-mask
+%%| fig-cap: "Constrained decoding as a mask. Logits are masked to the tokens an FSM allows from its current state, then the sampled token advances the FSM."
 flowchart LR
   L["logits over<br/>full vocabulary"] --> M["mask: allowed<br/>tokens from<br/>FSM state"]
   M --> S["sample from<br/>masked logits"]
@@ -39,6 +41,22 @@ The design that makes constrained decoding practical is to precompute the relati
 
 A second design idea exploits a structural fact: large stretches of a constrained output are forced. Inside `{"name": "`, the next several characters are not a choice, they are the only continuation the grammar allows until the value begins. A token-by-token loop still runs a full forward pass for each of those forced characters, paying decode cost to generate text that was never in doubt. The compressed finite-state machine, introduced in SGLang, collapses runs of single-transition edges in the automaton into one edge, so the runtime can recognize a forced span and emit it directly. This is jump-forward decoding: when the machine has only one path forward, write those tokens into the sequence without a model call, then resume sampling where the format branches. The model is consulted only where the output is genuinely undetermined.
 
+@fig-slc-jumpforward contrasts the two regimes. The forced span between two branch points is one edge in the compressed machine, written in a single step, while the model runs only at the points where the grammar leaves a real choice.
+
+```{mermaid}
+%%| label: fig-slc-jumpforward
+%%| fig-cap: "Jump-forward decoding over a compressed FSM. Forced spans collapse to a single edge emitted without a model call, after Yin et al. (2024)."
+flowchart LR
+  B1["branch point:<br/>model samples a key"] --> F1["forced span<br/>quote, colon, quote<br/>emitted, no model call"]
+  F1 --> B2["branch point:<br/>model samples a value"]
+  B2 --> F2["forced span<br/>quote, comma<br/>emitted, no model call"]
+  F2 --> B3["branch point:<br/>next key or close"]
+  classDef forced fill:#e8f0e8,stroke:#5a7a5a;
+  classDef branch fill:#f0e8e8,stroke:#7a5a5a;
+  class F1,F2 forced;
+  class B1,B2,B3 branch;
+```
+
 ### Grammars without the overhead
 
 The third idea generalizes the mask from regular to context-free languages while keeping the per-step cost near zero. A context-free grammar needs a stack, not just a state, so the allowed-token set depends on the current stack, which seems to defeat precomputation. XGrammar's insight is to split the vocabulary into tokens whose legality does not depend on the stack, which can be checked once and cached, and the smaller set of context-dependent tokens that must be checked against the live stack at runtime. With a persistent stack structure and by overlapping the grammar computation with the model's forward pass on the accelerator, the engine drives a full grammar constraint at close to the speed of unconstrained decoding.
@@ -52,6 +70,8 @@ The simplest keep rule is a sliding window: retain only the last $w$ tokens and 
 The explanation is the attention sink, the central finding of StreamingLLM. Because the softmax over attention scores must sum to one, it cannot output nothing; when a head has no informative place to attend, it dumps its excess attention onto the first few tokens of the sequence, which therefore receive large scores regardless of their content. These initial tokens act as a sink. Drop them, as a naive sliding window does, and every head loses the place it was parking its spare attention, and the distribution destabilizes. The fix is to keep a handful of initial tokens permanently, the sinks, alongside the sliding window of recent tokens. With four sink tokens plus a recent window, a model trained at a fixed length can stream over millions of tokens with stable perplexity, no fine-tuning required.
 
 ```{mermaid}
+%%| label: fig-slc-sink
+%%| fig-cap: "Sink-plus-window cache. A few initial sink tokens and a recent window stay in cache and feed attention, while the middle tokens are evicted."
 flowchart LR
   subgraph keep["What stays in cache"]
     sink["sink tokens<br/>(first few)"]
@@ -74,6 +94,38 @@ Sinks plus a window is a fixed rule that ignores content; the middle of a long d
 Constrained decoding began as logit masking against a hand-written automaton, correct but slow, because the allowed-token set was recomputed by scanning the vocabulary at every step. The first leap was Willard and Louf's index in 2023, which moved that scan to a one-time precomputation keyed by automaton state and made guided generation cheap enough to use by default; Outlines packaged it. SGLang's compressed finite-state machine in early 2024 added jump-forward decoding, removing model calls for the forced spans that constrained output is full of. XGrammar in late 2024 carried the same near-zero-overhead goal from regular expressions to full context-free grammars by partitioning the vocabulary into context-independent and context-dependent tokens and co-designing the grammar engine with the inference engine. The arc is one of pushing the constraint from a per-step vocabulary scan down to a precomputed table, then to skipped tokens, then to a grammar engine that overlaps with the forward pass.
 
 The long-context line evolved from blunt to selective. Window attention and recompute baselines bounded memory but broke on the dropped-prefix failure. H2O in 2023 reframed the cache as an eviction problem and kept heavy hitters by accumulated attention. StreamingLLM, also in 2023, explained why naive windows fail and fixed it with the attention-sink insight, keeping a few initial tokens permanently. SnapKV in 2024 pushed compression into the prompt itself using the end-of-prompt observation window. The frontier continues toward query-aware and learned eviction, deciding what to keep based on what the current generation is actually attending to. A connected development is designing the sink in at training time: models can be trained with a dedicated sink token so the attention parking is explicit rather than emergent, which makes the inference-time keep rule cleaner. That training-time choice belongs to @sec-transformer-architecture; this chapter inherits its consequence.
+
+@fig-slc-lineage lays the two arcs side by side. Each step removes a cost the previous one paid: the structured line pushes the constraint from a per-step vocabulary scan down to a precomputed table, then to skipped tokens, then to a grammar engine that hides behind the forward pass; the long-context line moves from a position-only window that breaks, to keeping a few sinks, to choosing what to keep by attention.
+
+```{dot}
+//| label: fig-slc-lineage
+//| fig-cap: "Two parallel lineages: constraining the decode loop and pruning the cache. Each step removes a cost paid by the one before it."
+digraph lineage {
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fontsize=11, fillcolor="#eef2f7", color="#456"];
+  edge [color="#789", arrowsize=0.7];
+
+  subgraph cluster_struct {
+    label="Structured decoding";
+    labeljust=l; color="#7a5a5a"; fontsize=12;
+    s1 [label="logit masking\nover a hand-written\nautomaton (slow scan)"];
+    s2 [label="Willard and Louf\nindex 2023\nprecomputed table"];
+    s3 [label="SGLang compressed\nFSM 2024\njump-forward"];
+    s4 [label="XGrammar 2024\ngrammar engine\noverlaps forward pass"];
+    s1 -> s2 -> s3 -> s4;
+  }
+
+  subgraph cluster_ctx {
+    label="Long-context keep";
+    labeljust=l; color="#5a7a5a"; fontsize=12;
+    c1 [label="window attention\nbreaks on\ndropped prefix"];
+    c2 [label="H2O 2023\nevict by accumulated\nattention"];
+    c3 [label="StreamingLLM 2023\nkeep attention sinks\nplus window"];
+    c4 [label="SnapKV 2024\ncompress the prompt\nby observation window"];
+    c1 -> c2 -> c3 -> c4;
+  }
+}
+```
 
 ::: {.callout-important}
 ## What's contested

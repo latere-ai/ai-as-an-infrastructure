@@ -64,7 +64,25 @@ different nodes and streams micro-batches through them, so stage two works on
 micro-batch one while stage one works on micro-batch two. It is
 bandwidth-cheap, moving only the activations at stage boundaries, but it pays
 a pipeline bubble: the fill and drain at the ends of each step where some
-stages sit idle.
+stages sit idle. @fig-training-bubble shows where that idle time lives.
+
+```{dot}
+//| label: fig-training-bubble
+//| fig-cap: "Pipeline bubble over four stages and four micro-batches: the fill at the start and the drain at the end leave stages idle. After Huang et al., 2019."
+digraph bubble {
+  rankdir=LR;
+  node [shape=plaintext];
+  t [label=<
+    <table border="0" cellborder="1" cellspacing="0" cellpadding="6">
+      <tr><td bgcolor="#e8e8e8"><b>time</b></td><td bgcolor="#e8e8e8">1</td><td bgcolor="#e8e8e8">2</td><td bgcolor="#e8e8e8">3</td><td bgcolor="#e8e8e8">4</td><td bgcolor="#e8e8e8">5</td><td bgcolor="#e8e8e8">6</td><td bgcolor="#e8e8e8">7</td></tr>
+      <tr><td><b>stage 1</b></td><td bgcolor="#bdd7e7">mb1</td><td bgcolor="#bdd7e7">mb2</td><td bgcolor="#bdd7e7">mb3</td><td bgcolor="#bdd7e7">mb4</td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#f0f0f0">idle</td></tr>
+      <tr><td><b>stage 2</b></td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#bdd7e7">mb1</td><td bgcolor="#bdd7e7">mb2</td><td bgcolor="#bdd7e7">mb3</td><td bgcolor="#bdd7e7">mb4</td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#f0f0f0">idle</td></tr>
+      <tr><td><b>stage 3</b></td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#bdd7e7">mb1</td><td bgcolor="#bdd7e7">mb2</td><td bgcolor="#bdd7e7">mb3</td><td bgcolor="#bdd7e7">mb4</td><td bgcolor="#f0f0f0">idle</td></tr>
+      <tr><td><b>stage 4</b></td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#f0f0f0">idle</td><td bgcolor="#bdd7e7">mb1</td><td bgcolor="#bdd7e7">mb2</td><td bgcolor="#bdd7e7">mb3</td><td bgcolor="#bdd7e7">mb4</td></tr>
+    </table>
+  >];
+}
+```
 
 *Sequence and context parallelism (SP/CP)* shard along the sequence
 dimension. SP, as introduced by Korthikanti et al., splits the parts of a
@@ -75,7 +93,26 @@ can be processed in blocks that pass key and value tiles around a ring.
 
 For each axis the design question is the same: what does it shard, what does
 it cost in communication, and which tier of the interconnect can it afford to
-use.
+use. @fig-training-axes lays the answers side by side.
+
+```{dot}
+//| label: fig-training-axes
+//| fig-cap: "The four parallelism axes plus expert parallelism, each by what it shards, the collective it runs, and the interconnect tier it can afford."
+digraph axes {
+  rankdir=LR;
+  node [shape=plaintext];
+  t [label=<
+    <table border="0" cellborder="1" cellspacing="0" cellpadding="6">
+      <tr><td bgcolor="#e8e8e8"><b>Axis</b></td><td bgcolor="#e8e8e8"><b>Shards</b></td><td bgcolor="#e8e8e8"><b>Collective</b></td><td bgcolor="#e8e8e8"><b>Interconnect tier</b></td></tr>
+      <tr><td>DP / ZeRO</td><td>batch, optimizer state</td><td>all-reduce, reduce-scatter, all-gather</td><td>across nodes</td></tr>
+      <tr><td>TP</td><td>matmuls in a layer</td><td>all-reduce per layer</td><td>inside node, NVLink</td></tr>
+      <tr><td>PP</td><td>layer-stack stages</td><td>point-to-point activations</td><td>across nodes</td></tr>
+      <tr><td>SP / CP</td><td>sequence dimension</td><td>all-gather, ring exchange</td><td>with TP or across nodes</td></tr>
+      <tr><td>EP</td><td>experts</td><td>all-to-all dispatch and combine</td><td>own all-to-all group</td></tr>
+    </table>
+  >];
+}
+```
 
 ### Expert parallelism
 
@@ -106,6 +143,30 @@ the representable band. It is applied selectively, the matmuls in fp8 while
 the numerically sensitive operations, the normalizations, residual adds, and
 the attention softmax, stay in higher precision. Pushed too far, fp8 does not
 crash; it quietly costs quality, which is what makes it hard to use well.
+
+@fig-training-precision shows why the exponent bits matter. bf16 keeps fp32's
+eight exponent bits, so it spans the same dynamic range and never needed fp16's
+loss scaling; fp8 spends its few bits on a tradeoff between range (E5M2) and
+precision (E4M3).
+
+```{dot}
+//| label: fig-training-precision
+//| fig-cap: "Bit layouts of the training precisions. Sign, exponent, and mantissa fields drawn to width. bf16 inherits fp32's eight exponent bits, which is why it spans the same range without loss scaling."
+digraph precision {
+  rankdir=LR;
+  node [shape=plaintext];
+  t [label=<
+    <table border="0" cellborder="1" cellspacing="0" cellpadding="5">
+      <tr><td bgcolor="#e8e8e8"><b>format</b></td><td bgcolor="#e8e8e8"><b>sign</b></td><td bgcolor="#e8e8e8"><b>exponent</b></td><td bgcolor="#e8e8e8"><b>mantissa</b></td></tr>
+      <tr><td>fp32</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">8 bits</td><td bgcolor="#c7e9c0">23 bits</td></tr>
+      <tr><td>fp16</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">5 bits</td><td bgcolor="#c7e9c0">10 bits</td></tr>
+      <tr><td>bf16</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">8 bits</td><td bgcolor="#c7e9c0">7 bits</td></tr>
+      <tr><td>fp8 E4M3</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">4 bits</td><td bgcolor="#c7e9c0">3 bits</td></tr>
+      <tr><td>fp8 E5M2</td><td bgcolor="#d4d4d4">1</td><td bgcolor="#bdd7e7">5 bits</td><td bgcolor="#c7e9c0">2 bits</td></tr>
+    </table>
+  >];
+}
+```
 
 ### Collectives and overlap
 
@@ -235,7 +296,11 @@ hide, and give EP its own all-to-all group. The layout is co-designed with the
 model shape from @sec-transformer-architecture and @sec-moe-ssm-hybrids, and
 it shifts with model size, sequence length, and interconnect.
 
+@fig-training-mesh sketches the conventional placement.
+
 ```{mermaid}
+%%| label: fig-training-mesh
+%%| fig-cap: "The conventional device-mesh placement: communication-heavy TP and SP stay inside a node under NVLink, while the cheaper-to-hide DP, PP, and EP span nodes."
 flowchart TB
   subgraph across["Across nodes"]
     DP["DP / ZeRO-FSDP: shard batch and optimizer state"]

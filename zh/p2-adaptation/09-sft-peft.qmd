@@ -37,7 +37,26 @@ $$
 知道用户的轮次在哪里结束、自己的轮次从哪里开始，因此 SFT 用角色词元包裹每一轮，即像
 `<|user|>` 与 `<|assistant|>` 这样由分词器保留、由模板插入的特殊词元。模板是一份契约：
 推理时必须使用相同的标记，否则模型就是在它被调过的分布之外被服务。这是本部分一个反复出现
-的真理的最小例子，即适配既关乎权重，也同样关乎格式。
+的真理的最小例子，即适配既关乎权重，也同样关乎格式。@fig-sft-peft-masking
+追踪一条样本从模板到被计分损失的流向。
+
+```{mermaid}
+%%| label: fig-sft-peft-masking
+%%| fig-cap: "一条 SFT 样本从对话模板经词元流走向被掩码的损失。角色标记切分词元流，只有回复词元贡献梯度。"
+flowchart TB
+  ex["（提示词，回复）样本对"] --> tmpl["对话模板包裹每一轮"]
+  tmpl --> stream["带角色标记的词元流"]
+  stream --> pm["用户词元<br/>法国的首都是哪里？"]
+  stream --> rm["助手词元<br/>巴黎。"]
+  pm --> mask["被掩码，无梯度"]
+  rm --> score["被计分，下一词元损失"]
+  mask --> upd["权重更新"]
+  score --> upd
+  classDef frozen fill:#eee,stroke:#999,color:#555;
+  classDef active fill:#dff0d8,stroke:#3c763d,color:#234;
+  class pm,mask frozen;
+  class rm,score active;
+```
 
 令人意外的是这只需要多么少的数据。浅层对齐假说，由 LIMA 论文命名，主张一个模型的知识与
 能力几乎全部在预训练中奠定，而 SFT 主要教会它该说哪个格式与风格的子分布。如果这是对的，
@@ -61,6 +80,23 @@ $$
 只有 $A$ 与 $B$ 训练；$W_0$ 保持冻结。其背后的假说是，一次微调想要施加的更新具有低的
 内在秩，因此一个 rank-8 或 rank-16 的分解就能捕获其中大部分。推理时乘积 $BA$ 可以被
 折回到 $W_0$ 中，于是一个被服务的 LoRA 模型零增加延迟，这与那些外挂额外层的方法不同。
+@fig-sft-peft-lora 展示这两条并行路径以及各自持有什么。
+
+```{mermaid}
+%%| label: fig-sft-peft-lora
+%%| fig-cap: "LoRA 在冻结权重旁加上一条可训练的低秩分支。输入同时喂入两条路径，两者的输出相加。只有 A 与 B 携带梯度，于是可训练参数量从 d 乘 k 降到 r 乘以 d 与 k 之和。"
+flowchart LR
+  x["输入 x"] --> W0["W0 (d x k)<br/>冻结"]
+  x --> A["A (r x k)<br/>训练"]
+  A --> B["B (d x r)<br/>训练"]
+  W0 --> sum(("+"))
+  B -->|"缩放 alpha/r"| sum
+  sum --> h["输出 h"]
+  classDef frozen fill:#eee,stroke:#999,color:#555;
+  classDef active fill:#dff0d8,stroke:#3c763d,color:#234;
+  class W0 frozen;
+  class A,B active;
+```
 
 QLoRA 把内存成本压得足够低，让在单块加速器上微调一个大模型成为可能。它把冻结的基座权重
 量化到 4-bit（一种由信息论动机推导的 NormalFloat 格式，NF4），并在其上以更高精度训练
@@ -80,6 +116,34 @@ $\tau_i = \theta_{\text{ft},i} - \theta_{\text{base}}$，即一个微调后模�
 ## 演化
 
 这条线从完整微调走向对它越来越廉价的近似，再走向把这些廉价部件组合起来。
+@fig-sft-peft-lineage 摆出这两条谱系，即效率主线与合并支线。
+
+```{dot}
+//| label: fig-sft-peft-lineage
+//| fig-cap: "适配的两条谱系。效率主线把每任务成本从一份完整副本压到单卡；合并支线把已完成的检查点组合起来，无需再训练。"
+digraph {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fillcolor="#eef3fa", color="#5a7", fontname="Helvetica"];
+  edge [color="#777"];
+
+  full [label="完整微调\n(BERT, GPT)\n每个权重，完整副本"];
+  adapt [label="适配器\n瓶颈子层\n增加推理深度"];
+  lora [label="LoRA\n低秩更新\n合并回基座"];
+  qlora [label="QLoRA\n4-bit NF4 基座\n单块加速器"];
+
+  soup [label="模型汤\n平均相同初始化的运行"];
+  task [label="任务算术\n带符号的任务向量"];
+  ties [label="TIES-merging\n修剪、选符号、合并"];
+  dare [label="DARE\n丢弃并重新缩放增量"];
+
+  full -> adapt;
+  adapt -> lora;
+  lora -> qlora [label="每任务更廉价"];
+  full -> soup [style=dashed, label="组合"];
+  soup -> task -> ties;
+  task -> dare;
+}
+```
 
 最早的迁移学习配方，是在一个下游任务上微调一个预训练模型的全部权重，也就是 BERT 与 GPT
 所确立为标准的做法。它有效，但昂贵且浪费：每个任务都需要模型的一份完整副本，而为了编码
