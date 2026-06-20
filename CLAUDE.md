@@ -1,22 +1,22 @@
 # AI as an Infrastructure
 
-A bilingual Quarto book, written design-first. The spine is the lifecycle of
-a capability, from compute to a deployed and governed behavior, across nine
-parts (Part 0 to Part IX). See `README.md` for the part list and
-`CONVENTIONS.md` for how chapters are written.
+A bilingual technical book, written design-first. The spine is the lifecycle of
+a capability, from compute to a deployed and governed behavior. See `README.md`
+for the part list and `CONVENTIONS.md` for how chapters are written.
 
 Released under latere.ai, licensed CC BY-NC-ND 4.0.
 
 ## Layout
 
-- Two standalone Quarto projects: `en/` and `zh/`, same chapter paths and
-  `{#sec-...}` labels under each. Built into `_book/en` and `_book/zh`.
-- Chapters live under `en/pN-*/NN-slug.qmd` (and the zh twin). Global
-  chapter numbers 01 to 37.
-- `INTEGRATION.md` maps source material (`../specs/research/llm-training/`
-  and `../latere-ai/content/blog/`) to chapters. The book is canonical.
-- Regenerate the scaffold from the TOC table if the structure changes;
-  hand-written chapters (for example `03-scaling-laws`) are not regenerated.
+- Content is bilingual markdown: `en/pN-*/NN-slug.qmd` and the `zh/` twin, with
+  the same chapter paths and `{#sec-...}` labels under each. `en/_quarto.yml`
+  and `zh/_quarto.yml` are kept ONLY as the chapter/part manifest (the reader
+  reads `book.chapters` from them); Quarto itself is no longer used to render.
+- The site is a **custom React + Bun reader** in `app/` (replaced Quarto). It
+  compiles the `.qmd` content (markdown, KaTeX math, citations from
+  `references.bib`, `@sec`/`@fig` cross-refs, graphviz/mermaid, callouts,
+  runnable/viz) to static HTML in `_book/{en,zh}`. See `app/src/pipeline/`.
+- `INTEGRATION.md` maps source material to chapters. The book is canonical.
 
 ## Authoring philosophy
 
@@ -30,12 +30,16 @@ reading.
 
 ## Build and verify
 
-- `make preview` (English) or `make preview-zh` for a live preview.
-- `make render-html` builds both languages, matching CI. CI renders `en`
-  and `zh` on push and PR.
-- The render check is the test: before committing structural or config
-  changes, run `make render-html` (or `quarto check`) and confirm both
-  books build. A broken render is a broken commit.
+- `make dev` runs the reader dev server (`app/`, hot client rebuild).
+- `make build` builds both languages into `_book/{en,zh}` (Bun SSG). This is
+  also what `.githooks/pre-commit` runs on every commit, so `_book` is vendored
+  (committed); enable the hook once per clone with
+  `git config core.hooksPath .githooks`.
+- `make export` regenerates the vendored PDF + EPUB (on demand; slow — headless
+  Chrome + pandoc). Not run by the pre-commit hook.
+- The build is the test: `make build` must compile both books. CI (`render.yml`)
+  lints the `.qmd` sources and runs the Bun build; a broken build is a broken
+  commit.
 
 ## Writing conventions
 
@@ -45,9 +49,12 @@ reading.
 
 ## Deploy
 
-The book deploys to `aaai.latere.ai` as a static-serving container behind the
-shared K8s ingress. See `deploy/prod/` and `.github/workflows/`. DNS is one
-A record in `../terraform/dns.tf`; the header link lives in `../latere-ai`.
+The book deploys to `aaai.latere.ai` as a static-serving nginx container behind
+the shared K8s ingress. `_book` is vendored, so `docker.yml` just packs the
+committed HTML into the image (no render in CI). Deploy = push `main` → image →
+`kubectl rollout restart deployment/aaai-web -n latere`. See `deploy/prod/` and
+`.github/workflows/`. DNS is one A record in `../terraform/dns.tf`; the header
+link lives in `../latere-ai`.
 
 ## Commits
 

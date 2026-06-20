@@ -1,32 +1,20 @@
-.PHONY: preview preview-zh render render-en render-zh render-html check test clean
+.PHONY: dev build export lint clean
 
-# Unit tests for the pandoc filters (needs pandoc; skips cleanly without it).
-test:
-	bash test/cjk-softbreak.test.sh
+# Live dev server for the reader (renders a sample chapter with hot client rebuild).
+dev:
+	cd app && bun run dev
 
-# Live preview, one language at a time (Quarto previews a single project).
-preview:
-	quarto preview en
+# Build the static site into _book/{en,zh} (what the pre-commit hook runs).
+build:
+	cd app && bun install --frozen-lockfile && bun run build
 
-preview-zh:
-	quarto preview zh
+# Generate the vendored PDF + EPUB into _book/<lang>/ (on demand; slow).
+export:
+	cd app && bun run export
 
-# Render both language books (HTML, PDF, ePub) into _book/en and _book/zh.
-render: render-en render-zh
-
-render-en:
-	quarto render en
-
-render-zh:
-	quarto render zh
-
-# HTML-only smoke test for both, matching CI.
-render-html:
-	quarto render en --to html
-	quarto render zh --to html
-
-check:
-	quarto check
+# Style/diagram lint on the .qmd sources (no em dashes, no plain ```mermaid).
+lint:
+	sh tools/lint.sh
 
 clean:
-	rm -rf _book en/.quarto zh/.quarto
+	rm -rf _book
