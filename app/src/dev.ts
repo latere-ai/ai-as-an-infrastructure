@@ -48,7 +48,7 @@ Bun.serve({
       return new Response(clientJs, { headers: { "content-type": "text/javascript" } });
     }
     const bodyHtml = renderToString(createElement(Reader, { chapter: devChapter }));
-    const html = page({ chapter: devChapter, bodyHtml, css, clientSrc: "/client.js" });
+    const html = page({ chapter: devChapter, bodyHtml, css, clientHref: "/client.js" });
     return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
   },
 });

@@ -1,5 +1,6 @@
 // Page template shared by the dev server and the SSG build. Wraps SSR'd shell
-// HTML with the head (fonts from CDN, the design's CSS) and the hydration data.
+// HTML with the head (fonts + KaTeX from CDN, the design's CSS inlined) and the
+// hydration data, then the client bundle and after-body runtime scripts.
 
 import type { ChapterData } from "./types.ts";
 
@@ -14,10 +15,10 @@ export function page(opts: {
   chapter: ChapterData;
   bodyHtml: string;
   css: string;
-  clientSrc: string; // path to hydration bundle, or inline via clientInline
-  clientInline?: string;
+  clientHref: string; // relative path to the hydration bundle
+  afterBody?: string; // raw runtime <script> blocks
 }): string {
-  const { chapter, bodyHtml, css, clientSrc, clientInline } = opts;
+  const { chapter, bodyHtml, css, clientHref, afterBody = "" } = opts;
   const title = `${chapter.title} · AI as an Infrastructure`;
   const data = JSON.stringify(chapter).replace(/</g, "\\u003c");
   return `<!DOCTYPE html>
@@ -32,7 +33,8 @@ ${FONT_LINKS}
 <body>
 <div id="root">${bodyHtml}</div>
 <script>window.__CHAPTER__ = ${data};</script>
-${clientInline ? `<script type="module">${clientInline}</script>` : `<script type="module" src="${clientSrc}"></script>`}
+<script type="module" src="${clientHref}"></script>
+${afterBody}
 </body>
 </html>`;
 }

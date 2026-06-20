@@ -53,7 +53,9 @@ export function expandDivs(src: string): string {
         // OPEN
         const { classes, id } = parseAttrs(fence[2]);
         const isCallout = classes.some((c) => c.startsWith("callout-"));
-        const cls = ["rdr-block", ...classes.map((c) => c.startsWith("callout-") ? `rdr-callout rdr-${c}` : `rdr-${c}`)].join(" ");
+        // Keep the original class name too (e.g. .runnable, .viz) so the ported
+        // client runtimes hook the same selectors they did under Quarto.
+        const cls = ["rdr-block", ...classes.flatMap((c) => c.startsWith("callout-") ? [`rdr-callout`, `rdr-${c}`] : [`rdr-${c}`, c])].join(" ");
         const idAttr = id ? ` id="${id}"` : "";
         out.push(`<div class="${cls}"${idAttr}>`);
         out.push("");
