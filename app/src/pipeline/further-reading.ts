@@ -23,6 +23,7 @@ export interface FurtherReadingEntry {
   eprint?: string;
   note?: string; // en gloss
   noteZh?: string; // zh gloss
+  inFurther: boolean; // false → cited inline but kept out of Further reading
 }
 
 function surname(name: { lastName?: string; firstName?: string; name?: string }): string {
@@ -52,6 +53,9 @@ export function furtherReadingEntries(refsDir: string, slug: string): FurtherRea
       eprint,
       note: f.note ? String(f.note) : undefined,
       noteZh: f["note-zh"] ? String(f["note-zh"]) : undefined,
+      // An entry that exists only to back an inline [@key] is marked
+      // `further = {no}` so it resolves citations but stays out of the list.
+      inFurther: !["no", "false", "0"].includes(String(f.further ?? "").toLowerCase()),
     };
   });
 }
@@ -84,7 +88,7 @@ function renderEntry(e: FurtherReadingEntry, lang: Lang): string {
 
 // HTML <ul> that fills the ::: {#further-reading} slot for a chapter.
 export function renderFurtherReading(refsDir: string, slug: string, lang: Lang): string {
-  const entries = furtherReadingEntries(refsDir, slug);
+  const entries = furtherReadingEntries(refsDir, slug).filter((e) => e.inFurther);
   if (entries.length === 0) return "";
   return `<ul class="rdr-further-reading">\n${entries.map((e) => renderEntry(e, lang)).join("\n")}\n</ul>`;
 }

@@ -43,7 +43,9 @@ for (const slug of slugs) {
   test(`${slug}: refs/ covers the same works as the original Further reading`, () => {
     expect(existsSync(join(refsDir, `${slug}.bib`))).toBe(true);
     const rendered = new Set(
-      furtherReadingEntries(refsDir, slug).map((e) => normalizeUrl(e.url ?? "")),
+      furtherReadingEntries(refsDir, slug)
+        .filter((e) => e.inFurther)
+        .map((e) => normalizeUrl(e.url ?? "")),
     );
     const baseline = new Set((snapshot[slug] ?? []).map(normalizeUrl));
     const missing = [...baseline].filter((u) => !rendered.has(u));
