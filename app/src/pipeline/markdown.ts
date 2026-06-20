@@ -8,6 +8,7 @@ import MarkdownIt from "markdown-it";
 import attrs from "markdown-it-attrs";
 import { katex } from "@mdit/plugin-katex";
 import type { Heading } from "../types.ts";
+import { quartoRefs, type RefContext } from "./quarto-refs.ts";
 
 export interface RenderedChapter {
   titleLine: string; // raw H1 line (for title/label extraction upstream)
@@ -22,7 +23,7 @@ function slugify(s: string): string {
     .replace(/-+/g, "-");
 }
 
-function createMd(): MarkdownIt {
+function createMd(ref?: RefContext): MarkdownIt {
   const md = new MarkdownIt({
     html: true, // chapters embed raw HTML (viz, cover); kept verbatim
     linkify: false,
@@ -31,6 +32,7 @@ function createMd(): MarkdownIt {
   });
   md.use(attrs, { allowedAttributes: ["id", "class", "data-viz", "data-family", "data-xlabel", "data-ylabel", "data-plabel", "data-pmin", "data-pmax", "data-p", "data-logy"] });
   md.use(katex);
+  if (ref) md.use(quartoRefs, ref);
   return md;
 }
 
@@ -67,8 +69,8 @@ function collectHeadings(md: MarkdownIt, body: string): { headings: Heading[]; t
   return { headings, tokens };
 }
 
-export function renderMarkdown(src: string): RenderedChapter {
-  const md = createMd();
+export function renderMarkdown(src: string, ref?: RefContext): RenderedChapter {
+  const md = createMd(ref);
   const { titleLine, body } = splitTitle(src);
   const { headings, tokens } = collectHeadings(md, body);
   const html = md.renderer.render(tokens, (md as any).options, {});

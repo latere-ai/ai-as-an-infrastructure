@@ -7,11 +7,15 @@ import Reader from "./Reader.tsx";
 import { page } from "./html.ts";
 import { loadBook } from "./pipeline/book.ts";
 import { compileChapter } from "./pipeline/compile.ts";
+import { loadBibliography } from "./pipeline/citations.ts";
+import { buildCrossref } from "./pipeline/crossref.ts";
+import { join } from "node:path";
 
 const css = await Bun.file(new URL("./theme.css", import.meta.url)).text();
 const repoRoot = new URL("../../", import.meta.url).pathname;
 const book = loadBook("en", repoRoot);
-const devChapter = compileChapter(book, book.chapters.find((c) => c.href.includes("06-transformer"))!);
+const ctx = { bib: loadBibliography(join(repoRoot, "references.bib")), xref: buildCrossref(book) };
+const devChapter = compileChapter(book, book.chapters.find((c) => c.href.includes("06-transformer"))!, ctx);
 
 async function buildClient(): Promise<string> {
   const out = await Bun.build({
