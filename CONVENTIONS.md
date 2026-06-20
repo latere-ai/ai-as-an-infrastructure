@@ -40,9 +40,10 @@ explain it.
 ## Math and diagrams
 
 - Math is LaTeX: inline `$...$` and display `$$...$$`.
-- Diagrams are Mermaid in fenced ```` ```mermaid ```` blocks. Verify they
-  render, not just that the syntax parses. Use a static image only when
-  Mermaid cannot express the figure.
+- Diagrams are Mermaid in `` ```{mermaid} `` blocks (Quarto's executable
+  diagram fence, with braces). A plain `` ```mermaid `` block renders as a
+  code listing, not a diagram. Verify they render, not just that the syntax
+  parses. Use a static image only when Mermaid cannot express the figure.
 
 ## Tone
 
