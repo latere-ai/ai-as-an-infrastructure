@@ -2,13 +2,15 @@
 
 A model's weights are a lossy, frozen snapshot of the corpus it was trained
 on. Retrieval-augmented generation puts a live, queryable corpus next to the
-model and feeds the right passages into the prompt at answer time. By the end
-of this chapter a reader can explain how a query becomes a set of retrieved
-chunks, why dense embeddings, sparse term matching, and rerankers each earn
-their place in the pipeline, how GraphRAG and agentic RAG extend the naive
-loop, and where retrieval is contested against ever-longer context windows.
+model and feeds the right passages into the prompt at answer time. This chapter
+follows a single artifact, a question, as it travels down a funnel that turns
+it into a few hundred tokens of evidence. We trace the funnel one stage at a
+time, asking at each what failure it exists to prevent and what it costs; then
+we watch the field attack the three places the funnel is weakest; and we close
+on the two forces that decide whether retrieval survives at all, an adversary
+who hides in the corpus and a context window that keeps growing.
 
-## Problem
+## Knowledge inside the weights, or outside them
 
 A frontier model knows what was in its pre-training mixture, up to the day the
 mixture was frozen, blurred by the lossy compression of @sec-scaling-laws. It
@@ -26,32 +28,39 @@ the corpus is large, so search must be sub-linear; the question and the answer
 rarely share exact words, so lexical match alone is brittle; the context window
 is finite and expensive, so you can pass only a handful of passages and they
 had better be the right ones. Retrieval is the act of turning a question into
-the few hundred tokens of evidence that change the answer.
+the few hundred tokens of evidence that change the answer. Lewis et al. named
+retrieval-augmented generation and framed it as combining parametric memory,
+the model's weights, with non-parametric memory, a retrievable index, training
+the retriever and generator together on knowledge-intensive tasks
+[@lewis2020retrieval].
 
-## Design
+## Down the funnel, one stage at a time
 
-The naive RAG pipeline has four stages: chunk and index the corpus offline,
-embed the query online, retrieve the nearest chunks, and generate an answer
-conditioned on them. Each stage exists to answer a specific failure of the
-stage that would otherwise replace it.
+The naive RAG pipeline that froze out of that idea has four stages: chunk and
+index the corpus offline, embed the query online, retrieve the nearest chunks,
+and generate an answer conditioned on them. Each stage exists to answer a
+specific failure of the stage that would otherwise replace it, and each carries
+its own dial with a knee. We walk them in order.
 
 **Chunking** exists because documents are too long to embed or retrieve whole.
 A single vector cannot represent a hundred-page report at the granularity a
 question needs, and you cannot paste the whole report into the prompt. So the
 corpus is split into chunks, typically a few hundred tokens, and each chunk is
-indexed independently. The chunk size is a direct trade: chunks too large
-dilute the relevant sentence among irrelevant ones and waste context budget;
-chunks too small sever the sentence from the context that disambiguates it.
-Overlapping windows and structure-aware splitting (by section, by paragraph)
-soften the boundary problem.
+indexed independently. The chunk size is a direct trade with no universal
+answer: chunks too large dilute the relevant sentence among irrelevant ones and
+waste context budget; chunks too small sever the sentence from the context that
+disambiguates it. The knee depends on document structure and question type,
+which is why overlapping windows and structure-aware splitting (by section, by
+paragraph) exist to soften the boundary problem.
 
 **Dense retrieval** answers the brittleness of lexical match. A dual-encoder
 embeds the query and each chunk into the same vector space, trained so that a
 question and its answer land near each other even when they share no words.
-Karpukhin et al. (2020), Dense Passage Retrieval, showed that a dual-encoder
+Karpukhin et al., in Dense Passage Retrieval, showed that a dual-encoder
 trained on a few thousand question-passage pairs beats a strong BM25 baseline
-by a wide margin on top-20 retrieval accuracy across open-domain QA. Relevance
-becomes a dot product or cosine similarity in embedding space:
+by a wide margin on top-20 retrieval accuracy across open-domain QA
+[@karpukhin2020dense]. Relevance becomes a dot product or cosine similarity in
+embedding space:
 
 $$
 \text{score}(q, c) = \mathbf{E}_q(q) \cdot \mathbf{E}_c(c)
@@ -59,17 +68,21 @@ $$
 
 where $\mathbf{E}_q$ and $\mathbf{E}_c$ are the query and chunk encoders. The
 encoders can be tied or separate, and the chunk embeddings are computed once,
-offline, then frozen into an index.
+offline, then frozen into an index. The dial here is dense against sparse:
+dense retrieval generalizes across paraphrase and fails on exact tokens, which
+the next stage corrects.
 
 **The vector store** answers the cost of search. With millions of chunk
 vectors, computing the dot product against every one for every query is too
 slow. Approximate nearest neighbor indexes trade a small, bounded recall loss
 for orders of magnitude in speed. The dominant structure is HNSW, the
-hierarchical navigable small-world graph of Malkov and Yashunin (2018), which
-builds a multi-layer proximity graph and searches it greedily from a sparse top
-layer down, giving logarithmic-scale query time. A vector store is HNSW (or a
-quantized variant) plus metadata filtering plus the plumbing to keep the index
-in sync with the corpus.
+hierarchical navigable small-world graph of Malkov and Yashunin, which builds a
+multi-layer proximity graph and searches it greedily from a sparse top layer
+down, giving logarithmic-scale query time [@malkov2018efficient]. A vector
+store is HNSW (or a quantized variant) plus metadata filtering plus the
+plumbing to keep the index in sync with the corpus. The dial is recall against
+latency: exact nearest neighbor is correct and too slow, and the index
+parameters are a recall-latency knob, not a fixed setting.
 
 **Hybrid search** answers the blind spot of dense retrieval. Embeddings
 generalize across paraphrase but lose exact tokens: a part number, a rare name,
@@ -77,7 +90,8 @@ a code identifier, a literal string that the dense model has smoothed away.
 Sparse lexical retrieval, BM25 over an inverted index, is exact on those terms
 and complementary. Hybrid search runs both and fuses the rankings, commonly
 with reciprocal rank fusion, so that a chunk ranked highly by either method
-surfaces.
+surfaces. It pays two indexes and a fusion step to get both halves, and that
+cost is usually worth it.
 
 **Reranking** answers the gap between cheap retrieval and accurate scoring. The
 dual-encoder is fast because the query and chunk never meet until the final dot
@@ -86,10 +100,12 @@ interaction between the query's words and the chunk's. A cross-encoder reranker
 feeds the query and chunk together through a transformer and scores their joint
 representation, which is far more accurate and far too slow to run over the
 whole corpus. So the pipeline retrieves a few hundred candidates cheaply, then
-reranks the top candidates expensively. ColBERT (Khattab and Zaharia, 2020)
-sits between the two: its late-interaction architecture keeps per-token
-embeddings and does a cheap MaxSim interaction, recovering much of the
-cross-encoder's accuracy at retrieval-time cost.
+reranks the top candidates expensively, and the length of that shortlist is the
+dial: running the cross-encoder only on a retrieved shortlist buys most of the
+accuracy at a fraction of the cost. ColBERT sits between the two: its
+late-interaction architecture keeps per-token embeddings and does a cheap
+MaxSim interaction, recovering much of the cross-encoder's accuracy at
+retrieval-time cost [@khattab2020colbert].
 
 The cost and accuracy of these three architectures follow directly from one
 design choice: where in the network the query and the chunk first meet, shown
@@ -124,6 +140,8 @@ flowchart TB
   LATE -.->|"sharper, costlier"| CROSS
 ```
 
+Stacked end to end, the four stages form a funnel, shown in @fig-rag-funnel.
+
 ```{mermaid}
 %%| label: fig-rag-funnel
 %%| fig-cap: "The naive RAG funnel. Cheap, broad stages on the left feed a short list to the expensive, sharp stages on the right, so the cross-encoder only ever scores a handful of candidates."
@@ -139,58 +157,57 @@ flowchart LR
   CTX --> GEN["generate + cite"]
 ```
 
-The pipeline is a funnel: each stage is cheaper-and-broader or
-costlier-and-sharper than the next, and the order exists so that the expensive
-stages only ever see a short list.
+Each stage is cheaper-and-broader or costlier-and-sharper than the next, and
+the order exists so that the expensive stages only ever see a short list. This
+is the workhorse design, and its strength is exactly its rigidity: embed once,
+retrieve once, generate once, with every dial set ahead of time.
 
-## Evolution
+## Three weaknesses, three lines of attack
 
-Lewis et al. (2020) named retrieval-augmented generation and framed it as
-combining parametric memory, the model's weights, with non-parametric memory, a
-retrievable index, training the retriever and generator together on
-knowledge-intensive tasks. The naive RAG that followed froze that idea into the
-four-stage funnel above and decoupled the stages: embed once, retrieve once,
-generate once. This is the workhorse, and it has three structural weaknesses
-that the rest of the field's evolution attacks in turn.
+That rigidity is also where the funnel breaks. The naive pipeline decouples its
+stages and runs each exactly once, which gives it three structural weaknesses,
+and most of the field's evolution is one line of work per weakness,
+@fig-rag-evolution.
 
 The first weakness is local-only reasoning. Naive RAG retrieves the chunks most
 similar to the query, which works for questions whose answer sits in a few
 passages and fails for questions whose answer is spread across the whole
 corpus. Asked "what are the main themes in these documents?", similarity search
 has nothing to grab, because no single chunk is about the themes. GraphRAG
-(Edge et al., 2024) reframes this as query-focused summarization. It uses a
-model to extract an entity-and-relationship graph from the corpus, runs Leiden
-community detection to partition the graph hierarchically, and pre-summarizes
-each community. A global question is then answered by map-reduce over community
-summaries rather than over raw chunks, which the authors show improves the
-comprehensiveness and diversity of answers on sensemaking questions over
-corpora in the million-token range. LightRAG (Guo et al., 2024) keeps the graph
-idea but cuts the cost: a dual-level retrieval that combines low-level entity
-retrieval with high-level concept retrieval over a graph index, with
-incremental updates so a new document does not force a full re-index.
+reframes this as query-focused summarization: it uses a model to extract an
+entity-and-relationship graph from the corpus, runs Leiden community detection
+to partition the graph hierarchically, and pre-summarizes each community. A
+global question is then answered by map-reduce over community summaries rather
+than over raw chunks, which the authors show improves the comprehensiveness and
+diversity of answers on sensemaking questions over corpora in the million-token
+range [@edge2024from]. LightRAG keeps the graph idea but cuts the cost: a
+dual-level retrieval that combines low-level entity retrieval with high-level
+concept retrieval over a graph index, with incremental updates so a new
+document does not force a full re-index [@guo2024lightrag].
 
 The second weakness is the static, single-shot control flow. Naive RAG always
 retrieves, retrieves exactly once, and never checks whether what it retrieved
-was any good. The fix is to put a controller in the loop. Self-RAG (Asai et
-al., 2023) trains the model to emit reflection tokens that decide whether to
-retrieve at all and then critique each retrieved passage for relevance and
-support before using it. CRAG (Yan et al., 2024) adds a lightweight evaluator
-between retrieval and generation that scores retrieved chunks and, when they
-fall short, triggers a corrective web search instead of generating from weak
-evidence. These are the bridge from naive to agentic.
+was any good. The fix is to put a controller in the loop. Self-RAG trains the
+model to emit reflection tokens that decide whether to retrieve at all and then
+critique each retrieved passage for relevance and support before using it
+[@asai2023selfrag]. CRAG adds a lightweight evaluator between retrieval and
+generation that scores retrieved chunks and, when they fall short, triggers a
+corrective web search instead of generating from weak evidence
+[@yan2024corrective]. These are the bridge from naive to agentic.
 
-The third move generalizes the second. Singh et al. (2025), surveying agentic
-RAG, describe the endpoint: the retrieval loop becomes an agent that plans,
+The third move generalizes the second. Singh et al., surveying agentic RAG,
+describe the endpoint: the retrieval loop becomes an agent that plans,
 decomposes a question into sub-queries, chooses which tools and indexes to
 query, reflects on intermediate results, and iterates until it has enough
-evidence. Retrieval stops being a fixed funnel and becomes a policy the agent
-runs, drawing on the agent architectures of @sec-agent-architectures and, when
-multiple specialized retrievers are involved, the coordination of
-@sec-multi-agent-systems. The same passages, reordered and re-queried, get used
-very differently.
-
-Each branch of the field's evolution attacks one of naive RAG's three
-structural weaknesses, as @fig-rag-evolution traces.
+evidence [@singh2025agentic]. Retrieval stops being a fixed funnel and becomes
+a policy the agent runs, drawing on the agent architectures of
+@sec-agent-architectures and, when multiple specialized retrievers are
+involved, the coordination of @sec-multi-agent-systems. The same passages,
+reordered and re-queried, get used very differently. The dial across this whole
+axis is naive against agentic: a single-shot pipeline is cheap, predictable,
+and low-latency; an agentic loop answers harder questions but multiplies token
+cost and latency and adds failure modes of its own. Most production traffic
+does not need the agent; the minority that does benefits enormously.
 
 ```{dot}
 //| label: fig-rag-evolution
@@ -222,40 +239,24 @@ digraph rag_evolution {
 }
 ```
 
-## Trade-offs
+## Retrieved text is untrusted input
 
-Every stage of the funnel is a balance with a knee.
+Adding retrieval moves the security boundary. Once untrusted text from a corpus
+flows into the prompt, that text can carry instructions. SafeRAG benchmarks
+this directly, classifying attacks into silver noise, inter-context conflict,
+soft advertisement, and white denial-of-service, and finds that across many RAG
+components even simple injected passages bypass retrievers and filters and
+degrade answer quality [@liang2025saferag]. Retrieved content is untrusted
+input and must be treated as such, which connects directly to
+@sec-security-authorization. This is a weakness the funnel cannot tune away: no
+chunk size or rerank depth makes a planted instruction safe, because the
+problem is trust, not ranking.
 
-- **Chunk size.** Large chunks preserve context but dilute relevance and burn
-  the context budget; small chunks are precise but lose the surrounding
-  meaning. There is no universal size; it depends on document structure and
-  question type, which is why structure-aware and overlapping chunking exist.
-- **Dense versus sparse.** Dense retrieval generalizes across paraphrase and
-  fails on exact tokens; sparse retrieval is exact and fails on paraphrase.
-  Hybrid search pays two indexes and a fusion step to get both, and that cost
-  is usually worth it.
-- **Recall versus latency in the index.** Exact nearest neighbor is correct and
-  too slow; approximate indexes like HNSW trade a tunable recall loss for
-  logarithmic query time. The index parameters are a recall-latency dial, not a
-  fixed setting.
-- **Retrieve-then-rerank.** A bi-encoder is cheap and approximate; a
-  cross-encoder is accurate and expensive. Running the cross-encoder only on a
-  retrieved shortlist buys most of the accuracy at a fraction of the cost, and
-  the shortlist length is the dial.
-- **Naive versus agentic.** A single-shot pipeline is cheap, predictable, and
-  low-latency. An agentic loop that plans, re-queries, and reflects answers
-  harder questions but multiplies token cost and latency and adds failure modes
-  of its own. Most production traffic does not need the agent; the minority that
-  does benefits enormously.
+## Will long context make retrieval obsolete?
 
-Retrieval also moves the security boundary. Once untrusted text from a corpus
-flows into the prompt, that text can carry instructions. SafeRAG (Liang et al.,
-2025) benchmarks this directly, classifying attacks into silver noise,
-inter-context conflict, soft advertisement, and white denial-of-service, and
-finds that across many RAG components even simple injected passages bypass
-retrievers and filters and degrade answer quality. Retrieved content is
-untrusted input and must be treated as such, which connects directly to
-@sec-security-authorization.
+The second force pressing on retrieval is friendlier in appearance and more
+fundamental: the context window keeps growing, and a large enough window might
+make the whole funnel unnecessary.
 
 ::: {.callout-important}
 ## What's contested
@@ -267,15 +268,18 @@ stays necessary on three grounds the window does not address: cost, since
 attention over a million tokens per query is far more expensive than fetching a
 few thousand; freshness, since the corpus changes faster than you can re-prompt
 and an index updates incrementally; and scale, since real corpora exceed any
-window. The evidence cuts against the pure long-context position: Liu et al.
-(2023), "Lost in the Middle," show that models use evidence placed mid-context
+window. The evidence cuts against the pure long-context position: Liu et al.,
+in "Lost in the Middle," show that models use evidence placed mid-context
 markedly worse than evidence at the edges, so a full window is not a uniform
-substitute for a short, well-ranked one. The honest reading is that the two are
-converging. Long context makes retrieval coarser and more forgiving, and
-retrieval makes long context affordable and current. See
+substitute for a short, well-ranked one [@liu2023lost]. The honest reading is
+that the two are converging. Long context makes retrieval coarser and more
+forgiving, and retrieval makes long context affordable and current. See
 @sec-structured-long-context for the window side and @sec-context-engineering
 for how the retrieved evidence is assembled into the prompt.
 :::
+
+The debate has a clean resolution once you ask who pays for the window, and the
+answer comes from a layer well below retrieval.
 
 ::: {.callout-tip}
 ## Constraint arrow
@@ -289,7 +293,7 @@ mediocre ones. The shape of the retrieval pipeline is dictated by what a token
 of context costs to serve.
 :::
 
-## Implementation
+## Making it real
 
 A minimal naive RAG loop is short, and the brevity is the point: the
 sophistication lives in the index, the embeddings, and the reranker, not the
@@ -317,8 +321,8 @@ typically judged by a model as in @sec-judging-holistic, with the caveats about
 agentic and trajectory evaluation in @sec-benchmarks. The third is the
 provenance contract: because every claim should trace to a retrieved chunk, the
 pipeline must carry citations through to the answer, which is both the original
-selling point of RAG in Lewis et al. and the main defense against the confident
-hallucination that motivated it.
+selling point of RAG in Lewis et al. [@lewis2020retrieval] and the main defense
+against the confident hallucination that motivated it.
 
 RAG sits beside, not inside, the agent's working memory. The retrieved context
 is ephemeral, assembled per request and discarded, which distinguishes it from

@@ -2,13 +2,15 @@
 
 A training run lives or dies on bandwidth, not peak FLOPs. By the end of this chapter a reader can explain what each accelerator family and interconnect tier offers, why a tensor-parallel group almost never spills past the NVLink boundary, and how model FLOPs utilization measures whether the hardware floor is being used.
 
-## Problem
+## A run that the spec sheet cannot explain
 
-A frontier run spreads one model across thousands of accelerators for weeks, and what gates it is rarely the peak arithmetic rate printed on a spec sheet. It is bandwidth at each tier of the machine: how fast a chip reaches its own memory, how fast two chips in a chassis talk, and how fast two chassis across the hall talk. Those three numbers differ by more than an order of magnitude each step out, and a parallelism axis that needs more talking than its tier can afford stalls the whole collective. This chapter owns that hardware floor: the accelerators, the interconnect hierarchy, and the single number, MFU, that says whether the floor is being used. The parallelism algorithms that ride on top belong to @sec-training-at-scale; cluster orchestration, checkpointing, and the data plane belong to @sec-orchestration-data-infra.
+Picture a frontier run spread across thousands of accelerators for weeks. The spec sheet promises a peak arithmetic rate, and the run delivers a fraction of it. The missing factor is rarely the matrix-multiply units sitting idle for want of work. It is the bytes those units wait on: how fast a chip reaches its own memory, how fast two chips in a chassis talk, how fast two chassis across the hall talk. Those three numbers differ by more than an order of magnitude each step out, and a parallelism axis that needs more talking than its tier can afford stalls the whole collective.
 
-## Design
+So the spec sheet's peak FLOPs is the wrong place to start. The right place is the hierarchy of bandwidth tiers underneath it, because every layout decision is a question of which tier a given exchange can afford. This chapter owns that hardware floor: the accelerators, the interconnect hierarchy, and the single number, MFU, that says whether the floor is being used. The parallelism algorithms that ride on top belong to @sec-training-at-scale; cluster orchestration, checkpointing, and the data plane belong to @sec-orchestration-data-infra.
 
-The machine is a hierarchy of bandwidth tiers, and every design choice traces back to which tier a given exchange can afford.
+## Three tiers of bandwidth
+
+The machine is a hierarchy of bandwidth tiers, and tracing a byte from the die outward shows why each tier exists and what it can host.
 
 The innermost tier is a chip and its memory. An accelerator pairs a large matrix-multiply throughput with high-bandwidth memory (HBM) sitting next to the die. The forward and backward matmuls are fed from HBM, so HBM bandwidth, not raw FLOPs, often sets the achievable rate for a kernel.
 
@@ -32,7 +34,9 @@ flowchart TD
   chip --> node --> cluster
 ```
 
-The mapping of parallelism axes onto tiers follows directly. Tensor parallelism (TP) shards a single matmul across devices and exchanges activations with an all-reduce twice per layer, so it is the most bandwidth-hungry axis and is pinned to the NVLink tier inside a node. Data and pipeline parallelism communicate far less per step, a gradient reduction once per step for DP and a single activation hand-off per stage boundary for PP, so they are the axes allowed to cross the inter-node network. Expert parallelism for MoE rides its own all-to-all group, treated in @sec-moe-ssm-hybrids. The rule of thumb that follows, TP inside the node and DP/PP across nodes, is not a convention but a consequence of the bandwidth gap, as @fig-accelerators-networking-axis-map lays out.
+## Mapping parallelism onto the tiers
+
+Once the tiers are fixed, the placement of each parallelism axis follows directly, and it follows from communication volume, not from taste. Tensor parallelism (TP) shards a single matmul across devices and exchanges activations with an all-reduce twice per layer, so it is the most bandwidth-hungry axis and is pinned to the NVLink tier inside a node [@shoeybi2019megatron]. Data and pipeline parallelism communicate far less per step, a gradient reduction once per step for DP and a single activation hand-off per stage boundary for PP, so they are the axes allowed to cross the inter-node network [@narayanan2021efficient]. Expert parallelism for MoE rides its own all-to-all group, treated in @sec-moe-ssm-hybrids. The rule of thumb that follows, TP inside the node and DP/PP across nodes, is not a convention but a consequence of the bandwidth gap, as @fig-accelerators-networking-axis-map lays out.
 
 ```{dot}
 //| label: fig-accelerators-networking-axis-map
@@ -61,7 +65,11 @@ digraph axis_map {
 }
 ```
 
-TPU pods are the JAX/XLA counterpart with a different cost model. The chips connect through the inter-chip interconnect (ICI) and an optical circuit switch (OCS) into a torus topology rather than a switched fat-tree, so neighbor-to-neighbor bandwidth is plentiful and the sharding is co-designed with the torus shape through GSPMD-style annotations rather than mapped onto a fat-tree.
+## The TPU detour: a torus instead of a switch
+
+TPU pods are the JAX/XLA counterpart with a different cost model, and they make the point that the tier hierarchy above is one design choice rather than a law of nature. The chips connect through the inter-chip interconnect (ICI) and an optical circuit switch (OCS) into a torus topology rather than a switched fat-tree, so neighbor-to-neighbor bandwidth is plentiful and the sharding is co-designed with the torus shape through GSPMD-style annotations rather than mapped onto a fat-tree after the fact [@xu2021gspmd]. The same byte that would cross a switch on a GPU cluster travels to a physical neighbor on a TPU pod, which is why bandwidth there scales with locality.
+
+## MFU: the one honest number
 
 The single number that tells you whether all of this is working is model FLOPs utilization. MFU is the FLOPs the model actually needs, divided by the peak FLOPs the hardware could deliver over the same wall-clock:
 
@@ -71,16 +79,16 @@ $$
 
 It counts only the useful arithmetic of the model. Its sibling, hardware FLOPs utilization (HFU), also counts work the hardware genuinely did but the model did not strictly need, most notably the extra forward passes of activation recomputation, which is why HFU exceeds MFU whenever recomputation is on. MFU is the honest figure because it answers the question the budget cares about: of the arithmetic I paid for, how much moved the model.
 
-## Evolution
+## Why the tiers look the way they do
 
-The interconnect tiers are the product of the bandwidth gap widening faster than any single fabric could close it. Early multi-GPU training leaned on PCIe, which was already too slow for sharding a matmul, so NVLink and then NVSwitch were introduced precisely to make the intra-node tier fast enough to host tensor parallelism. The accelerator families also moved the precision floor: each generation has widened the set of formats the matmul units execute natively, with Hopper-class and newer hardware adding fp8, which lets the same silicon deliver more matmul throughput per byte moved (the kernel-level consequences are in @sec-quantization-kernels). On the network side, InfiniBand and RoCE converged on RDMA and on rail-optimized topologies that give each accelerator a dedicated path to its peer on other nodes, so the inter-node tier could grow without every flow contending for the same switch ports. TPU pods evolved along a parallel track entirely, choosing a torus over a switched fabric so that bandwidth scales with locality.
+The interconnect tiers are the product of the bandwidth gap widening faster than any single fabric could close it. Early multi-GPU training leaned on PCIe, which was already too slow for sharding a matmul, so NVLink and then NVSwitch were introduced precisely to make the intra-node tier fast enough to host tensor parallelism [@shoeybi2019megatron]. The accelerator families also moved the precision floor: each generation has widened the set of formats the matmul units execute natively, with Hopper-class and newer hardware adding fp8, which lets the same silicon deliver more matmul throughput per byte moved [@micikevicius2022fp8] (the kernel-level consequences are in @sec-quantization-kernels). On the network side, InfiniBand and RoCE converged on RDMA and on rail-optimized topologies that give each accelerator a dedicated path to its peer on other nodes, so the inter-node tier could grow without every flow contending for the same switch ports. TPU pods evolved along a parallel track entirely, choosing a torus over a switched fabric so that bandwidth scales with locality.
 
 ::: {.callout-important}
 ## What's contested
 The intra-node versus inter-node boundary that this chapter is built on is itself moving. The scale-up domain, the set of accelerators that can reach each other at NVLink-class bandwidth, has been expanding past a single chassis toward rack-scale fabrics. As that domain grows, the maximum affordable tensor-parallel degree grows with it, and the long-standing rule that TP stays inside one small node weakens. Whether the future is ever-larger scale-up domains that let TP span a rack, or a continued reliance on the cheaper inter-node network with parallelism axes that tolerate it, is unsettled and vendor-dependent. The boundary is a property of this year's hardware, not a law.
 :::
 
-## Trade-offs
+## What each axis costs
 
 Every parallelism axis buys a different resource and pays in a different currency, and the interconnect tier sets the exchange rate.
 
@@ -93,9 +101,9 @@ Every parallelism axis buys a different resource and pays in a different currenc
 This is the clearest case in the book of a lower layer dictating an upper one. The interconnect bandwidth gap, NVLink an order of magnitude faster per byte than InfiniBand or RoCE, is what sets the maximum tensor-parallel degree that @sec-training-at-scale can choose. A parallelism layout is not picked on the whiteboard and then mapped to hardware. It is the hardware tier that decides which axis is allowed where, and TP staying inside the NVLink boundary is the direct imprint of that decision on the algorithm above it.
 :::
 
-## Implementation
+## Reading the timeline
 
-The collectives that move bytes across these tiers are provided by NCCL on NVIDIA hardware (RCCL on AMD), which maps each collective onto the topology, choosing a ring or a tree and routing it over NVLink or the network depending on where the ranks sit. A practitioner rarely calls it directly; the parallelism framework does. What the practitioner reads is the per-step profile, because MFU is diagnosed from a timeline, not from the loss curve. Exposed communication that did not hide under compute, an oversized pipeline bubble, too much recomputation, and unfused kernels each take a slice of the gap between achieved and peak FLOPs, and the timeline is where each slice is visible.
+The collectives that move bytes across these tiers are provided by NCCL on NVIDIA hardware (RCCL on AMD), which maps each collective onto the topology, choosing a ring or a tree and routing it over NVLink or the network depending on where the ranks sit [@nvidia2024nccl]. A practitioner rarely calls it directly; the parallelism framework does. What the practitioner reads is the per-step profile, because MFU is diagnosed from a timeline, not from the loss curve. Exposed communication that did not hide under compute, an oversized pipeline bubble, too much recomputation, and unfused kernels each take a slice of the gap between achieved and peak FLOPs, and the timeline is where each slice is visible.
 
 @fig-accelerators-networking-flops-gap reads the timeline as a descent from peak FLOPs down to MFU. Idle time, where a device waited on exposed communication or sat in a pipeline bubble, is pure loss. Of the FLOPs the hardware then actually ran, recomputation did work the model did not strictly need: that work lifts HFU above MFU, but only the useful arithmetic counts toward the honest figure.
 

@@ -8,60 +8,14 @@ explain why a session log records intent separately from result, why
 branching a conversation is cheap but branching a workspace is not, and why a
 shared vector store is a data-breach risk rather than a relevance bug.
 
-## Problem
+## A commit that runs twice
 
-A harness has to survive any of four events: a harness crash, a replica
-reschedule, a sandbox loss, or a user resuming a session days later. None of
-these is exotic; all of them are the normal operating regime of a long-running
-agent. Surviving them means writing state to a durable store, and the hard
-question is not where to put that state but what to record.
-
-The core difficulty is the gap between a side effect and its commit. A durable
-log records *intent* ("call `git commit`") and, separately, *result* ("commit
-succeeded"). If the harness crashes between those two writes, recovery reads
-the last durable state, which is pre-result, and the agent re-issues the
-operation. For an idempotent operation that is harmless. For a non-idempotent
-one, a second `git commit`, a duplicate ticket, a repeated payment, the store
-and the external world diverge silently, and nothing in the log can tell you it
-happened. Reported agent retry rates of 15 to 30 percent make this a regime to
-design for, not an edge case [1].
-
-A second problem sits above the first. A session is bounded by context
-compaction (@sec-structured-long-context): the context window fills, gets
-summarized, and the early turns fall out of the model's reach. An agent that
-is supposed to know a user across weeks therefore cannot rely on the context
-window alone. It needs a separate store, durable and queryable, that the
-harness loads into context on demand. That store is memory, and it is a
-different system from the session log: the log is append-only intent, memory is
-curated and retrievable.
-
-The third problem is tenancy. The moment memory is shared infrastructure, a
-retrieval that crosses a tenant boundary stops being a wrong answer and becomes
-a data breach. The same property that makes memory useful, that retrieved
-content lands directly in the model's context, makes it dangerous, because that
-content is indistinguishable from instructions the user or harness put there.
-
-## Design
-
-The durable-state primitive answers all three with one small contract,
-**append, read, snapshot, fork**, applied uniformly to state shapes that are
-anything but uniform: the session log (append-only intent), the workspace
-(mutable sandbox state), and long-term memory (curated, retrievable). One
-contract, several durability guarantees, and the design discipline is being
-honest about what each store does *not* guarantee.
-
-### Three durability models
-
-The session log can be built three ways, and the meaningful difference between
-them is what they record.
-
-The **append-only event log** writes every user message, model response, tool
-call, and tool result to a durable store. The log is the sole recovery
-artifact: any replica can serve any session by replaying it. This buys clean
-replay, clean audit, and transport-agnostic recovery, and it is the model that
-exhibits the intent-versus-result gap in its purest form. From the log alone,
-"requested but never ran" and "ran but never recorded" are identical: a tool
-call with no result.
+Start with the failure, because it names the whole subject. A runner prompts
+the model, the model asks to run `git commit`, the sandbox runs it and the
+commit lands, and then the runner crashes in the window between the effect
+firing and its record reaching durable storage. Recovery reads the last
+durable state, which is pre-commit, and the agent replays: it issues the same
+`git commit` again.
 
 ```{mermaid}
 %%| label: fig-memory-crash-replay
@@ -88,25 +42,40 @@ sequenceDiagram
     Note over SB: ✕ Duplicate commit or error:<br/>nothing to commit, working tree clean
 ```
 
-The **durable step log** closes the gap by adding a third record between intent
-and result: a durable *step boundary* written before the effect executes.
-Replay skips any step whose outcome is already durable, so "we asked to do X"
-and "X completed" become two separate, individually-durable facts, and replay
-can ask "did this step already complete?" instead of assuming it did not.
+This is not an exotic edge case. A harness has to survive any of four routine
+events: a harness crash, a replica reschedule, a sandbox loss, or a user
+resuming a session days later. All of them are the normal operating regime of
+a long-running agent, and reported agent retry rates of 15 to 30 percent make
+the replay above a regime to design for, not an accident [@fast2025reliability].
+The core difficulty it exposes is the gap between a side effect and its commit.
+A durable log records *intent* ("call `git commit`") and, separately, *result*
+("commit succeeded"). If the harness crashes between those two writes, recovery
+re-issues the operation. For an idempotent operation that is harmless. For a
+non-idempotent one, a second commit, a duplicate ticket, a repeated payment,
+the store and the external world diverge silently, and nothing in the log can
+tell you it happened.
 
-The **filesystem-as-state** model takes the opposite extreme: the working
-context is ephemeral and the *filesystem* is the sole authoritative record of
-task state [6]. The event log demotes to a secondary log of intent; the
-filesystem holds the truth, usually through an opinionated convention
-(`progress.md`, `plan.md`) the agent maintains. This sidesteps the
-intent-versus-result gap for anything the filesystem can represent, the file
-either has the new content or it does not, but it relocates the gap rather than
-removing it: a `git push`, an external API call, an MCP server-side cursor
-advance are still outside the filesystem's reach.
+Surviving these events means writing state to a durable store, and the hard
+question is not where to put that state but what to record. The state an agent
+leaves behind comes in three shapes, and they fail in three different ways.
+The **session log** is append-only intent, and its characteristic failure is
+the intent-versus-result gap above. The **workspace** is mutable sandbox
+state, and its failure is durability: a volume that cannot follow a pod across
+a zone boundary, a snapshot taken too rarely. **Long-term memory** is the
+curated, retrievable store that outlives a session, and its failure is
+tenancy: a retrieval that crosses a user boundary is not a wrong answer, it is
+a data breach. One small contract spans all three, **append, read, snapshot,
+fork**, applied to state shapes that are anything but uniform. The design
+discipline is being honest about what each store does *not* guarantee. The
+rest of this chapter walks the three stores in that spirit: what each one buys,
+and what it refuses.
 
-@fig-memory-durability-models places the three models on one axis, what each
-durably records relative to the effect, and shows where the intent-versus-result
-gap lands in each.
+## The session log: three ways to record a step
+
+The session log can be built three ways, and the meaningful difference between
+them is what they record relative to the effect, which fixes where the
+intent-versus-result gap lands. @fig-memory-durability-models places all three
+on that one axis.
 
 ```{dot}
 //| label: fig-memory-durability-models
@@ -157,16 +126,156 @@ digraph durability {
 }
 ```
 
+The **append-only event log** writes every user message, model response, tool
+call, and tool result to a durable store. The log is the sole recovery
+artifact: any replica can serve any session by replaying it. This buys clean
+replay, clean audit, and transport-agnostic recovery, and it is the model that
+exhibits the intent-versus-result gap in its purest form. From the log alone,
+"requested but never ran" and "ran but never recorded" are identical: a tool
+call with no result. That is the gap the opening crash walked into.
+
+The **durable step log** closes the gap by adding a third record between intent
+and result: a durable *step boundary* written before the effect executes.
+Replay skips any step whose outcome is already durable, so "we asked to do X"
+and "X completed" become two separate, individually-durable facts, and replay
+can ask "did this step already complete?" instead of assuming it did not. This
+is the answer durable-execution frameworks settled on, and the evolution is
+worth tracing. The plain event log gave clean replay but blurred intent and
+result. Restate [@ewen2025durable], Temporal [@davis2025durable], and Inngest
+[@poly2026durable] journal each step, run the effect, then record its outcome,
+formalizing the distinction the event log blurs. Temporal's own framing is that
+probabilistic LLM behavior makes naive retry logic insufficient, which is
+exactly the case durable journaling is built for [@workos2025fateev]. By 2025
+this crossed into the mainstream: AWS Durable Functions, Cloudflare Workflows,
+and Vercel's Workflow DevKit all shipped with AI-agent use cases as primary
+framing [@poly2026durable]. The pattern is no longer framework-specific.
+
+The **filesystem-as-state** model takes the opposite extreme: the working
+context is ephemeral and the *filesystem* is the sole authoritative record of
+task state [@zhou2026externalization]. The event log demotes to a secondary log
+of intent; the filesystem holds the truth, usually through an opinionated
+convention (`progress.md`, `plan.md`) the agent maintains. This sidesteps the
+intent-versus-result gap for anything the filesystem can represent, the file
+either has the new content or it does not, but it relocates the gap rather than
+removing it: a `git push`, an external API call, an MCP server-side cursor
+advance are still outside the filesystem's reach.
+
+### From a list to a tree
+
+The session log records steps, but its *shape* evolved separately from its
+durability. A linear append-only log treats a session as a list, and to back
+out you start over. Production harnesses moved past that. Rewind and truncate
+jump back to a checkpoint and discard the tail, rolling the workspace back to
+match, as in Claude Code's `/rewind` [@anthropic2025checkpointing] and Cursor's
+per-edit checkpoints [@cursor2025checkpoints]. A forkable tree goes further:
+multiple live branches from any checkpoint, all preserved. LangGraph's
+time-travel model treats checkpoints as a DAG with explicit branch IDs
+[@langchain2025timetravel], Claude Code's `/fork` spawns a child session from a
+shared history point [@anthropic2025checkpointing], and Replit Agent
+[@replit2025checkpoints] and OpenAI's Codex CLI [@openai2026codex] ship their
+own variants. The session stopped being a list and became a tree, or at least a
+log with a movable head. That tree is cheap to build only because conversation
+state is a pointer structure, an assumption the workspace will break in the
+next section.
+
+## The workspace: partial durability, expensive branching
+
+The workspace is the sandbox's mutable filesystem. It outlives individual tool
+calls but is not on the durable log, and that distinction is the source of two
+failures the session log does not have.
+
+**Workspace persistence is partial durability, not full recovery.**
+Persisting the workspace across pod lifecycle events has its own failure modes.
+The common Kubernetes pattern mounts a PersistentVolumeClaim at `/workspace`;
+the dominant failure is zone scoping. A ReadWriteOnce PVC is backed by a zonal
+block device that is physically attachable only within its own availability
+zone, so when a pod reschedules across zones the volume cannot follow and
+recovery falls back to a full re-bootstrap
+[@rack2cloud2026kubernetes; @kubernetes2023pvc]. When a pod is deliberately
+destroyed (teardown, timeout, scale-down) the PVC is often deleted with it, and
+uncommitted work is gone: Gitpod issue #9544 is the archetype, a workspace
+timeout fired before the final sync completed and a user lost roughly two hours
+of work [@gitpod2022data]. The alternative, checkpointing the complete state on
+a cadence, trades snapshot frequency directly against storage overhead, and the
+frequency knob is load-bearing because it sets the maximum work a crash can
+erase. Replit's snapshot engine captures filesystem and conversation context
+together and reports recovering from hourly OOM crashes without data loss
+[@replit2025snapshot; @replit2025memory]. Any design that claims "sessions
+survive indefinitely" owes an explicit account of which failure modes it covers
+and which it does not.
+
+**Branching splits cheaply on conversation and expensively on the workspace.**
+Branching conversation state is a pointer operation: the log is a tree of event
+IDs and forking a tree is cheap. Branching the *workspace* is not, because the
+workspace is a real filesystem and two branches cannot both own it.
+
+```{mermaid}
+%%| label: fig-memory-branching
+%%| fig-cap: "Forking conversation state is a cheap pointer operation, while the shared workspace forces a choice between interfering branches and per-fork clone cost."
+graph LR
+    classDef easy fill:#d5f5e3,stroke:#27ae60
+    classDef hard fill:#f9d6d6,stroke:#c0392b
+
+    CK[Checkpoint]
+    CK --> B1[Branch A: conversation]
+    CK --> B2[Branch B: conversation]
+    CK --> W[Workspace / sandbox state]
+    W --> C{Shared or cloned?}
+    C -->|shared| RACE[Branches interfere]
+    C -->|cloned| COST[Clone cost per fork]
+
+    class B1,B2 easy
+    class RACE,COST hard
+```
+
+As @fig-memory-branching shows, the choice collapses to a dilemma: forks that
+*share* the workspace race on it, branch A's writes are visible to branch B,
+and forks that *clone* it pay the clone cost. Three failure modes follow. A
+branch cannot fork the external systems it touches, git remotes, issue
+trackers, MCP cursors, so branchable and unbranchable state drift apart.
+Merge-back is structurally unsolved: files have a common ancestor at the
+checkpoint, so a three-way merge applies, but two divergent conversations have
+no merge base because the content is a reasoning trajectory, not editable
+lines, which is why the *agent*, not the harness, has to resolve a file merge.
+And orphan branches pin workspace and session-log resources until a TTL
+reclaims them, so without one the leak accumulates silently. Rewind alone
+suffices for interactive coding; forkable trees pay off when users explore
+alternatives in parallel or an evaluation pipeline replays a session with a
+changed prompt.
+
+::: {.callout-tip}
+## Constraint arrow
+Whether branching and snapshotting are cheap or ruinous is decided one layer
+down, by the storage substrate, not by the harness. A PVC has no native
+cheap-clone primitive, so a fork on PVC must copy the whole workspace.
+Copy-on-write overlays and content-addressed snapshots duplicate only the
+divergent blocks, so a fork costs what diverged. Firecracker snapshots
+serialize an entire microVM and restore in tens to hundreds of milliseconds
+[@aws2025firecracker], which makes per-fork snapshotting affordable that would
+be ruinous on a PVC. The clone cost is bounded by the substrate, not by the
+harness, so the session-tree feature in the layer above is enabled or priced
+out by a storage choice made below it.
+:::
+
+## Long-term memory: useful because retrievable, dangerous for the same reason
+
+A session is bounded by context compaction (@sec-structured-long-context): the
+context window fills, gets summarized, and the early turns fall out of the
+model's reach. An agent that is supposed to know a user across weeks therefore
+cannot rely on the context window alone. It needs a separate store, durable and
+queryable, that the harness loads into context on demand. That store is memory,
+and it is a different system from the session log: the log is append-only
+intent, memory is curated and retrievable.
+
 ### The shape of memory
 
-Memory is the store that outlives a session, and it has a structure worth
-naming. Short-term memory is the session context within one conversation.
-Long-term memory splits into episodic (past interactions), semantic (facts
-about the user or domain), and procedural (learned workflows). External
-knowledge, the corpora behind retrieval-augmented generation
-(@sec-rag-retrieval) and knowledge graphs, sits alongside but is a different
-thing: memory is per-user, curated, and writable, where RAG retrieves from a
-shared corpus the agent does not own.
+Memory has a structure worth naming. Short-term memory is the session context
+within one conversation. Long-term memory splits into episodic (past
+interactions), semantic (facts about the user or domain), and procedural
+(learned workflows). External knowledge, the corpora behind
+retrieval-augmented generation (@sec-rag-retrieval) and knowledge graphs, sits
+alongside but is a different thing: memory is per-user, curated, and writable,
+where RAG retrieves from a shared corpus the agent does not own.
 
 ```{mermaid}
 %%| label: fig-memory-taxonomy
@@ -197,139 +306,61 @@ graph TB
 ```
 
 The base layer is a vector store plus embedding retrieval: text is embedded,
-stored, and recalled by similarity. Pinecone [27], pgvector [28], and Chroma
-[29] are representative substrates. Above them sit opinionated memory
-frameworks, Letta [30] (the successor to MemGPT [31]), Zep [32], and Mem0 [33],
-that decide what to write, when, and how to compact it. Knowledge graphs model
-entities and relationships explicitly, which suits compositional queries but is
-harder to populate automatically, and a temporal knowledge graph adds the time
-dimension so a fact can be valid for a period and then superseded.
+stored, and recalled by similarity. Pinecone [@pinecone2025managed], pgvector
+[@pgvector2025vector], and Chroma [@chroma2025embedding] are representative
+substrates. Above them sit opinionated memory frameworks, Letta
+[@letta2025stateful] (the successor to MemGPT [@packer2023memgpt]), Zep
+[@zep2025temporal], and Mem0 [@mem02025memory], that decide what to write, when,
+and how to compact it. Knowledge graphs model entities and relationships
+explicitly, which suits compositional queries but is harder to populate
+automatically, and a temporal knowledge graph adds the time dimension so a fact
+can be valid for a period and then superseded.
 
-## Evolution
-
-Each of the three stores reached its current shape by the same route: a simple
-model met a failure it could not represent, and the next model added exactly
-the missing record.
-
-Durable execution is the clearest case. The plain event log gave clean replay
-but blurred intent and result. Durable-execution frameworks, Restate [2],
-Temporal [3], and Inngest [4], journal each step, run the effect, then record
-its outcome, formalizing the distinction the event log blurs. Temporal's own
-framing is that probabilistic LLM behavior makes naive retry logic
-insufficient, which is exactly the case durable journaling is built for [5]. By
-2025 this crossed into the mainstream: AWS Durable Functions, Cloudflare
-Workflows, and Vercel's Workflow DevKit all shipped with AI-agent use cases as
-primary framing [4]. The pattern is no longer framework-specific.
-
-Session structure evolved in parallel. A linear append-only log treats a
-session as a list, and to back out you start over. Production harnesses moved
-past that. Rewind and truncate jump back to a checkpoint and discard the tail,
-rolling the workspace back to match, as in Claude Code's `/rewind` [13] and
-Cursor's per-edit checkpoints [14]. A forkable tree goes further: multiple live
-branches from any checkpoint, all preserved. LangGraph's time-travel model
-treats checkpoints as a DAG with explicit branch IDs [16], Claude Code's
-`/fork` spawns a child session from a shared history point [13], and Replit
-Agent [15] and OpenAI's Codex CLI [17] ship their own variants. The session
-stopped being a list and became a tree, or at least a log with a movable head.
-
-Memory followed the same arc from a research artifact to a product category.
-MemGPT [31] framed the LLM as an operating system that pages memory in and out
-of a bounded context, and its successor Letta [30] turned that into a hosted
-primitive. Zep [32] built memory on a temporal knowledge graph, and Mem0 [33]
-optimized for low latency and token cost. The category is young enough that its
-benchmarks are still contested, which is the next box.
+The category arrived the way the other two stores did, by a research artifact
+hardening into a product. MemGPT [@packer2023memgpt] framed the LLM as an
+operating system that pages memory in and out of a bounded context, and its
+successor Letta [@letta2025stateful] turned that into a hosted primitive. Zep
+[@zep2025temporal] built memory on a temporal knowledge graph, and Mem0
+[@mem02025memory] optimized for low latency and token cost. The category is
+young enough that its benchmarks are still contested.
 
 ::: {.callout-important}
 ## What's contested
 Cross-vendor memory benchmarks are not yet trustworthy. Mem0 reports a 26
-percent LLM-as-Judge gain over OpenAI memory on LOCOMO [34] with large latency
-and token-cost reductions [33]. Letta's counter-benchmark reports a higher
-LoCoMo score with disputed methodology [35]. Zep reports its temporal knowledge
-graph leading on a different benchmark [32]. The vendors agree on neither the
-metric, the dataset split, nor the baseline, so treat any cross-vendor memory
-benchmark as contested until it is independently reproduced. The useful signal
-is the shape of the trade, recall quality against latency and token cost, not
-the headline number.
+percent LLM-as-Judge gain over OpenAI memory on LOCOMO [@snap2024locomo] with
+large latency and token-cost reductions [@mem02025memory]. Letta's
+counter-benchmark reports a higher LoCoMo score with disputed methodology
+[@letta2025benchmarking]. Zep reports its temporal knowledge graph leading on a
+different benchmark [@zep2025temporal]. The vendors agree on neither the metric,
+the dataset split, nor the baseline, so treat any cross-vendor memory benchmark
+as contested until it is independently reproduced. The useful signal is the
+shape of the trade, recall quality against latency and token cost, not the
+headline number.
 :::
 
-## Trade-offs
+### What memory refuses to guarantee
 
-Each store buys its guarantee with a specific sacrifice, and naming the knee
-matters more than the mechanism.
+Memory trades cost against simplicity, and write-time safety against read-time
+convenience. Memory must be either loaded ambiently into every prompt (simple,
+expensive) or exposed as a tool the agent queries on demand (cheaper, scales
+better, but the agent has to know when to ask). Changing the embedding model
+invalidates the existing index and forces an expensive reindex, so the
+embedding choice is a long-term commitment.
 
-**Workspace persistence is partial durability, not full recovery.** The
-workspace, the sandbox's mutable filesystem, outlives individual tool calls but
-is not on the durable log, and persisting it across pod lifecycle events has
-its own failure modes. The common Kubernetes pattern mounts a
-PersistentVolumeClaim at `/workspace`; the dominant failure is zone scoping. A
-ReadWriteOnce PVC is backed by a zonal block device that is physically
-attachable only within its own availability zone, so when a pod reschedules
-across zones the volume cannot follow and recovery falls back to a full
-re-bootstrap [7] [8]. When a pod is deliberately destroyed (teardown, timeout,
-scale-down) the PVC is often deleted with it, and uncommitted work is gone:
-Gitpod issue #9544 is the archetype, a workspace timeout fired before the final
-sync completed and a user lost roughly two hours of work [9]. The alternative,
-checkpointing the complete state on a cadence, trades snapshot frequency
-directly against storage overhead, and the frequency knob is load-bearing
-because it sets the maximum work a crash can erase. Replit's snapshot engine
-captures filesystem and conversation context together and reports recovering
-from hourly OOM crashes without data loss [11] [12]. Any design that claims
-"sessions survive indefinitely" owes an explicit account of which failure modes
-it covers and which it does not.
-
-**Branching splits cheaply on conversation and expensively on the workspace.**
-Branching conversation state is a pointer operation: the log is a tree of event
-IDs and forking a tree is cheap. Branching the *workspace* is not, because the
-workspace is a real filesystem and two branches cannot both own it.
-
-```{mermaid}
-%%| label: fig-memory-branching
-%%| fig-cap: "Forking conversation state is a cheap pointer operation, while the shared workspace forces a choice between interfering branches and per-fork clone cost."
-graph LR
-    classDef easy fill:#d5f5e3,stroke:#27ae60
-    classDef hard fill:#f9d6d6,stroke:#c0392b
-
-    CK[Checkpoint]
-    CK --> B1[Branch A: conversation]
-    CK --> B2[Branch B: conversation]
-    CK --> W[Workspace / sandbox state]
-    W --> C{Shared or cloned?}
-    C -->|shared| RACE[Branches interfere]
-    C -->|cloned| COST[Clone cost per fork]
-
-    class B1,B2 easy
-    class RACE,COST hard
-```
-
-As @fig-memory-branching shows, the choice collapses to a dilemma: forks that *share* the workspace race on it,
-branch A's writes are visible to branch B, and forks that *clone* it pay the
-clone cost. Three failure modes follow. A branch cannot fork the external
-systems it touches, git remotes, issue trackers, MCP cursors, so branchable and
-unbranchable state drift apart. Merge-back is structurally unsolved: files have
-a common ancestor at the checkpoint, so a three-way merge applies, but two
-divergent conversations have no merge base because the content is a reasoning
-trajectory, not editable lines, which is why the *agent*, not the harness, has
-to resolve a file merge. And orphan branches pin workspace and session-log
-resources until a TTL reclaims them, so without one the leak accumulates
-silently. Rewind alone suffices for interactive coding; forkable trees pay off
-when users explore alternatives in parallel or an evaluation pipeline replays a
-session with a changed prompt.
-
-**Memory trades cost against simplicity, and write-time safety against
-read-time convenience.** Memory must be either loaded ambiently into every
-prompt (simple, expensive) or exposed as a tool the agent queries on demand
-(cheaper, scales better, but the agent has to know when to ask). Changing the
-embedding model invalidates the existing index and forces an expensive
-reindex, so the embedding choice is a long-term commitment. The sharpest
-trade is tenancy. A top-k similarity query against a shared vector store
-without an enforced tenant filter can return another tenant's data, and the
-defense has to live in the index, not in application code. Partition at write
-time, per-tenant namespaces, pgvector row-level security or separate schemas,
-so a query physically cannot reach another tenant's vectors. Attributing every
-chunk and filtering after the query is weaker, because filter-at-read-time is
-one bug away from a leak, whereas partition-at-write-time fails closed. This is
-where memory consumes the identity model directly (@sec-security-authorization):
-tenancy is sourced from identity, and partitioning enforces it.
+The sharpest trade is tenancy, and it is what makes a shared vector store a
+data-breach risk rather than a relevance bug. The same property that makes
+memory useful, that retrieved content lands directly in the model's context,
+makes it dangerous, because that content is indistinguishable from instructions
+the user or harness put there. A top-k similarity query against a shared vector
+store without an enforced tenant filter can return another tenant's data, and
+the defense has to live in the index, not in application code. Partition at
+write time, per-tenant namespaces, pgvector row-level security or separate
+schemas, so a query physically cannot reach another tenant's vectors.
+Attributing every chunk and filtering after the query is weaker, because
+filter-at-read-time is one bug away from a leak, whereas partition-at-write-time
+fails closed. This is where memory consumes the identity model directly
+(@sec-security-authorization): tenancy is sourced from identity, and
+partitioning enforces it.
 
 A second tenancy risk is specific to memory and has no analogue in the session
 log: because the agent writes memory based on user messages, a malicious user
@@ -340,36 +371,23 @@ agent's behavior in ways that are hard to debug, because the trace shows
 retrieval *succeeding*: the injected text is not an error, it is a correct
 retrieval of wrong content.
 
-::: {.callout-tip}
-## Constraint arrow
-Whether branching and snapshotting are cheap or ruinous is decided one layer
-down, by the storage substrate, not by the harness. A PVC has no native
-cheap-clone primitive, so a fork on PVC must copy the whole workspace.
-Copy-on-write overlays and content-addressed snapshots duplicate only the
-divergent blocks, so a fork costs what diverged. Firecracker snapshots
-serialize an entire microVM and restore in tens to hundreds of milliseconds
-[22], which makes per-fork snapshotting affordable that would be ruinous on a
-PVC. The clone cost is bounded by the substrate, not by the harness, so the
-session-tree feature in the layer above is enabled or priced out by a storage
-choice made below it.
-:::
+## Two properties to nail down before the first crash
 
-## Implementation
+Both of the following are invisible until exactly the wrong moment, which is
+why they belong in the design and not in the postmortem.
 
-Two properties are worth nailing down before the first crash, because both are
-invisible until exactly the wrong moment.
-
-The first is the **reconciliation gap**. If the sandbox holds mutable state
-outside the durable log, the harness must reconcile the two on recovery. For
-idempotent operations it does not matter; the result is the same whether the
-operation ran once or twice. For non-idempotent ones, append to a file,
-increment a counter, create a commit, call a side-effectful API, the harness
-needs either a step-log boundary or an idempotency key threaded through the
-tool. The journal records the step's intent and its key before the effect
-fires; on replay the harness performs check-then-act against that key, or
-against the external system's own dedup, git's ref state, a payment processor's
-idempotency header, rather than blindly re-issuing. The step log does not make
-external effects idempotent on its own. It gives you the hook to make them so.
+The first is the **reconciliation gap**, the operational form of the opening
+crash. If the sandbox holds mutable state outside the durable log, the harness
+must reconcile the two on recovery. For idempotent operations it does not
+matter; the result is the same whether the operation ran once or twice. For
+non-idempotent ones, append to a file, increment a counter, create a commit,
+call a side-effectful API, the harness needs either a step-log boundary or an
+idempotency key threaded through the tool. The journal records the step's
+intent and its key before the effect fires; on replay the harness performs
+check-then-act against that key, or against the external system's own dedup,
+git's ref state, a payment processor's idempotency header, rather than blindly
+re-issuing. The step log does not make external effects idempotent on its own.
+It gives you the hook to make them so.
 
 ```python
 # Idempotency-keyed step, conceptual sketch.
@@ -393,13 +411,14 @@ the memory-specific obligation is to keep every record attributable to a tenant
 and erasable by tenant.
 
 For the memory store itself, the base implementation is a vector index
-(pgvector [28] inside an existing Postgres is the low-operational-overhead
-default; Pinecone [27] or Chroma [29] when a dedicated store is warranted),
-wrapped either by a framework (Letta [30], Zep [32], Mem0 [33]) that manages
-write and compaction policy, or by a thin custom layer when the policy is
-simple enough to own. The harness (@sec-the-harness) is what loads the result
-into context, ambiently or through a retrieval tool, closing the loop back to
-the session that the memory outlived.
+(pgvector [@pgvector2025vector] inside an existing Postgres is the
+low-operational-overhead default; Pinecone [@pinecone2025managed] or Chroma
+[@chroma2025embedding] when a dedicated store is warranted), wrapped either by a
+framework (Letta [@letta2025stateful], Zep [@zep2025temporal], Mem0
+[@mem02025memory]) that manages write and compaction policy, or by a thin custom
+layer when the policy is simple enough to own. The harness (@sec-the-harness) is
+what loads the result into context, ambiently or through a retrieval tool,
+closing the loop back to the session that the memory outlived.
 
 ## Further reading
 

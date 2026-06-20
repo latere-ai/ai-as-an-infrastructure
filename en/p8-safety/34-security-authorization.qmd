@@ -7,30 +7,35 @@ broad token plus a prompt injection equals a breach, how identity and
 governance split the work of bounding authority, and why budget and audit
 are downstream of a verified principal rather than systems of their own.
 
-## Problem
+## The breach that names the problem
 
-The agent's whole purpose is to take actions: read a repository, send an
-email, query a warehouse, call a model. Each action needs authority, and the
+In May 2025, Invariant Labs disclosed a clean way to turn a reasonable
+configuration into a cross-repository data leak [@invariantlabs2025github].
+The GitHub MCP integration followed a common pattern: one personal access
+token, broad enough to span a user's repositories, reused for the life of a
+session. An attacker planted instructions in a public issue. When the agent
+read that issue, it followed the planted instructions, and because the single
+token already covered the user's private repositories, the agent used it to
+exfiltrate their contents. The failure was not a leaked secret. It was a
+correctly held secret that was too broad and too durable.
+
+That sentence is the whole chapter in miniature, so it is worth taking apart.
+An agent's purpose is to take actions: read a repository, send an email,
+query a warehouse, call a model. Each action needs authority, and the
 tempting default is to authorize the agent once with a broad credential and
-let it reuse that credential for the session's life. This is where the
-trouble starts. A standing grant is reachable by anything that can reach the
-agent, and an agent's input channel is open by construction: it reads
-untrusted content. An attacker who plants instructions in a web page, a
-file, or a tool's output (indirect prompt injection, of which tool poisoning
-is one variant) can steer the agent into using that grant. The token does
-not know whether the agent decided to act or was tricked into it.
+let it reuse that credential for the session's life. The trouble is that a
+standing grant is reachable by anything that can reach the agent, and an
+agent's input channel is open by construction: it reads untrusted content. An
+attacker who plants instructions in a web page, a file, or a tool's output
+(indirect prompt injection, of which tool poisoning is one variant) can steer
+the agent into using that grant. The token does not know whether the agent
+decided to act or was tricked into it.
 
 So the attack surface is the scope list. Authority that is broad and
 long-lived turns a single injected instruction into the union of everything
-the credential permits. The Invariant Labs disclosure of the GitHub MCP
-"one-PAT-for-all-repos" pattern is the clean demonstration: a reasonable
-personal access token, broad enough to span repositories, became a
-cross-repository exfiltration primitive once an injected instruction reached
-the repositories the same token covered. The failure was not a leaked
-secret. It was a correctly held secret that was too broad and too durable.
-
-The shape of the breach is that one injected instruction inherits the full
-union of what the standing token permits (@fig-security-ambient-fanout).
+the credential permits (@fig-security-ambient-fanout). The blast radius is
+not the one repository the attacker reached. It is every repository the same
+token covered.
 
 ```{dot}
 //| label: fig-security-ambient-fanout
@@ -56,31 +61,38 @@ digraph fanout {
 }
 ```
 
-Three further problems compound the first. The agent runs on shared
-infrastructure, so the platform must know which tenant an action belongs to,
-or a retrieval query silently returns one tenant's data into another's
-session. Provider keys and OAuth tokens that pay for and authorize the work
-must not be reachable by the generated code that might leak them. And when a
-human withdraws consent, the authority already issued must actually stop,
-not merely be flagged.
+The GitHub case is one shape of a more general failure, and three further
+problems compound it. The agent runs on shared infrastructure, so the
+platform must know which tenant an action belongs to, or a retrieval query
+silently returns one tenant's data into another's session. Provider keys and
+OAuth tokens that pay for and authorize the work must not be reachable by the
+generated code that might leak them. And when a human withdraws consent, the
+authority already issued must actually stop, not merely be flagged. Each of
+these is the same question asked of a different resource: how much authority
+travels, and for how long.
 
-## Design
+## Two fabrics, one verb
 
-The design answer is to make authority a first-class, narrow, short-lived,
-attributed thing, owned by two cooperating fabrics that split one verb.
+The answer is to make authority a first-class, narrow, short-lived,
+attributed thing. In a mature platform that thing is owned by two cooperating
+fabrics that split a single verb: governance *declares* what an agent may
+attempt, and identity *enforces* it on the wire. Before reaching that seam,
+both fabrics consume the same primitive.
 
-**The principal tuple.** Every operation resolves its caller into
-`(user_id, tenant_id, agent_id, workload_id, scopes, attributes)` and
-answers one question: may this principal take this action on this resource?
-That tuple is what every other system consumes. Persistence stamps it on a
-session, the cost pipeline bills against it, the audit log attributes to it.
-An audit entry that records "session X did Y" without the verified tuple
-cannot answer the only questions an investigation asks, which are who and for
-which tenant.
+### The principal tuple
 
-**Three identities, not a hierarchy.** The harness reconciles three
-principals on every call, and they are orthogonal axes that cannot be
-collapsed (@fig-security-three-identities).
+Every operation resolves its caller into
+`(user_id, tenant_id, agent_id, workload_id, scopes, attributes)` and answers
+one question: may this principal take this action on this resource? That tuple
+is what every other system consumes. Persistence stamps it on a session, the
+cost pipeline bills against it, the audit log attributes to it. An audit entry
+that records "session X did Y" without the verified tuple cannot answer the
+only questions an investigation asks, which are who and for which tenant.
+
+### Three identities, not a hierarchy
+
+The harness reconciles three principals on every call, and they are
+orthogonal axes that cannot be collapsed (@fig-security-three-identities).
 
 ```{mermaid}
 %%| label: fig-security-three-identities
@@ -103,18 +115,19 @@ cannot: is this a legitimate harness replica, or something else in the
 cluster that obtained a token? Each identity closes an attack the others
 leave open, and each carries an attribution the others cannot.
 
-**Declares versus enforces.** Two fabrics split the work of bounding
-authority, and the seam between them is the load-bearing idea of the
-chapter. Governance *declares* an attenuation: this agent may only read, only
-this repository, only under a spending ceiling. Identity *enforces* it, by
-minting a token scoped to exactly that and refusing to mint anything broader.
-Capability attenuation is governance's vocabulary; token scoping is
-identity's mechanism for making it true on the wire. The cleanest test for
-which fabric owns a concern: if revoking it changes who can reach a resource,
-it is identity; if revoking it changes what an authorized principal is
-permitted to attempt, it is governance. A token's `scope` claim sits on the
-seam precisely because identity writes it to encode what governance decided
-(@fig-security-declares-enforces).
+### Declares versus enforces
+
+Two fabrics split the work of bounding authority, and the seam between them is
+the load-bearing idea of the chapter. Governance *declares* an attenuation:
+this agent may only read, only this repository, only under a spending ceiling.
+Identity *enforces* it, by minting a token scoped to exactly that and refusing
+to mint anything broader. Capability attenuation is governance's vocabulary;
+token scoping is identity's mechanism for making it true on the wire. The
+cleanest test for which fabric owns a concern: if revoking it changes who can
+reach a resource, it is identity; if revoking it changes what an authorized
+principal is permitted to attempt, it is governance. A token's `scope` claim
+sits on the seam precisely because identity writes it to encode what
+governance decided (@fig-security-declares-enforces).
 
 ```{mermaid}
 %%| label: fig-security-declares-enforces
@@ -141,57 +154,63 @@ Governance treats the agent as a *document*, not a running process: a named,
 owner-signed, versioned record of its prompt, its tool grants, its model
 binding, its budget, and its approval steps. The document is the thing that
 answers "what was this agent allowed to do at the moment it acted," because
-the allowance is the document at a point in version control. The
-load-bearing invariant on delegation is $C_{child} \subseteq C_{parent}$:
-authority can only ever shrink as work is handed down a chain, never grow.
+the allowance is the document at a point in version control. The load-bearing
+invariant on delegation is $C_{child} \subseteq C_{parent}$: authority can
+only ever shrink as work is handed down a chain, never grow.
 
-**Credential custody.** The provider key and the OAuth token live in the
-fabric, never in the agent's environment, config, logs, or command history.
-The agent receives a scoped, short-lived handle that the fabric exchanges for
-the real credential at call time. This is the same secret-reachability
-discipline that the harness applies at the sandbox boundary
-(@sec-the-harness): generated code must not read high-value secrets. It
-matters most for provider keys because their blast radius is unattributed
-spend on someone else's models, discovered on the invoice.
+### Credential custody
 
-**Tenancy as the coarsest ownership axis.** Every resource carries a tenant
-attribute or is silently trapped in one tenant. Isolation then lives on a
-spectrum whose defining property is blast radius on a bug, and the choice is
-made per resource class rather than platform-wide, because blast radius is
-not uniform: a leaked audit row is a confidentiality incident, but a leaked
-cross-tenant memory retrieval is an active data breach that surfaces one
-tenant's content inside another's live session (@sec-memory-systems,
-@sec-rag-retrieval).
+The provider key and the OAuth token live in the fabric, never in the agent's
+environment, config, logs, or command history. The agent receives a scoped,
+short-lived handle that the fabric exchanges for the real credential at call
+time. This is the same secret-reachability discipline that the harness
+applies at the sandbox boundary (@sec-the-harness): generated code must not
+read high-value secrets. It matters most for provider keys because their
+blast radius is unattributed spend on someone else's models, discovered on
+the invoice.
 
-## Evolution
+### Tenancy as the coarsest ownership axis
+
+Every resource carries a tenant attribute or is silently trapped in one
+tenant. Isolation then lives on a spectrum whose defining property is blast
+radius on a bug, and the choice is made per resource class rather than
+platform-wide, because blast radius is not uniform: a leaked audit row is a
+confidentiality incident, but a leaked cross-tenant memory retrieval is an
+active data breach that surfaces one tenant's content inside another's live
+session (@sec-memory-systems, @sec-rag-retrieval).
+
+## From broad to ephemeral
 
 The packaging of authority for a call has moved steadily from broad and
 durable toward narrow and ephemeral, driven by each incident that the prior
-shape made possible.
+shape made possible. The GitHub breach sits at the start of that arc, not the
+end: it is what the oldest packaging looks like when an agent reads untrusted
+input.
 
 **Broad bearer tokens** were the default because they are one consent dialog
-and one credential. Their cost is temporal: a broad token is a standing
-grant reachable by anything that can reach the agent. GitHub's fine-grained
-personal access tokens and Google's narrowed consent screens exist to
-claw back from this pattern.
+and one credential. Their cost is temporal: a broad token is a standing grant
+reachable by anything that can reach the agent. GitHub's fine-grained personal
+access tokens and Google's narrowed consent screens exist to claw back from
+this pattern.
 
 **Short-lived capability tokens** invert the standing grant: each tool call
 mints a token carrying exactly the permissions that call needs, with a TTL in
 minutes, so the window in which a leaked or injected call can do damage
-shrinks from a session to a single operation. Macaroons (2014) and
-Biscuit are the formal grounding: tokens a holder can *attenuate*,
-adding caveats that only further restrict, never widen, so a service hands a
-strictly weaker token to the next hop without calling back to the issuer.
-This is the object-capability discipline, and it is exactly
-$C_{child} \subseteq C_{parent}$ expressed at the token layer.
+shrinks from a session to a single operation. Macaroons (2014) and Biscuit
+are the formal grounding: tokens a holder can *attenuate*, adding caveats that
+only further restrict, never widen, so a service hands a strictly weaker token
+to the next hop without calling back to the issuer
+[@birgisson2014macaroons]. This is the object-capability discipline, and it
+is exactly $C_{child} \subseteq C_{parent}$ expressed at the token layer.
 
 **On-behalf-of (OBO)** propagates the user's authority end to end instead of
 replacing it with the agent's, so a warehouse's row-level security sees the
-human, not the service account. RFC 8693 formalizes the token exchange;
-the agent-specific standards-track answer is IETF
-draft-oauth-ai-agents-on-behalf-of-user-00, which encodes user plus
-agent plus client identity in one delegated token. Okta for AI Agents
-and Auth0's agent-identity work ship this as product rather than draft.
+human, not the service account. RFC 8693 formalizes the token exchange
+[@jones2020rfc8693]; the agent-specific standards-track answer is IETF
+draft-oauth-ai-agents-on-behalf-of-user-00, which encodes user plus agent plus
+client identity in one delegated token [@oauth2025agents]. Okta for AI Agents
+[@okta2025agents] and Auth0's agent-identity work [@auth02026identity] ship
+this as product rather than draft.
 
 **Workload identity** (SPIFFE/SPIRE) lets the pod prove what it is
 cryptographically, with no shared secret to leak. It is what lets the token
@@ -199,47 +218,48 @@ broker refuse to mint a user token for a process that merely sits in the
 cluster, and it is standard for anything multi-replica.
 
 The selection rule that this history settles into: broad scopes are
-defensible only for single-user, low-privilege deployments; capability
-tokens earn their plumbing when actions are high-privilege or irreversible;
-OBO is load-bearing whenever downstream authorization is user-dependent;
-SPIFFE is standard for anything multi-replica.
+defensible only for single-user, low-privilege deployments; capability tokens
+earn their plumbing when actions are high-privilege or irreversible; OBO is
+load-bearing whenever downstream authorization is user-dependent; SPIFFE is
+standard for anything multi-replica.
 
 ::: {.callout-important}
 ## What's contested
 Whether governance is a primitive distinct from identity is genuinely
-unsettled. The skeptical position is that identity already issues
-attenuable, scoped, delegatable tokens (Macaroons, Biscuit, OBO, the
-`agent_id` in its tuple), so there is nothing left for a separate fabric to
-own. The separation argument answers with a question identity cannot answer
-alone: what was this agent allowed to do at the moment it acted? The answer
-is not a token scope; it is a prompt, a tool list, a budget, and a set of
-approval steps, the agent's versioned document, which identity never held.
-The honest counterweight is that the market is thin: there is no mature,
-vendor-neutral "governance fabric" category the way there is for identity
-(Okta, Auth0, SPIFFE) or sandboxes. A thin market is what an under-served
-primitive looks like before it is named, but it is also what a non-primitive
-looks like, and that is why the question stays open.
+unsettled. The skeptical position is that identity already issues attenuable,
+scoped, delegatable tokens (Macaroons, Biscuit, OBO, the `agent_id` in its
+tuple), so there is nothing left for a separate fabric to own. The separation
+argument answers with a question identity cannot answer alone: what was this
+agent allowed to do at the moment it acted? The answer is not a token scope;
+it is a prompt, a tool list, a budget, and a set of approval steps, the
+agent's versioned document, which identity never held. The honest
+counterweight is that the market is thin: there is no mature, vendor-neutral
+"governance fabric" category the way there is for identity (Okta, Auth0,
+SPIFFE) or sandboxes. A thin market is what an under-served primitive looks
+like before it is named, but it is also what a non-primitive looks like, and
+that is why the question stays open.
 :::
 
-## Trade-offs
+## Where it bites
 
 Every choice in this chapter prices one good against another, and the knees
-are sharp.
+are sharp. Five trade-offs recur, and each one is a place where a defensible
+decision has a sharp downside that the alternative does not.
 
 - **Isolation granularity versus sharing flexibility.** Flat-user tenancy is
   trivially isolated and cannot share. A three-level org-project hierarchy is
   legible by inspection but calcifies the moment the real org is a matrix
   rather than a tree. Attribute-based access fits any topology but makes "who
   can see what?" undecidable by reading the data, which breaks offline audit
-  and erasure traversals. Pick the simplest shape that fits the org and
-  leaves the ownership graph walkable.
+  and erasure traversals. Pick the simplest shape that fits the org and leaves
+  the ownership graph walkable.
 - **Revocation latency versus long TTL.** Revocation latency is unavoidable
   with bearer tokens: a user withdrawing consent does not reach into
   already-issued tokens, so the session runs on revoked authority until the
   token expires. The TTL is therefore the ceiling on how long a revoked grant
   stays exploitable. Long-TTL tokens and a right to immediate revocation are
-  mutually exclusive, and the more sensitive the tenant, the shorter the
-  token must live.
+  mutually exclusive, and the more sensitive the tenant, the shorter the token
+  must live.
 - **Partition-at-write versus filter-at-read.** A `tenant_id` filter applied
   at read time is one missing `WHERE` clause from a leak; an index that is
   physically per-tenant cannot leak even if the query is wrong. Filtering is
@@ -257,33 +277,34 @@ are sharp.
 
 ::: {.callout-tip}
 ## Constraint arrow
-Budget enforcement is dictated by identity, not by the cost system. A cap
-that says "this tenant may spend five thousand dollars a month" is
-meaningless unless every model call carries a *verified* tenant at the moment
-of the call, before the spend happens (@sec-economics). The runaway-spend
-incidents, the \$47,000 agent loop and the Claude Code recursion that
-burned 1.67 billion tokens in five hours, are not purely cost-system
-failures. Budgets existed in both; they fired on spend the system could
-attribute only after the money was gone. Per-tenant enforcement is downstream
-of a verified principal because attribution has to precede the call, and a
-cost cap can only be as precise as the identity handed to it.
+Budget enforcement is dictated by identity, not by the cost system. A cap that
+says "this tenant may spend five thousand dollars a month" is meaningless
+unless every model call carries a *verified* tenant at the moment of the call,
+before the spend happens (@sec-economics). The runaway-spend incidents, the
+\$47,000 agent loop [@waxell2025loop] and the Claude Code recursion that
+burned 1.67 billion tokens in five hours [@claudecode2025tokens], are not
+purely cost-system failures. Budgets existed in both; they fired on spend the
+system could attribute only after the money was gone. Per-tenant enforcement
+is downstream of a verified principal because attribution has to precede the
+call, and a cost cap can only be as precise as the identity handed to it.
 :::
 
-## Implementation
+### The component that answers the verb
 
 The component that actually answers "may this caller take this action on this
 resource?" is a policy engine, and it is the most visible artifact of the
-fabric. OPA / Rego is Kubernetes-native and data-driven, with a real
-learning curve. AWS Cedar is typed and analyzable, so you can ask formal
-questions of a policy ("can any principal ever reach this resource?") rather
-than only testing it. Oso is authorization as a library with a
-relationship model; Permit.io composes these backends behind one API. A
-production system runs two policy surfaces and should keep them separate: the
-resource-access policy that identity owns ("can this identity read this
-resource?") and the action-risk policy that governance owns ("may this agent
-send this email?"), because they change for different reasons and on
-different cadences, and the latter is where human approval is placed
-(@sec-oversight-control).
+fabric. OPA / Rego is Kubernetes-native and data-driven, with a real learning
+curve. AWS Cedar is typed and analyzable, so you can ask formal questions of a
+policy ("can any principal ever reach this resource?") rather than only
+testing it. Oso is authorization as a library with a relationship model;
+Permit.io composes these backends behind one API. A production system runs two
+policy surfaces and should keep them separate: the resource-access policy that
+identity owns ("can this identity read this resource?") and the action-risk
+policy that governance owns ("may this agent send this email?"), because they
+change for different reasons and on different cadences, and the latter is
+where human approval is placed (@sec-oversight-control).
+
+### The isolation tiers
 
 The isolation tiers, chosen per resource class:
 
@@ -293,57 +314,52 @@ The isolation tiers, chosen per resource class:
 | Namespace | Separate schemas or namespaces per tenant | Misrouted query hits one wrong tenant | Most B2B SaaS |
 | Physical | Separate DBs, clusters, or accounts per tenant | Bug stays inside one tenant | Regulated, large enterprise, sovereign cloud |
 
-A mature platform mixes tiers deliberately: sessions logically partitioned
-for cost, high-sensitivity memory physically isolated, audit as a shared
-physical store with tenant-tagged rows. The trap that runs underneath all of
-it is implicit tenancy from request headers: if `tenant_id` is read from an
-HTTP header with no cryptographic binding (a JWT claim, an mTLS client cert),
-a single spoofed header bypasses the most carefully chosen physical tier at
-the front door.
+A mature platform mixes tiers deliberately: sessions logically partitioned for
+cost, high-sensitivity memory physically isolated, audit as a shared physical
+store with tenant-tagged rows. The trap that runs underneath all of it is
+implicit tenancy from request headers: if `tenant_id` is read from an HTTP
+header with no cryptographic binding (a JWT claim, an mTLS client cert), a
+single spoofed header bypasses the most carefully chosen physical tier at the
+front door.
+
+### Closing the loop
 
 Two operational patterns close the loop. Budget enforcement must be
 synchronous with the call, living in the model-access fabric or the gateway,
 the only points with both per-call context and the authority to refuse; a
-budget enforced by the billing system is an alert, not enforcement, because
-it fires after the spend. Right-to-erasure, in tension with audit's demand
-that the record persist, is resolved by tombstone-plus-proof: purge the
-payload, keep the tamper-evident chain intact, and prove the deletion rather
-than silently dropping a row.
+budget enforced by the billing system is an alert, not enforcement, because it
+fires after the spend. Right-to-erasure, in tension with audit's demand that
+the record persist, is resolved by tombstone-plus-proof: purge the payload,
+keep the tamper-evident chain intact, and prove the deletion rather than
+silently dropping a row.
 
 The recurring failure modes are all identity edges drawn imprecisely. Ambient
 authority is the GitHub MCP shape: one long-lived token, every call, prompt
 injection triggers anything it permits. Agent-to-agent delegation that
 forwards the user's token hands the next agent the user's full authority with
 none of the user's intent attached; the correct shape is a delegated,
-attenuated token that names the chain and narrows scope at each hop
-(@sec-multi-agent-systems). Cross-tenant retrieval bleed-over is the
-highest-risk class, mitigated by partition-at-write over filter-at-read.
-Silent tenant coupling, where a resource inherits tenancy implicitly at
-creation, becomes unshareable and un-re-parentable without a migration that
-implicit tenancy is exactly unable to express.
+attenuated token that names the chain and narrows scope at each hop, and
+botched delegation is a leading cause of multi-agent failure
+[@cemri2025multiagent] (@sec-multi-agent-systems). Cross-tenant retrieval
+bleed-over is the highest-risk class, mitigated by partition-at-write over
+filter-at-read. Silent tenant coupling, where a resource inherits tenancy
+implicitly at creation, becomes unshareable and un-re-parentable without a
+migration that implicit tenancy is exactly unable to express.
 
 ## Further reading
 
 - GitHub. "Fine-grained personal access tokens." [GitHub Docs](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
 - C. Brunel et al. "Biscuit: Decentralized Authorization with Attenuable Tokens." [biscuitsec.org](https://www.biscuitsec.org/)
-- A. Birgisson et al. "Macaroons: Cookies with Contextual Caveats for Decentralized Authorization in the Cloud." NDSS 2014. [Google Research](https://research.google/pubs/macaroons-cookies-with-contextual-caveats-for-decentralized-authorization-in-the-cloud/)
-- IETF RFC 8693. "OAuth 2.0 Token Exchange." [RFC Editor](https://datatracker.ietf.org/doc/html/rfc8693)
 - IETF. "OAuth 2.0 On-Behalf-Of User for AI Agents." draft-oauth-ai-agents-on-behalf-of-user-00, 2025. [IETF Datatracker](https://datatracker.ietf.org/doc/html/draft-oauth-ai-agents-on-behalf-of-user-00)
-- Okta. "Okta for AI Agents, Early Access." September 2025. [Okta](https://www.okta.com/blog/ai/okta-ai-agents-early-access-announcement/)
 - SPIFFE/SPIRE. "Secure Production Identity Framework for Everyone." [spiffe.io](https://spiffe.io/)
 - AWS. "IAM Identity Federation and Attribute-Based Access Control." [AWS Docs](https://docs.aws.amazon.com/IAM/latest/UserGuide/introduction_attribute-based-access-control.html)
 - Google Cloud. "IAM Overview, Resource Hierarchy and Conditions." [Google Cloud Docs](https://cloud.google.com/iam/docs/overview)
 - AWS. "Cedar Policy Language." [cedarpolicy.com](https://www.cedarpolicy.com/)
-- DEV Community. "The \$47,000 Agent Loop." 2025. [dev.to](https://dev.to/waxell/the-47000-agent-loop-why-token-budget-alerts-arent-budget-enforcement-389i)
-- anthropics/claude-code. "Massive token consumption: 1.67B tokens in 5 hours." Issue #4095, 2025. [GitHub](https://github.com/anthropics/claude-code/issues/4095)
 - CNCF. "Open Policy Agent (OPA)." [openpolicyagent.org](https://www.openpolicyagent.org/)
 - Oso. "Authorization as a Library, Relationship-Based Access Control." [osohq.com](https://www.osohq.com/)
 - Permit.io. "Authorization-as-a-Service for Fine-Grained Access Control." [permit.io](https://www.permit.io/)
-- Invariant Labs. "GitHub MCP: Ambient Authority and Cross-Repo Token Scope Creep." May 2025. [invariantlabs.ai](https://invariantlabs.ai/blog/mcp-github-vulnerability)
 - Salesforce. "Agentforce Trust Layer and Agent Identity." 2025. [Salesforce](https://www.salesforce.com/agentforce/trust-layer/)
-- Auth0. "Identity for AI Agents." 2026. [Auth0](https://auth0.com/blog/identity-for-ai-agents/)
 - Google, Microsoft et al. "Agent-to-Agent (A2A) Protocol." 2025. [a2aprotocol.org](https://a2aprotocol.org/)
 - Pinecone. "Managed Vector Database for AI." [pinecone.io](https://www.pinecone.io/)
 - pgvector. "Open-source Vector Similarity Search for Postgres." [github.com/pgvector/pgvector](https://github.com/pgvector/pgvector)
 - Anthropic. "Claude Code Plugins and Subagents Reference." [code.claude.com](https://code.claude.com/docs/en/plugins-reference)
-- M. Cemri et al. "Why Do Multi-Agent LLM Systems Fail?" *NeurIPS 2025 Datasets and Benchmarks Track*. [OpenReview](https://openreview.net/forum?id=fAjbYBmonr)

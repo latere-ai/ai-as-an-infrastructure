@@ -10,7 +10,12 @@ shadows the whole approach. By the end a reader can explain why a learned
 reward needs a leash, what that leash is, and why pulling on the reward too
 hard makes the model worse.
 
-## Problem
+The chapter is organized around that single tension. First, why a preference
+signal is the right thing to learn. Then how the reward and its leash are
+built, where the recipe came from, and the precise way the proxy breaks under
+pressure. The balances and the operational reality close it out.
+
+## Why a preference, not a demonstration
 
 SFT optimizes a single demonstrated response per prompt. It cannot express
 that one answer is better than another, only that a given answer is the
@@ -28,13 +33,15 @@ test that passes or a math answer that matches, the machinery is the same but
 the failure modes change, and that work belongs to @sec-training-to-reason.
 Here the reward is learned and therefore wrong somewhere, and the central
 problem is to optimize against a reward you know to be imperfect without the
-policy discovering and exploiting exactly where it is wrong.
+policy discovering and exploiting exactly where it is wrong. The rest of the
+chapter is the machinery that makes optimizing a known-imperfect reward safe
+enough to be useful.
 
-## Design
+## Building the reward
 
 The pipeline has three stages: start from an SFT model, train a reward model
 on human preferences, then reinforce the policy against that reward. The
-InstructGPT paper fixed this recipe as the standard.
+InstructGPT paper fixed this recipe as the standard [@ouyang2022training].
 
 The reward model turns comparisons into a scalar. Take an SFT backbone,
 replace the token-prediction head with a scalar head, and train it so that
@@ -57,6 +64,8 @@ overfits the narrow distribution of responses it was trained to compare. This
 is the most failure-prone artifact in the pipeline, because every later step
 trusts it.
 
+## The leash
+
 Reinforcement learning then optimizes the policy to produce responses the
 reward model scores highly. The objective is not simply to maximize reward.
 A reward model is a proxy, and a policy that maximizes a proxy without
@@ -76,18 +85,18 @@ keeps the policy near the region where the reward model was trained, where
 its scores still mean something, and it preserves the fluency and knowledge
 the policy already had.
 
-PPO is the optimizer that maximizes this objective. It is a policy-gradient
-method with two ideas that make it usable on language models. A clipped
-surrogate objective bounds how far the policy moves in one update, by
-clipping the probability ratio between the new and old policy so a single
-batch cannot push the policy off a cliff. And a value model, a critic, of the
-same backbone estimates the expected reward from each partial generation, so
-the per-token advantage (how much better this token was than the critic
-expected) has lower variance than the raw reward alone. The KL penalty enters
-as a per-token shaping term added to the reward. The result is a four-model
-arrangement held in memory at once: the policy being trained, the frozen
-reference for the KL term, the reward model for the score, and the critic for
-the advantage.
+PPO is the optimizer that maximizes this objective [@schulman2017proximal].
+It is a policy-gradient method with two ideas that make it usable on language
+models. A clipped surrogate objective bounds how far the policy moves in one
+update, by clipping the probability ratio between the new and old policy so a
+single batch cannot push the policy off a cliff. And a value model, a critic,
+of the same backbone estimates the expected reward from each partial
+generation, so the per-token advantage (how much better this token was than
+the critic expected) has lower variance than the raw reward alone. The KL
+penalty enters as a per-token shaping term added to the reward. The result is
+a four-model arrangement held in memory at once: the policy being trained, the
+frozen reference for the KL term, the reward model for the score, and the
+critic for the advantage.
 
 @fig-rlhf-pipeline lays out the three stages and the four resident models in
 the PPO step. The reward model and the reference model are frozen, shown with
@@ -131,34 +140,35 @@ flowchart TB
   class ref,rmscore frozen;
 ```
 
-## Evolution
+## Where the recipe came from
 
 The idea of learning a reward from comparisons predates language models.
 Christiano et al. (2017) trained reward models from human preferences over
 trajectories in control and Atari tasks, establishing that a few thousand
 comparisons could specify a behavior no hand-written reward captured, and
-that optimizing the learned reward with RL could then reach it. The pieces
-were the reward model, the policy optimized against it, and the recognition
-that the reward was a learned proxy.
+that optimizing the learned reward with RL could then reach it
+[@christiano2017deep]. The pieces were the reward model, the policy optimized
+against it, and the recognition that the reward was a learned proxy.
 
 InstructGPT (Ouyang et al., 2022) carried this to language and fixed the
 three-stage recipe that the field still uses: SFT, reward model on human
 rankings, PPO against the reward with a KL penalty to the SFT reference. Its
 result reframed alignment: a 1.3B InstructGPT model was preferred by humans
-over the 175B base GPT-3, which showed that the bottleneck was not capability
-but the elicitation of helpful behavior, and that preference optimization
-was how you elicited it.
+over the 175B base GPT-3 [@ouyang2022training], which showed that the
+bottleneck was not capability but the elicitation of helpful behavior, and
+that preference optimization was how you elicited it.
 
 The cost that InstructGPT exposed was human labeling. Every comparison in the
 reward-model training set is a person reading two responses, which is slow
 and expensive and does not scale to the volume modern alignment wants.
 Constitutional AI (Bai et al., 2022) replaced much of that human labeling
-with an AI one. A model critiques and revises its own responses against a
-written set of principles, a constitution, to build the harmlessness data,
-and an AI model expresses the preferences that train the reward model, a
-recipe named RLAIF, reinforcement learning from AI feedback. The human effort
-moves from labeling thousands of comparisons to writing and auditing a short
-list of principles, which is far cheaper to produce and to inspect.
+with an AI one [@bai2022constitutional]. A model critiques and revises its own
+responses against a written set of principles, a constitution, to build the
+harmlessness data, and an AI model expresses the preferences that train the
+reward model, a recipe named RLAIF, reinforcement learning from AI feedback.
+The human effort moves from labeling thousands of comparisons to writing and
+auditing a short list of principles, which is far cheaper to produce and to
+inspect.
 
 The frontier from here splits. One branch keeps the reward model and the RL
 loop but swaps the human feedback for AI feedback, the RLAIF line above.
@@ -167,6 +177,26 @@ at all, since the same preference data can be optimized more directly. That
 is @sec-dpo-variants. A third reuses the PPO machinery against a reward that
 is checkable rather than learned, which removes the reward model's
 unreliability as the central problem and is @sec-training-to-reason.
+
+## When the proxy breaks
+
+A learned reward is wrong somewhere, and optimization pressure is what finds
+the wrong place. As the policy drifts further from the SFT reference, measured
+by KL, the reward model's score keeps climbing, but true quality follows it
+only up to a knee, then turns down as the policy exploits regions where the
+proxy is wrong [@gao2022scaling]. @fig-rlhf-overoptimization sketches that
+frontier. The KL leash is the control that keeps the policy left of the knee.
+
+```{mermaid}
+%%| label: fig-rlhf-overoptimization
+%%| fig-cap: "Over-optimization of a learned reward. Proxy reward rises monotonically with drift, but true quality peaks at a knee and then falls as the policy exploits the reward model's blind spots. After Gao et al. (2022)."
+flowchart LR
+  start["Low KL<br>policy near SFT reference"] --> knee["Knee<br>true quality peaks"]
+  knee --> over["High KL<br>reward keeps rising,<br>true quality falls"]
+  start -.->|"reward up,<br>quality up"| knee
+  knee -.->|"reward up,<br>quality down"| over
+  leash["KL penalty beta<br>holds policy left of the knee"] -.-> knee
+```
 
 ::: {.callout-important}
 ## What's contested
@@ -184,38 +214,21 @@ the safe regime is a moving target rather than a solved one. The KL leash
 makes the problem manageable in practice but does not dissolve it. There is a
 real reward-versus-KL frontier where more optimization stops helping and then
 starts hurting, and where exactly it sits depends on the reward model, the
-data, and how hard you pull. Treat a rising reward curve as evidence of
-optimization, not of quality, and trust it only against held-out human
-judgment.
+data, and how hard you pull [@gao2022scaling]. Treat a rising reward curve as
+evidence of optimization, not of quality, and trust it only against held-out
+human judgment.
 :::
 
-@fig-rlhf-overoptimization sketches that frontier. As the policy drifts
-further from the SFT reference, measured by KL, the reward model's score keeps
-climbing, but true quality follows it only up to a knee, then turns down as
-the policy exploits regions where the proxy is wrong. The KL leash is the
-control that keeps the policy left of the knee.
-
-```{mermaid}
-%%| label: fig-rlhf-overoptimization
-%%| fig-cap: "Over-optimization of a learned reward. Proxy reward rises monotonically with drift, but true quality peaks at a knee and then falls as the policy exploits the reward model's blind spots. After Gao et al. (2022)."
-flowchart LR
-  start["Low KL<br>policy near SFT reference"] --> knee["Knee<br>true quality peaks"]
-  knee --> over["High KL<br>reward keeps rising,<br>true quality falls"]
-  start -.->|"reward up,<br>quality up"| knee
-  knee -.->|"reward up,<br>quality down"| over
-  leash["KL penalty beta<br>holds policy left of the knee"] -.-> knee
-```
-
-## Trade-offs
+## The balances
 
 The pipeline is a set of balances, each with a knee.
 
 - **Reward fidelity versus labeling cost.** Human comparisons are the
   highest-fidelity preference signal and the most expensive. AI feedback
-  (RLAIF, constitutional methods) is far cheaper and scales, but inherits the
-  labeling model's biases and blind spots, and a flaw in the constitution or
-  the critic propagates into every label. Human labels set the ceiling; AI
-  labels set the volume.
+  (RLAIF, constitutional methods) is far cheaper and scales
+  [@bai2022constitutional], but inherits the labeling model's biases and
+  blind spots, and a flaw in the constitution or the critic propagates into
+  every label. Human labels set the ceiling; AI labels set the volume.
 - **Optimization pressure versus over-optimization.** The KL coefficient
   $\beta$ is the central knob. Too small a $\beta$ lets the policy chase the
   reward off-distribution into the region where the reward model is wrong, and
@@ -248,7 +261,7 @@ one supervised loss. The shape of the cheaper method downstream is set by the
 resident cost of the on-policy one here.
 :::
 
-## Implementation
+## Running the loop
 
 Most of this chapter is a training pipeline, not a code change, and its
 operational reality is dominated by the four-model footprint and the data
@@ -264,15 +277,16 @@ The failure modes are worth naming because each appears at a different place.
 A miscalibrated or overfit reward model fails before RL even starts and
 poisons everything downstream, so reward-model accuracy on held-out
 comparisons is the first thing to check. Reward hacking appears mid-run as a
-rising reward curve with flat or falling human-judged quality, and the
-defenses are a tuned KL penalty, early stopping, and a held-out human
-evaluation that the reward curve cannot game. Sycophancy is a specific,
-predictable hack: labelers and users reward agreement and flattery, so a
-policy optimizing their approval learns to tell people what they want to hear,
-which is a direct artifact of optimizing an approval proxy rather than a bug
-in the optimizer. And the alignment tax shows up as a capability regression
-against the base model on benchmarks the preference data never covered, which
-is why @sec-benchmarks gates the aligned model rather than trusting the reward.
+rising reward curve with flat or falling human-judged quality
+[@gao2022scaling], and the defenses are a tuned KL penalty, early stopping,
+and a held-out human evaluation that the reward curve cannot game. Sycophancy
+is a specific, predictable hack: labelers and users reward agreement and
+flattery, so a policy optimizing their approval learns to tell people what
+they want to hear, which is a direct artifact of optimizing an approval proxy
+rather than a bug in the optimizer. And the alignment tax shows up as a
+capability regression against the base model on benchmarks the preference data
+never covered, which is why @sec-benchmarks gates the aligned model rather
+than trusting the reward.
 
 ## Further reading
 

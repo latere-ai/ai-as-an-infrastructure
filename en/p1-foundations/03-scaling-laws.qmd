@@ -9,37 +9,32 @@ you pay for the run. By the end a reader can explain why a frontier model is
 the size it is, trained on the number of tokens it is, and why that answer
 changed between 2020 and today.
 
-## Problem
+## The irreversible bet
 
 A pre-training run commits a cluster for weeks and a budget you cannot
 refund. Before it starts you must choose a parameter count, a token budget,
 a learning-rate schedule, and a batch size, and you must choose them from
 small experiments because you cannot afford to try them at full scale. The
-question this chapter answers is how to spend a fixed compute budget so the
-final loss is as low as it can be, and how to know that before committing.
+whole chapter is one question asked under that constraint: how to spend a
+fixed compute budget so the final loss is as low as it can be, and how to
+know that before committing.
 
-## Design
+The reason the question is answerable at all is that the spend has a
+predictable shape. The autoregressive objective is what makes it both
+possible and measurable. Next-token prediction is maximum likelihood over a
+token stream, cross-entropy on the shifted sequence under a causal mask, so
+every position is a training example and the corpus is its own supervision.
+The loss this produces, in nats or bits per token, is the quantity scaling
+laws predict; perplexity is just its exponential. That single scalar, the
+loss, is what you are buying with the run, and it is what the rest of the
+chapter learns to forecast and then to minimize per dollar.
 
-The autoregressive objective makes the spend possible: next-token
-prediction is maximum likelihood over a token stream, cross-entropy on the
-shifted sequence under a causal mask, so every position is a training
-example and the corpus is its own supervision. The loss this produces, in
-nats or bits per token, is the quantity scaling laws predict; perplexity is
-just its exponential.
+## A law you can extrapolate
 
-Around that objective sits a recipe. AdamW is the default optimizer, with
-decoupled weight decay and two moment estimates whose state is the dominant
-memory term, which is why @sec-training-at-scale shards it. The
-learning-rate schedule has three parts: a linear warmup while the moment
-estimates are still cold, a stable high phase, and a decay. Cosine decay to
-a small floor is the well-understood default. Warmup-stable-decay holds a
-constant rate on a plateau and decays only when you choose to stop, which
-makes one plateau checkpoint spawn many decays and makes scaling
-experiments composable.
-
-The decision that dominates all of these is sizing. A scaling law fit on a
-ladder of small runs predicts the loss of a large run as a smooth power law
-in parameters, data, and compute:
+The decision that dominates everything else is sizing, and sizing is
+tractable because the loss is smooth. A scaling law fit on a ladder of small
+runs predicts the loss of a large run as a power law in parameters, data,
+and compute [@kaplan2020scaling]:
 
 $$
 L(N, D) = E + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}}
@@ -47,22 +42,28 @@ $$
 
 where $N$ is parameters and $D$ is training tokens. You fit the constants on
 runs you can afford, then read off the compute-optimal $N$ and $D$ for the
-budget you intend to spend. Maximal-update parametrization (muP) makes the
-hyperparameters transfer too: parametrize the widths so the optimal learning
-rate and initialization are stable across model size, tune them on a small
-proxy, and carry them to full scale instead of sweeping at full cost.
+budget you intend to spend. The law extrapolates: that is its entire value.
+It lets a few cheap runs stand in for a run you will only ever do once.
 
-## Evolution
+The same logic extends to the hyperparameters that the loss formula does
+not name. Maximal-update parametrization (muP) makes them transfer:
+parametrize the widths so the optimal learning rate and initialization are
+stable across model size, tune them on a small proxy, and carry them to
+full scale instead of sweeping at full cost [@yang2022mup]. Sizing and
+hyperparameters both become things you decide on small runs and trust at
+large ones.
+
+## Kaplan, then Chinchilla
 
 The sizing rule itself has a history, and getting it wrong is the most
 expensive mistake in this chapter. Kaplan et al. (2020) established that
 loss follows smooth power laws and, from their fits, recommended spending
-most of a larger budget on parameters. Hoffmann et al. (2022), the
-Chinchilla paper, corrected this: parameters and tokens should scale
-together, roughly twenty training tokens per parameter at compute-optimal,
-and the Kaplan-era recipe had been systematically under-training on data. A
-Chinchilla-optimal model is smaller and reads more than the prior
-generation expected.
+most of a larger budget on parameters [@kaplan2020scaling]. Hoffmann et al.
+(2022), the Chinchilla paper, corrected this: parameters and tokens should
+scale together, roughly twenty training tokens per parameter at
+compute-optimal, and the Kaplan-era recipe had been systematically
+under-training on data [@hoffmann2022chinchilla]. A Chinchilla-optimal model
+is smaller and reads more than the prior generation expected.
 
 The same compute budget, fixed by $C \approx 6ND$, splits very differently
 under each of these recipes. @fig-scaling-allocation contrasts the three
@@ -99,12 +100,14 @@ digraph allocation {
 }
 ```
 
-When unique tokens run out, data-constrained scaling takes over: repeated
-data has decaying value, and past a few epochs adding parameters beats
-adding repetitions. The frontier of the recipe is still moving. Second-order
-and preconditioned optimizers, Shampoo and the newer Muon, claim better
-loss per FLOP by conditioning the update with curvature or orthogonalization.
-These are live options, not settled defaults.
+The recipe did not stop at Chinchilla. When unique tokens run out,
+data-constrained scaling takes over: repeated data has decaying value, and
+past a few epochs adding parameters beats adding repetitions
+[@muennighoff2023scaling]. The frontier of the recipe is still moving.
+Second-order and preconditioned optimizers, Shampoo and the newer Muon,
+claim better loss per FLOP by conditioning the update with curvature or
+orthogonalization [@jordan2024muon; @liu2025muon]. These are live options,
+not settled defaults.
 
 ::: {.callout-important}
 ## What's contested
@@ -128,38 +131,49 @@ economics is actually set by how many tokens the model will decode over its
 lifetime.
 :::
 
-## Trade-offs
+## The rest of the recipe
 
-The recipe is a set of balances, each with a knee.
+The scaling law fixes $N$ and $D$. It does not fix how the optimizer walks
+to that loss, and those choices are a set of balances, each with a knee.
 
-- **Compute-optimal versus over-training for inference.** Chinchilla
-  optimizes loss for a training budget. If the model will serve many
-  tokens, over-train a smaller model: you pay more to train and far less per
-  inference, and the right point depends on expected lifetime inference
-  volume.
-- **Batch size versus steps.** A larger batch buys data parallelism and
-  shorter wall-clock, but past the critical batch size you burn compute for
-  no loss gain, and too small a batch leaves the accelerators idle and pays
-  communication overhead per useful token. The critical batch size grows
-  during training, so the optimal batch is a schedule, not a constant.
-- **Schedule choice.** Cosine is the understood default but locks the token
-  budget at run start. Warmup-stable-decay trades a small loss penalty for
-  the ability to keep training, fork decays, and run clean scaling ladders.
-  Choose cosine for a single known-budget run, the plateau schedule when the
-  budget is uncertain.
+The optimizer is the first of them. AdamW is the default, with decoupled
+weight decay and two moment estimates whose state is the dominant memory
+term, which is why @sec-training-at-scale shards it [@loshchilov2019decoupled].
+The learning-rate schedule that drives it has three parts: a linear warmup
+while the moment estimates are still cold, a stable high phase, and a decay.
+Cosine decay to a small floor is the well-understood default, but it locks
+the token budget at run start. Warmup-stable-decay holds a constant rate on
+a plateau and decays only when you choose to stop, which makes one plateau
+checkpoint spawn many decays and makes scaling experiments composable
+[@hu2024minicpm]. It trades a small loss penalty for the ability to keep
+training, fork decays, and run clean scaling ladders. Choose cosine for a
+single known-budget run, the plateau schedule when the budget is uncertain.
 
-## Implementation
+Batch size is the second balance. A larger batch buys data parallelism and
+shorter wall-clock, but past the critical batch size you burn compute for
+no loss gain, and too small a batch leaves the accelerators idle and pays
+communication overhead per useful token [@mccandlish2018empirical]. The
+critical batch size grows during training, so the optimal batch is a
+schedule, not a constant.
 
-Most of this chapter is a plan; a small part is an operational kit for
-keeping a multi-week run alive. The stability tricks are z-loss, an
-auxiliary penalty on the log-partition that stops output logits from
-drifting; QK-norm, normalizing query and key before the dot product to cap
+And muP closes the loop back to sizing. Tuning the learning rate and
+initialization on a small proxy and transferring them at full width is what
+keeps the largest run from leaving loss on the table for a reason you would
+never see otherwise [@yang2022mup].
+
+## Keeping the run alive
+
+Most of this chapter is a plan. A smaller part is an operational kit for
+keeping a multi-week run alive, because the plan is worthless if the run
+dies in week three. The stability tricks are z-loss, an auxiliary penalty
+on the log-partition that stops output logits from drifting [@chowdhery2022palm];
+QK-norm, normalizing query and key before the dot product to cap
 attention-logit growth; depth-scaled initialization; and global-norm
 gradient clipping as the blunt safety net. Loss-spike recovery is a
 procedure, not a hyperparameter: detect the spike from grad-norm and loss
 telemetry, then skip and resume from a recent checkpoint, lower the rate,
-and reorder the data batches that triggered it. @fig-loss-spike-recovery
-traces that loop.
+and reorder the data batches that triggered it [@deepseek2024deepseekv3].
+@fig-loss-spike-recovery traces that loop.
 
 ```{mermaid}
 %%| label: fig-loss-spike-recovery

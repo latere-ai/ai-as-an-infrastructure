@@ -1,19 +1,22 @@
 # Training at Scale: Stability and Distributed Parallelism {#sec-training-at-scale}
 
 A frontier model does not fit on one accelerator, and the run that produces
-it spans thousands of them for weeks. This chapter owns the systems that make
-that run fast, numerically stable, and recoverable: the four orthogonal axes
-of parallelism and how they compose, the precision formats that buy
-throughput without breaking the math, the collectives that move gradients and
-the overlap that hides them, and the fault tolerance that lets a run survive
-its own hardware. By the end a reader can explain how a device mesh is laid
-out for a given model shape and interconnect, why each parallelism axis lives
-where it does, and why MFU is the one number that says whether the systems
-work is done.
+it spans thousands of them for weeks. The moment the work is split across that
+many devices, three resources start to fight: the memory each shard must hold,
+the communication that keeps the shards consistent, and the failures that a
+fleet of that size produces as its steady state. Everything in this chapter is
+a way of spending those three against each other so that achieved throughput
+stays high and a dead GPU costs minutes, not days. This chapter takes the
+machinery apart along that seam. It opens on the three forces, then works
+through the cuts that split the model and what each one costs to communicate,
+the bits the arithmetic runs in, and the overlap that hides the traffic, with
+each tool's origin attached to the mechanism it explains. One number, model
+FLOPs utilization, runs through the whole teardown as the scoreboard that says
+whether the systems work is done.
 
-## Problem
+## Three forces that fight
 
-Two facts force everything in this chapter. A frontier model's parameters,
+Two facts force everything that follows. A frontier model's parameters,
 gradients, and optimizer state do not fit in one device's memory, and the
 arithmetic to train it does not finish on one device in any acceptable time.
 So the work is split across thousands of accelerators, and the moment it is
@@ -28,43 +31,36 @@ failure: at thousands of nodes for weeks, a dead GPU or NIC is the steady
 state, not the exception, and a single one kills the whole collective. The
 job of the training-systems layer is to spend memory, communication, and
 recovery against each other so that achieved throughput stays high and a
-failure costs minutes, not days.
+failure costs minutes, not days. No single way of splitting the work resolves
+all three at once, which is why the design offers several orthogonal cuts and
+composes them.
 
-## Design
+## Four cuts, and what each one costs
 
-The core idea is that no single way of splitting the work suffices, so the
-design offers four orthogonal axes, each cutting a different resource, and
-composes them. Around the split sit two more concerns the split creates:
-which numerical precision the arithmetic runs in, and how the resulting
-communication is hidden under compute.
+Each axis answers a different scaling problem, shards a different resource,
+and arrived in the literature when the previous generation hit a wall. Read in
+that order they are less a menu than a record of how the toolkit was
+assembled, one cut at a time.
 
-### Four axes of parallelism
-
-Each axis answers a different scaling problem.
-
-*Data parallelism (DP)* replicates the model and shards the batch across
-replicas; each replica computes gradients on its slice and an all-reduce
-averages them. Plain DP does not save memory, since every replica holds a
-full copy. ZeRO and its PyTorch sibling FSDP fix that by additionally
-sharding optimizer state, gradients, and parameters across the DP group, so
-per-device memory drops without changing the math: a layer's parameters are
-all-gathered just before they are needed and freed right after. This is the
-sharding @sec-scaling-laws points to when it notes that the optimizer state
-is the dominant memory term.
-
-*Tensor parallelism (TP)* shards individual matmuls inside a layer, splitting
-attention heads and the feed-forward columns and rows across devices. It is
+*Tensor parallelism (TP)* came first. It shards individual matmuls inside a
+layer, splitting attention heads and the feed-forward columns and rows across
+devices. Megatron-LM showed how to do this with only two all-reduces per
+layer, which made a multi-billion-parameter model trainable once it no longer
+fit on one device [@shoeybi2019megatron]. The cost is that it is
 communication-heavy: each TP layer needs an all-reduce (or a reduce-scatter
 and all-gather pair) on the critical path of every forward and backward step.
 That cost is only affordable over the fastest interconnect, so TP stays
 inside a node.
 
-*Pipeline parallelism (PP)* splits the layer stack into stages placed on
-different nodes and streams micro-batches through them, so stage two works on
-micro-batch one while stage one works on micro-batch two. It is
-bandwidth-cheap, moving only the activations at stage boundaries, but it pays
-a pipeline bubble: the fill and drain at the ends of each step where some
-stages sit idle. @fig-training-bubble shows where that idle time lives.
+*Pipeline parallelism (PP)* arrived in parallel and cuts a different
+resource. It splits the layer stack into stages placed on different nodes and
+streams micro-batches through them, so stage two works on micro-batch one
+while stage one works on micro-batch two. GPipe established the micro-batching
+that keeps the stages busy [@huang2019gpipe], and PipeDream generalized the
+schedule to cut the bubble [@narayanan2019pipedream]. PP is bandwidth-cheap,
+moving only the activations at stage boundaries, but it pays a pipeline
+bubble: the fill and drain at the ends of each step where some stages sit
+idle. @fig-training-bubble shows where that idle time lives.
 
 ```{dot}
 //| label: fig-training-bubble
@@ -84,12 +80,28 @@ digraph bubble {
 }
 ```
 
+*Data parallelism (DP)* replicates the model and shards the batch across
+replicas; each replica computes gradients on its slice and an all-reduce
+averages them. Plain DP does not save memory, since every replica holds a
+full copy. ZeRO observed that the optimizer state, gradients, and parameters
+in standard DP are redundantly replicated, and sharded them across the DP
+group in three progressive stages [@rajbhandari2019zero]; ZeRO-Infinity
+extended the idea to offload onto CPU and NVMe [@rajbhandari2021zeroinfinity],
+and PyTorch FSDP made sharded DP a native, ergonomic primitive
+[@zhao2023pytorch]. Sharding drops per-device memory without changing the
+math: a layer's parameters are all-gathered just before they are needed and
+freed right after. This is the sharding @sec-scaling-laws points to when it
+notes that the optimizer state is the dominant memory term.
+
 *Sequence and context parallelism (SP/CP)* shard along the sequence
-dimension. SP, as introduced by Korthikanti et al., splits the parts of a
-layer that TP leaves replicated (the norms and dropouts) along the sequence
-to cut activation memory; CP, of which ring attention is the canonical form,
-shards the attention computation itself so a context too long for one device
-can be processed in blocks that pass key and value tiles around a ring.
+dimension, the axis that activation memory lives on. SP splits the parts of a
+layer that TP leaves replicated, the norms and dropouts, along the sequence to
+cut activation memory, introduced alongside selective recomputation that
+redoes only the cheap-to-redo, memory-heavy operations rather than the whole
+layer [@korthikanti2022reducing]. CP, of which ring attention is the canonical
+form, shards the attention computation itself so a context too long for one
+device can be processed in blocks that pass key and value tiles around a ring,
+letting the context grow nearly without bound [@liu2023ring].
 
 For each axis the design question is the same: what does it shard, what does
 it cost in communication, and which tier of the interconnect can it afford to
@@ -114,35 +126,37 @@ digraph axes {
 }
 ```
 
-### Expert parallelism
-
-Mixture-of-experts layers add a fifth axis. The experts are sharded across
+Mixture-of-experts layers add a fifth cut. The experts are sharded across
 devices, and each token is dispatched to its chosen experts by an all-to-all
-collective, then the results are combined back by a second all-to-all. The
-systems layer owns only this execution: the two all-to-all exchanges per MoE
-layer, the load-imbalance stragglers when a hot expert draws more than its
-share of tokens, the capacity padding that bounds per-expert work, and the
-overlap of dispatch and combine with expert compute. The routing decision and
-the load-balancing loss that *create* this traffic pattern belong to
+collective, then the results are combined back by a second all-to-all, the
+dispatch pattern traced to GShard [@lepikhin2020gshard]. The systems layer
+owns only this execution: the two all-to-all exchanges per MoE layer, the
+load-imbalance stragglers when a hot expert draws more than its share of
+tokens, the capacity padding that bounds per-expert work, and the overlap of
+dispatch and combine with expert compute. The routing decision and the
+load-balancing loss that *create* this traffic pattern belong to
 @sec-moe-ssm-hybrids.
 
-### Precision
+## Paying in bits: the precision axis
 
 The arithmetic does not need to run in fp32. Mixed precision keeps the
 forward and backward matmuls and the activations in bf16, while holding an
 fp32 master copy of the weights and fp32 optimizer state so that small updates
-do not vanish when added to a large weight. bf16's wide exponent is what makes
-this safe: it retired the loss scaling that fp16 needed to keep gradients off
-the floor of its narrow range.
+do not vanish when added to a large weight, the recipe established by
+Micikevicius et al. [@micikevicius2017mixed]. bf16's wide exponent is what
+makes this safe: it retired the loss scaling that fp16 needed to keep
+gradients off the floor of its narrow range.
 
 fp8 (the E4M3 and E5M2 formats) pushes the matmuls further on Hopper-class and
 newer hardware, roughly doubling matmul throughput and halving the memory the
-operands occupy. The price is range: fp8 has so few exponent bits that the
-operands must be rescaled per tensor, or more finely, to keep values inside
-the representable band. It is applied selectively, the matmuls in fp8 while
-the numerically sensitive operations, the normalizations, residual adds, and
-the attention softmax, stay in higher precision. Pushed too far, fp8 does not
-crash; it quietly costs quality, which is what makes it hard to use well.
+operands occupy; the formats paper defined E4M3 and E5M2 for the generation
+that made fp8 matmuls native [@micikevicius2022fp8]. The price is range: fp8
+has so few exponent bits that the operands must be rescaled per tensor, or
+more finely, to keep values inside the representable band. It is applied
+selectively, the matmuls in fp8 while the numerically sensitive operations,
+the normalizations, residual adds, and the attention softmax, stay in higher
+precision. Pushed too far, fp8 does not crash; it quietly costs quality, which
+is what makes it hard to use well.
 
 @fig-training-precision shows why the exponent bits matter. bf16 keeps fp32's
 eight exponent bits, so it spans the same dynamic range and never needed fp16's
@@ -168,107 +182,45 @@ digraph precision {
 }
 ```
 
-### Collectives and overlap
+## Hiding the traffic
 
-The traffic every axis generates runs through a small set of collectives:
-all-reduce, reduce-scatter, all-gather, and all-to-all. NCCL (RCCL on AMD)
-implements them and maps each onto the topology, choosing a ring or a tree
-algorithm and routing over NVLink within a node or the network between nodes.
+Every cut above generates traffic, and that traffic runs through a small set
+of collectives: all-reduce, reduce-scatter, all-gather, and all-to-all. NCCL
+(RCCL on AMD) implements them and maps each onto the topology, choosing a ring
+or a tree algorithm and routing over NVLink within a node or the network
+between nodes [@nvidia2024nccl].
 
 The collectives are pure overhead unless they run while the device is doing
 something else, so overlap is the central throughput trick. FSDP prefetches
 the next layer's parameters with an all-gather while the current layer
-computes. The gradient reduce-scatter overlaps the backward pass. PP
-communication overlaps stage compute. EP all-to-all overlaps expert matmuls.
-Whatever cannot be hidden is exposed communication, and it shows up directly
-as lost throughput.
+computes [@zhao2023pytorch]. The gradient reduce-scatter overlaps the backward
+pass. PP communication overlaps stage compute. EP all-to-all overlaps expert
+matmuls. Whatever cannot be hidden is exposed communication, and it shows up
+directly as lost throughput.
 
-### MFU, the scoreboard
-
-Model FLOPs utilization measures whether the overlap worked. It is achieved
-FLOPs over peak hardware FLOPs, counting only the FLOPs the model
-mathematically requires. It is distinct from hardware FLOPs utilization (HFU),
-which also counts the redundant FLOPs of activation recomputation, so HFU
-exceeds MFU whenever recomputation is on. MFU is the single number that says
-the systems work is done, and its budget is a sum of losses: exposed
-communication, the pipeline bubble, recomputation, and unfused kernels each
-take a slice. A low MFU is diagnosed from a per-step timeline, not from the
-loss curve.
-
-## Evolution
-
-The toolkit arrived one axis at a time, each in response to a wall the
-previous generation hit.
-
-Tensor parallelism came first. Megatron-LM (Shoeybi et al., 2019) showed how
-to shard the transformer's matmuls across GPUs with only two all-reduces per
-layer, making a multi-billion-parameter model trainable when it no longer fit
-on one device. Pipeline parallelism arrived in parallel: GPipe (Huang et al.,
-2019) split the layer stack into stages and used micro-batching to keep them
-busy, and PipeDream (Narayanan et al., 2019) generalized the schedule to cut
-the bubble.
-
-Data parallelism then learned to save memory. ZeRO (Rajbhandari et al., 2019)
-observed that the optimizer state, gradients, and parameters in standard DP
-are redundantly replicated, and sharded them across the DP group in three
-progressive stages; ZeRO-Infinity (2021) extended the idea to offload onto CPU
-and NVMe, and PyTorch FSDP (Zhao et al., 2023) made sharded DP a native,
-ergonomic primitive. Activation memory got its own axis next: Korthikanti et
-al. (2022) introduced sequence parallelism alongside selective recomputation,
-recomputing only the cheap-to-redo, memory-heavy operations rather than the
-whole layer.
-
-By 2021 the axes were combined deliberately. Narayanan et al.'s PTD-P work
-mapped data, tensor, and pipeline parallelism onto a single GPU cluster as a
-composed 3D layout, establishing the ordering that frontier runs still follow.
-Long context then drove context-parallel attention: ring attention (Liu et
-al., 2023) shards the sequence across devices and streams key and value blocks
-around a ring so the context can grow nearly without bound. On the precision
-axis, mixed-precision training (Micikevicius et al., 2017) established the
-bf16-plus-fp32-master recipe, and the fp8 formats paper (Micikevicius et al.,
-2022) defined E4M3 and E5M2 for the Hopper generation that made fp8 matmuls
-native. Expert parallelism's all-to-all dispatch traces to GShard (Lepikhin et
-al., 2020).
-
-## Trade-offs
-
-Each axis spends a different resource, and the layout that wins is the one
-that hides the most communication under compute for a specific model shape on
-a specific interconnect.
-
-- **Parallelism layout, and its non-portability.** TP cuts per-device memory
-  and latency but burns intra-node bandwidth, so it caps at the NVLink domain.
-  PP is bandwidth-cheap but pays a pipeline bubble, mitigated by more
-  micro-batches and interleaved schedules. DP and ZeRO scale the batch, but
-  the optimizer-state shard and the all-gather traffic grow with the DP
-  degree. The right layout is not portable: change the model size, the
-  sequence length, or the cluster, and the optimum moves.
-- **Memory versus compute.** Activation and gradient checkpointing trade extra
-  forward FLOPs in the backward pass for lower peak activation memory.
-  Selective recomputation redoes only the cheap, memory-heavy operations. More
-  recomputation lets you fit a bigger model or a longer sequence, at the cost
-  of MFU, which is exactly why HFU exceeds MFU when recompute is on.
-- **Precision versus stability.** bf16 is the safe default, and fp32 master
-  weights are non-negotiable for the optimizer. fp8 buys throughput and
-  memory but narrows range, so it is applied per-tensor with scaling and kept
-  away from the sensitive operations. Pushed too far it produces silent
-  quality loss, not a crash.
-- **Checkpoint cadence.** Frequent checkpoints shrink the work lost per
-  failure but tax storage bandwidth and can stall the run. Asynchronous and
-  sharded checkpointing is what makes a short cadence affordable, and the
-  optimum depends on cluster mean time between failures and write cost.
+Model FLOPs utilization is the scoreboard that says whether the overlap
+worked. It is achieved FLOPs over peak hardware FLOPs, counting only the FLOPs
+the model mathematically requires. It is distinct from hardware FLOPs
+utilization (HFU), which also counts the redundant FLOPs of activation
+recomputation, so HFU exceeds MFU whenever recomputation is on. MFU is the
+single number that says the systems work is done, and its budget is a sum of
+losses: exposed communication, the pipeline bubble, recomputation, and unfused
+kernels each take a slice. A low MFU is diagnosed from a per-step timeline, not
+from the loss curve. It is the thread that ties the whole teardown together,
+since every cut and every precision choice ends up scored here.
 
 ::: {.callout-important}
 ## What's contested
 How far fp8 can be pushed in frontier pre-training is unsettled. bf16 is the
 agreed safe default, and fp8 plainly buys throughput and memory on
-Hopper-class hardware. The disagreement is over the boundary: which operations
-can move to fp8, how fine the scaling must be, and how many trillions of
-tokens a run can sustain in fp8 before the narrowed range costs final quality.
-The failure mode is what makes this hard to settle empirically: fp8 pushed too
-far does not crash, it quietly degrades the model, so the cost is invisible
-until a late evaluation. Treat the fp8 boundary as a per-operation,
-per-recipe choice that must be validated, not a setting you can copy.
+Hopper-class hardware [@micikevicius2022fp8]. The disagreement is over the
+boundary: which operations can move to fp8, how fine the scaling must be, and
+how many trillions of tokens a run can sustain in fp8 before the narrowed range
+costs final quality. The failure mode is what makes this hard to settle
+empirically: fp8 pushed too far does not crash, it quietly degrades the model,
+so the cost is invisible until a late evaluation. Treat the fp8 boundary as a
+per-operation, per-recipe choice that must be validated, not a setting you can
+copy.
 :::
 
 ::: {.callout-tip}
@@ -276,25 +228,62 @@ per-recipe choice that must be validated, not a setting you can copy.
 The interconnect dictates the parallelism layout. Tensor parallelism needs an
 all-reduce on the critical path of every layer, which is only affordable over
 the fastest links, so the size of the NVLink domain sets the maximum TP group;
-beyond it, TP traffic crosses the network and stalls. Pipeline and data
-parallelism, which move less and can hide it, are the axes that span nodes,
-and expert parallelism gets its own all-to-all group. The bandwidth hierarchy
-of @sec-accelerators-networking is therefore upstream of every mesh decision
-in this chapter: a lower layer's wires decide which split an upper layer may
-use where.
+beyond it, TP traffic crosses the network and stalls [@shoeybi2019megatron].
+Pipeline and data parallelism, which move less and can hide it, are the axes
+that span nodes, and expert parallelism gets its own all-to-all group. The
+bandwidth hierarchy of @sec-accelerators-networking is therefore upstream of
+every mesh decision in this chapter: a lower layer's wires decide which split
+an upper layer may use where.
 :::
 
-## Implementation
+## Turning the dials
+
+Each axis spends a different resource, and the layout that wins is the one
+that hides the most communication under compute for a specific model shape on
+a specific interconnect. By 2021 the axes were being combined deliberately:
+the PTD-P work mapped data, tensor, and pipeline parallelism onto a single GPU
+cluster as a composed 3D layout, establishing the ordering that frontier runs
+still follow [@narayanan2021efficient]. The dials below are what an engineer
+actually turns inside that layout.
+
+- **Parallelism layout, and its non-portability.** TP cuts per-device memory
+  and latency but burns intra-node bandwidth, so it caps at the NVLink domain.
+  PP is bandwidth-cheap but pays a pipeline bubble, mitigated by more
+  micro-batches and interleaved schedules [@narayanan2019pipedream]. DP and
+  ZeRO scale the batch, but the optimizer-state shard and the all-gather
+  traffic grow with the DP degree [@rajbhandari2019zero]. The right layout is
+  not portable: change the model size, the sequence length, or the cluster,
+  and the optimum moves.
+- **Memory versus compute.** Activation and gradient checkpointing trade extra
+  forward FLOPs in the backward pass for lower peak activation memory.
+  Selective recomputation redoes only the cheap, memory-heavy operations
+  [@korthikanti2022reducing]. More recomputation lets you fit a bigger model
+  or a longer sequence, at the cost of MFU, which is exactly why HFU exceeds
+  MFU when recompute is on.
+- **Precision versus stability.** bf16 is the safe default, and fp32 master
+  weights are non-negotiable for the optimizer [@micikevicius2017mixed]. fp8
+  buys throughput and memory but narrows range, so it is applied per-tensor
+  with scaling and kept away from the sensitive operations
+  [@micikevicius2022fp8]. Pushed too far it produces silent quality loss, not
+  a crash.
+- **Checkpoint cadence.** Frequent checkpoints shrink the work lost per
+  failure but tax storage bandwidth and can stall the run. Asynchronous and
+  sharded checkpointing is what makes a short cadence affordable, and the
+  optimum depends on cluster mean time between failures and write cost
+  [@mohan2021checkfreq].
+
+## Laying out a real run, and how it breaks
 
 ### Composing the axes
 
 A frontier run maps the device mesh as a product of axes, conventionally
 (DP x TP x PP), adding EP for MoE and layering SP on top of TP. The ordering
-rule of thumb follows directly from the constraint arrow: put TP inside a node
-under NVLink, run PP and DP across nodes where their cheaper communication can
-hide, and give EP its own all-to-all group. The layout is co-designed with the
-model shape from @sec-transformer-architecture and @sec-moe-ssm-hybrids, and
-it shifts with model size, sequence length, and interconnect.
+rule of thumb follows directly from the constraint arrow and from the PTD-P
+result: put TP inside a node under NVLink, run PP and DP across nodes where
+their cheaper communication can hide, and give EP its own all-to-all group
+[@narayanan2021efficient]. The layout is co-designed with the model shape from
+@sec-transformer-architecture and @sec-moe-ssm-hybrids, and it shifts with
+model size, sequence length, and interconnect.
 
 @fig-training-mesh sketches the conventional placement.
 
@@ -320,22 +309,23 @@ flowchart TB
 
 The frameworks differ mostly in which layout and which hardware each makes
 ergonomic. Megatron-LM and Megatron-Core carry TP, PP, SP, and EP on the
-NVIDIA stack. DeepSpeed packages ZeRO and offload. PyTorch FSDP is native
-sharded DP. JAX and XLA express sharding as GSPMD-style annotations (Xu et al.,
-2021) on TPU, where the JAX `pjit` interface drives the partitioner. In
-practice a frontier stack combines pieces, for example Megatron-Core for model
-parallelism plus a custom data and checkpoint plane.
+NVIDIA stack [@shoeybi2019megatron]. DeepSpeed packages ZeRO and offload
+[@rajbhandari2019zero]. PyTorch FSDP is native sharded DP [@zhao2023pytorch].
+JAX and XLA express sharding as GSPMD-style annotations on TPU, where the JAX
+`pjit` interface drives the partitioner [@xu2021gspmd]. In practice a frontier
+stack combines pieces, for example Megatron-Core for model parallelism plus a
+custom data and checkpoint plane.
 
 ### Fault tolerance
 
 At thousands of nodes for weeks, recovery is a first-class subsystem.
 Checkpointing cadence is set by the write cost against the work lost per
-failure; asynchronous and sharded checkpointing, as in CheckFreq (Mohan et
-al., 2021), keep the write off the critical path so a short cadence stays
-affordable. Elastic restart detects a dead node, fences it, and resumes from
-the last checkpoint, ideally onto spare capacity without a full restart.
-Stragglers and silent data corruption are harder than clean crashes, because
-the run keeps going while it is slow or subtly wrong.
+failure; asynchronous and sharded checkpointing, as in CheckFreq, keep the
+write off the critical path so a short cadence stays affordable
+[@mohan2021checkfreq]. Elastic restart detects a dead node, fences it, and
+resumes from the last checkpoint, ideally onto spare capacity without a full
+restart. Stragglers and silent data corruption are harder than clean crashes,
+because the run keeps going while it is slow or subtly wrong.
 
 One fault-tolerance concern reaches into the data plane: a restart must resume
 the exact same data order, which means the sampler and shuffle state are part
@@ -359,6 +349,10 @@ appears only at a certain micro-batch count. A node failure with no fast
 detection, fencing, and recent checkpoint rolls the run back to its last save,
 and the gap is pure waste.
 
+The fastest attention kernel does not change this accounting: FlashAttention
+keeps attention exact and makes the score matrix affordable by never writing
+it to high-bandwidth memory, a kernel-level win that sits underneath these
+parallelism axes rather than replacing one of them [@dao2022flashattention].
 Recipe-level stability, the z-loss and QK-norm and loss-spike recovery that
 keep the optimizer from diverging, belongs to @sec-scaling-laws. The stability
 this chapter owns is numerical, set by the precision choice, and run-level, set

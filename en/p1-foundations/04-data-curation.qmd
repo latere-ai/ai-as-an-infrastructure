@@ -7,7 +7,7 @@ deduplicated corpus, why mixture and curriculum are decided early and
 expensive to revisit, what synthetic data buys and risks, and why a
 contamination leak invalidates every downstream number.
 
-## Problem
+## A corpus is a system, not a script
 
 A pre-training run consumes a fixed compute budget set by @sec-scaling-laws.
 That budget buys a token count, and the corpus that fills it is the single
@@ -34,7 +34,12 @@ hard parts are throughput, determinism, and resumability, not the
 per-document algorithms. A re-run must produce byte-identical shards, or the
 mixture and decontamination contracts become unverifiable.
 
-## Design
+The chapter follows a byte from the open web through the narrowing filters
+that decide whether it survives, then steps back to the three decisions that
+are locked early, the contract that protects the numbers, and the histories
+that explain why the field still argues about all of it.
+
+## A byte's journey through the narrowing filters
 
 The pipeline is a sequence of narrowing filters, each cheap relative to the
 training run it feeds, arranged so the cheapest cuts come first.
@@ -55,8 +60,10 @@ flowchart LR
   J --> K[("Token-id shards")]
 ```
 
-**Sourcing.** The bulk substrate is the web. CommonCrawl is the raw input:
-WARC/WET extraction, boilerplate stripping, language identification, and
+### Where the byte comes from
+
+The bulk substrate is the web. CommonCrawl is the raw input: WARC/WET
+extraction, boilerplate stripping, language identification, and
 URL/host-level filtering. CommonCrawl is raw and noisy, and the value is in
 the pipeline applied to it, not the crawl itself. Around that web core sit
 curated sources, books, papers, encyclopedic and reference text, source code
@@ -64,13 +71,15 @@ with license and quality signals, and non-English text at deliberate ratios.
 Each source has different licensing, quality, and dedup characteristics, and
 each competes for the same token budget.
 
-**Cleaning and normalization.** Unicode normalization, repair of text
-extraction artifacts, PII handling, and toxicity and safety pre-filtering.
-The goal is to remove garbage without scrubbing legitimate distributional
-variety: the registers, dialects, and domains that a model needs to see to
-generalize.
+Before any filtering, the bytes are made uniform. Cleaning and normalization
+covers Unicode normalization, repair of text extraction artifacts, PII
+handling, and toxicity and safety pre-filtering. The goal is to remove
+garbage without scrubbing legitimate distributional variety: the registers,
+dialects, and domains that a model needs to see to generalize.
 
-**Deduplication.** Three mechanisms at three granularities. Exact hashing
+### The first cut: deduplication
+
+Deduplication runs three mechanisms at three granularities. Exact hashing
 removes identical documents. Suffix-array or substring methods remove
 near-duplicate spans inside otherwise distinct documents. MinHash with
 locality-sensitive hashing (LSH) does fuzzy document-level dedup at corpus
@@ -78,6 +87,14 @@ scale: it estimates Jaccard similarity between documents from a small set of
 hashed shingles, so the cost is sub-quadratic rather than all-pairs. Dedup
 recovers wasted compute and reduces verbatim memorization. The standing
 tension is aggressiveness against losing genuinely distinct content.
+
+Dedup is not merely a cost optimization, and the evidence says so. Lee et al.
+showed that deduplicating training data makes models better, not just
+cheaper: it cuts memorization and improves held-out loss [@lee2022deduplicating].
+SemDeDup pushed the idea into embedding space, removing semantic
+near-duplicates that surface-form hashing misses [@abbas2023semdedup]. The
+through-line is that redundancy is not neutral; it actively degrades the
+model, so the filter that removes it is a quality filter in disguise.
 
 @fig-data-curation-minhash shows why MinHash with LSH avoids the all-pairs
 blow-up: each document collapses to a short signature, LSH bands route similar
@@ -99,75 +116,113 @@ flowchart LR
   H -->|Yes| I["Drop as near-duplicate,<br/>count in manifest"]
 ```
 
-**Quality filtering.** Two families. Heuristic gates are rule-based: length,
-symbol-to-word ratio, repetition, stop-word presence, and a perplexity
-threshold from a reference model. They are cheap, auditable, and high-recall
-for obvious junk, but brittle at the margins. Classifier filters are learned:
-a model scores each document against a reference of "good" text, for example
-a classifier trained to distinguish curated text from raw web. Classifiers
-have higher precision but carry a structural risk, they encode the reference
-set's notion of quality into the entire corpus.
+### The second cut: quality filtering
 
-**Mixture.** The ratios across web, code, curated, and multilingual, plus
-per-source weights. The mixture can be hand-tuned, scaled from small-proxy
-ablations, or optimized directly. DoReMi frames mixture selection as group
+What survives dedup still has to clear a quality bar, and two families set
+it. Heuristic gates are rule-based: length, symbol-to-word ratio, repetition,
+stop-word presence, and a perplexity threshold from a reference model. They
+are cheap, auditable, and high-recall for obvious junk, but brittle at the
+margins. Classifier filters are learned: a model scores each document against
+a reference of "good" text, for example a classifier trained to distinguish
+curated text from raw web. Classifiers have higher precision but carry a
+structural risk, they encode the reference set's notion of quality into the
+entire corpus. The reference perplexity filter traces directly to CCNet,
+which paired language identification with a perplexity score from a reference
+language model [@wenzek2020ccnet].
+
+## The decisions locked early
+
+By the time the byte clears quality filtering, the per-document work is done.
+What remains is global: how to combine sources, how to order them, and
+whether to manufacture more. These decisions are cheap to state and expensive
+to change, because each one constrains the others.
+
+**Mixture** is the ratios across web, code, curated, and multilingual, plus
+per-source weights. It can be hand-tuned, scaled from small-proxy ablations,
+or optimized directly. DoReMi frames mixture selection as group
 distributionally robust optimization: train a small proxy, use it to find
 weights that minimize worst-case excess loss across domains, then apply those
-weights to the full run. The mixture is locked early and expensive to
-revisit, because changing it means re-deriving the curriculum and often
-re-running proxy ablations.
+weights to the full run [@xie2023doremi]. The mixture is locked early and
+expensive to revisit, because changing it means re-deriving the curriculum
+and often re-running proxy ablations.
 
-**Curriculum.** The ordering and phasing of data over training: easy-to-hard,
-domain phasing, or saving a high-quality slice for late. This is the ordering
-*within* the data plane. It is distinct from the annealing *phase*, which
-up-weights high-quality data near the end of training and belongs to
-mid-training, covered alongside @sec-training-at-scale.
+**Curriculum** is the ordering and phasing of data over training:
+easy-to-hard, domain phasing, or saving a high-quality slice for late. This
+is the ordering *within* the data plane. It is distinct from the annealing
+*phase*, which up-weights high-quality data near the end of training and
+belongs to mid-training, covered alongside @sec-training-at-scale.
 
-**Synthetic data.** Model-generated and templated text: rephrasing or
-augmenting web text, textbook-style generation, and distillation targets.
-The principle is that a small amount of dense, clean, on-distribution text
-can be worth far more than its token count in raw web. It is powerful for
-filling capability gaps, and @sec-synthetic-data treats it as a first-class
+**Synthetic data** is model-generated and templated text: rephrasing or
+augmenting web text, textbook-style generation, and distillation targets. The
+principle is that a small amount of dense, clean, on-distribution text can be
+worth far more than its token count in raw web. It is powerful for filling
+capability gaps, and @sec-synthetic-data treats it as a first-class
 post-training tool. The risks are distributional collapse, factual drift, and
-laundering eval content back into training.
+laundering eval content back into training. Because the last risk feeds
+directly into the contract that follows, synthetic data is also where the
+pipeline most needs the next stage to be strict.
 
-**Decontamination.** N-gram or substring overlap detection against the eval
+## Decontamination as a contract
+
+Decontamination is N-gram or substring overlap detection against the eval
 registry, an overlap threshold, a drop-or-flag decision, and a report emitted
 as the contract to evaluation. This is the stage that earns the chapter its
 place in the stack. The report, not a shared implementation, is the hand-off.
 
-## Evolution
+The threshold is not a free parameter. N-gram overlap detection is itself
+evadable: rephrased benchmark samples slip past surface-level matching, which
+is exactly why the threshold and method are a negotiated contract rather than
+a private default [@yang2023rethinking]. A loose threshold leaks benchmarks
+and inflates scores. A strict one over-removes legitimate near-duplicates and
+shrinks the corpus. Either way the decision belongs to the boundary between
+this chapter and @sec-benchmarks, not inside the data team.
 
-Early corpora were assembled, not engineered. The Pile (2020) curated 800GB
-from twenty-two diverse sources and made the components explicit. C4 (2020),
-built for T5, showed that a handful of heuristic cleaning rules over
-CommonCrawl already moved downstream quality. The pivot to pipeline-as-product
-came with CCNet (2020), which combined language identification with a
-perplexity filter from a reference language model, and then with RefinedWeb
-(2023), whose claim was sharper: web data alone, filtered and deduplicated
-hard enough, can match or beat curated corpora. FineWeb (2024) carried this
-further with public ablations that fixed compute and architecture and varied
-only the data, turning corpus construction into a measurable science rather
-than folklore.
+::: {.callout-tip}
+## Constraint arrow
+The evaluation layer reaches down and sets a hard constraint on this one. The
+decontamination threshold is not a data-team preference: it is dictated by
+the eval registry that @sec-benchmarks defines and must supply. If evaluation
+does not hand down which held-out sets to protect, this chapter cannot
+guarantee the numbers reported later are real. The worst-case failure, a
+contamination leak through a dedup gap, a synthetic pipeline, or an agent
+transcript that embedded a benchmark task, inflates every downstream score at
+once. The decontamination contract exists precisely so a lower layer cannot
+silently corrupt an upper one.
+:::
 
-Deduplication earned its own line of evidence. Lee et al. (2022) showed that
-deduplicating training data makes models better, not merely cheaper: it cuts
-memorization and improves held-out loss. SemDeDup (2023) pushed dedup into
-embedding space, removing semantic near-duplicates that surface-form hashing
-misses.
+## How the recipe got here: two histories
 
-The synthetic turn arrived through two results. TinyStories (2023) showed
-that a narrow, fully synthetic corpus could teach small models coherent
-English. The phi line, opened by "Textbooks Are All You Need" (2023), argued
-that textbook-quality synthetic and filtered data could reach strong
-reasoning at a fraction of the usual token count. Rephrasing the Web (WRAP,
-2024) made the cheaper version of the bet: rephrase existing web text into
-cleaner styles rather than generating from scratch, gaining compute and data
-efficiency without inventing content. The newest and least-documented source
-is agent transcripts, tool-use traces and verified multi-step trajectories
-recycled as training signal, foreshadowed by datasets like ToolBench. The
-open questions there are provenance, dedup against the source model's own
-outputs, and contamination from embedded eval tasks.
+### From assembled corpora to pipeline-as-product
+
+Early corpora were assembled, not engineered. The Pile curated 800GB from
+twenty-two diverse sources and made the components explicit [@gao2020pile].
+C4, built for T5, showed that a handful of heuristic cleaning rules over
+CommonCrawl already moved downstream quality [@raffel2020t5]. The pivot to
+pipeline-as-product came with CCNet, which combined language identification
+with a perplexity filter from a reference language model
+[@wenzek2020ccnet], and then with RefinedWeb, whose claim was sharper: web
+data alone, filtered and deduplicated hard enough, can match or beat curated
+corpora [@penedo2023refinedweb]. FineWeb carried this further with public
+ablations that fixed compute and architecture and varied only the data,
+turning corpus construction into a measurable science rather than folklore
+[@penedo2024fineweb].
+
+### The synthetic turn
+
+The synthetic turn arrived through two results. TinyStories showed that a
+narrow, fully synthetic corpus could teach small models coherent English
+[@eldan2023tinystories]. The phi line, opened by "Textbooks Are All You
+Need," argued that textbook-quality synthetic and filtered data could reach
+strong reasoning at a fraction of the usual token count
+[@gunasekar2023textbooks]. Rephrasing the Web (WRAP) made the cheaper version
+of the bet: rephrase existing web text into cleaner styles rather than
+generating from scratch, gaining compute and data efficiency without
+inventing content [@maini2024rephrasing]. The newest and least-documented
+source is agent transcripts, tool-use traces and verified multi-step
+trajectories recycled as training signal, foreshadowed by datasets like
+ToolBench [@qin2023toolllm]. The open questions there are provenance, dedup
+against the source model's own outputs, and contamination from embedded eval
+tasks.
 
 ::: {.callout-important}
 ## What's contested
@@ -220,7 +275,10 @@ digraph {
 }
 ```
 
-## Trade-offs
+## What you trade, and what breaks
+
+Every stage above is a dial, and turning it the wrong way fails silently.
+The dials are worth naming together because they interact.
 
 - **Quantity versus quality.** More tokens help only if they are not junk or
   duplicates. Past a point, aggressive filtering and dedup beat raw volume.
@@ -241,20 +299,16 @@ digraph {
   shrinks the corpus. The threshold is a contract term, not an internal
   detail.
 
-::: {.callout-tip}
-## Constraint arrow
-The evaluation layer reaches down and sets a hard constraint on this one. The
-decontamination threshold is not a data-team preference: it is dictated by
-the eval registry that @sec-benchmarks defines and must supply. If evaluation
-does not hand down which held-out sets to protect, this chapter cannot
-guarantee the numbers reported later are real. The worst-case failure, a
-contamination leak through a dedup gap, a synthetic pipeline, or an agent
-transcript that embedded a benchmark task, inflates every downstream score at
-once. The decontamination contract exists precisely so a lower layer cannot
-silently corrupt an upper one.
-:::
+The failure modes are worth naming because each bites at a different time. A
+contamination leak inflates results and is detected late, if at all. A dedup
+gap wastes compute and raises memorization risk, while over-dedup silently
+removes rare content. Filter bias amplification strips legitimate variety
+across the whole corpus. Synthetic collapse or drift narrows the distribution
+or propagates the generator's errors. A mixture mistake under- or over-trains
+a capability, and because the mixture is locked early and surfaces only at
+evaluation, it is the costliest to diagnose and redo.
 
-## Implementation
+## The determinism discipline
 
 Most of this chapter is a set of design decisions. The operational reality is
 a determinism discipline. Because mixture and decontamination are contracts,
@@ -280,15 +334,6 @@ n-gram signatures for every item in the eval registry, then drop or flag any
 training document whose overlap exceeds the contract threshold, and write the
 count and identities of removed documents into the report that evaluation
 consumes.
-
-The failure modes are worth naming because each bites at a different time. A
-contamination leak inflates results and is detected late, if at all. A dedup
-gap wastes compute and raises memorization risk, while over-dedup silently
-removes rare content. Filter bias amplification strips legitimate variety
-across the whole corpus. Synthetic collapse or drift narrows the distribution
-or propagates the generator's errors. A mixture mistake under- or over-trains
-a capability, and because the mixture is locked early and surfaces only at
-evaluation, it is the costliest to diagnose and redo.
 
 ## Further reading
 

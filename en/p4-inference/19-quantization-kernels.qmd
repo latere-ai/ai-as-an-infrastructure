@@ -10,7 +10,7 @@ without falling over, why FlashAttention never materializes the score matrix,
 and why the choice among vLLM, SGLang, and TensorRT-LLM is a choice about
 which of these wins the engine has already made.
 
-## Problem
+## The memory wall
 
 A weight in FP16 costs two bytes. A seventy-billion-parameter model is
 therefore one hundred and forty gigabytes before a single token is served,
@@ -37,12 +37,15 @@ architecture of @sec-transformer-architecture makes attention central, and
 @sec-structured-long-context pushes the sequence length up, so the cost of
 moving these intermediates grows faster than the cost of the model itself.
 
-## Design
+Two levers answer this single enemy. The first shrinks each number so fewer
+bytes must move. The second refuses to write intermediates that will only be
+read back. The rest of the chapter takes them in turn, then shows that the
+serving regime picks between them and that an evaluation sitting one layer up
+quietly prices the whole trade.
 
-Two ideas answer the problem. Quantization shrinks each number. Fused
-kernels stop writing intermediates that will only be read back.
+## Lever one: make each byte smaller
 
-**Quantization** maps a high-precision tensor onto a small set of levels and
+Quantization maps a high-precision tensor onto a small set of levels and
 stores the levels plus a scale. For integer quantization the rule is a scale
 and a round,
 
@@ -60,32 +63,45 @@ mantissa in the small budget instead of a uniform grid, which trades some
 precision near zero for dynamic range, and the hardware can multiply the
 small format natively.
 
+### Why per-tensor INT8 breaks: the outlier
+
 The reason quantization is not trivial is the outlier. Weights have a
 well-behaved distribution and quantize cleanly. Activations in a trained
 transformer do not: a few channels carry values orders of magnitude larger
 than the rest, and a single per-tensor scale chosen to cover them throws
-away all precision on the rest. Every serious method is a different answer to
-the outlier.
+away all precision on the rest. This is why naive per-tensor INT8, carried
+over from vision models, collapses on large transformers once the emergent
+activation outliers appear past a certain scale. Every serious method is a
+different answer to the outlier.
+
+### Three answers to the outlier
+
+GPTQ, AWQ, and SmoothQuant attack the outlier from three different angles,
+and the angle each chooses is what fixes its strengths and limits.
 
 - **GPTQ** quantizes weights only, one layer at a time, and treats it as a
   reconstruction problem. It uses approximate second-order information, the
   Hessian of the layer's output error, to quantize weights column by column
   while updating the remaining full-precision weights to absorb the error
-  just introduced. This pushes the bitwidth to three or four bits per weight
-  with little quality loss, and it touches activations not at all.
+  just introduced [@frantar2022gptq]. This pushes the bitwidth to three or
+  four bits per weight with little quality loss, and it touches activations
+  not at all.
 - **AWQ** also quantizes weights only, but starts from the observation that
   not all weights matter equally. Protecting roughly the top one percent of
   salient weight channels, identified by watching the activation magnitudes
   rather than the weights, removes most of the error. AWQ folds that
   protection into a per-channel scaling found by search, with no
   backpropagation and no reconstruction, so it does not overfit the small
-  calibration set.
+  calibration set [@lin2023awq].
 - **SmoothQuant** targets the harder regime where activations are quantized
   too. It applies a mathematically equivalent transformation that divides the
   activations by a per-channel factor and multiplies the weights by the same
   factor, migrating the difficulty out of the spiky activations and into the
-  smooth weights. After this smoothing, both can be taken to INT8, which
-  unlocks integer matmuls for the whole layer, not just integer storage.
+  smooth weights [@xiao2022smoothquant]. After this smoothing, both can be
+  taken to INT8, which unlocks integer matmuls for the whole layer, not just
+  integer storage.
+
+### Two axes that organize the choices
 
 That last distinction is the second design axis: **weight-only versus
 weight-and-activation**. Weight-only quantization (GPTQ, AWQ) shrinks the
@@ -101,18 +117,21 @@ The **formats** are the alphabet these methods write in. INT8 and INT4 are
 uniform integer grids with a scale, cheap and well supported. FP8 comes in
 two NVIDIA-specified encodings, E4M3 with more mantissa for precision and
 E5M2 with more exponent for range, and is native on recent hardware so it
-accelerates the multiply itself. GGUF is not a number format but a container:
-the file standard of the llama.cpp ecosystem, packing weights in block-wise
-"k-quant" schemes together with all metadata, so a quantized model is one
-portable file that runs on CPU and Apple silicon as readily as on a GPU.
+accelerates the multiply itself [@micikevicius2022fp8]. GGUF is not a number
+format but a container: the file standard of the llama.cpp ecosystem, packing
+weights in block-wise "k-quant" schemes together with all metadata, so a
+quantized model is one portable file that runs on CPU and Apple silicon as
+readily as on a GPU [@llamacpp2023gguf].
 
-**Fused kernels** answer the memory-traffic half. FlashAttention computes
-exact attention without ever materializing the score matrix. It tiles the
-query, key, and value matrices into blocks that fit in fast on-chip SRAM,
-and it computes the softmax online: as each key block arrives it keeps a
-running maximum and a running normalizer, rescaling the partial output so
-the final result equals the full softmax without the full matrix ever
-existing.
+## Lever two: stop moving the matrix
+
+Fused kernels answer the memory-traffic half. FlashAttention computes exact
+attention without ever materializing the score matrix. It tiles the query,
+key, and value matrices into blocks that fit in fast on-chip SRAM, and it
+computes the softmax online: as each key block arrives it keeps a running
+maximum and a running normalizer, rescaling the partial output so the final
+result equals the full softmax without the full matrix ever existing
+[@dao2022flashattention].
 
 $$
 m_i = \max(m_{i-1}, \tilde{m}_i), \qquad
@@ -148,6 +167,8 @@ flowchart LR
   HBM_naive -. "same exact result, far less traffic" .-> SRAM
 ```
 
+## The routing decision
+
 The two levers compose into a single routing decision. The bottleneck the
 engine is fighting picks the quantization scheme, and the fused attention
 kernel then sits underneath whichever path is chosen, as @fig-quantization-kernels-routing
@@ -167,44 +188,64 @@ flowchart TD
   G --> H["serving engine: vLLM, SGLang, TensorRT-LLM"]
 ```
 
-## Evolution
+Reading the regime off the bottleneck is the chapter's practical core.
+Bandwidth-bound decode favors weight-only GPTQ or AWQ; a compute-bound
+prefill or a throughput-first deployment favors FP8 or SmoothQuant so the
+matmul runs small; CPU and Apple silicon targets favor GGUF k-quants for
+portability; an NVIDIA production stack reaches for TensorRT-LLM to fuse and
+compile down to the hardware.
 
-Quantization for language models has a short, sharp history driven by the
-outlier. Naive per-tensor INT8, carried over from vision models, collapsed on
-large transformers once the emergent activation outliers appeared past a
-certain scale. The first wave of fixes isolated the outliers in higher
-precision while quantizing the rest. GPTQ (2022) then showed that careful
-second-order weight reconstruction reaches three to four bits with negligible
-loss, making weight-only low-bit serving practical. SmoothQuant (2022)
-attacked the activation side by moving the difficulty into the weights,
-enabling full INT8 with reported speedups around one and a half times and
-memory roughly halved. AWQ (2023) reframed weight-only quantization around
+## How the engines came to package this
+
+Both levers reached today's form through a short, sharp history, and the
+serving engines are where the two tracks were finally wired together.
+
+On the quantization side the story is driven by the outlier. The first wave
+of fixes isolated the outliers in higher precision while quantizing the rest.
+GPTQ (2022) then showed that careful second-order weight reconstruction
+reaches three to four bits with negligible loss, making weight-only low-bit
+serving practical [@frantar2022gptq]. SmoothQuant (2022) attacked the
+activation side by moving the difficulty into the weights, enabling full INT8
+with reported speedups around one and a half times and memory roughly halved
+[@xiao2022smoothquant]. AWQ (2023) reframed weight-only quantization around
 salience and per-channel scaling, reporting more than threefold speedups over
-the FP16 baseline while avoiding the overfitting risk of reconstruction. The
-format frontier moved in parallel, from FP16 to INT8 to INT4 on the weight
-side, and to FP8 once hardware made the small float native.
+the FP16 baseline while avoiding the overfitting risk of reconstruction
+[@lin2023awq]. The format frontier moved in parallel, from FP16 to INT8 to
+INT4 on the weight side, and to FP8 once hardware made the small float native
+[@micikevicius2022fp8].
 
 Kernels evolved on a separate track aimed at the same bound. FlashAttention
-(Dao et al., 2022) established the IO-aware, never-materialize design.
-FlashAttention-2 (Dao, 2023) rebalanced the work, parallelizing across the
-sequence dimension and reducing non-matmul operations to push utilization
-higher. FlashAttention-3 (Shah et al., 2024) targeted the Hopper generation
+established the IO-aware, never-materialize design [@dao2022flashattention].
+FlashAttention-2 rebalanced the work, parallelizing across the sequence
+dimension and reducing non-matmul operations to push utilization higher
+[@dao2023flashattention2]. FlashAttention-3 targeted the Hopper generation
 specifically, overlapping the asynchronous tensor-core and memory engines and
 adding low-precision FP8 paths, so the kernel and the quantization story
-converged on the same hardware.
+converged on the same hardware [@shah2024flashattention3].
 
 The engines packaged these advances into systems. FasterTransformer was the
-early hand-optimized baseline. vLLM (Kwon et al., 2023) made paged KV-cache
-management the centerpiece, treating cache memory like operating-system
-virtual memory to cut fragmentation, and it pairs that with quantized weights
-and FlashAttention-style kernels. SGLang (Zheng et al., 2023) added
-RadixAttention to reuse shared prefixes across requests, which matters for
-the structured and agentic workloads of later chapters. TensorRT-LLM is
+early hand-optimized baseline. vLLM made paged KV-cache management the
+centerpiece, treating cache memory like operating-system virtual memory to
+cut fragmentation, and it pairs that with quantized weights and
+FlashAttention-style kernels [@kwon2023paged]. SGLang added RadixAttention to
+reuse shared prefixes across requests, which matters for the structured and
+agentic workloads of later chapters [@zheng2023sglang]. TensorRT-LLM is
 NVIDIA's compiler-driven engine, fusing kernels and selecting low-precision
 paths for its own hardware, distributed as an open repository rather than a
-paper.
+paper [@nvidia2023tensorrtllm].
 
-## Trade-offs
+The engines wire these together rather than reinventing them. vLLM exposes
+quantization as a serving option over its paged cache (`LLM`,
+`vllm/entrypoints/llm.py`) and dispatches attention to a FlashAttention
+backend; SGLang layers prefix reuse on top
+(`RadixCache`, `python/sglang/srt/mem_cache/radix_cache.py`); TensorRT-LLM
+compiles a model definition into a fused, low-precision engine for a target
+GPU (`github.com/NVIDIA/TensorRT-LLM`). The common pattern is the same:
+calibrate or convert the weights once into a quantized artifact, load it into
+an engine that already owns a fused attention kernel and a cache manager, and
+serve.
+
+## What each lever costs
 
 Every choice in this chapter spends one resource to buy another, and the
 right point depends on the serving regime, not on a universal best.
@@ -229,6 +270,13 @@ right point depends on the serving regime, not on a universal best.
   the backward pass and does extra rescaling rather than store the score
   matrix. This is a net win only because attention was memory-bound; the
   same recompute would be wasteful on a compute-bound kernel.
+
+## The evaluation gate
+
+The last trade-off, precision against capability, is the one that does not
+settle inside this chapter. It is paid one layer up, at evaluation, and the
+discipline of treating a quantized model as a model change is what keeps the
+saving honest.
 
 ::: {.callout-important}
 ## What's contested
@@ -258,26 +306,6 @@ looks like pure systems engineering is therefore gated by an evaluation that
 sits above it, and shipping a quantized model without that re-run is shipping
 an unmeasured model.
 :::
-
-## Implementation
-
-In practice the chapter reduces to a routing decision and a small set of
-levers. The regime picks the method: bandwidth-bound decode favors
-weight-only GPTQ or AWQ; a compute-bound prefill or a throughput-first
-deployment favors FP8 or SmoothQuant so the matmul runs small; CPU and Apple
-silicon targets favor GGUF k-quants for portability; an NVIDIA production
-stack reaches for TensorRT-LLM to fuse and compile down to the hardware.
-
-The engines wire these together rather than reinventing them. vLLM exposes
-quantization as a serving option over its paged cache (`LLM`,
-`vllm/entrypoints/llm.py`) and dispatches attention to a FlashAttention
-backend; SGLang layers prefix reuse on top
-(`RadixCache`, `python/sglang/srt/mem_cache/radix_cache.py`); TensorRT-LLM
-compiles a model definition into a fused, low-precision engine for a target
-GPU (`github.com/NVIDIA/TensorRT-LLM`). The common pattern is the same:
-calibrate or convert the weights once into a quantized artifact, load it into
-an engine that already owns a fused attention kernel and a cache manager, and
-serve.
 
 The operational caution is the one the arrow names. A quantized artifact is
 cheap to produce and easy to mistake for free. The footprint saving is real
