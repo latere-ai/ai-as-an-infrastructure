@@ -22,10 +22,10 @@ function stripTags(html: string): string {
     .trim();
 }
 
-export function buildSearchDoc(ch: ChapterData): SearchDoc {
+export function buildSearchDoc(ch: ChapterData, href: string): SearchDoc {
   return {
-    // search.json sits at the lang root; hrefs are already lang-root-relative
-    href: ch.toc.find((p) => p.chapters.some((c) => c.active))?.chapters.find((c) => c.active)?.href ?? "",
+    // store the bare lang-root-relative href; SearchBox applies the page prefix
+    href,
     num: ch.chapterNum,
     title: ch.title,
     headings: ch.headings.map((h) => h.text),

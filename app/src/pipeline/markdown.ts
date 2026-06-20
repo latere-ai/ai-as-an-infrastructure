@@ -47,9 +47,11 @@ function createMd(ctx: RenderContext): MarkdownIt {
   const defFence = md.renderer.rules.fence!.bind(md.renderer.rules);
   md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     const info = tokens[idx].info.trim();
-    if (info === "{=html}") return tokens[idx].content; // Pandoc raw HTML block (cover, viz)
-    if (info === "{dot}" || info === "dot") return renderDot(ctx.graphviz, tokens[idx].content, ctx.xref, ctx.currentHref);
-    if (info === "{mermaid}" || info === "mermaid") return renderMermaid(tokens[idx].content, ctx.xref, ctx.currentHref);
+    // Fences are renamed to bare tokens before parsing (markdown-it-attrs strips
+    // {dot}/{mermaid}/{=html} curly infos), so match the renamed forms.
+    if (info === "rdrhtml") return tokens[idx].content; // Pandoc raw HTML block
+    if (info === "rdrdot" || info === "dot") return renderDot(ctx.graphviz, tokens[idx].content, ctx.xref, ctx.currentHref);
+    if (info === "rdrmermaid" || info === "mermaid") return renderMermaid(tokens[idx].content, ctx.xref, ctx.currentHref);
     return defFence(tokens, idx, options, env, self);
   };
   return md;
@@ -104,7 +106,10 @@ function postProcess(html: string, ctx: RenderContext): string {
 export function renderMarkdown(src: string, ctx: RenderContext): RenderedChapter {
   const md = createMd(ctx);
   const { titleLine, body } = splitTitle(src);
-  const expanded = expandDivs(body);
+  // Rename curly diagram fences to bare language tokens so markdown-it-attrs
+  // leaves the info intact for our fence renderer.
+  const normalized = body.replace(/^(`{3,})\{(dot|mermaid)\}[ \t]*$/gm, (_m, ticks, kind) => `${ticks}rdr${kind}`);
+  const expanded = expandDivs(normalized);
   const { headings, tokens } = collectHeadings(md, expanded);
   const html = postProcess(md.renderer.render(tokens, (md as any).options, {}), ctx);
   return { titleLine, html, headings };

@@ -4,7 +4,7 @@
 // order, skipping unnumbered front/back matter (Preface, Summary, References).
 
 import { parse as parseYaml } from "yaml";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Lang, NavChapter, NavPart } from "../types.ts";
 
@@ -57,8 +57,12 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
   let frontSingle: BookChapter[] = []; // top-level chapters with no part
   let chapterCounter = 0;
 
-  const makeChapter = (qmdRel: string, partLabel: string): BookChapter => {
+  // A chapter listed in _quarto.yml whose .qmd does not exist yet (e.g. a
+  // translation in progress) is skipped with a warning, so an in-progress TOC
+  // never breaks the build.
+  const makeChapter = (qmdRel: string, partLabel: string): BookChapter | null => {
     const qmdPath = join(langDir, qmdRel);
+    if (!existsSync(qmdPath)) { console.warn(`  skip (missing): ${lang}/${qmdRel}`); return null; }
     const { title, unnumbered } = readHeading(qmdPath);
     let num = "";
     if (!unnumbered) num = String(++chapterCounter);
@@ -68,16 +72,12 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
   for (const entry of rawChapters) {
     if (typeof entry === "string") {
       const ch = makeChapter(entry, "");
-      frontSingle.push(ch);
-      flat.push(ch);
+      if (ch) { frontSingle.push(ch); flat.push(ch); }
     } else if (entry && typeof entry === "object" && "part" in entry) {
       const part = entry as { part: string; chapters: string[] };
-      const chs = (part.chapters ?? []).map((c) => {
-        const ch = makeChapter(c, part.part);
-        flat.push(ch);
-        return ch;
-      });
-      parts.push({ label: part.part, single: false, chapters: chs });
+      const chs = (part.chapters ?? []).map((c) => makeChapter(c, part.part)).filter((c): c is BookChapter => !!c);
+      flat.push(...chs);
+      if (chs.length) parts.push({ label: part.part, single: false, chapters: chs });
     }
   }
 

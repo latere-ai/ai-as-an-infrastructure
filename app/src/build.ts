@@ -68,7 +68,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const outPath = join(langOut, ch.href);
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, html);
-    searchDocs.push(buildSearchDoc(data));
+    searchDocs.push(buildSearchDoc(data, ch.href));
     pageCount++;
   }
   writeFileSync(join(langOut, "search.json"), JSON.stringify(searchDocs));

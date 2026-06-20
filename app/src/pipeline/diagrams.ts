@@ -49,7 +49,11 @@ function figureWrap(inner: string, label: string | undefined, cap: string | unde
 export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap, currentHref: string): string {
   const { body, label, cap } = extractDirectives(code, "//|");
   let svg: string;
-  try { svg = gv.dot(body, "svg"); } catch (e) { svg = `<pre class="rdr-diagram-error">graphviz error: ${String(e)}</pre>`; }
+  try {
+    svg = gv.dot(body, "svg");
+    const i = svg.indexOf("<svg"); // drop the <?xml?> + DOCTYPE preamble for inline HTML
+    if (i > 0) svg = svg.slice(i);
+  } catch (e) { svg = `<pre class="rdr-diagram-error">graphviz error: ${String(e)}</pre>`; }
   return figureWrap(`<div class="rdr-diagram">${svg}</div>`, label, cap, xref, currentHref);
 }
 
