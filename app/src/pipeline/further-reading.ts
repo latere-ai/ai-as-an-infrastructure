@@ -16,9 +16,12 @@ import type { Lang } from "../types.ts";
 
 export interface FurtherReadingEntry {
   key: string;
+  type: string; // bib entry type: book, article, misc, inproceedings, …
   authors: string[]; // surnames in order
+  authorsFull: string[]; // "Surname, First" in order (for book style)
   year: string;
   title: string;
+  publisher?: string;
   url?: string;
   eprint?: string;
   note?: string; // en gloss
@@ -32,6 +35,11 @@ function surname(name: { lastName?: string; firstName?: string; name?: string })
   return "?";
 }
 
+function fullName(name: { lastName?: string; firstName?: string; name?: string }): string {
+  if (name.lastName) return name.firstName ? `${name.lastName}, ${name.firstName}` : name.lastName;
+  return name.name ?? "?";
+}
+
 // Entries of one chapter's bib, in file order. Returns [] if the chapter has no
 // .bib yet (so an un-backfilled chapter renders an empty list rather than crash).
 export function furtherReadingEntries(refsDir: string, slug: string): FurtherReadingEntry[] {
@@ -40,15 +48,18 @@ export function furtherReadingEntries(refsDir: string, slug: string): FurtherRea
   // sentenceCase:false keeps the authors' original title casing ("Scaling Laws
   // for…", not "Scaling laws for…"), matching the hand-written further reading.
   const lib = parseBib(readFileSync(path, "utf8"), { errorHandler: () => {}, sentenceCase: false });
-  return lib.entries.map((e: { key: string; fields: Record<string, any> }) => {
+  return lib.entries.map((e: { key: string; type?: string; fields: Record<string, any> }) => {
     const f = e.fields as Record<string, any>;
-    const authors: string[] = Array.isArray(f.author) ? f.author.map((a: any) => surname(a)) : [];
+    const authorList: any[] = Array.isArray(f.author) ? f.author : [];
     const eprint = f.eprint ? String(f.eprint) : undefined;
     return {
       key: e.key,
-      authors,
+      type: String(e.type ?? "misc").toLowerCase(),
+      authors: authorList.map((a) => surname(a)),
+      authorsFull: authorList.map((a) => fullName(a)),
       year: String(f.year ?? f.date ?? "").match(/\d{4}/)?.[0] ?? "n.d.",
       title: String(f.title ?? "").replace(/[{}]/g, ""),
+      publisher: f.publisher ? String(f.publisher) : undefined,
       url: f.url ? String(f.url) : eprint ? `https://arxiv.org/abs/${eprint}` : undefined,
       eprint,
       note: f.note ? String(f.note) : undefined,
@@ -77,12 +88,23 @@ function linkText(e: FurtherReadingEntry): string {
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 function renderEntry(e: FurtherReadingEntry, lang: Lang): string {
-  const gloss = (lang === "zh" ? e.noteZh : e.note) ?? (lang === "zh" ? e.note : undefined);
+  // zh prefers the zh gloss, falling back to the en gloss; en uses the en gloss.
+  const gloss = (lang === "zh" ? e.noteZh ?? e.note : e.note);
+  const glossPart = gloss ? ` (${esc(gloss)})` : "";
+  const link = e.url ? ` <a href="${esc(e.url)}" rel="noopener">${esc(linkText(e))}</a>` : "";
+
+  // Books: Chicago-ish "Surname, First. *Title.* Publisher, year. [host]".
+  if (e.type === "book") {
+    const authors = e.authorsFull.length ? `${esc(e.authorsFull.join("; "))}. ` : "";
+    const pub = e.publisher ? `${esc(e.publisher)}, ` : "";
+    return `<li>${authors}<em>${esc(e.title)}</em>${glossPart}. ${pub}${e.year}.${link}</li>`;
+  }
+
+  // Papers and everything else: 'Surname et al., "Title" (gloss), year. [link]'.
   const authors = e.authors.length ? `${esc(authorsLabel(e.authors))}, ` : "";
   const titlePart = gloss
-    ? `&ldquo;${esc(e.title)}&rdquo; (${esc(gloss)}),`
+    ? `&ldquo;${esc(e.title)}&rdquo;${glossPart},`
     : `&ldquo;${esc(e.title)},&rdquo;`;
-  const link = e.url ? ` <a href="${esc(e.url)}" rel="noopener">${esc(linkText(e))}</a>` : "";
   return `<li>${authors}${titlePart} ${e.year}.${link}</li>`;
 }
 
