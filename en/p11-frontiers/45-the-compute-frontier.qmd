@@ -1,0 +1,274 @@
+# The Compute Frontier: Bandwidth, Not FLOPs {#sec-compute-frontier}
+
+@sec-accelerators-networking taught the reader to read a cluster as three
+bandwidth tiers and to diagnose a run with one honest number, model FLOPs
+utilization. That chapter described how the tiers work. This one asks where
+each tier breaks. By the end a reader can say why the scarce resource at the
+frontier is bytes rather than arithmetic, why a single accelerator is now a
+package of chiplets rather than one die, why the NVLink boundary that the
+earlier chapter pinned to a node has moved to a whole rack, and which of the
+escape routes from the bandwidth wall are already shipping rather than
+promised.
+
+## A spec sheet that lies in the same direction every year
+
+A frontier accelerator's datasheet leads with a peak arithmetic rate, and
+the rate climbs fast across generations, faster still once the precision
+drops from FP16 to FP8 to FP4. Read only that line and the machine looks
+like it is getting better at the thing training and inference need most.
+The line is true and almost beside the point. The work a transformer does is
+not bound by how fast the multiply-accumulate units can run; it is bound by
+how fast operands reach them. Attention decode, mixture-of-experts routing,
+and any kernel that touches more memory than it reuses spend their time
+waiting on high-bandwidth memory, not on the matrix units. The roofline of
+@sec-accelerators-networking already named this: below a kernel's arithmetic
+intensity the achievable rate is set by HBM bandwidth, and the peak FLOPs
+ceiling is unreachable.
+
+The frontier problem is that the two numbers on the roofline diverge. Across
+recent accelerator generations, low-precision matrix throughput has climbed
+much faster than HBM bandwidth per chip. Stating the trend honestly matters
+more than a headline multiple: from the V100 era to Blackwell, peak compute
+grew by roughly an order of magnitude more than memory bandwidth did, and the
+recent FP4 and FP8 jumps widen the gap further because they multiply
+arithmetic throughput without moving a single byte faster. The arithmetic
+intensity a kernel must reach to escape the memory-bound region therefore
+rises every generation. This is the memory wall, and it is not a temporary
+manufacturing lag. It is the structural fact that organizes the whole
+chapter: every tier of the machine, the chip, the package, the rack, and the
+power behind them, is hitting a ceiling that bandwidth, not arithmetic, sets.
+
+```{mermaid}
+%%| label: fig-compute-frontier-walls
+%%| fig-cap: "The frontier as a stack of ceilings, each binding at a different tier. The spec sheet's FLOPs sits at the bottom and is the least scarce; bytes, package area, fabric reach, and megawatts bind above it."
+flowchart TB
+  flops["peak FLOPs<br/>(spec-sheet headline, least scarce)"]
+  hbm["HBM bandwidth + capacity<br/>(the memory wall)"]
+  retic["reticle limit 858 mm²<br/>(forces chiplets on an interposer)"]
+  fabric["scale-up fabric reach<br/>(how much silicon one coherent domain spans)"]
+  power["power + cooling<br/>(the datacenter ceiling, @sec-powering-ai)"]
+  flops --> hbm --> retic --> fabric --> power
+```
+
+## The chip: a die too small for its own memory
+
+The innermost ceiling is geometric. A photolithography scanner can expose at
+most one reticle field per shot, capped near 858 mm² [@shilov2026cowos]. A
+frontier compute die already presses against that limit, so the only way to
+add transistors is to stop building one die. Modern accelerators are several
+compute chiplets and a row of HBM stacks tiled side by side on a silicon
+interposer, the CoWoS (chip-on-wafer-on-substrate) package. The interposer,
+not the logic die, is now the object whose area sets how much compute and how
+many memory stacks one accelerator can carry. @sec-making-silicon owns the
+question of whether that interposer can be fabricated and bought; here it is
+enough to see that the reticle limit pushed packaging up into the
+architecture, making interposer area a first-class design parameter.
+
+What gets tiled onto the interposer is mostly memory, and the memory is the
+point. NVIDIA's Rubin generation reaches roughly 288 GB of HBM4 at about
+22 TB/s per accelerator. Google's Ironwood, the TPU v7, carries 192 GB of
+HBM3e at 7.37 TB/s and is the first TPU to support FP8 natively rather than
+through emulation [@google2025ironwood]. The numbers move every quarter, and
+any specific figure in this chapter is a date stamp rather than a constant.
+The durable observation is the ratio: capacity and bandwidth grow, but they
+grow more slowly than the arithmetic that consumes them, so the fraction of
+real workloads that are memory-bound rises over time.
+
+::: {.callout-tip}
+## Constraint arrow
+
+HBM bandwidth growing slower than low-precision matrix throughput sets a
+falling arithmetic-intensity floor. That floor dictates choices two layers
+up: an ever-larger share of inference kernels land in the memory-bound region,
+which is why the serving layer leans on FP8 and FP4 weights and on aggressive
+key-value-cache management rather than on more FLOPs (cross-ref
+@sec-memory-scheduling and @sec-quantization-kernels). Adding arithmetic to a
+bandwidth-bound kernel buys nothing.
+:::
+
+## The rack: the scale-up boundary that moved
+
+@sec-accelerators-networking drew a hard line at the node: tensor parallelism,
+the most communication-hungry axis, had to stay inside the NVLink domain,
+and that domain was the eight or so accelerators in one chassis. That line has
+moved. The defining hardware shift of this generation is the deliberate
+expansion of the coherent scale-up domain from a node to a whole rack.
+NVIDIA's GB200 and GB300 NVL72 wire seventy-two GPUs into a single
+NVLink-coherent domain spanning the rack, and the Rubin NVL72 keeps the form
+factor while roughly doubling the fabric bandwidth. The rule from Part VII
+still holds, but its boundary is now the rack rather than the chassis: tensor
+parallelism stays inside the NVLink domain, and the domain got an order of
+magnitude larger.
+
+```{dot}
+//| label: fig-compute-frontier-domain
+//| fig-cap: "The scale-up domain that @sec-accelerators-networking pinned to a node has expanded to a rack. The most bandwidth-hungry parallelism axis can now span 72 accelerators inside one coherent fabric, where before it spanned roughly 8."
+digraph scaleup {
+  rankdir=LR;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280"];
+
+  old [label="2023 scale-up domain\n~8 GPUs, one chassis\nTP fits here"];
+  new [label="2026 scale-up domain\n72 GPUs, one rack (NVL72)\nTP fits here", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  out [label="scale-out\nDP / PP across racks\nInfiniBand / Ethernet"];
+
+  old -> new [label="NVLink domain\nblown open to rack scale"];
+  new -> out [label="cheaper bytes\nsparse communication only"];
+}
+```
+
+Why expand the domain at all? Because the memory wall and the parallelism
+math interact. A larger coherent domain lets a model's tensor-parallel and
+expert-parallel groups span more silicon at full fabric bandwidth, so the
+per-device memory pressure of a trillion-parameter model is spread without
+spilling the hungriest collective onto the slow inter-rack network. The rack
+became the unit of frontier compute because that is the largest blast radius
+the fabric can still hide a collective inside.
+
+The expansion is not free, and copper is running out of reach. Past a rack,
+the per-interface power of pluggable optical transceivers, on the order of
+tens of watts each, becomes a budget the rack cannot spend. Co-packaged
+optics move the fiber onto the switch package and cut the per-interface power
+roughly from 30 W to 9 W, which is the case NVIDIA makes for Quantum-X and
+Spectrum-X co-packaged switches shipping through 2026 [@nvidia2025cpo].
+Beyond a fixed topology, optical circuit switching lets the fabric itself be
+reconfigured per training phase; recent work on parallelism-driven optical
+rails reports large network-power and cost reductions at a few percent
+training overhead [@ding2026opus]. The through-line is that the fabric's
+energy budget, not only its bandwidth, now bounds how large a coherent domain
+can be built and cooled, which is the thread @sec-powering-ai picks up.
+
+## The silicon menagerie: who is betting on bandwidth
+
+For most of the deep-learning era the merchant GPU was the only serious
+frontier accelerator, and its software ecosystem was the moat. The bandwidth
+wall has opened room for a wider menagerie, and reading the entrants by what
+they optimize is more instructive than ranking them by peak FLOPs.
+
+The custom-ASIC bet is vertical integration: co-design the chip with the
+network and skip the merchant margin. Google's Ironwood scales to a
+9,216-chip superpod wired as a torus with optical circuit switches rather
+than a switched fat-tree, and targets the inference-dominated workload mix
+directly [@google2025ironwood]. Amazon's Trainium makes the same wager for
+its own fleet. The merchant counter is AMD's memory-density play: its
+rack-scale Helios system pairs accelerators carrying substantially more HBM
+than the NVIDIA part it competes with, trading peak FP4 throughput for memory
+capacity and bandwidth on the thesis that the wall is bytes, not arithmetic.
+Under export controls, Huawei's CloudMatrix knits hundreds of domestic NPUs
+into one optically-meshed scale-up domain that reaches frontier aggregate
+bandwidth by brute force and roughly four times the power, a reminder that
+the scale-up-domain idea is general and that the memory wall can be answered
+with watts when the best silicon is unavailable.
+
+At the contrarian edge sits wafer-scale. Cerebras keeps an entire model's
+weights in on-die SRAM across a single wafer of 900,000 cores, with no HBM to
+stream from, and reports multiples of GPU per-user token rate on
+latency-bound decode [@cerebras2024wse3]. It is the purest bet against the
+memory wall: if you never leave the die, there is no HBM bandwidth to be
+bound by. Its ceiling is capacity, since on-wafer SRAM cannot hold a
+trillion-parameter model, so it wins latency-bound serving rather than the
+largest training runs.
+
+## Escape routes, in order of maturity
+
+The chapter's payoff is to sort the ways out of the bandwidth wall by how real
+they are today, because the field's discourse mixes shipping hardware with
+research slides.
+
+Shipping now is rack-scale copper: the NVL72-class domain is in production and
+is the reason tensor parallelism can span seventy-two devices. Shipping
+through 2026 is co-packaged optics, the next step once copper runs out of
+reach past the rack [@nvidia2025cpo]. A numeric escape route is already in
+training pipelines: four-bit pretraining formats such as NVFP4 relax the
+arithmetic-intensity floor by halving operand bytes while preserving accuracy
+over multi-trillion-token runs, which is the cleanest way to make a
+memory-bound kernel less memory-bound without new silicon (the format
+mechanics belong to @sec-quantization-kernels). A structural route is to split
+the workload across chips specialized for each phase: prefill is
+compute-bound and tolerates cheaper high-capacity memory, while decode is
+bandwidth-bound and wants scarce HBM, so a separate prefill-optimized class of
+accelerator pairs with HBM parts for decode. That this idea has wavered in and
+out of vendor roadmaps is itself a frontier-uncertainty signal worth
+recording rather than smoothing over. Further out sit reconfigurable optical
+fabrics [@ding2026opus] and wafer-scale integration [@cerebras2024wse3], real
+research with real demonstrations but not yet the default.
+
+```{dot}
+//| label: fig-compute-frontier-escapes
+//| fig-cap: "Escape routes from the bandwidth wall, ordered by maturity. The left column is in production; the right column is demonstrated but not default."
+digraph escapes {
+  rankdir=LR;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280"];
+
+  subgraph cluster_ship { label="shipping"; color="#6b7280"; fontname="Helvetica"; fontsize=10;
+    rack [label="rack-scale copper\n(NVL72 domain)"];
+    cpo  [label="co-packaged optics\n(Quantum-X / Spectrum-X)"];
+    fp4  [label="FP4 pretraining\n(NVFP4: fewer operand bytes)"];
+  }
+  subgraph cluster_emerge { label="emerging"; color="#6b7280"; fontname="Helvetica"; fontsize=10;
+    disagg [label="prefill/decode\nhardware split"];
+    ocs    [label="optical circuit\nswitching"];
+    wafer  [label="wafer-scale /\nin-memory compute"];
+  }
+  rack -> disagg [style=invis];
+  cpo -> ocs [style=invis];
+  fp4 -> wafer [style=invis];
+}
+```
+
+::: {.callout-important}
+## What's contested
+
+Four debates are genuinely live, and the camps disagree on which non-FLOPs
+wall binds first rather than on whether FLOPs stopped being the limit.
+
+- **One coherent fabric, an open standard, or cheap Ethernet?** NVIDIA bets
+  ever-larger proprietary NVLink domains are worth their cost. The UALink
+  consortium wants an open switched standard to commoditize the scale-up tier.
+  A pragmatist camp reuses Ethernet switch silicon for scale-up. Through 2026
+  the pragmatists shipped first, because rack vendors fell back to
+  Ethernet-substrate fabrics when native open-standard switch silicon was not
+  yet available. NVIDIA has meanwhile partially opened its own fabric to
+  third-party silicon, blurring the proprietary-versus-open line.
+- **Is co-packaged optics mandatory or a reliability risk?** Proponents say
+  copper is out of runway past a rack and optics is the only way to scale the
+  domain. Skeptics point to unproven laser reliability and repairability at
+  fleet scale and defend copper inside the rack. The dividing line is
+  distance.
+- **Do custom ASICs displace the merchant GPU?** The vertical-integration camp
+  says co-designed silicon wins perf-per-watt on the inference-heavy mix. The
+  incumbent camp says the software ecosystem and flexibility keep the GPU the
+  default, and ASICs win only captive first-party workloads.
+- **Is wafer-scale the answer or a niche?** It clearly wins latency-bound
+  single-user decode and clearly cannot hold the largest models in SRAM. The
+  unresolved question is whether model sizes plateau enough for on-die
+  capacity to catch up.
+:::
+
+## Reading the frontier
+
+The capability, efficiency, trust lens closes the chapter as it closes the
+others. Capability at this layer is no longer set by how many FLOPs a chip can
+retire but by how many bytes it can move and how much coherent silicon one
+fabric can span, which is why the rack replaced the chip as the unit of
+frontier compute. Efficiency moved into the numerics and the network: a
+four-bit operand and a nine-watt optical interface buy more frontier than a
+faster matrix unit, because both attack bytes rather than arithmetic. Trust,
+at the silicon layer, is supply and concentration: a frontier run now depends
+on whether a handful of buyers can secure interposer area and HBM stacks at
+all, which is the allocation gate @sec-making-silicon takes up next. The
+spec-sheet FLOPs was never the scarce resource. The scarce resources are
+bytes, package area, fabric reach, and the megawatts behind them, and the
+rest of this part follows that scarcity up the stack.
+
+## Further reading
+
+- Google, "Ironwood: The First Google TPU for the Age of Inference," 2025 (TPU v7 specs: 192 GB HBM3e at 7.37 TB/s, 9,216-chip superpod, native FP8). [blog.google](https://blog.google/innovation-and-ai/infrastructure-and-cloud/google-cloud/ironwood-tpu-age-of-inference/)
+- NVIDIA, "Scaling AI Factories with Co-Packaged Optics for Better Power Efficiency," 2025 (Quantum-X and Spectrum-X CPO, the 30 W to 9 W per-interface case). [developer.nvidia.com](https://developer.nvidia.com/blog/scaling-ai-factories-with-co-packaged-optics-for-better-power-efficiency/)
+- Ding, Lyu, Kataria, Singh, "Photonic Rails in ML Datacenters with Opus," 2026 (optical circuit switching reconfigured per parallelism phase). [arXiv:2602.12521](https://arxiv.org/abs/2602.12521)
+- Shilov, "TSMC 'Super Carrier' CoWoS," Tom's Hardware, 2026 (the 858 mm² reticle limit and the CoWoS reticle-scaling roadmap). [tomshardware.com](https://www.tomshardware.com/tech-industry/tsmc-super-carrier-cowos-interposer-gets-bigger-enabling-massive-ai-chips-to-reach-9-reticle-sizes-with-12-hbm4-stacks)
+- Cerebras Systems, "Third-Generation Wafer-Scale Engine (WSE-3)," 2024 (the on-die-SRAM bet against the memory wall, and its capacity ceiling). [cerebras.ai](https://www.cerebras.ai/press-release/cerebras-announces-third-generation-wafer-scale-engine)
+- Epoch AI, "How Much Power Will Frontier AI Training Demand in 2030?," 2025 (the datacenter-level power ceiling this chapter hands to @sec-powering-ai). [epoch.ai](https://epoch.ai/blog/power-demands-of-frontier-ai-training)
