@@ -3,7 +3,7 @@
 // client hydration share one definition.
 
 export type Lang = "en" | "zh";
-export type Palette = "ink" | "clay";
+export type Palette = "ink" | "clay" | "rose";
 export type Theme = "light" | "dark";
 export type Layout = "codex" | "manuscript" | "atlas";
 

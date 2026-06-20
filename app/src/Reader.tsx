@@ -9,7 +9,7 @@ import { DEFAULT_SETTINGS } from "./types.ts";
 
 type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
-  palette: string; ink: string; clay: string; theme: string; light: string; dark: string;
+  palette: string; ink: string; clay: string; rose: string; theme: string; light: string; dark: string;
   body: string; sans: string; kai: string; size: string; layout: string;
   codex: string; manuscript: string; atlas: string; prev: string; next: string; lang: string; resize: string; download: string;
   author: string; updated: string; readtimeLabel: string;
@@ -18,14 +18,14 @@ type Strings = {
 const STRINGS: Record<Lang, Strings> = {
   zh: {
     sidebar: "目录侧栏", onThisPage: "本页目录", settings: "阅读设置", search: "搜索章节…",
-    palette: "配色", ink: "墨纸", clay: "靛蓝", theme: "主题", light: "浅色", dark: "深色",
+    palette: "配色", ink: "墨纸", clay: "靛蓝", rose: "玫瑰", theme: "主题", light: "浅色", dark: "深色",
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
     codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", lang: "EN", resize: "拖动调整宽度", download: "下载",
     author: "作者", updated: "更新于", readtimeLabel: "阅读时长",
   },
   en: {
     sidebar: "Sidebar", onThisPage: "On this page", settings: "Reading settings", search: "Search chapters…",
-    palette: "Palette", ink: "Ink", clay: "Azure", theme: "Theme", light: "Light", dark: "Dark",
+    palette: "Palette", ink: "Ink", clay: "Azure", rose: "Rose", theme: "Theme", light: "Light", dark: "Dark",
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
     codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", lang: "中", resize: "Drag to resize", download: "Download",
     author: "Author", updated: "Updated", readtimeLabel: "Reading time",
@@ -466,7 +466,14 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
       position: "absolute", top: 42, right: 0, zIndex: 60, width: 264, padding: "14px 16px 16px",
       background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-lg)",
     }}>
-      <div style={{ ...row, marginTop: 0 }}><span style={label}>{t.palette}</span>{Seg<Palette>(s.palette, [{ v: "ink", l: t.ink }, { v: "clay", l: t.clay }], (v) => set({ palette: v }))}</div>
+      <div style={{ ...row, marginTop: 0, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
+        <span style={label}>{t.palette}</span>
+        <div style={{ ...seg, width: "100%" }}>
+          {([{ v: "ink", l: t.ink }, { v: "clay", l: t.clay }, { v: "rose", l: t.rose }] as { v: Palette; l: string }[]).map((o) => (
+            <button key={o.v} style={{ ...segBtn(s.palette === o.v), flex: 1 }} onClick={() => set({ palette: o.v })}>{o.l}</button>
+          ))}
+        </div>
+      </div>
       <div style={row}><span style={label}>{t.theme}</span>{Seg(s.theme, [{ v: "light", l: t.light }, { v: "dark", l: t.dark }], (v) => set({ theme: v as ReaderSettings["theme"] }))}</div>
       <div style={row}><span style={label}>{t.body}</span>{Seg(s.serifBody ? "kai" : "sans", [{ v: "sans", l: t.sans }, { v: "kai", l: t.kai }], (v) => set({ serifBody: v === "kai" }))}</div>
       <div style={row}>
