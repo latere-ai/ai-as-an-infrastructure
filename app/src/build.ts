@@ -30,6 +30,10 @@ const built = await Bun.build({
 });
 if (!built.success) { console.error(built.logs); process.exit(1); }
 const clientJs = await built.outputs[0].text();
+// Content hash for cache-busting. reader.js keeps a stable filename (so nginx
+// serves it), but the <script src> carries ?v=<hash> so a returning reader's
+// browser fetches the new bundle instead of a stale cached one on every deploy.
+const clientHash = Bun.hash(clientJs).toString(36).slice(0, 10);
 
 // Reuse the proven runtime scripts (verbatim, framework-free IIFEs) + mermaid.
 const runtime = (f: string) => existsSync(join(repoRoot, f)) ? readFileSync(join(repoRoot, f), "utf8") : "";
@@ -65,7 +69,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const data = compileChapter(book, ch, ctx);
     const bodyHtml = renderToString(createElement(Reader, { chapter: data }));
     const depth = ch.href.split("/").length - 1;
-    const clientHref = "../".repeat(depth) + "reader.js";
+    const clientHref = "../".repeat(depth) + "reader.js?v=" + clientHash;
     const html = page({ chapter: data, bodyHtml, css, clientHref, afterBody });
     const outPath = join(langOut, ch.href);
     mkdirSync(dirname(outPath), { recursive: true });
