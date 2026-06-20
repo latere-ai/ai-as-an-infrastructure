@@ -6,6 +6,7 @@ import type { ChapterData } from "./types.ts";
 export const sampleChapter: ChapterData = {
   lang: "en",
   partLabel: "Part I: Foundations and Pretraining",
+  partShort: "Part I",
   chapterNum: "6",
   eyebrow: "Part 1 · Chapter 6",
   crumbChapter: "Chapter 6",

@@ -34,7 +34,8 @@ export interface PrevNext {
 
 export interface ChapterData {
   lang: Lang;
-  partLabel: string; // breadcrumb part, e.g. "Part I: Foundations and Pretraining"
+  partLabel: string; // full part, e.g. "Part I: Foundations and Pretraining"
+  partShort: string; // short part, e.g. "Part I" / "第一部分"
   chapterNum: string; // "6" or ""
   eyebrow: string; // "Part 1 · Chapter 6"
   crumbChapter: string; // breadcrumb tail, "Chapter 6" / "第 6 章"

@@ -159,8 +159,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const set = (patch: Partial<ReaderSettings>) => setS((p) => ({ ...p, ...patch }));
   const fontScale = Math.min(1.4, Math.max(0.8, s.fontScale));
 
-  const showSidebar = s.layout !== "manuscript" && !mobile && !s.navCollapsed;
-  const showMiniToc = s.layout === "codex" && !mobile && !s.tocCollapsed;
+  const showSidebar = !mobile && !s.navCollapsed;
+  const showMiniToc = !mobile && !s.tocCollapsed;
   const bodyFont = s.serifBody ? "var(--font-cjk)" : "var(--font-ui)";
 
   const iconBtn = (active: boolean): React.CSSProperties => ({
@@ -174,7 +174,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
       className="reader"
       data-palette={s.palette}
       data-theme={s.theme}
-      data-layout={s.layout}
+      data-layout="codex"
       style={{
         height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column",
         background: "var(--bg)", color: "var(--fg-1)", fontFamily: "var(--font-ui)",
@@ -205,7 +205,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             borderLeft: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: 11,
             letterSpacing: ".02em", color: "var(--fg-3)", whiteSpace: "nowrap", overflow: "hidden",
           }}>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{chapter.partLabel}</span>
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{chapter.partShort}</span>
             <span style={{ opacity: 0.5 }}>·</span>
             <span style={{ color: "var(--fg-1)", whiteSpace: "nowrap" }}>{chapter.crumbChapter}</span>
           </nav>
@@ -213,7 +213,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
         <div style={{ flex: 1 }} />
 
-        {s.layout === "codex" && !mobile && (
+        {!mobile && (
           <button onClick={() => set({ tocCollapsed: !s.tocCollapsed })} title={t.onThisPage} aria-label={t.onThisPage} style={iconBtn(!s.tocCollapsed)}>
             <Icon d={<><rect x="2" y="3" width="12" height="10" rx="1.5" /><line x1="9.5" y1="3" x2="9.5" y2="13" /></>} />
           </button>
@@ -252,7 +252,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             padding: mobile ? "26px 18px 60px" : "40px 56px 80px",
             fontFamily: bodyFont, lineHeight: 1.85, color: "var(--fg-2)",
           }}>
-            <ChapterOpener chapter={chapter} layout={s.layout} t={t} />
+            <ChapterOpener chapter={chapter} t={t} />
             <div className="rdr-article" dangerouslySetInnerHTML={{ __html: chapter.contentHtml }} />
             <PrevNextNav chapter={chapter} t={t} />
           </article>
@@ -296,27 +296,7 @@ function MetaRow({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   );
 }
 
-function ChapterOpener({ chapter, layout, t }: { chapter: ChapterData; layout: Layout; t: Strings }) {
-  if (layout === "manuscript") {
-    return (
-      <div style={{ textAlign: "center", margin: "8px 0 40px" }}>
-        {chapter.chapterNum && <div style={{ fontFamily: "var(--font-serif)", fontSize: "clamp(72px,12vw,120px)", lineHeight: 0.85, color: "var(--accent)" }}>{chapter.chapterNum}</div>}
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: ".22em", textTransform: "uppercase", color: "var(--fg-3)", margin: "8px 0 14px" }}>{chapter.eyebrow}</div>
-        <h1 style={{ fontFamily: "var(--font-serif)", fontWeight: 400, fontSize: "clamp(2.2rem,5vw,3.2rem)", lineHeight: 1.15, color: "var(--fg-1)" }}>{chapter.title}</h1>
-        <div style={{ width: 48, height: 2, background: "var(--accent)", margin: "24px auto 0" }} />
-      </div>
-    );
-  }
-  if (layout === "atlas") {
-    return (
-      <div style={{ marginBottom: 34, paddingBottom: 22, borderBottom: "2px solid var(--fg-1)" }}>
-        {chapter.chapterNum && <div style={{ fontFamily: "var(--font-serif)", fontSize: "clamp(64px,9vw,92px)", lineHeight: 0.82, color: "var(--fg-1)" }}>{chapter.chapterNum}</div>}
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: ".18em", textTransform: "uppercase", color: "var(--accent)", margin: "12px 0" }}>{chapter.eyebrow}</div>
-        <h1 style={{ fontFamily: "var(--font-ui)", fontWeight: 700, letterSpacing: "-.03em", lineHeight: 1.04, fontSize: "clamp(2.2rem,5vw,3.4rem)", color: "var(--fg-1)" }}>{chapter.title}</h1>
-      </div>
-    );
-  }
-  // codex
+function ChapterOpener({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   return (
     <div style={{ marginBottom: 26 }}>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: ".15em", textTransform: "uppercase", color: "var(--accent)", marginBottom: 10 }}>{chapter.eyebrow}</div>
@@ -489,14 +469,6 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
       <div style={{ ...row, marginTop: 0 }}><span style={label}>{t.palette}</span>{Seg<Palette>(s.palette, [{ v: "ink", l: t.ink }, { v: "clay", l: t.clay }], (v) => set({ palette: v }))}</div>
       <div style={row}><span style={label}>{t.theme}</span>{Seg(s.theme, [{ v: "light", l: t.light }, { v: "dark", l: t.dark }], (v) => set({ theme: v as ReaderSettings["theme"] }))}</div>
       <div style={row}><span style={label}>{t.body}</span>{Seg(s.serifBody ? "kai" : "sans", [{ v: "sans", l: t.sans }, { v: "kai", l: t.kai }], (v) => set({ serifBody: v === "kai" }))}</div>
-      <div style={{ ...row, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
-        <span style={label}>{t.layout}</span>
-        <div style={{ ...seg, width: "100%" }}>
-          {([{ v: "codex", l: t.codex }, { v: "manuscript", l: t.manuscript }, { v: "atlas", l: t.atlas }] as { v: Layout; l: string }[]).map((o) => (
-            <button key={o.v} style={{ ...segBtn(s.layout === o.v), flex: 1 }} onClick={() => set({ layout: o.v })}>{o.l}</button>
-          ))}
-        </div>
-      </div>
       <div style={row}>
         <span style={label}>{t.size}</span>
         <div style={{ ...seg, alignItems: "center" }}>

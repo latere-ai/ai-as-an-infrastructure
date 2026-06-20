@@ -31,9 +31,14 @@ function chapterWord(lang: string, num: string): string {
   return lang === "zh" ? `第 ${num} 章` : `Chapter ${num}`;
 }
 
+// "Part I: Foundations…" → "Part I"; "第一部分：基础…" → "第一部分"
+function shortPart(label: string): string {
+  return label.split(/[:：]/)[0].trim();
+}
+
 function eyebrowFor(book: Book, ch: BookChapter): string {
   if (!ch.num) return ch.title;
-  return `${ch.partLabel} · ${chapterWord(book.lang, ch.num)}`;
+  return `${shortPart(ch.partLabel)} · ${chapterWord(book.lang, ch.num)}`;
 }
 
 // Reading time from the de-tagged body: ~220 wpm (en) / ~400 cpm CJK (zh).
@@ -78,6 +83,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   return {
     lang: book.lang,
     partLabel: ch.partLabel || book.title,
+    partShort: ch.partLabel ? shortPart(ch.partLabel) : book.title,
     chapterNum: ch.num,
     eyebrow: eyebrowFor(book, ch),
     crumbChapter: ch.num ? chapterWord(book.lang, ch.num) : ch.title,
