@@ -8,11 +8,13 @@ import { navFor, prevNext } from "./book.ts";
 import { renderMarkdown } from "./markdown.ts";
 import type { Bibliography } from "./citations.ts";
 import type { CrossrefMap } from "./crossref.ts";
+import type { GraphvizInstance } from "./diagrams.ts";
 import type { ChapterData, Lang } from "../types.ts";
 
 export interface CompileContext {
   bib: Bibliography;
   xref: CrossrefMap;
+  graphviz: GraphvizInstance;
 }
 
 // Depth of a chapter's output file relative to the language root, for building
@@ -35,7 +37,7 @@ function eyebrowFor(book: Book, ch: BookChapter): string {
 
 export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext): ChapterData {
   const src = readFileSync(ch.qmdPath, "utf8");
-  const { html, headings } = renderMarkdown(src, { bib: ctx.bib, xref: ctx.xref, currentHref: ch.href });
+  const { html, headings } = renderMarkdown(src, { bib: ctx.bib, xref: ctx.xref, currentHref: ch.href, graphviz: ctx.graphviz });
   const { prev, next } = prevNext(book, ch.href);
   return {
     lang: book.lang,

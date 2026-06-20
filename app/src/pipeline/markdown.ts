@@ -1,42 +1,58 @@
-// Markdown → HTML for chapter bodies. markdown-it core + attributes ({#sec-id}
-// on headings/images) + KaTeX math. Quarto-specific constructs (callouts,
-// mermaid/dot, citations, cross-refs, runnable/viz) are handled by dedicated
-// pipeline passes layered on top in later phases; here we cover core prose,
-// tables, code, links, images, headings, and math.
+// Markdown → HTML for chapter bodies. markdown-it core + attributes ({#id} on
+// headings/images) + KaTeX math + Quarto references + fenced divs (callouts,
+// runnable) + diagrams (dot inline SVG, mermaid client-side) + numbered figures.
+// Raw {=html} viz blocks pass through verbatim (html:true).
 
 import MarkdownIt from "markdown-it";
 import attrs from "markdown-it-attrs";
 import { katex } from "@mdit/plugin-katex";
 import type { Heading } from "../types.ts";
-import { quartoRefs, type RefContext } from "./quarto-refs.ts";
+import { quartoRefs } from "./quarto-refs.ts";
+import type { Bibliography } from "./citations.ts";
+import type { CrossrefMap } from "./crossref.ts";
+import { renderDot, renderMermaid, type GraphvizInstance } from "./diagrams.ts";
+import { expandDivs } from "./divs.ts";
+
+export interface RenderContext {
+  bib: Bibliography;
+  xref: CrossrefMap;
+  currentHref: string;
+  graphviz: GraphvizInstance;
+}
 
 export interface RenderedChapter {
-  titleLine: string; // raw H1 line (for title/label extraction upstream)
+  titleLine: string;
   html: string;
   headings: Heading[];
 }
 
 function slugify(s: string): string {
-  return s.toLowerCase().trim()
-    .replace(/[^\w一-鿿\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-");
+  return s.toLowerCase().trim().replace(/[^\w一-鿿\s-]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-");
 }
 
-function createMd(ref?: RefContext): MarkdownIt {
-  const md = new MarkdownIt({
-    html: true, // chapters embed raw HTML (viz, cover); kept verbatim
-    linkify: false,
-    typographer: false, // never auto-convert -- to dashes (house style bans em dashes)
-    breaks: false,
-  });
-  md.use(attrs, { allowedAttributes: ["id", "class", "data-viz", "data-family", "data-xlabel", "data-ylabel", "data-plabel", "data-pmin", "data-pmax", "data-p", "data-logy"] });
+// Relative path from a chapter's output file to "<lang>/figures/".
+function figPrefix(currentHref: string): string {
+  const depth = currentHref.split("/").length - 1;
+  return "../".repeat(depth) + "figures/";
+}
+
+function createMd(ctx: RenderContext): MarkdownIt {
+  const md = new MarkdownIt({ html: true, linkify: false, typographer: false, breaks: false });
+  md.use(attrs, { allowedAttributes: ["id", "class", /^data-/] });
   md.use(katex);
-  if (ref) md.use(quartoRefs, ref);
+  md.use(quartoRefs, { bib: ctx.bib, xref: ctx.xref, currentHref: ctx.currentHref });
+
+  // Diagram fences: ```{dot}``` and ```{mermaid}```.
+  const defFence = md.renderer.rules.fence!.bind(md.renderer.rules);
+  md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+    const info = tokens[idx].info.trim();
+    if (info === "{dot}" || info === "dot") return renderDot(ctx.graphviz, tokens[idx].content, ctx.xref, ctx.currentHref);
+    if (info === "{mermaid}" || info === "mermaid") return renderMermaid(tokens[idx].content, ctx.xref, ctx.currentHref);
+    return defFence(tokens, idx, options, env, self);
+  };
   return md;
 }
 
-// Split off the first H1 (chapter title, rendered by the opener) from the body.
 function splitTitle(src: string): { titleLine: string; body: string } {
   const lines = src.split("\n");
   for (let i = 0; i < lines.length; i++) {
@@ -49,30 +65,45 @@ function splitTitle(src: string): { titleLine: string; body: string } {
   return { titleLine: "", body: src };
 }
 
-// Collect h2/h3 headings (with their resolved ids) for the on-this-page TOC,
-// assigning slugged ids to any heading without an explicit {#id}.
 function collectHeadings(md: MarkdownIt, body: string): { headings: Heading[]; tokens: ReturnType<MarkdownIt["parse"]> } {
-  const env = {};
-  const tokens = md.parse(body, env);
+  const tokens = md.parse(body, {});
   const headings: Heading[] = [];
+  let inCallout = 0;
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
+    // skip headings that live inside a callout/runnable wrapper (html_block divs)
+    if (tok.type === "html_block" && /class="[^"]*rdr-callout/.test(tok.content)) inCallout++;
     if (tok.type !== "heading_open") continue;
     const level = Number(tok.tag.slice(1));
     if (level !== 2 && level !== 3) continue;
-    const inline = tokens[i + 1];
-    const text = inline?.content ?? "";
+    const text = tokens[i + 1]?.content ?? "";
     let id = tok.attrGet("id");
     if (!id) { id = slugify(text); tok.attrSet("id", id); }
-    headings.push({ id, text: text.replace(/\[@[^\]]+\]/g, "").trim(), level });
+    headings.push({ id, text: text.replace(/\[@[^\]]+\]/g, "").replace(/@[a-z]+-[a-z0-9-]+/g, "").trim(), level });
   }
   return { headings, tokens };
 }
 
-export function renderMarkdown(src: string, ref?: RefContext): RenderedChapter {
-  const md = createMd(ref);
+// Wrap standalone figure images in <figure> with a numbered caption, and rewrite
+// /figures/ and figures/ paths to the chapter-relative prefix.
+function postProcess(html: string, ctx: RenderContext): string {
+  const prefix = figPrefix(ctx.currentHref);
+  html = html.replace(/src="\/?figures\//g, `src="${prefix}`);
+  // <p>…<img … id="fig-x" … alt="cap" …>…</p>  →  <figure>…<figcaption>
+  return html.replace(/<p>\s*(<img\b[^>]*\bid="(fig-[^"]+)"[^>]*>)\s*<\/p>/g, (_m, img: string, id: string) => {
+    const alt = img.match(/\balt="([^"]*)"/)?.[1] ?? "";
+    const num = ctx.xref.get(id)?.label ?? "";
+    const numPart = num ? `<span class="rdr-fig-num">${num}.</span> ` : "";
+    const caption = alt || num ? `<figcaption>${numPart}${alt}</figcaption>` : "";
+    return `<figure class="rdr-figure" id="${id}">${img}${caption}</figure>`;
+  });
+}
+
+export function renderMarkdown(src: string, ctx: RenderContext): RenderedChapter {
+  const md = createMd(ctx);
   const { titleLine, body } = splitTitle(src);
-  const { headings, tokens } = collectHeadings(md, body);
-  const html = md.renderer.render(tokens, (md as any).options, {});
+  const expanded = expandDivs(body);
+  const { headings, tokens } = collectHeadings(md, expanded);
+  const html = postProcess(md.renderer.render(tokens, (md as any).options, {}), ctx);
   return { titleLine, html, headings };
 }
