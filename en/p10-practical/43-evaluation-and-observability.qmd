@@ -1,0 +1,274 @@
+# Evaluation and Observability {#sec-eval-practice}
+
+A model that tops a public leaderboard can still misbehave in your product. The
+benchmark measured a generic capability on a fixed dataset. Your app runs a
+*specific* prompt, over *your* retrieval context, inside an agent loop, against
+live user input that drifts week to week. The discipline that closes this gap
+has two halves, and by mid-2026 they have largely fused into one tooling
+category. This chapter is a practical guide to choosing and wiring that tooling.
+
+Where it sits in the stack: @sec-benchmarks measures models in the abstract,
+@sec-judging-holistic covers how to grade open-ended output, and
+@sec-evaluating-agents covers multi-step agent evaluation. This chapter measures
+*your running system*. It consumes the serving layer (@sec-serving-stack) and
+the model gateway (@sec-wiring-stack), and it produces the feedback signal that
+feeds back into agents (@sec-agents-practice) and fine-tuning
+(@sec-training-practice): eval datasets become preference data, and agent traces
+are where failures actually surface.
+
+::: {.callout-note}
+## As of mid-2026
+This is a dated snapshot (June 2026). Prices, version numbers, acquisitions, and
+"best for" claims move fast in this category, and 2026 has been a year of heavy
+consolidation. Treat every specific dollar figure and ranking below as
+indicative and source-attributed, not timeless, and re-verify current values and
+roadmaps before committing. Lead with the durable parts: the categories, the
+trade-offs, and the wiring.
+:::
+
+## The two halves of the loop
+
+**Evaluation** asks "is the output good?" against criteria you define. It runs
+offline, on a curated dataset, in CI, before you ship, and online, sampled from
+production traffic and scored continuously. The unit of work is a *score*. Scores
+come in three flavors that you mix:
+
+- **Deterministic assertions**: regex, JSON-schema validation, exact match, a
+  latency or cost budget. Cheap, fast, and the first line of defense.
+- **Reference-based metrics**: BLEU and ROUGE and their retrieval cousins like
+  context precision, context recall, and faithfulness.
+- **LLM-as-judge**: a second model grades the first against a rubric. This is
+  the only practical way to score open-ended quality at scale, and the bulk of
+  @sec-judging-holistic is about doing it without fooling yourself.
+
+**Observability** asks "what actually happened?" It captures a *trace*: the full
+tree of a request as it moves through your system, every LLM call, retrieval,
+tool invocation, and nested agent step, with inputs, outputs, timing, token
+counts, and cost attached to each span. Without it you are debugging a
+non-deterministic distributed system by reading flat logs.
+
+The two halves connect because **you evaluate the traces you observe**. A
+production trace becomes a test case. A judge runs over sampled spans to produce
+online scores. A regression caught in a dashboard becomes a fixture in the
+offline suite. This loop, observe then score then curate then re-test, is the
+practical core of "continuously evaluate an LLM app", and it is the figure to
+keep in mind for the rest of the chapter (@fig-eval-loop).
+
+```{mermaid}
+%%| label: fig-eval-loop
+%%| fig-cap: "The continuous-evaluation loop. Production traces are observed, sampled spans are scored by judges and assertions, failures are curated into a regression dataset, and that dataset gates the next release. Every component calls the model gateway rather than providers directly."
+flowchart LR
+  user["User / CI traffic"] --> app["LLM app<br>agent + retrieval"]
+  app -->|"OTel GenAI spans"| obs["Observability<br>Langfuse / Phoenix"]
+  app -->|"model call"| gw["Model gateway"]
+  gw --> providers["Providers / vLLM"]
+  obs -->|"sampled traces"| eval["Eval / Judge<br>Promptfoo / DeepEval"]
+  gw -->|"judge call<br>scoped virtual key"| eval
+  eval -->|"scores"| gate["Dashboards / CI gate"]
+  eval -->|"promote failing trace"| ds["Offline dataset<br>regression suite"]
+  ds -->|"gates next release"| app
+```
+
+## The 2026 shakeout
+
+Two acquisitions reshaped the landscape in early 2026, and they tell you the
+direction of travel: the standalone eval/observability tool is becoming a feature
+of a larger data or model platform.
+
+- OpenAI **acquired Promptfoo** (announced March 9, 2026) and is
+  **deprecating its own hosted Evals product** (read-only October 31, 2026,
+  shutdown November 30, 2026), steering users toward Promptfoo and Datasets. The
+  open-source `openai/evals` repo persists; the hosted dashboard does not.
+- ClickHouse **acquired Langfuse** (January 16, 2026, alongside ClickHouse's
+  $400M Series D). Langfuse states its OSS and self-host commitment continues.
+
+The lesson is not which logo owns which tool. It is that the churn is real, so
+favor tools whose data and instrumentation you can carry elsewhere. That is the
+case for OpenTelemetry below.
+
+## Key players
+
+All license, pricing, and acquisition claims below are as of mid-2026 and
+attributed in *Further reading*. Pricing is the published list shape at time of
+writing and changes often, so treat exact dollars as indicative. Judge accuracy
+and "best for" claims are workload-dependent and not independently benchmarked
+here.
+
+### Eval harnesses and frameworks
+
+| Name | What it is | License / model | Best for |
+| --- | --- | --- | --- |
+| **lm-evaluation-harness** (EleutherAI) | The de facto academic harness: 60+ standard benchmarks, hundreds of subtasks, reproducible configs, the backend behind many leaderboards | Open source (MIT) | Benchmarking a *model's* raw capability reproducibly |
+| **Inspect** (UK AISI) | Framework for model and agentic evals: tool use, multi-turn, model-graded scoring; `inspect_evals` ships 200+ ready evals | Open source (MIT) | Safety and agentic evaluation, sandboxed tool-use tasks |
+| **Promptfoo** | CLI + config-driven eval and red-teaming: assertions, LLM-as-judge, model comparison, RAG/agent tests, 50+ vuln categories | Open source (MIT) + paid Enterprise; **acquired by OpenAI (Mar 2026)** | App-level evals and security red-teaming you can drop into CI without notebooks |
+| **DeepEval** (Confident AI) | Pytest-native eval framework: 50+ metrics (LLM-as-judge, RAG, agentic, safety), G-Eval, DAG metrics | Open source + Confident AI cloud | Teams wanting unit-test-style regression on LLM output |
+| **RAGAS** | Reference-free RAG metrics: faithfulness, answer relevancy, context precision/recall | Open source | Quick RAG-pipeline scoring, often consumed *through* other frameworks |
+| **MLflow 3 Evaluate** | GenAI eval + tracing inside the MLflow platform | Open source | MLOps shops already standardized on MLflow / Databricks |
+
+### Tracing and observability platforms
+
+| Name | What it is | License / model | Best for |
+| --- | --- | --- | --- |
+| **Langfuse** | OSS LLM engineering platform: tracing, prompt management, evals, datasets | MIT, self-hostable; cloud Hobby free / Core $29 / Pro $199 / Enterprise $2,499 per mo, billed per unit | Teams wanting a fully self-hostable OSS observability + eval stack |
+| **LangSmith** (LangChain) | Framework-agnostic observability + eval + prompt platform; agent ops | Proprietary SaaS; Developer free / Plus $39/seat/mo / Enterprise custom | Teams in or near the LangChain/LangGraph ecosystem wanting a polished managed platform |
+| **Arize Phoenix** | OSS observability + eval built **on OpenTelemetry**, instrumented via **OpenInference** | Open source (ELv2-style); Arize AX is the commercial cloud | Teams wanting OTel-native, vendor-neutral tracing that runs locally with no account |
+| **Braintrust** | Eval-first commercial platform: experiments, scoring, tracing, prompt playground | Proprietary SaaS; Starter free / Pro $249/mo / Enterprise custom | Product teams wanting eval, tracing, and a prompt playground tightly integrated |
+| **W&B Weave** (Weights & Biases) | LLM tracing, evaluation, prompt/version tracking inside the W&B ecosystem | Proprietary SaaS | Teams already on W&B for experiment tracking |
+| **Confident AI** | Cloud platform behind DeepEval: datasets, tracing, monitoring | Proprietary SaaS | DeepEval users wanting a managed collaboration layer |
+
+### The substrate
+
+| Name | What it is | License / model | Best for |
+| --- | --- | --- | --- |
+| **OpenTelemetry GenAI semantic conventions** | Vendor-neutral spec for LLM/agent spans and metrics (`gen_ai.*` attributes), under CNCF OTel | Open standard (Apache 2.0) | The wire format that lets you switch backends without re-instrumenting |
+| **OpenInference** (Arize) | OTel-aligned conventions + drop-in auto-instrumentation across providers, agent frameworks, RAG libs | Open source | Practical auto-instrumentation today, ahead of the spec stabilizing |
+
+As of mid-2026 the OTel GenAI spec is still largely experimental ("Development"
+stability), though core attributes (`gen_ai.system`, `gen_ai.request.model`,
+token counts) are stabilizing. You opt into the latest with
+`OTEL_SEMCONV_STABILITY_OPT_IN`. OpenInference runs ahead of the spec and emits
+to any OTel backend (Datadog, Grafana, Jaeger), which is why it is the practical
+choice today.
+
+## How to choose
+
+The first cut is **capability eval versus application eval**, because they are
+different jobs done by different tools.
+
+::: {.callout-tip}
+## Constraint arrow
+The serving layer dictates the shape of your eval harness. Because you point
+evals and judges at the **model gateway** (@sec-wiring-stack) rather than at
+providers, an A/B between two models becomes a routing rule, not a code change,
+and judge credentials become scoped virtual keys with their own budget rather
+than raw provider secrets. The gateway you chose in @sec-serving-stack is what
+makes continuous online evaluation cheap to operate.
+:::
+
+Pick a **capability harness** when you are measuring a *model*: comparing
+checkpoints, validating a fine-tune (@sec-training-practice), or reproducing a
+leaderboard number. Use **Inspect** when the task is agentic, tool-using, or
+safety-flavored, and **lm-evaluation-harness** for classic academic benchmarks.
+
+Pick an **application eval tool** when you are measuring *your system*: this
+prompt, this RAG pipeline, this agent, against criteria that matter to your
+product. Within application eval, four axes decide the tool:
+
+| Axis | Choose this | When |
+| --- | --- | --- |
+| CI-native vs platform-native | **Promptfoo** (config/CLI) or **DeepEval** (pytest) | Evals must live in the repo and gate merges with no external account |
+| | **Braintrust** or **LangSmith** | You want a hosted UI for non-engineers to curate datasets and compare runs visually |
+| Self-host vs managed | **Langfuse** or **Phoenix** | Data residency, cost control, or vendor-neutrality matter and you can run infra |
+| | **LangSmith**, **Braintrust**, **Confident AI** | You would rather not operate it and will pay for polish |
+| OTel-native vs proprietary SDK | **Phoenix / OpenInference** | You want one instrumentation that targets many backends and avoids lock-in |
+| | **LangSmith**, **Braintrust** | Smoother out of the box, at the cost of coupling your code to one vendor |
+| Red-teaming in scope? | **Promptfoo** | You need the deepest built-in adversarial scanning (OWASP LLM Top 10, jailbreaks, PII, prompt injection) |
+
+### LLM-as-judge: cost versus trust
+
+A judge is roughly 500x to 5000x cheaper than human review and can approach
+human-to-human agreement, *but only when calibrated*. An uncalibrated judge is a
+confident liar. As of mid-2026 the consensus practice, covered in depth in
+@sec-judging-holistic, is:
+
+- **Validate against a human-labeled sample.** Report Cohen's kappa or
+  Krippendorff's alpha and target around $0.8$ agreement before you trust the
+  judge to gate anything.
+- **Control for position bias.** Score both A/B and B/A orderings and count only
+  consistent wins.
+- **Control for verbosity and self-preference bias.** Never use the same model
+  family as both generator and judge.
+- **Use explicit, criterion-separated rubrics** (G-Eval style). Split hard rules
+  into a DAG of checks rather than one fuzzy prompt.
+
+## A sensible default
+
+For a typical team shipping one or two LLM features and wanting a continuous eval
+loop without standing up a platform team, here is a stack that is OSS-first,
+self-hostable, OTel-native, and CI-gated, with a clean upgrade path to a managed
+platform later.
+
+| Job | Default pick | Managed alternative |
+| --- | --- | --- |
+| Observability / tracing | **Langfuse** (self-host or free/Core cloud) | **LangSmith** (Plus) or **Braintrust** |
+| App evals in CI | **Promptfoo** (assertions, comparison, red-team) + **DeepEval** (pytest metrics) | Braintrust / LangSmith eval modules |
+| Model / capability eval | **Inspect** (agentic, safety) or **lm-evaluation-harness** (academic) | hosted leaderboards |
+| Instrumentation | **OpenTelemetry GenAI** via **OpenInference** auto-instrumentation | proprietary SDK |
+
+Two caveats to this default. First, the churn: Promptfoo is now OpenAI-owned and
+Langfuse is ClickHouse-owned, so re-confirm roadmap and licensing before you
+commit long-term. Second, do not add a vendor you do not need. Teams already
+standardized on Databricks should prefer **MLflow 3 Evaluate**, and teams on
+Weights & Biases should prefer **Weave**, over bolting on a new platform.
+
+## Wiring
+
+The loop closes through the model gateway (@sec-wiring-stack). The app under
+test, the evals, and the judge all call the gateway, never providers directly.
+That single decision is what makes swapping models a config change and keeps
+judge credentials as budget-capped virtual keys.
+
+Here is a minimal Promptfoo config that points at the gateway and uses an
+LLM judge with a deterministic guard in front of it. Save it as
+`promptfooconfig.yaml` and run `npx promptfoo@latest eval`.
+
+```yaml
+# promptfooconfig.yaml
+providers:
+  - id: openai:chat:gpt-5            # resolved by the gateway, not OpenAI directly
+    config:
+      apiBaseUrl: https://gateway.internal/v1
+      apiKey: ${GATEWAY_VKEY}        # scoped virtual key, budget-capped
+prompts:
+  - "Answer using only the context:\n{{context}}\n\nQ: {{question}}"
+tests:
+  - vars: { question: "...", context: "..." }
+    assert:
+      - type: is-json                # deterministic guard, runs first and free
+      - type: llm-rubric             # LLM-as-judge, calibrated rubric
+        value: "Answer is faithful to the context and cites it."
+        provider: openai:chat:gpt-5-mini   # judge via gateway, different family
+```
+
+To gate merges, run that one command in CI and fail the job on a regression:
+
+```bash
+# CI step: fail the build if any eval assertion regresses
+npx promptfoo@latest eval -c promptfooconfig.yaml --no-cache --output results.json
+# exit code is non-zero when assertions fail, which fails the pipeline
+```
+
+The heartbeat of the whole system is the promotion step. A production trace from
+Langfuse or Phoenix that fails an online judge gets promoted into the `tests:`
+set above, so the offline suite hardens against the failures you actually see in
+production rather than the ones you imagined at design time. Without that
+promotion step you have two disconnected tools. With it you have a loop.
+
+## The capability, efficiency, trust lens
+
+**Capability**: observability turns a non-deterministic system into something you
+can debug, and evaluation turns "it feels better" into a number that gates a
+release. **Efficiency**: the gateway makes online judging cheap enough to run
+continuously, and deterministic assertions catch the cheap failures before a
+judge call is ever made. **Trust**: an LLM judge is only as trustworthy as its
+calibration against humans, and the OTel substrate is what lets you carry your
+traces and scores away from any vendor that changes its terms. The loop is worth
+building only if all three hold, and in mid-2026 the tooling has finally matured
+enough that they can.
+
+## Further reading
+
+- lm-evaluation-harness: <https://github.com/EleutherAI/lm-evaluation-harness>
+- Inspect AI: <https://inspect.aisi.org.uk/> and the evals suite at <https://ukgovernmentbeis.github.io/inspect_evals/>
+- Promptfoo docs: <https://www.promptfoo.dev/docs/intro/>; red-teaming: <https://www.promptfoo.dev/docs/red-team/>; OpenAI acquisition (Mar 9, 2026): <https://www.promptfoo.dev/blog/>
+- OpenAI Evals OSS repo: <https://github.com/openai/evals>; hosted Evals deprecation timeline: <https://developers.openai.com/api/docs/deprecations>
+- DeepEval: <https://deepeval.com/docs/introduction>; Confident AI: <https://www.confident-ai.com/>
+- RAGAS (via DeepEval): <https://deepeval.com/docs/metrics-ragas>
+- MLflow GenAI eval: <https://mlflow.org/docs/latest/ml/evaluation/>
+- Langfuse: <https://langfuse.com/docs/observability/overview>; pricing: <https://langfuse.com/pricing>; ClickHouse acquisition (Jan 16, 2026): <https://clickhouse.com/blog/clickhouse-acquires-langfuse-open-source-llm-observability>
+- LangSmith: <https://www.langchain.com/langsmith>; pricing: <https://www.langchain.com/pricing>
+- Arize Phoenix: <https://arize.com/docs/phoenix>
+- Braintrust: <https://www.braintrust.dev/>; pricing: <https://www.braintrust.dev/pricing>
+- W&B Weave: <https://wandb.ai/site/weave/>
+- OpenTelemetry GenAI semantic conventions: <https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/>; 2026 overview: <https://opentelemetry.io/blog/2026/genai-observability/>
+- LLM-as-judge practice (2026): DeepEval, <https://deepeval.com/blog/llm-as-a-judge>; Confident AI, <https://www.confident-ai.com/blog/why-llm-as-a-judge-is-the-best-llm-evaluation-method>

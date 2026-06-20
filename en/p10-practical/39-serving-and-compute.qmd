@@ -1,0 +1,434 @@
+# Serving, Gateways, and Compute {#sec-serving-stack}
+
+This is a hands-on chapter. The theory of why serving is hard lives in
+@sec-serving-problem and @sec-memory-scheduling; here we choose tools. By the
+end you should be able to stand up a self-hosted endpoint, decide when not to,
+put a gateway in front of it for keys and cost control, and place the whole
+thing on compute you can actually pay for. The chapter works top down through
+three layers that stack into one request path: the gateway you talk to, the
+serving engine that decodes tokens, and the GPUs underneath.
+
+::: {.callout-note}
+## As of mid-2026
+Everything below is a dated snapshot. Tool rankings, version numbers, and
+prices move every quarter. Benchmark deltas are from third-party blogs and are
+workload-specific, so treat them as directional, not as facts, and re-verify
+current values before you commit. The durable content here is the categories,
+the trade-offs, and the wiring, not any single number.
+:::
+
+## The three layers
+
+A self-hosted inference stack is three layers with one interface running
+through all of them. @fig-serving-stack shows the request path.
+
+```{mermaid}
+%%| label: fig-serving-stack
+%%| fig-cap: "The request path through a self-hosted stack. One OpenAI-compatible interface runs from the app down to the engine, so any layer can be swapped without rewriting the others."
+flowchart TB
+  app["App / Agent / RAG retriever"] -->|"OpenAI-compatible API<br/>virtual key"| gw["Gateway<br/>auth, routing, budgets, fallback"]
+  gw -->|"hosted fallback"| api["Hosted APIs<br/>OpenAI / Anthropic / Gemini"]
+  gw -->|"self-hosted"| eng["Serving engine<br/>vLLM / SGLang / TRT-LLM"]
+  eng --> gpu["GPUs<br/>serverless / neocloud / hyperscaler"]
+  gw -->|"spend, traces"| obs[("Cost + audit + OTel")]
+```
+
+The interface is the key to the whole design. By 2026 almost every engine and
+gateway speaks the OpenAI HTTP shape (`/v1/chat/completions`,
+`/v1/completions`, `/v1/embeddings`). That single convention is what lets you
+swap a self-hosted model for a hosted one, put a gateway in front of many
+engines uniformly, and point an eval harness (@sec-eval-practice) at the same
+URL as production. Build against it and keep every layer replaceable.
+
+## Layer 1: the serving engine
+
+A serving engine turns a set of weights into a service: it loads the model onto
+accelerators, batches requests, runs the forward passes, manages the key-value
+cache, and streams tokens back. This is where most controllable cost and most
+user-visible latency live. The same weights under two engines, or one engine
+with two configs, can differ by an order of magnitude in tokens per second and
+tail latency.
+
+Two phases drive every design decision (@sec-serving-problem). **Prefill**
+processes the whole prompt in parallel and is compute-bound. **Decode** emits
+one token at a time, each step re-reading the cache, and is
+memory-bandwidth-bound. The features that matter are answers to the tension
+between them: **continuous batching** (add and retire requests every step,
+table stakes by 2026), **PagedAttention** (store the cache in non-contiguous
+pages so memory is not fragmented), **prefix caching / KV reuse** (compute a
+shared leading prefix once, the dominant win for agents and RAG, generalized to
+a radix tree by SGLang's RadixAttention), **quantization** (@sec-quantization-kernels:
+FP8, FP4, INT4 via AWQ/GPTQ, GGUF K-quants), **speculative decoding**
+(@sec-faster-decoding), **structured output** (grammar-constrained decoding via
+XGrammar), and **prefill/decode disaggregation** (separate worker pools for the
+two phases, the headline datacenter pattern of 2026).
+
+### The players
+
+The table below is a mid-2026 snapshot. Licenses and "best for" are durable;
+the benchmark notes are third-party and workload-specific.
+
+| Engine | What it is | License / HW | Best for |
+| --- | --- | --- | --- |
+| **vLLM** | The de-facto open-source default. Origin of PagedAttention, broadest model and feature coverage, "V1" core re-architected for lower overhead. | Apache-2.0, GPU | General-purpose GPU serving; the safe default |
+| **SGLang** | High-performance engine built on RadixAttention (radix-tree prefix reuse) plus a frontend for structured LLM programs. | Apache-2.0, GPU | Prefix-heavy traffic (agents, RAG, multi-turn), large MoE |
+| **TensorRT-LLM** | NVIDIA's optimized engine; compiled kernels plus a now-default PyTorch backend that loads HF weights without a build step. | Apache-2.0, NVIDIA only | Max throughput/latency on Hopper/Blackwell, FP8/FP4 |
+| **LMDeploy** | InternLM/OpenMMLab engine with a C++ TurboMind backend and aggressive built-in w4a16 quantization. | Apache-2.0, GPU | Low-TTFT quantized serving, INT4 70B-class |
+| **llama.cpp** | Portable C/C++ engine for GGUF quantized models. Runs on CPU, CUDA, ROCm, Vulkan, Metal. | MIT, portable | Local / edge / CPU / mixed-vendor; max portability |
+| **Ollama** | Developer-friendly wrapper (registry + CLI + OpenAI API) over llama.cpp; moving to an MLX backend on Apple Silicon (preview). | MIT, portable | Local dev, laptops, fastest path to localhost |
+| **MLX / mlx-lm** | Apple's framework for Apple Silicon (unified memory, zero-copy). | MIT, Apple only | Fastest single stream on Macs |
+| **NVIDIA Dynamo** | Not an engine: a datacenter orchestrator above engines. Disaggregation, KV-aware routing, NIXL transport, memory tiering. | Apache-2.0, NVIDIA | Multi-node, SLO-driven fleets at scale |
+| **llm-d** | Kubernetes-native distributed stack: vLLM workers + KV-aware routing + disaggregation + Inference Gateway. | Apache-2.0 (CNCF Sandbox) | K8s-native fleets without going all-NVIDIA |
+| **Hugging Face TGI** | Formerly a leading server. Archived March 2026, maintenance mode; HF now points users to vLLM/SGLang/llama.cpp/MLX. | Apache-2.0, archived | Legacy only; do not start here |
+
+As of mid-2026, secondary benchmarks report SGLang ahead of vLLM on some H100
+single-model tests (one cites roughly 29 percent) with larger gains on
+prefix-heavy shapes, the gap narrowing at 70B scale; LMDeploy near SGLang on
+throughput with best-in-class TTFT for INT4 70B; MLX 30 to 50 percent faster
+than llama.cpp on some Apple Silicon models. These come from vendor and blog
+benchmarks that vary by model, GPU, batch shape, and tuning, and they age fast.
+Verify on your own workload before treating any of them as a tiebreaker.
+
+### How to choose an engine
+
+The decision is mostly a function of where you run, what your traffic looks
+like, and how much performance engineering you can afford.
+
+- **Pick vLLM** when you want one safe, broadly-supported default on GPUs, need
+  a wide range of models and features now, and value ecosystem maturity over
+  the last 20 percent of performance. This is the right answer for most teams.
+- **Pick SGLang** when your traffic is prefix-heavy (agents, RAG, multi-turn)
+  or you serve large MoE models, and you want top throughput on those shapes.
+  Verify the win on your own traffic first.
+- **Pick TensorRT-LLM** when you are all-NVIDIA, latency and throughput are
+  first-order costs, and you can invest in the toolchain (the default PyTorch
+  backend lowers that cost versus the old build flow).
+- **Pick LMDeploy** when quantized w4a16 serving and low TTFT on a NVIDIA fleet
+  matter most.
+- **Pick llama.cpp** when you need portability (CPU, AMD via Vulkan/ROCm,
+  Metal), edge or local deploys, and GGUF quant, and you do not need
+  datacenter-grade concurrency.
+- **Pick Ollama or MLX** when the target is a laptop or a few internal users;
+  pick MLX specifically on Apple Silicon for the fastest single stream.
+- **Reach for Dynamo or llm-d** when you have outgrown a single node and need
+  KV-aware routing, disaggregation, and SLO-driven autoscaling across a fleet.
+- **Do not start on TGI** in 2026; it is archived and maintenance-only.
+
+**Sensible default (mid-2026):** vLLM behind an OpenAI-compatible endpoint,
+prefix caching on, an appropriate quantization (FP8 on Hopper/Blackwell, or
+AWQ/GPTQ INT4 to fit a bigger model on smaller cards), and XGrammar-backed
+structured output for any tool-calling or extraction path. It is the broadest,
+lowest-regret choice. For local and dev, the default flips to Ollama or
+llama.cpp on Linux/Windows and MLX on Macs. Those are single-node,
+low-concurrency tools; do not promote them into a high-traffic path.
+
+A minimal single-node vLLM launch:
+
+```bash
+vllm serve <model-id> \
+  --enable-prefix-caching \
+  --quantization fp8 \
+  --guided-decoding-backend xgrammar
+# exposes an OpenAI-compatible server on :8000
+```
+
+Flag names and structured-output parameters drift between vLLM versions; check
+the docs for your release.
+
+## Layer 2: the gateway
+
+A model gateway is the control plane between your application code and the many
+model providers it talks to. In the thinnest framing it is a reverse proxy that
+speaks one API and fans requests out to OpenAI, Anthropic, Google, Bedrock,
+Azure, your own vLLM, and aggregators like OpenRouter. That undersells it. The
+gateway is where five concerns nobody wants scattered across application code
+get centralized:
+
+1. **Unified API.** One request schema, so swapping `gpt-5` for `claude-opus-4`
+   or a self-hosted variant is a config change, not a code change.
+2. **Key custody.** Provider secrets live on the server. Apps and agents hold
+   short-lived *virtual keys* scoped to a model allowlist and a budget, never
+   the raw provider credential.
+3. **Cost tracking.** Per-key, per-team, per-tag spend, attributed and
+   exportable. This is the single most cited reason teams adopt a gateway.
+4. **Fallback and routing.** Retries, provider failover, load balancing,
+   context-window fallback, cost- or latency-aware model selection.
+5. **Budgets and policy.** Hard spend caps, rate limits, guardrails (PII
+   redaction, jailbreak filtering), and an audit trail.
+
+The gateway is the seam between the serving layer and everything above it. The
+newest gateways extend the idea past plain LLM calls into agent-native
+protocols (MCP for tools, A2A for agent-to-agent), so the gateway becomes the
+policy point for tool and agent traffic too, which connects directly to the
+harness work in @sec-agents-practice and the authorization model in
+@sec-security-authorization.
+
+### The players
+
+| Gateway | What it is | Hosting | Best for |
+| --- | --- | --- | --- |
+| **LiteLLM** | Python SDK + self-hostable proxy translating 100+ providers to OpenAI format; virtual keys, budgets, spend logs, UI. | Self-host (OSS core) + Enterprise tier | Broadest provider coverage, Python stack, DevOps in place |
+| **OpenRouter** | Managed aggregator: one endpoint, prepaid credits, 300+ models, BYOK. | Managed SaaS | Solo devs and small teams wanting zero-setup catalog access |
+| **Portkey** | Gateway with guardrails, virtual keys, fallbacks, caching, prompt management, observability. | OSS core + managed | Enterprises needing governance: PII redaction, audit, compliance |
+| **agentgateway** | Rust data plane for HTTP/gRPC and AI-native protocols: LLM + MCP + A2A in one. | Self-host (Apache-2.0, Linux Foundation) | Platform teams wanting one proxy for LLM, tool, and agent traffic |
+| **Envoy AI Gateway** | Kubernetes-native gateway on Envoy + Gateway API; token rate limiting, InferencePool. | Self-host (OSS) | Teams already on Envoy/Istio/Gateway API |
+| **Kong AI Gateway** | LLM routing as plugins in Kong's API platform; PII redaction, semantic caching. | OSS core + Enterprise | Orgs already running Kong |
+| **Cloudflare AI Gateway** | Platform-native gateway: observability, caching, rate limiting, cost tracking; Unified Billing. | Managed SaaS | Teams already on Cloudflare/Workers |
+| **Helicone** | OSS gateway/proxy, observability-first logging and analytics; Rust runtime. | OSS + hosted | Logging and analytics with low overhead (often paired with LiteLLM) |
+| **Bifrost** (Maxim AI) | Go gateway: adaptive load balancing, cluster mode, guardrails; markets very low overhead. | OSS + commercial | High-throughput self-hosted LiteLLM alternative |
+| **Lux** (latere.ai) | The author's own gateway: one address to OpenAI/Anthropic/Gemini/OpenRouter/Ollama; sealed credentials, virtual keys, spend caps, hooks, audit. | Latere product | The Latere stack; a worked example here, not a neutral pick |
+
+Several vendors publish dramatic overhead numbers (Bifrost "50x faster than
+LiteLLM" and "~11µs"; Portkey "<1ms"; LiteLLM "~8ms P95 at 1k RPS"). These are
+vendor benchmarks under inconsistent conditions and are not independently
+verified. The durable point: compiled-language gateways (Go/Rust: Bifrost,
+agentgateway, Helicone, Envoy) generally claim lower proxy overhead than the
+Python LiteLLM proxy, but for most workloads provider and model latency
+dominate gateway overhead by orders of magnitude. Benchmark on your own traffic
+before treating overhead as a tiebreaker.
+
+### How to choose a gateway
+
+Work two axes in order: managed versus self-hosted, then plain-LLM versus
+agent-native.
+
+- **Pick OpenRouter** when you are a solo dev or small team and want the
+  largest catalog with no infra and no contracts.
+- **Pick LiteLLM** when you want a self-hosted, broadly compatible gateway and
+  have the DevOps to run it, especially on a Python stack.
+- **Pick Portkey** (or Kong if you already run Kong) when governance,
+  guardrails, and compliance are requirements, not nice-to-haves.
+- **Pick agentgateway** when your roadmap is agentic and you need LLM, MCP, and
+  A2A traffic under one governed policy point.
+- **Pick Envoy AI Gateway** when your platform team already lives in
+  Envoy/Istio/Gateway API and wants the AI control plane in the same CRDs.
+- **Use a managed gateway** (OpenRouter, Cloudflare, Portkey managed) when you
+  want zero infrastructure and accept that keys and request metadata transit a
+  third party. Move to self-hosted when key custody, audit, or compliance
+  forces it.
+
+**Sensible default (mid-2026):** self-host LiteLLM as the gateway, paired with
+an observability layer (Helicone or LiteLLM's own dashboard) for spend and
+request analytics. It gives you the broadest provider coverage, virtual keys
+with budgets, spend tracking, and fallbacks, all open source and in your own
+environment, and almost everything else in the ecosystem interoperates with it.
+If your roadmap is agent-heavy, evaluate agentgateway early so LLM, tool, and
+agent traffic share one policy point instead of bolting agent concerns onto a
+chat-only proxy later.
+
+::: {.callout-note}
+Disclosure: the author's own stack uses **Lux** as its gateway. It appears here
+as a worked example of these patterns, not as a neutral recommendation over the
+options above.
+:::
+
+A minimal LiteLLM config that unifies a hosted and a self-hosted model behind
+one name and adds a fallback:
+
+```yaml
+model_list:
+  - model_name: smart            # the name your app requests
+    litellm_params:
+      model: anthropic/claude-opus-4
+      api_key: os.environ/ANTHROPIC_API_KEY
+  - model_name: smart            # same alias, load-balanced / fallback target
+    litellm_params:
+      model: openai/gpt-5
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: local
+    litellm_params:
+      model: openai/<model-id>   # your vLLM, OpenAI-compatible
+      api_base: http://vllm-svc:8000/v1
+
+litellm_settings:
+  fallbacks: [{ "smart": ["local"] }]   # if hosted "smart" fails, use local
+  num_retries: 2
+
+# virtual keys, team budgets, and spend caps are issued via the
+# /key/generate API and the proxy UI, not this file.
+```
+
+The application then points a standard OpenAI client at the proxy and requests
+model `"smart"`. The gateway resolves the alias, load-balances or fails over,
+records spend against the virtual key, and emits traces. Upstream, `"local"`
+resolves to your Layer-1 engine, so self-hosted and hosted models become
+interchangeable behind one name:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://gateway.internal/v1", api_key="<virtual-key>")
+resp = client.chat.completions.create(
+    model="smart",
+    messages=[{"role": "user", "content": "..."}],
+)
+```
+
+Schema drifts between LiteLLM versions; check the docs for the exact keys.
+
+## Layer 3: the compute under it
+
+Everything above eventually lands on a GPU someone has to provision, schedule,
+and pay for. Two questions sit at the center, and they are mostly orthogonal:
+where the GPUs come from (the **build versus rent** axis) and how they are
+scheduled. The hardware itself is @sec-accelerators-networking; the
+orchestration substrate is @sec-orchestration-data-infra; the cost arithmetic
+is @sec-economics. Here we choose.
+
+### Self-host versus call an API
+
+Before sizing GPUs, settle the prior question: should you self-host at all? Most
+teams should start on a hosted API and self-host only when a concrete pressure
+forces it. The honest decision rule:
+
+- **Call a hosted API** (through your gateway) when traffic is bursty or low
+  volume, when you want the frontier model without operating it, when
+  time-to-ship matters more than per-token cost, and when your data can leave
+  your environment. This is the right default for most application teams.
+- **Self-host** when at least one of these binds: sustained high utilization
+  makes per-token economics dominate (you keep the hardware busy), data
+  residency or compliance requires weights and prompts to stay in your
+  environment, you need an open-weight model or a fine-tune no API offers, or
+  you need latency and tail-behavior control the API will not give you.
+
+The gateway makes this reversible. Because both paths speak the same
+OpenAI-shaped interface, you can start hosted, add a self-hosted route as one
+more alias, and shift traffic with a config change. Choosing a model for either
+path is @sec-choosing-model; the wiring of the whole stack is @sec-wiring-stack.
+
+### Where the GPUs come from
+
+A spectrum runs from serverless GPU platforms (push a function or a model, they
+handle the machine), through rented GPU clouds and neoclouds, to the
+hyperscalers, to owning hardware in a colo. The deciding variable is **sustained
+utilization**.
+
+| Tier | Examples | Billing shape | Best for |
+| --- | --- | --- | --- |
+| **Serverless GPU / managed inference** | Modal, Replicate, Baseten, RunPod Serverless, Fireworks, Together | Per-second / per-token, scale-to-zero | Bursty or low-utilization inference, zero infra to run |
+| **GPU clouds / neoclouds** | CoreWeave, Lambda, Nebius, Crusoe | On-demand + reserved GPU-hour | Steady, high-utilization training and serving clusters |
+| **Marketplaces / spot** | Vast.ai, decentralized | Per-hour, interruptible | Cheapest fault-tolerant batch; never latency-critical serving |
+| **Hyperscalers** | AWS, GCP, Azure | On-demand / reserved; custom silicon | Already there, broadest menu, managed pipelines, TPU/Trainium |
+| **Own hardware (colo)** | self-operated | Capex + ops | Sustained very-high utilization at scale, with ops muscle |
+
+Pricing is volatile and aggregators disagree, so anchor on the **shape**, not
+the dollar. As of mid-2026, list-price anchors put serverless H100 around 3 to
+4 dollars per hour (Modal ~3.95/hr, RunPod ~2.89/hr), with roughly a 5x spread
+in H100 on-demand rates across tiers. Re-check before committing; these move
+quarterly.
+
+The rule of thumb: below roughly 40 to 50 percent sustained utilization of a
+dedicated GPU, serverless is cheaper because you pay nothing when idle. Above
+it, reserved GPU-hour rates on a neocloud or hyperscaler undercut both
+serverless and on-demand. Own hardware only at sustained very-high utilization
+where amortized capex beats years of rental. Use a marketplace or spot only for
+fault-tolerant batch. Use **SkyPilot** across all of these when you want to stay
+portable, chase the cheapest available capacity across clouds, and avoid
+lock-in.
+
+### How the GPUs are scheduled
+
+Once you control a pool, a control plane decides placement. The three dominant
+ones, and how they split:
+
+- **Slurm** when the dominant workload is large multi-node training and batch:
+  jobs that start, run for hours, checkpoint, and exit. Gang scheduling is
+  native and simple. The cost is no native services, ingress, or autoscaling.
+- **Kubernetes** when you run inference serving, mixed workloads, or
+  microservices alongside AI, and want the autoscaling, ingress, and
+  service-mesh ecosystem. Add **Volcano** or **NVIDIA KAI Scheduler** for gang
+  scheduling, **Kueue** for multi-team quota and admission, and **DRA** for
+  fine-grained GPU/MIG allocation.
+- **Ray (on KubeRay)** when your team is Python-native and wants distributed
+  training, RL, data, and serving in one framework, riding on K8s.
+
+The common large-team split is Slurm for training, Kubernetes for serving. The
+2026 convergence is **Slurm-on-K8s** projects (SchedMD Slinky, CoreWeave SUNK,
+Nebius Soperator) that keep Slurm's gang semantics on shared K8s infra,
+narrowing the split. The momentum is toward standardizing on Kubernetes even
+for training, via the add-ons above, because inference, not training, is now
+the majority of AI compute spend and serving wants exactly the elastic,
+scale-to-zero, latency-aware scheduling that Kubernetes provides.
+
+**Sensible default (mid-2026):** for a team shipping AI features with mixed
+bursty inference and occasional fine-tuning and no dedicated infra team, start
+on a serverless GPU or managed-inference platform (Modal for general serverless
+Python ergonomics, Baseten for production serving with SLAs, Fireworks or
+Together for pure open-model token inference). Promote to reserved neocloud
+clusters scheduled with Slurm-for-training and Kubernetes-for-serving as
+utilization climbs and the rental premium starts to dominate the bill.
+
+::: {.callout-tip}
+## Constraint arrow
+The serving cost of a token, set at this layer, reaches all the way back up to
+pre-training. @sec-scaling-laws over-trains a smaller model past Chinchilla
+optimal precisely because the GPU-hour and per-token economics decided here are
+paid for the model's entire serving lifetime. The bottom of the stack sets a
+parameter at the top.
+:::
+
+## Wiring it together
+
+The three layers compose into one request path, shown in @fig-serving-wiring,
+and the OpenAI-compatible interface is what keeps each replaceable.
+
+```{mermaid}
+%%| label: fig-serving-wiring
+%%| fig-cap: "The full stack wired end to end. The gateway is the hub: apps, agents, and eval harnesses all hold a virtual key and one base URL, and the gateway fans out to hosted APIs and self-hosted engines running on scheduled GPUs."
+flowchart TB
+  app["App / Agent runtime"] -->|"virtual key"| gw["Gateway (LiteLLM / Lux)"]
+  eval["Eval harness"] -->|"same API"| gw
+  gw -->|"alias smart"| api["Hosted APIs"]
+  gw -->|"alias local"| orch["Orchestrator (fleet scale)<br/>Dynamo / llm-d"]
+  orch --> prefill["Prefill workers (vLLM / SGLang)"]
+  orch --> decode["Decode workers (vLLM / SGLang)"]
+  prefill <-->|"KV transfer (NIXL/NVLink/IB)"| decode
+  gw -.->|"single node: skip orchestrator"| engine["Single engine (vLLM)"]
+  prefill --> sched["GPUs scheduled by<br/>K8s+KAI / Slurm / Ray"]
+  decode --> sched
+  engine --> sched
+  gw -->|"spend, traces"| obs[("Cost + audit + OTel")]
+```
+
+Three facts make this hold together in practice. Applications never hold
+provider keys: they hold a virtual key minted by the gateway, so rotating a
+credential or capping a runaway agent is a server-side operation with no client
+redeploy. One base URL, OpenAI-shaped, serves app code, eval harnesses, and
+agent runtimes alike, so switching models or adding a fallback is configuration.
+And the engine, not the prompt, enforces structured output: guided decoding via
+XGrammar is the reliable path when downstream code parses tool calls or
+extracted data.
+
+## Capability, efficiency, trust
+
+The three-lens close ties the layers back to the book's spine. **Capability** is
+the gateway's reach: one interface that makes every model, hosted or
+self-hosted, addressable, so the best model for each call is a routing rule.
+**Efficiency** is the engine and the compute tier working together: continuous
+batching, prefix caching, and quantization raise tokens per second, while the
+build-versus-rent and utilization decision sets the dollar floor under every
+token. **Trust** is the gateway again as the policy point: key custody, spend
+caps, audit, PII redaction, and the agent-native protocols that bring tool and
+agent traffic under one governed seam, which is where this chapter hands off to
+the safety and authorization work in @sec-security-authorization.
+
+## Further reading
+
+- vLLM documentation (features, quantization, structured outputs). [docs.vllm.ai](https://docs.vllm.ai/en/latest/); disaggregated prefilling, [features/disagg_prefill](https://docs.vllm.ai/en/latest/features/disagg_prefill/)
+- SGLang project (RadixAttention). [github.com/sgl-project/sglang](https://github.com/sgl-project/sglang)
+- TensorRT-LLM (NVIDIA). [developer.nvidia.com/tensorrt-llm](https://developer.nvidia.com/tensorrt-llm); [docs](https://nvidia.github.io/TensorRT-LLM/)
+- NVIDIA Dynamo (datacenter-scale disaggregation). [developer.nvidia.com/dynamo](https://developer.nvidia.com/dynamo); [github.com/ai-dynamo/dynamo](https://github.com/ai-dynamo/dynamo)
+- llm-d project; joined CNCF, March 2026. [github.com/llm-d/llm-d](https://github.com/llm-d/llm-d); [redhat.com/en/topics/ai/what-is-llm-d](https://www.redhat.com/en/topics/ai/what-is-llm-d)
+- LMDeploy. [github.com/InternLM/lmdeploy](https://github.com/InternLM/lmdeploy). llama.cpp. [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). Ollama. [github.com/ollama/ollama](https://github.com/ollama/ollama). Apple MLX / mlx-lm. [github.com/ml-explore/mlx](https://github.com/ml-explore/mlx)
+- Hugging Face TGI (archived March 21, 2026). [github.com/huggingface/text-generation-inference](https://github.com/huggingface/text-generation-inference)
+- LiteLLM proxy: cost tracking, load balancing, fallbacks. [docs.litellm.ai/docs/proxy/cost_tracking](https://docs.litellm.ai/docs/proxy/cost_tracking); [routing-load-balancing](https://docs.litellm.ai/docs/routing-load-balancing)
+- OpenRouter, "What is an LLM gateway." [openrouter.ai/blog/insights/llm-gateway](https://openrouter.ai/blog/insights/llm-gateway/)
+- Portkey AI gateway buyers guide. [portkey.ai/buyers-guide/ai-gateway-solutions](https://portkey.ai/buyers-guide/ai-gateway-solutions)
+- agentgateway (LLM + MCP + A2A); Linux Foundation. [agentgateway.dev](https://agentgateway.dev/); [github.com/agentgateway/agentgateway](https://github.com/agentgateway/agentgateway)
+- Envoy AI Gateway (InferencePool, token rate limiting). [aigateway.envoyproxy.io/docs/capabilities](https://aigateway.envoyproxy.io/docs/capabilities/)
+- Bifrost (Maxim AI). [github.com/maximhq/bifrost](https://github.com/maximhq/bifrost). Lux. [lux.latere.ai](https://lux.latere.ai)
+- Modal pricing (billing model, GPU rates). [modal.com/pricing](https://modal.com/pricing). RunPod pricing. [runpod.io/pricing](https://www.runpod.io/pricing)
+- SkyPilot, "Slurm vs K8s for AI Infra" (SUNK, Soperator, Volcano, Kueue). [blog.skypilot.co/slurm-vs-k8s](https://blog.skypilot.co/slurm-vs-k8s/); GPU Compass pricing, [blog.skypilot.co/gpu-compass](https://blog.skypilot.co/gpu-compass/)
+- KubeRay (official Ray K8s operator). [github.com/ray-project/kuberay](https://github.com/ray-project/kuberay); Anyscale, "Introducing KubeRay v1.4," [anyscale.com/blog/kuberay-v1-4](https://www.anyscale.com/blog/kuberay-v1-4)
+- CloudOptimo, "Kubernetes AI Infrastructure in 2026" (KAI, DRA, inference-share framing). [cloudoptimo.com](https://www.cloudoptimo.com/blog/kubernetes-ai-infrastructure-in-2026-gpu-scheduling-and-production-realities/)
+- Spheron, vLLM vs TensorRT-LLM vs SGLang H100 benchmarks (2026, directional). [spheron.network/blog/vllm-vs-tensorrt-llm-vs-sglang-benchmarks](https://www.spheron.network/blog/vllm-vs-tensorrt-llm-vs-sglang-benchmarks/); GPU cloud pricing, [spheron.network/blog/gpu-cloud-pricing-comparison-2026](https://www.spheron.network/blog/gpu-cloud-pricing-comparison-2026/)
+- SqueezeBits, guided-decoding performance vLLM vs SGLang (2026, directional). [blog.squeezebits.com/guided-decoding-performance-vllm-sglang](https://blog.squeezebits.com/guided-decoding-performance-vllm-sglang)

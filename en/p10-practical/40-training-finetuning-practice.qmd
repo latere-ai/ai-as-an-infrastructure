@@ -1,0 +1,337 @@
+# Training and Fine-tuning in Practice {#sec-training-practice}
+
+This is a practical chapter. The theory of how weights move lives in
+@sec-sft-peft (supervised fine-tuning and parameter-efficient methods) and
+@sec-training-at-scale (sharding an optimizer across many accelerators).
+Here the question is narrower and more immediate: it is mid-2026, you have a
+task and a budget, and you must pick the tools that change a model's weights,
+wire them into the rest of your stack, and decide whether you should be
+training at all. The answer is opinionated and dated. Lead with the
+categories and trade-offs, which are durable, and treat every version number,
+price, and ranking as a snapshot to re-check.
+
+::: {.callout-note}
+## As of mid-2026
+Frameworks, prices, GitHub star counts, and revenue figures below are a
+June 2026 snapshot, each attributed to a source. Per-token prices show the
+*shape* of pricing, not a canonical quote. Treat anything called uncertain as
+needing a fresh check before you commit a budget. The categories and the
+"how to choose" logic age slowly; the specifics age in months.
+:::
+
+## The layer and what it contains
+
+Training and fine-tuning is the layer where you change weights, as opposed to
+the serving layer where you only run forward passes (@sec-serving-stack) or
+the agent and retrieval layers where you steer a frozen model with context
+(@sec-agents-practice, @sec-retrieval-practice). In a real 2026 stack it
+splits into three sub-layers that are easy to conflate and behave very
+differently.
+
+```{dot}
+//| label: fig-training-layers
+//| fig-cap: "The three sub-layers of the training and fine-tuning stack in 2026. Most teams touch only the middle row; the engines sit underneath, the managed services replace all three."
+digraph layers {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=10];
+
+  toolkit [label="Post-training toolkits\nTRL, Axolotl, Unsloth, LLaMA-Factory\n(SFT, DPO, GRPO)", fillcolor="#d9e8ff"];
+  peft [label="Parameter-efficient methods\nPEFT: LoRA, QLoRA, DoRA", fillcolor="#d9ffd9"];
+  engine [label="Distributed engines\nFSDP2 / TorchTitan, Megatron-Core,\nDeepSpeed, JAX / MaxText", fillcolor="#ffd9d9"];
+  managed [label="Managed services\nTogether, Fireworks, Bedrock,\nAzure, Vertex", fillcolor="#fff4d9"];
+
+  toolkit -> peft [label="uses"];
+  toolkit -> engine [label="runs on"];
+  managed -> toolkit [label="hides all of this", style=dashed];
+}
+```
+
+1. **Distributed engines.** The heavy systems that shard a model and its
+   optimizer state across many accelerators: PyTorch FSDP2 and TorchTitan,
+   NVIDIA Megatron-Core, Microsoft DeepSpeed (ZeRO), and the JAX/XLA stack
+   (MaxText) on TPUs. This is where 4D and 5D parallelism, FP8 training, and
+   trillion-parameter scale live. @sec-training-at-scale explains the
+   mechanics.
+2. **Post-training toolkits.** Higher-level libraries that wrap those engines
+   for supervised fine-tuning (SFT), preference optimization (DPO, ORPO), and
+   reinforcement learning (GRPO, GSPO, PPO): Hugging Face TRL, Axolotl,
+   Unsloth, LLaMA-Factory. This is what most teams actually touch.
+3. **Parameter-efficient methods and managed services.** LoRA, QLoRA, DoRA,
+   carried by the PEFT library, plus hosted fine-tuning APIs that hide the
+   accelerators entirely.
+
+Two 2026 themes tie this layer to the rest of the book. FP8 training has gone
+mainstream: Google's Ironwood TPU has native FP8 in its matrix units,
+Megatron-Core ships FP8 training, and Unsloth does FP8 reinforcement learning
+([Google Cloud, 2026](https://cloud.google.com/blog/products/compute/training-large-models-on-ironwood-tpus)).
+More important for an infrastructure book, RL post-training has fused training
+with inference serving: modern RL toolkits embed an inference engine, almost
+always vLLM, to generate rollouts, so the training box now contains a serving
+box. That is the wiring story at the end of this chapter.
+
+## The first fork: should you train at all?
+
+Before tooling, answer the harder question. In 2026 the honest default for
+many tasks is *do not train weights*. Prompt engineering, few-shot examples,
+retrieval (@sec-retrieval-practice), and structured outputs cover much of what
+fine-tuning used to be reached for. OpenAI, while winding down its self-serve
+fine-tuning product, points users to prompt caching, smaller base models, and
+RAG instead
+([explainx.ai, secondary](https://explainx.ai/blog/openai-gpt-55-pricing-fine-tuning-api-wind-down-2026)).
+
+Fine-tune when you need a *durable behavior change* the context window cannot
+carry cheaply:
+
+- a consistent output format or house style the prompt keeps drifting from,
+- a narrow domain with vocabulary or conventions absent from the base model,
+- a latency or cost win from distilling a large model's behavior into a small
+  specialized one (this is the constraint arrow below),
+- a capability shaped by reinforcement learning against a verifiable reward,
+  the reasoning and agentic case from @sec-training-to-reason.
+
+If none of these holds, spend the week on better prompts and retrieval, not
+on a training run.
+
+::: {.callout-tip}
+## Constraint arrow
+The serving layer reaches up and justifies the most common reason to
+fine-tune. A small model that you have specialized costs far less per token
+to serve (@sec-serving-stack) than a large general model behind an API. When
+you serve a high volume, the training run pays for itself in inference
+savings, which is the same over-training-for-inference logic from
+@sec-scaling-laws applied one level up. Fine-tuning here is a *serving-cost*
+decision wearing a *training* costume.
+:::
+
+## Key players (mid-2026)
+
+The tables below are dated and source-attributed. Verify current versions and
+prices before you choose.
+
+### Distributed engines
+
+| Name | What it is | License | Best for | Note (mid-2026) |
+|------|-----------|---------|----------|-----------------|
+| **PyTorch FSDP2** | Native fully-sharded data parallel; shards params, grads, optimizer state as DTensor | BSD | PyTorch-native sharded training without a heavy framework | FSDP2 is current; FSDP1 deprecated from PyTorch 2.11+. Adds per-param freezing, mixed FP8/BF16 ([PyTorch tutorial](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html)) |
+| **TorchTitan** | PyTorch-native pre-training platform on FSDP2; composable 4D parallelism | BSD | Production pre-training / continued pre-training on PyTorch | Reported speedups on Llama 3.1 recipes at 128 to 512 GPU scale ([arXiv 2410.06511](https://arxiv.org/pdf/2410.06511)); foundation under torchforge |
+| **NVIDIA Megatron-Core** | GPU-optimized tensor/pipeline/expert/context parallelism; product-supported | Apache-2.0-style + NVIDIA support | Large dense, MoE, and multimodal training on NVIDIA GPUs | Jan 2026 added dynamic context parallelism (reported up to ~1.48x on variable-length seqs); FP8 training ([docs](https://docs.nvidia.com/megatron-core/index.html), [roadmap](https://github.com/NVIDIA/Megatron-LM/issues/4003)) |
+| **NeMo / Megatron Bridge** | Higher-level orchestration over Megatron-Core; recipes, export, alignment | Open source + NVIDIA support | Teams standardizing on the NVIDIA stack end to end | Bridge 0.4.0 (Apr 2026) added Kimi 2.5, Nemotron 3, Qwen 3.5 VL, FP8 export ([docs](https://docs.nvidia.com/nemo/megatron-bridge/latest/)) |
+| **DeepSpeed (ZeRO)** | ZeRO sharding, CPU/NVMe offload, training optimizations | Apache-2.0 / MIT | Memory-constrained training, offload, very large models | Stable v0.18.9 (Mar 2026); added Muon optimizer for ZeRO-3 ([releases](https://github.com/deepspeedai/DeepSpeed/releases)) |
+| **JAX + MaxText** | Decoder-only LLM reference on JAX/XLA, tuned for TPU | Apache-2.0 | Foundation-model training on Cloud TPU | Ironwood TPU FP8; Qwen3-Next and DeepSeek features (Mar 2026). Pairs with Tunix for RL ([docs](https://maxtext.readthedocs.io/), [Cloud TPU + JAX](https://docs.cloud.google.com/tpu/docs/jax-ai-stack)) |
+
+### Post-training toolkits (what most teams touch)
+
+| Name | What it is | License | Best for | Note (mid-2026) |
+|------|-----------|---------|----------|-----------------|
+| **Hugging Face TRL** | Official HF post-training: SFT, DPO, GRPO, reward modeling | Apache-2.0 | The reference; building blocks others wrap | De-facto standard trainers; integrates PEFT, accelerate, FSDP/DeepSpeed ([docs](https://huggingface.co/docs/trl)) |
+| **Axolotl** | Config-driven (YAML) wrapper over TRL/PEFT; LoRA, QLoRA, full FT, multimodal | Apache-2.0 | Reproducible config-as-code runs on a few GPUs | Multimodal since 2025; "edit a YAML, get a run" ([repo](https://github.com/axolotl-ai-cloud/axolotl)) |
+| **Unsloth** | Custom Triton kernels for faster, lower-VRAM SFT and RL on 1 to 2 GPUs | Apache-2.0 core; paid Pro | Single-GPU efficiency; long-context GRPO | OSS is effectively single-GPU; robust multi-GPU is Pro (**uncertain**, status evolving). GRPO on a 24GB GPU; FP8 RL ~1.4x vs BF16 ([docs](https://unsloth.ai/docs)) |
+| **LLaMA-Factory** | Broad toolkit + web UI (LlamaBoard); widest model support | Apache-2.0 | Many model families, low-code UI, breadth over peak speed | ~68k GitHub stars; can use an Unsloth backend reportedly within ~6% of native speed ([secondary](https://theaiengineer.substack.com/p/unsloth-vs-axolotl-vs-llama-factory)) |
+| **torchtune** | PyTorch-native post-training (SFT/DPO/PPO/GRPO/QAT), minimal abstraction | BSD | Hackable recipes on PyTorch | **Maintenance only:** active dev stopped Jul 15, 2025; an unnamed PyTorch-native successor is in development ([issue #2883](https://github.com/meta-pytorch/torchtune/issues/2883)) |
+| **torchforge** | PyTorch-native RL + agentic post-training on Monarch + TorchTitan + vLLM | Open source, **experimental** | Scalable RL post-training without writing distributed infra | Announced Oct 2025. Not the torchtune successor; sits on TorchTitan (training) and vLLM (rollouts) ([PyTorch blog](https://pytorch.org/blog/introducing-torchforge/)) |
+| **HF PEFT** | Library implementing LoRA, QLoRA, DoRA, rsLoRA | Apache-2.0 | The adapter layer under TRL/Axolotl/LLaMA-Factory | Where the LoRA-family methods live ([docs](https://huggingface.co/docs/peft)) |
+
+### Managed services (no accelerators of your own)
+
+| Name | What it is | Best for | Note (mid-2026) |
+|------|-----------|----------|-----------------|
+| **OpenAI fine-tuning** | Hosted SFT/RFT on GPT models | (Winding down) | **Self-serve fine-tuning is being wound down.** No new orgs since May 7, 2026; all new jobs end Jan 6, 2027 ([deprecations](https://developers.openai.com/api/docs/deprecations)) |
+| **Together AI** | Managed SFT, DPO, LoRA on open weights; per-training-token billing | Cheap LoRA/SFT on open weights + dedicated serving | E.g. LoRA SFT ~$0.48/M tokens (16B), full FT ~$3.20/M (70 to 100B), DPO ~$8/M; serving endpoint billed separately ([secondary](https://www.cloudzero.com/blog/together-ai-pricing/)) |
+| **Fireworks AI** | Self-serve post-training + fast serving in one place | Tune-and-serve together | Reported ~$800M ARR (May 2026), up from ~$305M (end 2025) ([secondary](https://sacra.com/c/fireworks-ai/)) |
+| **AWS Bedrock** | Managed SFT + RFT, including open weights, OpenAI-compatible APIs | AWS-native shops; RFT on open weights | RFT for open-weight + OpenAI-compatible FT added Feb 2026 ([what's-new](https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-bedrock-reinforcement-fine-tuning-openai)) |
+| **Modal** | Serverless GPU compute; run torchtune/Unsloth/Axolotl yourself | Bring-your-own-recipe on on-demand GPUs | Not fully managed FT; you write the training code ([ref](https://www.spheron.network/blog/fireworks-ai-alternatives/)) |
+| **Azure AI Foundry / Google Vertex** | Cloud-native managed fine-tuning (Azure OpenAI, Gemini tuning) | Enterprises on Azure/GCP | Azure has FT cost-management tooling ([Microsoft Learn](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning-cost-management)) |
+
+### Parameter-efficient methods
+
+These are techniques, not products; they live inside PEFT, Unsloth, and TRL.
+See @sec-sft-peft for the theory of why a low-rank update suffices.
+
+- **LoRA.** Low-rank adapters; the default. Zero added inference latency once
+  merged into the base weights.
+- **QLoRA.** 4-bit (NF4) frozen base plus LoRA; the single-GPU sweet spot for
+  roughly 1K to 50K examples.
+- **DoRA.** Weight-decomposed LoRA (magnitude plus direction); better
+  convergence, worth it at larger data, roughly 50K to 500K examples.
+- **rsLoRA.** Rank-stabilized LoRA for high ranks.
+- Newer arXiv variants (RandLoRA, activation-space methods) exist but are not
+  defaults. **Treat as frontier, unverified in production**
+  ([AppScale 2026](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026)).
+
+## How to choose
+
+Once you have decided you genuinely need to train weights, four questions
+settle the tool.
+
+**Scale of the run.** One consumer or single GPU points to **Unsloth** for
+its kernels and low VRAM. A few GPUs with config-as-code points to **Axolotl**
+or **LLaMA-Factory**. Multi-node pre-training or continued pre-training points
+to **TorchTitan/FSDP2**, **Megatron-Core**, or **MaxText** on TPUs.
+
+**Ecosystem you live in.** NVIDIA GPUs with a desire for vendor support point
+to **Megatron-Core/NeMo**. PyTorch-native and hackable points to
+**FSDP2/TorchTitan + TRL**. TPUs point to **JAX/MaxText**. Pure Hugging Face
+muscle memory points to **TRL** directly.
+
+**Method.** Style or format with small data points to **QLoRA**. A deeper
+domain shift with more data points to **DoRA** or high-rank LoRA. A structural
+domain change with 500K or more examples points to **full fine-tuning**.
+Reasoning or agentic behavior against a reward points to **GRPO/GSPO** in
+Unsloth, TRL, or torchforge (@sec-training-to-reason).
+
+**Self-host versus managed.** Managed wins on time-to-first-run, no GPU
+operations, and elastic cost, with predictable per-training-token pricing.
+Self-host wins on data residency and IP control, unusual recipes,
+repeated or large runs where you amortize hardware, and avoiding vendor
+lock-in or sudden deprecation. Note the convenience tax: Together prices LoRA
+per training token *plus* a separate hourly dedicated endpoint to serve the
+result, so the cheap headline number is not the full bill.
+
+Concrete picks:
+
+- **Pick Unsloth when** you are on one 24 to 80GB GPU and want the fastest,
+  lowest-VRAM SFT or long-context GRPO.
+- **Pick Axolotl when** you want reproducible YAML-configured runs across a
+  few GPUs and value config-as-code in CI.
+- **Pick LLaMA-Factory when** you need breadth of model support or a low-code
+  UI for non-experts.
+- **Pick TRL directly when** you are writing custom post-training logic and
+  want the canonical trainers.
+- **Pick TorchTitan/FSDP2 or Megatron-Core when** you are doing real
+  multi-node pre-training or continued pre-training.
+- **Pick MaxText when** you are on TPUs.
+- **Pick a managed service when** you have no GPU operations appetite and a
+  standard SFT/LoRA/DPO/RFT workload, but design an export path given 2026's
+  deprecation precedent.
+
+## A sensible default (mid-2026)
+
+For a typical product team that has decided it genuinely needs to fine-tune an
+open-weight model, as of June 2026:
+
+**Default: Axolotl (YAML config) on top of TRL + PEFT, doing QLoRA**, on
+rented GPUs (Modal, Runpod, or your own cloud). It is reproducible,
+config-as-code fits CI and eval (@sec-eval-practice), QLoRA keeps it single-
+or few-GPU, and you keep your weights and data. A starting recipe is `r=16`,
+DoRA on, `target_modules="all-linear"`, and you raise the rank for harder
+tasks
+([AppScale 2026](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026)).
+
+- **Alternative A, maximum single-GPU efficiency or RL:** Unsloth, especially
+  for consumer GPUs or long-context GRPO.
+- **Alternative B, no GPU operations at all:** a managed service. Together for
+  cheap open-weight LoRA/SFT, Fireworks if you want tune-and-serve in one
+  place, Bedrock if you are AWS-native. Build an export and portability path;
+  do not assume a managed FT product is permanent. OpenAI's self-serve
+  wind-down, announced May 2026, is the cautionary tale.
+
+For multi-node pre-training rather than fine-tuning, the default shifts to
+**TorchTitan/FSDP2** or **Megatron-Core**, or **MaxText** on TPUs.
+
+## Wiring it into the stack
+
+The defining 2026 wiring fact is that **RL post-training now embeds the
+inference layer**. A GRPO or PPO loop generates rollouts from the current
+policy, scores them with a reward, then updates the weights. Generation is the
+bottleneck, so toolkits delegate it to a fast inference engine, almost always
+**vLLM**. Unsloth drives vLLM for rollouts; torchforge runs vLLM for
+generation and TorchTitan for training, shuttling weights between them through
+an RDMA tensor store
+([PyTorch blog](https://pytorch.org/blog/introducing-torchforge/)). So the
+training box in your architecture diagram contains a serving box. This is the
+same vLLM from @sec-serving-stack, now used as a training subcomponent, a
+clean instance of the book's thesis that these layers are one infrastructure.
+
+```{mermaid}
+%%| label: fig-training-wiring
+%%| fig-cap: "End-to-end wiring. A toolkit drives PEFT and a distributed engine to produce weights, which then flow through serving, gateway, eval, and the agent and retrieval layers. In the RL case the serving engine (vLLM) sits inside the training loop."
+flowchart TD
+  data["Data\n(SFT / preference / reward)"] --> toolkit["Toolkit\nTRL / Axolotl / Unsloth"]
+  toolkit -->|uses| peft["PEFT\nLoRA / QLoRA / DoRA"]
+  toolkit -->|runs on| engine["Engine\nFSDP2 / DeepSpeed / Megatron"]
+  peft --> weights["Adapter or merged weights"]
+  engine --> weights
+  toolkit -.RL loop.-> vllm["vLLM rollouts"]
+  vllm -->|reward| toolkit
+  weights --> serving["Serving engine\nvLLM / TGI"]
+  serving --> gateway["Gateway"]
+  gateway --> eval["Eval harness\n(gate before promotion)"]
+  eval --> agents["Agents / retrieval"]
+```
+
+After training you merge the adapter, or serve it directly with an
+adapter-aware engine, hand the weights to the serving layer behind your
+gateway (@sec-serving-stack), and route an eval harness against it before
+promotion (@sec-eval-practice). The retrieval and agent layers then consume
+the served model. Adapter-aware serving, many LoRAs over one base, is where
+managed adapter platforms historically fit. The whole flow assembles into the
+end-to-end stack of @sec-wiring-stack.
+
+## A config and a launch you can adapt
+
+A minimal Axolotl QLoRA config, illustrative and meant to be edited:
+
+```yaml
+# qlora.yml
+base_model: Qwen/Qwen3-8B
+load_in_4bit: true          # QLoRA: 4-bit NF4 frozen base
+adapter: lora
+lora_r: 16
+lora_alpha: 32
+lora_target_modules: all-linear
+datasets:
+  - path: ./data/sft.jsonl
+    type: chat_template
+gradient_checkpointing: true
+sequence_len: 4096
+micro_batch_size: 2
+num_epochs: 3
+# distributed backend (FSDP2 or DeepSpeed) configured via accelerate
+```
+
+Launch it, then merge the adapter for serving:
+
+```bash
+# train (single or few GPUs via accelerate)
+accelerate launch -m axolotl.cli.train qlora.yml
+
+# merge the LoRA adapter back into the base for adapter-free serving
+python -m axolotl.cli.merge_lora qlora.yml --lora_model_dir ./out
+```
+
+The merged weights are then handed to the serving stack. Keep the config in
+version control so a training run is a reviewable diff, the same discipline
+you apply to the rest of the infrastructure.
+
+## Closing: capability, efficiency, trust
+
+Through the book's closing lens, fine-tuning is first a *capability* lever,
+the durable behavior change a prompt cannot carry. It is increasingly an
+*efficiency* lever, distilling a large model into a small cheap-to-serve one,
+which is why the serving-cost constraint arrow points up so often. And it is a
+*trust* surface: a fine-tuned model has absorbed your data, so data residency,
+reproducible config-as-code, and an eval gate before promotion are not
+niceties but the controls that let you ship the weights at all. The honest
+2026 default is still to reach for prompting and retrieval first, and to train
+only when the behavior change has to live in the weights.
+
+## Further reading
+
+First-hand sources first.
+
+- PyTorch, "Getting Started with Fully Sharded Data Parallel (FSDP2)." [docs.pytorch.org](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html)
+- Liang et al., "TorchTitan: One-stop PyTorch Native Solution for Production-Ready LLM Pre-training," 2024. [arXiv:2410.06511](https://arxiv.org/pdf/2410.06511); repo [github.com/pytorch/torchtitan](https://github.com/pytorch/torchtitan)
+- NVIDIA, "Megatron-Core documentation" and roadmap. [docs.nvidia.com](https://docs.nvidia.com/megatron-core/index.html); [roadmap #4003](https://github.com/NVIDIA/Megatron-LM/issues/4003)
+- NVIDIA, "NeMo Megatron Bridge documentation." [docs.nvidia.com](https://docs.nvidia.com/nemo/megatron-bridge/latest/)
+- Microsoft DeepSpeed releases. [github.com/deepspeedai/DeepSpeed](https://github.com/deepspeedai/DeepSpeed/releases)
+- Google, "MaxText documentation" and "Training large models on Ironwood TPUs," 2026. [maxtext.readthedocs.io](https://maxtext.readthedocs.io/); [cloud.google.com](https://cloud.google.com/blog/products/compute/training-large-models-on-ironwood-tpus); [Cloud TPU + JAX](https://docs.cloud.google.com/tpu/docs/jax-ai-stack)
+- Hugging Face, "TRL" and "PEFT" documentation. [huggingface.co/docs/trl](https://huggingface.co/docs/trl); [huggingface.co/docs/peft](https://huggingface.co/docs/peft)
+- Axolotl. [github.com/axolotl-ai-cloud/axolotl](https://github.com/axolotl-ai-cloud/axolotl)
+- Unsloth documentation and long-context GRPO guide. [unsloth.ai/docs](https://unsloth.ai/docs); [GRPO long-context](https://unsloth.ai/docs/get-started/reinforcement-learning-rl-guide/grpo-long-context)
+- torchtune future direction. [issue #2883](https://github.com/meta-pytorch/torchtune/issues/2883)
+- PyTorch, "Introducing torchforge," 2025. [pytorch.org/blog](https://pytorch.org/blog/introducing-torchforge/); repo [github.com/meta-pytorch/forge](https://github.com/meta-pytorch/forge)
+- OpenAI, "Deprecations" (fine-tuning wind-down). [developers.openai.com](https://developers.openai.com/api/docs/deprecations)
+- AWS, "Reinforcement fine-tuning for open-weight models on Bedrock," Feb 2026. [aws.amazon.com](https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-bedrock-reinforcement-fine-tuning-openai)
+- Microsoft, "Fine-tuning cost management." [learn.microsoft.com](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning-cost-management)
+- Secondary comparisons and pricing (verify before use): AppScale, "LoRA, QLoRA, full fine-tuning compared," 2026 [appscale.blog](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026); CloudZero, "Together AI pricing" [cloudzero.com](https://www.cloudzero.com/blog/together-ai-pricing/); Sacra, "Fireworks AI" [sacra.com](https://sacra.com/c/fireworks-ai/); "Fine-tuning in 2026" toolkit comparison [dev.to](https://dev.to/ultraduneai/eval-003-fine-tuning-in-2026-axolotl-vs-unsloth-vs-trl-vs-llama-factory-2ohg); All Things Open, "LLM fine-tuning as an open-source developer workflow" [allthingsopen.org](https://allthingsopen.org/articles/llm-fine-tuning-open-source-developer-workflow).

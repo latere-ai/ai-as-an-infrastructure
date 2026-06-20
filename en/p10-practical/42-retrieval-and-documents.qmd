@@ -1,0 +1,395 @@
+# Retrieval and Document Intelligence {#sec-retrieval-practice}
+
+Retrieval is how a model talks to data it was never trained on, and document
+intelligence is the front door that decides what data even reaches it. This
+chapter is the practical companion to the theory in @sec-rag-retrieval and
+@sec-context-engineering: where those chapters explain why retrieval works and
+how a context window is assembled, this one is for the engineer who has to pick
+tools in 2026 and wire them together. The two halves are one pipeline. A PDF
+becomes structured text, structured text becomes embeddings in a vector store,
+a query pulls the right chunks back, and a reranker orders them before they hit
+the prompt. A failure anywhere upstream silently poisons everything downstream.
+
+::: {.callout-note}
+## As of mid-2026
+
+This is a dated snapshot (2026-06). Every ranking, price, version number, and
+benchmark score below is volatile and source-attributed, and many come from
+vendor posts or version-mixed aggregators that do not agree. Treat them as
+directional, lead with the durable guidance (the categories, the trade-offs,
+how to choose, how to wire), and verify current values against the primary
+sources before you quote them.
+:::
+
+## The pipeline and why parse quality leads
+
+Read the pipeline in ingestion order. @fig-retrieval-pipeline shows the whole
+path from a raw document to an answer.
+
+```{mermaid}
+%%| label: fig-retrieval-pipeline
+%%| fig-cap: "The retrieval and document-intelligence pipeline, from raw document to grounded answer. Ingestion is offline; query is online; evaluation observes both."
+flowchart LR
+  subgraph Ingest [Ingestion offline]
+    D[Documents<br>PDF scan office] --> P[Parse and OCR<br>VLM or pipeline]
+    P --> X[Structured extraction<br>schema-valid object]
+    P --> C[Chunk and embed]
+    X --> VDB[(Vector store)]
+    C --> VDB
+  end
+  subgraph Query [Query online]
+    Q[User or agent query] --> H{Hybrid retrieve}
+    H --> VDB
+    VDB --> F[RRF fusion] --> RR[Rerank] --> CTX[Top-k context] --> LLM[Generator or agent] --> A[Answer]
+  end
+  EVAL[Eval RAGAS or LangSmith] -.-> H
+  EVAL -.-> RR
+  EVAL -.-> A
+```
+
+The order matters because the largest data loss and the quietest errors happen
+at the parse step, not the search step. If a two-column page is flattened into
+interleaved lines, or a financial table is shredded into prose, no embedding
+model and no reranker downstream can recover the structure. By mid-2026 the
+vector database itself is close to a commodity: approximate nearest-neighbor
+search (HNSW, IVF, DiskANN variants) is everywhere and rarely the bottleneck.
+The differentiation has moved to the parse quality at the front, the embedding
+and reranker quality in the middle, and the cost architecture (RAM-resident
+versus object-storage) underneath. We treat the two halves in pipeline order:
+document intelligence first, then the retrieval stack.
+
+::: {.callout-tip}
+## Constraint arrow
+
+The retriever sets the ceiling on answer faithfulness no matter how good the
+generator is, and the parser sets the ceiling on the retriever. Spending here
+beats almost any prompt or model change above. A second arrow comes from below:
+once an agent (@sec-agents-practice) calls retrieval as a tool many times per
+task, per-query latency and cost stop being afterthoughts and become design
+constraints, which is what makes the object-storage cost curve worth caring
+about.
+:::
+
+## Document intelligence: getting from a messy file to clean data
+
+Document intelligence turns a PDF, scan, screenshot, or office file into
+machine-readable structure: text in reading order, tables as cells, equations
+as LaTeX, key-value pairs, and ultimately a typed object that obeys a schema.
+By 2026 the field split into three architectural camps, plus a cross-cutting
+concern.
+
+1. **Classic CV/OCR pipelines.** Multi-stage: layout detection, OCR,
+   table reconstruction, reading-order assembly. Deterministic, debuggable,
+   fast, and brittle on unusual layouts. Marker, MinerU, PaddleOCR,
+   unstructured, and the cloud APIs live here.
+2. **End-to-end document VLMs.** A single image-and-text-to-text model emits
+   the whole structured document (Markdown, HTML tables, LaTeX) in one pass.
+   These dominate the open leaderboards, are usually small (sub-2B), and are
+   self-hostable on the same serving fleet as your chat models
+   (@sec-serving-stack). Simpler to run, harder to debug when they drop a
+   column.
+3. **Agentic document platforms.** A managed service wraps OCR, a VLM, a
+   correction loop, and structured extraction behind an API and an SLA. You
+   trade self-hosting for accuracy on hard documents and for compliance.
+
+The cross-cutting concern is **structured extraction**: going from parsed text
+to a typed object that obeys a JSON Schema. That is where constrained decoding
+and validation libraries meet the parse.
+
+The table below is a condensed view; the *Primary sources* hold the version and
+license detail.
+
+| Tool | Camp | License / deploy | Pick it when |
+| --- | --- | --- | --- |
+| **Docling** (IBM) | Pipeline toolkit | MIT toolkit, Apache-2.0 model, self-host | You want a permissive, batteries-included OSS pipeline with RAG-friendly output and swappable OCR |
+| **Granite-Docling-258M** | End-to-end VLM | Apache-2.0, self-host | Cost-efficient self-hosted conversion inside Docling; most permissive license; edge-tolerant |
+| **PaddleOCR-VL** (Baidu) | End-to-end VLM | Apache-2.0, self-host | Best-in-class open full-document accuracy when you can serve a VLM |
+| **dots.ocr**, **DeepSeek-OCR**, **MinerU**, **GLM-OCR** | End-to-end VLM | Apache-2.0 (verify weights), self-host | Self-hosted layout-aware parsing; DeepSeek-OCR for very high throughput |
+| **Mistral OCR 3** | Hosted OCR model | Commercial API, self-host on request | A flat low per-page price, an EU vendor, and a self-host escape hatch |
+| **Reducto** | Agentic platform | Commercial SaaS + on-prem | Adversarial enterprise docs (dense tables, handwriting, forms) with SOC 2 / HIPAA / zero-retention needs |
+| **LlamaParse / LlamaCloud** | Agentic platform | Hosted SaaS, credit-based | You are on LlamaIndex and want tiered parse quality (Fast to Agentic Plus) plus extraction |
+| **unstructured** | Pipeline + hosted | Apache-2.0 + hosted | The hard part is format sprawl (hundreds of source types), not the single hardest PDF |
+| **Azure / AWS / Google doc-AI** | Cloud doc-AI | Managed, per-page | You are deep in that cloud and want prebuilt extractors and a free tier with no model ops |
+| **Marker / Surya** (Datalab) | Pipeline | Code OSS, **weights OpenRAIL-M revenue-capped** | Research, personal, or small-startup use; read the weight license before commercial use |
+
+One option is missing from the table on purpose. A general frontier VLM such as
+Gemini Flash or Pro parses pages well with no pipeline at all, and it is the
+baseline in most 2026 comparisons. It costs more per page than a dedicated small
+OCR VLM and can hallucinate or silently drop content on dense tables, so treat
+"just send the page to a frontier VLM" as a real, simple option that you
+benchmark against the specialists, not as a default.
+
+### Structured extraction
+
+Once a page is parsed, turning it into a typed object is an orthogonal choice
+along one axis: do you control the decoder?
+
+| Library | Mechanism | Pick it when |
+| --- | --- | --- |
+| **Outlines / XGrammar** | Constrained decoding (`guided_json`) inside the server | You self-host on vLLM/SGLang and want hard schema guarantees with zero post-hoc parsing |
+| **Instructor** | Pydantic validation + auto-retry around a provider SDK | You call a hosted model and want simple validation and retries |
+| **BAML** | Schema-Aligned Parsing of near-JSON output | The model returns malformed-but-close JSON and you want prompt discipline plus tolerant parsing |
+
+### Choosing a parser
+
+The decision is four axes: document difficulty, self-host versus API, volume and
+cost, and compliance.
+
+- **Self-hosted document VLM** (PaddleOCR-VL, dots.ocr, DeepSeek-OCR,
+  Granite-Docling, MinerU) when you can run a GPU, want no per-page bill, need
+  data to stay in your VPC, and your documents are "normal hard": academic
+  papers, reports, mixed text and tables. Serve them on vLLM/SGLang and you get
+  constrained decoding for free.
+- **Docling toolkit** as the safest pure-OSS default: a permissive pipeline with
+  RAG-friendly output and the option to drop in Granite-Docling.
+- **Mistral OCR 3** when you want a hosted API with a flat low per-page price
+  (reported around $2 per 1k pages, roughly half with batch, per Mistral, Dec
+  2025) and an EU vendor.
+- **Reducto or LlamaParse Agentic** when documents are genuinely adversarial and
+  accuracy matters more than per-page cost, and you want the correction loop,
+  SLA, and compliance without building them.
+- **unstructured** when the problem is format sprawl rather than the single
+  hardest PDF.
+- **Cloud doc-AI** (Azure, AWS, Google) when you are already in that cloud or
+  need a specific prebuilt extractor (invoice, receipt, ID, lending).
+
+A self-host parse plus schema-valid extraction is one request when constrained
+decoding lives inside the server:
+
+```python
+# vLLM / SGLang OpenAI-compatible call: schema-constrained extraction
+resp = client.chat.completions.create(
+    model="paddleocr-vl",                 # served locally on vLLM
+    messages=[{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": page_png_data_uri}},
+        {"type": "text", "text": "Extract the invoice as JSON."}]}],
+    extra_body={"guided_json": Invoice.model_json_schema()},  # Outlines / XGrammar
+)
+```
+
+## The retrieval stack: stores, embeddings, rerankers, hybrid search
+
+Around the vector store sit three other pieces: embedding models that turn text
+(and increasingly images and PDFs) into vectors, rerankers that re-score a
+candidate set for precision, and RAG frameworks that wire ingestion, chunking,
+retrieval, fusion, and prompt assembly together.
+
+### Vector stores
+
+The first question is almost always: do you already run Postgres? The table is
+condensed; the *Primary sources* hold the benchmark and pricing detail, all of
+it vendor-reported and version-sensitive.
+
+| Store | What it is | License | Pick it when |
+| --- | --- | --- | --- |
+| **pgvector (+ pgvectorscale)** | Postgres extension with HNSW/IVFFlat; pgvectorscale adds disk-resident StreamingDiskANN and label filtering | OSS (PostgreSQL) | You already run Postgres and your corpus is up to tens of millions of vectors. The right default for most RAG |
+| **Qdrant** | Rust vector-native DB; strong filtering, quantization, ACORN | Apache-2.0 + cloud | You are not on Postgres, want a fast self-hosted engine, and need heavy metadata filtering and data residency |
+| **Weaviate** | Vector-native with native hybrid (BM25 + vector) and built-in vectorizer modules | BSD-3 + cloud | You want hybrid search and embedding generation built in with minimal glue |
+| **Milvus / Zilliz** | Distributed, disaggregated, billion-scale; Zilliz is the managed cloud | Apache-2.0 + managed | You are genuinely at hundreds of millions to billions of vectors and have the ops capacity |
+| **Pinecone** | Managed serverless; Dedicated Read Nodes for heavy reads | Proprietary SaaS | You want fully managed, will pay for zero ops, and value predictable scaling |
+| **Turbopuffer** | Managed vector + search on object storage with caching | Proprietary SaaS | Cost at scale dominates, data is mostly cold and bursty, or you have very many tenants/namespaces |
+| **LanceDB** | Embedded/in-process on the Lance columnar format; multimodal | Apache-2.0 + cloud | Edge, desktop, notebooks, or multimodal pipelines where running a server is overhead |
+| **Chroma** | Lightweight OSS store, dev-ergonomics first | Apache-2.0 + cloud | Prototyping or small RAG where simplicity beats scale (validate limits first) |
+| **Vespa / Elasticsearch / OpenSearch** | Full search engines with vector support | Apache-2.0 / Elastic | Retrieval is really search (complex ranking, recommendation), or you already operate one |
+
+The trade-offs underneath those picks are durable even as the products churn.
+**One system versus vector-native:** Postgres-with-vectors removes an entire
+moving part (ops, backups, consistency, joins) at some cost in peak ANN
+throughput, and for most teams that trade is correct. **RAM versus object
+storage:** classic vector DBs keep the working set in RAM (fast, expensive),
+while object-storage-first designs (Turbopuffer, disk-resident DiskANN in
+pgvectorscale and Milvus) trade some latency for much lower cost on large or
+cold corpora. **Managed versus self-hosted:** managed buys zero ops and
+predictable scaling, self-hosted buys cost control, data residency, and no
+per-query markup. **Filtering at scale:** if most queries are "vector search
+but only within this tenant or date range or permission set," filtered recall
+and filtered latency matter more than raw ANN speed, and Qdrant (ACORN) and
+pgvectorscale (label filtering) are built for it.
+
+### Embeddings and rerankers
+
+The database returns what the embedding model encoded, and the reranker fixes
+the ordering. Spending here usually beats switching databases. Treat the
+embedding model as a first-class versioned dependency: changing it means
+re-embedding the whole corpus.
+
+MTEB and MMTEB scores below are not directly comparable across boards or
+versions (the English board, the multilingual board, and legacy versus current
+task sets use different task counts), so a higher number is not automatically a
+better model for your use case. The notes here are directional.
+
+| Model | Provider | Open / API | Note (as of 2026) |
+| --- | --- | --- | --- |
+| **OpenAI text-embedding-3-large / -small** | OpenAI | API | The boring-safe default; widely supported, Matryoshka dimension truncation; -small is cheap and good enough for many apps |
+| **Cohere Embed v4** | Cohere | API | Multimodal (text + images), ~128K context, 100+ languages, Matryoshka dimensions; strong enterprise default |
+| **Voyage 4 family** | Voyage AI (MongoDB) | API; nano open-weighted | Jan 2026; shared embedding space across models, domain variants (code/law/finance); default on MongoDB Atlas |
+| **Gemini Embedding (gemini-embedding-001)** | Google | API | Cited near the top of the English MTEB board (per aggregators); multimodal direction. Verify board position before quoting |
+| **Qwen3-Embedding** | Alibaba | Open (Apache-2.0) | Best open default for non-English and self-hosting; long context; cited near the top of MMTEB |
+| **BGE-M3** | BAAI | Open (MIT) | Multilingual and multi-functional (dense/sparse/ColBERT in one); solid self-hosted baseline |
+| **Cohere Rerank 4** (Fast / Pro) | Cohere | API | Reranker; 32K context, multilingual, broadest production track record; on Bedrock/Azure/OCI |
+| **Voyage rerank-2.5** | Voyage AI | API | Reranker; large free tier; natural pairing on MongoDB Atlas |
+| **mxbai-rerank v2** | Mixedbread | Open (Apache-2.0) | Best open self-hosted reranker; cross-encoder on Qwen2.5 |
+
+### Hybrid search and reranking: the 2026 consensus
+
+The default retrieval strategy in 2026 is **hybrid plus rerank**.
+
+- **Hybrid search** runs BM25 (sparse, exact-term) and dense vector search in
+  parallel and fuses the two ranked lists, typically with **Reciprocal Rank
+  Fusion**: `score = sum 1 / (k + rank)`, with `k = 60` by convention. BM25
+  catches exact matches (codes, names, rare terms) that dense vectors blur;
+  dense catches paraphrase and concept that BM25 misses. Fusing by rank
+  sidesteps the incompatible-score-scale problem.
+- **Reranking** takes the top 50 to 100 fused candidates and re-scores them with
+  a cross-encoder that reads query and document together, returning the top 5 to
+  10 into the prompt. **Late-interaction** models (ColBERT-style, MaxSim) sit
+  between dense retrieval and cross-encoder reranking: token-level matching with
+  precomputable document representations.
+- Optionally de-duplicate with MMR before reranking so the context window is not
+  spent on near-identical chunks.
+
+A minimal pgvector hybrid retrieval, with the embed and rerank calls going
+through the gateway (see *Wiring*):
+
+```sql
+-- chunks(id, doc_id, content, embedding vector(1024), tsv tsvector)
+WITH dense AS (                          -- dense candidates (HNSW / DiskANN)
+  SELECT id, RANK() OVER (ORDER BY embedding <=> :query_vec) AS r
+  FROM chunks ORDER BY embedding <=> :query_vec LIMIT 100
+),
+sparse AS (                              -- sparse candidates (BM25-style)
+  SELECT id, RANK() OVER (ORDER BY ts_rank_cd(tsv, plainto_tsquery(:q)) DESC) AS r
+  FROM chunks WHERE tsv @@ plainto_tsquery(:q) LIMIT 100
+)
+SELECT c.id, c.content,                  -- reciprocal rank fusion, k = 60
+       COALESCE(1.0/(60+dense.r),0) + COALESCE(1.0/(60+sparse.r),0) AS rrf
+FROM chunks c
+LEFT JOIN dense  ON dense.id  = c.id
+LEFT JOIN sparse ON sparse.id = c.id
+WHERE dense.id IS NOT NULL OR sparse.id IS NOT NULL
+ORDER BY rrf DESC
+LIMIT 50;  -- hand these 50 to the reranker, keep the top 5-10 for the prompt
+```
+
+### Frameworks
+
+For the orchestration layer, the common 2026 pattern is **LlamaIndex** (MIT) for
+ingestion and retrieval, **LangGraph** (MIT) for orchestration and agents when
+the app is agentic, **Haystack** (Apache-2.0) when you want explicit testable
+production pipelines, and **DSPy** when you want to compile and optimize the
+retrieval-plus-prompt rather than hand-tune it. Wire in **RAGAS** or
+**LangSmith** from day one. Retrieval without evaluation is guessing, which is
+exactly the case the eval-practice chapter makes (@sec-eval-practice).
+
+::: {.callout-important}
+## What's contested
+
+The benchmarks that rank these tools are unusually unreliable. OmniDocBench, the
+main OCR benchmark, is widely described as saturated in 2026 (Jerry Liu /
+LlamaIndex), and public OCR leaderboards do not predict performance on
+financial, legal, or insurance documents. MTEB scores are not comparable across
+its English, multilingual, and legacy boards. And almost every vector-database
+latency, throughput, and cost claim is vendor-reported and not independently
+verified. The practical consequence: validate any parser or embedding choice on
+*your* documents with a small labeled set, and treat a leaderboard position as a
+shortlist signal, never as a decision.
+:::
+
+## A sensible default (2026)
+
+For a typical team starting this stack in mid-2026 (opinionated, dated
+2026-06):
+
+- **Document intelligence: a two-tier setup.** Default tier is self-hosted OSS:
+  **Docling** as the pipeline with a small open document VLM (**PaddleOCR-VL**,
+  or **Granite-Docling** for the most permissive license) served on **vLLM**,
+  paired with **Outlines/XGrammar** `guided_json` for schema-valid extraction.
+  Escalation tier routes the pages your eval flags as low-confidence (dense
+  tables, handwriting, bad scans) to **Reducto** or **LlamaParse Agentic**, or
+  uses **Mistral OCR 3** as a cheap hosted fallback. If you cannot run a GPU at
+  all, make Mistral OCR 3 the default and skip the OSS tier.
+- **Vector store: pgvector on your existing Postgres**, adding
+  **pgvectorscale** when you cross into tens of millions of vectors. If you are
+  not on Postgres, **Qdrant** is the default vector-native alternative; if you
+  refuse to run any infra, **Pinecone** or **Turbopuffer** (the latter when cost
+  at scale or many tenants dominates).
+- **Embeddings: start with a strong API model** (text-embedding-3-large for the
+  safe path, Cohere Embed v4 for multimodal/long context, Voyage 4 on MongoDB
+  Atlas), and go open weight (Qwen3-Embedding or BGE-M3) when you need
+  self-hosting, data residency, or non-English depth.
+- **Retrieval strategy: hybrid (BM25 + dense) with RRF, then a reranker.** Add
+  the reranker (Cohere Rerank 4 managed, or mxbai-rerank v2 self-hosted) before
+  you tune anything exotic. It is usually the highest-ROI single change.
+- **Framework: LlamaIndex** for ingestion and retrieval, **LangGraph** for
+  orchestration if agentic, and **RAGAS or LangSmith** wired in from day one.
+
+The rationale is to minimize new infrastructure, put the quality budget where it
+pays (parse quality, embeddings, hybrid, rerank), and keep a clean upgrade path.
+You can swap the store later without rewriting the pipeline, but you cannot
+un-poison answers from a parser and retriever you never measured.
+
+## Wiring
+
+Retrieval sits below the agent or generator and beside the model gateway, and
+document intelligence sits one step further out at the ingestion edge. The
+unifying seam is the gateway. Embedding models, rerankers, and self-hosted
+document VLMs are all just served models (@sec-serving-stack), so ideally you
+call them **through the model gateway** alongside chat traffic. Then embedding,
+rerank, and parse calls are keyed, budgeted, and observed exactly like chat
+calls, and swapping `text-embedding-3-large` for a self-hosted `bge-m3`, or
+PaddleOCR-VL for Mistral OCR on hard pages, is a routing change rather than a
+code change. The end-to-end wiring of the whole stack is the subject of
+@sec-wiring-stack; here the point is narrower. Parse feeds extraction and
+chunking, both feed the vector store, the store feeds retrieval, retrieval feeds
+context into the generator or agent, and evaluation observes retrieval and the
+final answer. A bad parse poisons every layer above it, which is why parse
+quality is a retrieval and agent concern, not a preprocessing afterthought.
+
+## Primary sources
+
+Vector stores:
+
+- pgvector: <https://github.com/pgvector/pgvector>
+- pgvectorscale / StreamingDiskANN: <https://github.com/timescale/pgvectorscale>; Tiger Data benchmark (vendor-reported) <https://www.tigerdata.com/blog/pgvector-is-now-as-fast-as-pinecone-at-75-less-cost>
+- Qdrant: <https://qdrant.tech/documentation/>; hybrid search <https://qdrant.tech/articles/hybrid-search/>
+- Weaviate: <https://weaviate.io/blog/hybrid-search-explained>
+- Milvus / Zilliz: <https://milvus.io/docs>
+- Pinecone cost model: <https://docs.pinecone.io/guides/manage-cost/understanding-cost>; Dedicated Read Nodes <https://www.pinecone.io/blog/dedicated-read-nodes/>
+- Turbopuffer: <https://turbopuffer.com/blog/turbopuffer>; pricing log <https://turbopuffer.com/docs/pricing-log>
+- LanceDB: <https://lancedb.github.io/lancedb/>; Chroma: <https://docs.trychroma.com/>; Vespa: <https://docs.vespa.ai/>
+
+Embeddings and rerankers:
+
+- MTEB leaderboard: <https://huggingface.co/spaces/mteb/leaderboard> (scores differ across boards and versions; not directly comparable)
+- Voyage 4 family: <https://blog.voyageai.com/2026/01/15/voyage-4/>
+- Cohere Rerank: <https://docs.cohere.com/docs/rerank-overview>; Rerank 4 (VentureBeat) <https://venturebeat.com/ai/coheres-rerank-4-quadruples-the-context-window-to-cut-agent-errors-and-boost>
+- Cohere Embed: <https://docs.cohere.com/docs/cohere-embed>; OpenAI embeddings: <https://platform.openai.com/docs/guides/embeddings>
+- BGE-M3: <https://huggingface.co/BAAI/bge-m3>; Qwen3-Embedding: <https://huggingface.co/Qwen>; mxbai-rerank v2: <https://www.mixedbread.com/>
+
+Hybrid search and RAG frameworks:
+
+- Hybrid search / RRF / reranking overview: <https://www.digitalapplied.com/blog/hybrid-search-bm25-vector-reranking-reference-2026>
+- ColBERT / late interaction (survey): <https://arxiv.org/pdf/2502.14822>; Agentic RAG survey: <https://arxiv.org/pdf/2501.09136>
+- LlamaIndex: <https://docs.llamaindex.ai/>; LangGraph: <https://langchain-ai.github.io/langgraph/>; Haystack: <https://docs.haystack.deepset.ai/>; DSPy: <https://dspy.ai/>; RAGAS: <https://docs.ragas.io/>
+
+Document intelligence:
+
+- Docling / Granite-Docling: <https://www.ibm.com/new/announcements/granite-docling-end-to-end-document-conversion>, <https://huggingface.co/ibm-granite/granite-docling-258M/blob/main/README.md>
+- unstructured: <https://docs.unstructured.io/open-source/introduction/overview>
+- LlamaParse / LlamaCloud pricing: <https://www.llamaindex.ai/pricing>
+- Reducto: <https://reducto.ai/pricing>, <https://reducto.ai/blog/reducto-series-b-funding>
+- Mistral OCR 3: <https://mistral.ai/news/mistral-ocr-3/>, <https://mistral.ai/pricing/>
+- OmniDocBench: <https://github.com/opendatalab/OmniDocBench>; "OmniDocBench is saturated" (Jerry Liu): <https://www.llamaindex.ai/blog/omnidocbench-is-saturated-what-s-next-for-ocr-benchmarks>
+- PaddleOCR-VL / GLM-OCR scores: <https://huggingface.co/PaddlePaddle/PaddleOCR-VL/discussions/29>, <https://arxiv.org/html/2603.10910v1>
+- Marker / Surya (Datalab) licensing: <https://github.com/datalab-to/surya>
+- Cloud doc-AI pricing: <https://aiproductivity.ai/blog/document-ai-cost-comparison/>
+- Structured extraction (Instructor / BAML / Outlines / XGrammar): <https://techsy.io/en/blog/best-llm-structured-output-libraries>
+
+## Further reading
+
+- Khattab and Zaharia, "ColBERT: Efficient and Effective Passage Search via Contextualized Late Interaction over BERT," 2020. [arXiv:2004.12832](https://arxiv.org/abs/2004.12832)
+- Singh et al., "Agentic Retrieval-Augmented Generation: A Survey," 2025. [arXiv:2501.09136](https://arxiv.org/pdf/2501.09136)
+- Late-interaction retrieval survey, 2025. [arXiv:2502.14822](https://arxiv.org/pdf/2502.14822)
+- Liu, "OmniDocBench is Saturated: What's Next for OCR Benchmarks," LlamaIndex, 2026. <https://www.llamaindex.ai/blog/omnidocbench-is-saturated-what-s-next-for-ocr-benchmarks>
+- OmniDocBench project (benchmark, versions, metrics). <https://github.com/opendatalab/OmniDocBench>
+- MTEB / MMTEB leaderboard and methodology. <https://huggingface.co/spaces/mteb/leaderboard>

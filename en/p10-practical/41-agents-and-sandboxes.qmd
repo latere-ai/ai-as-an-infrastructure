@@ -1,0 +1,420 @@
+# Agents, Frameworks, and Sandboxes {#sec-agents-practice}
+
+This is a practical chapter. It takes the agent architecture of
+@sec-agent-architectures, the harness of @sec-the-harness, and the authorization
+model of @sec-security-authorization and turns them into a buying-and-wiring
+decision for an engineer shipping an agent in 2026. The goal is not to survey
+every library but to give you a way to choose and a default that is hard to
+regret.
+
+An agent runtime is three parts, and most of the 2026 confusion comes from
+conflating them:
+
+1. **The framework / SDK** is the loop. The model only emits tokens. To make it
+   call a tool, read the result, decide the next step, remember earlier turns,
+   hand work to another agent, pause for a human, and recover after a crash, you
+   need a control loop and the plumbing around it.
+2. **MCP (the Model Context Protocol)** is the wire protocol for tools. It is to
+   tool integration what the OpenAI Chat Completions shape is to model calls: the
+   common interface that lets one tool server be reused by every framework.
+3. **The sandbox** is the execution substrate. The moment an agent runs code, the
+   safety story stops being about the model and becomes about the runtime. The
+   sandbox is the isolated computer the code runs in.
+
+The throughline is that the framework, the tools, and the box all keep secrets
+and model access *outside*, reaching in only through governed seams: a gateway
+virtual key for models, short-lived scoped tokens for credentials, a default-deny
+network for egress. Get that discipline right and the specific products become
+reversible choices.
+
+::: {.callout-note}
+## As of mid-2026
+Everything below is a dated snapshot (June 2026). Version numbers, prices, and
+"best for" verdicts move fast in this category. Treat rankings and specific
+figures as source-attributed and verifiable, not as timeless fact, and confirm
+current values on each project's own docs before you commit. The durable content
+is the *categories and trade-offs*, not the version strings.
+:::
+
+## Frameworks: the landscape
+
+Feature checklists hide the real decision. The axis that matters is **how the
+framework structures the agent loop**, because that dictates what you can express,
+how much boilerplate you write, and where control lives. Five archetypes cover the
+field, and they map directly onto the loop structures of @sec-agent-architectures:
+
+1. **Graph / state-machine** (LangGraph, Google ADK, Pydantic AI's
+   `pydantic-graph`). You declare nodes and edges; the runtime walks the graph,
+   persists a typed `State`, and supports loops, parallel branches, conditional
+   routing, and crash-resume from a checkpoint. Most expressive, most control,
+   most boilerplate. The only archetype that natively handles "Agent A then B then
+   back to A" and "B and C in parallel."
+2. **Linear handoff chain** (OpenAI Agents SDK). A small set of primitives; agents
+   delegate by *handing off* the conversation, and the receiver sees the full
+   transcript. Cyclic or parallel topologies must be modeled by hand. Fastest to a
+   working agent.
+3. **Harness / CLI engine** (Claude Agent SDK). The loop is the Claude Code engine
+   of @sec-the-harness: a real filesystem, bash, web search, and automatic context
+   compaction are built in, and you extend it with hooks, in-process MCP tools, and
+   subagents. Unmatched for "a model working in a repo."
+4. **Role / crew orchestration** (CrewAI). You define specialist roles and goals;
+   the crew collaborates. Natural when work decomposes into roles, less
+   fine-grained than a graph.
+5. **Model-first autonomous loop** (AWS Strands). A system prompt plus tools, and
+   the model drives. Least scaffolding, least deterministic control.
+
+Tool and memory handling is the second axis, and MCP has flattened most of it.
+Tools are either native function tools (a decorated function whose signature
+becomes the schema) or MCP servers (external over stdio/HTTP, or in-process).
+Memory ranges from "the framework replays the message list each turn" (OpenAI
+Sessions, simplest) to "a durable, checkpointed `State` you can rewind" (LangGraph,
+Pydantic AI durable execution). The deciding question is whether you must survive
+a restart mid-task. If yes, you want a checkpointer, not a message list.
+
+### A comparison of the players
+
+Versions and license claims below are as of June 2026 and attributed in *Further
+reading*. Where a "best for" verdict is the field's loose consensus rather than a
+vendor fact, read it as directional.
+
+| Name | Loop archetype | License / backer | Pick it when | Note |
+| --- | --- | --- | --- | --- |
+| **LangGraph** | Graph / state-machine | MIT, LangChain Inc.; paid Platform for hosting | The workflow is genuinely a graph: loops, parallel branches, approval gates, long-running, must survive crashes | 1.0 GA reached; most control, most boilerplate. "Time travel" rewinds `State` to a prior checkpoint |
+| **OpenAI Agents SDK** | Linear handoff chain | MIT, OpenAI | You want the shortest path to a production agent of moderate complexity and a tiny primitive set over maximal control | Provider-agnostic despite the name: 100+ models via Chat Completions / LiteLLM. Cyclic/parallel routing is hand-built |
+| **Claude Agent SDK** | Harness / CLI engine | MIT, Anthropic; model usage billed via Claude API | The agent is fundamentally Claude working over a filesystem/CLI: coding agents, repo automation, ops | Renamed from Claude Code SDK in late 2025. Strongest MCP-native and lifecycle-hook story; in-process tools avoid subprocess overhead |
+| **CrewAI** | Role / crew | MIT, CrewAI Inc.; paid enterprise tier | The problem decomposes cleanly into specialist roles and you want a multi-agent prototype fast | Independent of LangChain. Fast to start, less fine-grained than a graph |
+| **Pydantic AI** | Graph / state-machine | MIT, Pydantic Services Inc. | You are a type-disciplined Python shop wanting validated structured outputs and durable execution | Validation and structured output are first-class. Durable execution preserves progress across restarts |
+| **LlamaIndex** | Data / RAG + agent layer | MIT, LlamaIndex Inc.; paid LlamaCloud | The hard part is retrieval and document parsing, not orchestration | The differentiator is the retrieval stack (see @sec-retrieval-practice); often paired with another framework for orchestration |
+| **Mastra** | Deterministic TS workflows | MIT/Apache (verify per package), Mastra (YC W25) | Your team lives in TypeScript and wants a batteries-included stack without crossing into Python | Launched early 2026, rapid traction. Workflows are explicit deterministic pipelines |
+| **Google ADK** | Graph / state-machine | Apache-2.0, Google; multi-language | You are on Google Cloud/Gemini, or want a native graph engine for cyclic and parallel routing | Optimized for Gemini but model- and deployment-agnostic |
+| **AWS Strands** | Model-first loop | Apache-2.0, AWS | You are AWS-centric and want a minimal, model-driven loop without hand-coding orchestration | Trades orchestration control for simplicity; leans on the model to drive |
+| **Microsoft Agent Framework** | Graph workflow on SK | MIT, Microsoft | You are a .NET/Azure enterprise wanting Microsoft's supported, telemetry-rich stack | Shipped 1.0 in 2026 as the convergence of Semantic Kernel + AutoGen. **Both predecessors are now maintenance-only** |
+| **AG2** (ex-AutoGen) | Conversation-driven multi-agent | Apache-2.0, `ag2ai/ag2`; volunteer | You specifically want the AutoGen conversation lineage and human-in-the-loop dialogue patterns | The community fork that kept the AutoGen PyPI packages after the creators left Microsoft; innovation has slowed |
+
+::: {.callout-important}
+## What's contested
+Several 2026 comparison blogs publish ordered "production rankings" of these
+frameworks (for example LangGraph first, Claude Agent SDK second, CrewAI third).
+These are individual authors' opinions from small samples, not measured
+benchmarks, and they are not independently verified. Use them as directional
+sentiment, never as evidence. The defensible claim is about *loop archetype fit*,
+not a leaderboard position.
+:::
+
+### How to choose, concretely
+
+- *Pick **LangGraph*** when the workflow is a graph: loops, parallel branches,
+  approval gates, long-running, must survive crashes. Accept the boilerplate for
+  the control.
+- *Pick the **OpenAI Agents SDK*** when you want the shortest path to a production
+  agent of moderate complexity and value a small, learnable primitive set.
+- *Pick the **Claude Agent SDK*** when the agent is Claude working over a
+  filesystem or CLI. Nothing else matches its coding-agent ergonomics.
+- *Pick **CrewAI*** when the problem splits cleanly into specialist roles and you
+  want a multi-agent prototype fast.
+- *Pick **Pydantic AI*** when you want type safety, validated structured outputs,
+  and durable execution in Python.
+- *Pick **LlamaIndex*** when the value is in retrieval and document parsing; use it
+  for the data layer and keep orchestration thin.
+- *Pick **Mastra*** when your team is TypeScript-first.
+- *Pick **Google ADK** or **AWS Strands*** when you are committed to that cloud and
+  want the first-party toolkit.
+- *Pick **Microsoft Agent Framework*** when you are a .NET/Azure enterprise; it is
+  the supported successor to AutoGen and Semantic Kernel, both now maintenance-only.
+
+**A sensible default.** For a product team building its first serious agent,
+follow the loop archetype, not brand loyalty. If the agent is a coding, ops, or
+filesystem agent, start with the **Claude Agent SDK**: it hands you a working loop
+with real tools, context compaction, and MCP, and you extend it with hooks and
+subagents. For a general task/tool agent of moderate complexity, start with the
+**OpenAI Agents SDK**: the primitive set is learnable in an afternoon, it is
+provider-agnostic, and tracing is built in. **Graduate to LangGraph** when the
+workflow outgrows a linear chain and you need loops, parallel branches, approval
+gates, or durable crash-resume. That migration is a sign of growth, not a failure.
+
+::: {.callout-tip}
+## Constraint arrow
+The framework cannot be more reliable than the gateway and serving layers beneath
+it (@sec-serving-stack, @sec-wiring-stack). This is why "durable execution" and
+"checkpointing" became the headline 2026 features: they are the framework's attempt
+to survive failures in the layers below. Point the framework at a model gateway
+with a virtual key, not a raw provider credential, and the lower layer's
+governance, allowlists, budget caps, model swaps, becomes a server-side change
+with no agent redeploy.
+:::
+
+## MCP: the tool layer underneath everything
+
+MCP is half this story. It is the protocol that lets a tool server, written once,
+be consumed by every framework above, which is why "what tools does framework X
+support" became a non-question: the answer is "any MCP server." By 2026 it is the
+default tool layer underneath almost all of the frameworks in the table.
+
+State of the spec, as of mid-2026:
+
+- **Stable: `2025-11-25`.** Stateful, with an `initialize`/`initialized` handshake
+  plus per-session state. Transports are stdio (local subprocess) and Streamable
+  HTTP (remote service).
+- **Release candidate `2026-07-28`** (published 21 May 2026), described by the
+  maintainers as the largest revision since launch. The headline is a **stateless
+  core**: it removes the init handshake and session state, carries protocol
+  metadata in `_meta`, and adds routing headers (`Mcp-Method`, `Mcp-Name`) so load
+  balancers can route without inspecting the body. The point is horizontal scaling
+  on ordinary HTTP infrastructure: any server instance can serve any request. It
+  also formalizes independently versioned **extensions** (shipping MCP Apps for
+  server-rendered UI and Tasks for async work), a 12-month deprecation policy, and
+  a conformance suite. These are breaking changes versus `2025-11-25`. Confirm the
+  final ship date and your client/server support before depending on stateless
+  behavior.
+- **Registry and discovery.** An official MCP Registry with namespace verification
+  exists, and MCP Server Cards (a `.well-known` metadata format) let registries and
+  crawlers discover servers without a live connection. The often-cited "500+ public
+  servers" is a moving, secondary-sourced figure.
+
+In production you do not let each agent dial arbitrary MCP servers directly. You
+route MCP traffic through a governed proxy (an "MCP gateway", agentgateway and
+similar) that applies auth, allowlists, and audit, the same way a model gateway
+governs token traffic. The framework speaks MCP either way; whether a tool is a
+local subprocess, a remote HTTP service, or an in-process function changes almost
+nothing in the agent code. That portability is the whole point of MCP being a wire
+protocol rather than a library API.
+
+A minimal sketch of the in-process MCP-tool pattern, in the Claude Agent SDK shape.
+Check the SDK docs for the exact current API.
+
+```python
+from claude_agent_sdk import tool, create_sdk_mcp_server, query, ClaudeAgentOptions
+
+@tool("lookup_order", "Look up an order by id", {"order_id": str})
+async def lookup_order(args):
+    row = await db.fetch_order(args["order_id"])
+    return {"content": [{"type": "text", "text": row.summary()}]}
+
+server = create_sdk_mcp_server(name="ops-tools", version="1.0.0", tools=[lookup_order])
+
+async for msg in query(
+    prompt="Refund the late order for customer 4471 and explain why.",
+    options=ClaudeAgentOptions(
+        mcp_servers={"ops": server},
+        allowed_tools=["lookup_order", "Read"],
+        # model access resolves through the gateway base_url + virtual key,
+        # not a raw provider credential
+    ),
+):
+    print(msg)
+```
+
+The same agent could instead point at an *external* MCP server over HTTP behind
+the MCP gateway. The framework code barely changes.
+
+## Sandboxes: the execution substrate
+
+A sandbox is a disposable, isolated computer handed to an agent to run untrusted
+code in. The model writes a Python snippet, a shell command, a `git` operation, or
+a whole dev loop, and that code executes somewhere that is *not* your laptop, *not*
+your production cluster, and *not* sharing a kernel with another tenant's secrets.
+
+The safety argument is blunt and worth internalizing: once an agent can execute
+code, a jailbreak filter on the gateway does nothing against `rm -rf`, a crypto
+miner, or an exfiltration `curl` the model was tricked into emitting. The 2026
+security consensus (Firecrawl and others) is that the only robust defense is to
+isolate the physical environment the code runs in, not to ask the model nicely in
+a system prompt. This is the practical face of @sec-security-authorization: the
+runtime, not the prompt, is the enforcement boundary.
+
+Two isolation models dominate, and the choice between them is most of the game:
+
+- **MicroVM isolation** (Firecracker, Cloud Hypervisor, Kata). Each sandbox is a
+  real, minimal virtual machine with its own guest kernel, separated from the host
+  by hardware virtualization (KVM). This is the strongest commonly-deployed
+  boundary for untrusted code, the same lineage AWS Lambda uses. Firecracker
+  reports booting user code in as little as roughly 125 ms and creating up to
+  roughly 150 microVMs per second per host (project docs, as of 2026).
+- **Userspace-kernel / gVisor isolation.** A userspace kernel intercepts syscalls
+  so the guest never talks to the host kernel directly. Production-grade (it is
+  what Google Cloud Run uses), trading a sliver of the microVM's hardware
+  separation for faster starts on custom images. Modal uses this model.
+
+A third, weaker tier, plain containers with a shared host kernel, is common but
+should be treated as a soft boundary for untrusted code unless hardened with gVisor
+or a microVM underneath. A fourth, V8 isolates (Cloudflare Dynamic Workers), is
+faster still but only runs sandboxed JS/WASM, not an arbitrary OS.
+
+### A comparison of the players
+
+All latency and price claims below are as of mid-2026, vendor-reported or
+third-party-reported, and not independently verified. Treat the table as a starting
+map, not a price sheet, and confirm current rates on each vendor's pricing page.
+
+| Name | Isolation | Pricing model (2026) | Pick it when | Note |
+| --- | --- | --- | --- | --- |
+| **E2B** | Firecracker microVM | Open-source SDK; hosted free Hobby + credit, Pro tier, usage per second | You want a popular, agent-native, microVM-isolated code box with an open SDK and a self-host path, running short-lived Python/JS tool calls | Site claims start "under 200ms"; a circulating "p50 ~78ms" figure is from comparison blogs, **not** E2B's own page |
+| **Modal** | gVisor (userspace kernel) | Hosted; Sandbox CPU billed above the Function rate; optional GPUs | The agent must run untrusted code *and* reach a GPU in the same isolated box (inference, fine-tune steps) | Same isolation model as Google Cloud Run; faster custom-image starts, slightly thinner boundary than a full microVM |
+| **Fly.io (Machines / Sprites)** | Firecracker microVM | Hosted; per-second CPU+RAM, no charge while idle | You want raw microVM control, or snapshot/restore for clean reproducible eval runs with zero idle billing | Sprites "start in under a second" (vendor). Sub-10ms restore and "28ms boot" numbers are third-party, treat as unverified |
+| **Vercel Sandbox** | Firecracker microVM | Hosted; active-CPU billing, memory billed provisioned for the full run | Your app is in the Vercel ecosystem and you run agent-generated code with up to ~45-min lifetimes | Bills active CPU but memory is provisioned-billed, watch idle memory cost |
+| **Cloudflare Sandbox SDK** | Container + V8 isolate tier | Hosted; active-CPU pricing, requires Workers Paid | You are on Cloudflare/Workers and want edge-distributed execution with live preview URLs | GA in April 2026. Two tiers: V8 isolates (JS/WASM) and full container sandboxes. Verify cost incl. Durable Objects |
+| **Daytona** | Container base | Hosted; usage-based, free credit | You want very fast sandbox creation for short-lived agent code runs | Claims "sub-90ms" creation, but a **container** base, so verify the isolation model against your threat model |
+| **Runloop** | Two-layer (VM + container) | Hosted; free + usage, Pro tier, enterprise | You build a *coding* agent and want suspend/resume devboxes plus built-in SWE-style benchmarks | The differentiator is the eval/benchmark + suspend/resume tooling, not just isolation |
+| **Northflank** | microVM (Kata/gVisor by infra) | Self-serve + enterprise; lower headline vCPU/GB rate | You want one platform for both app deployment and agent code execution at a lower compute rate | Isolation varies by underlying infra; positions on cost + bring-your-own-cloud |
+| **Browserbase (+ Anthropic Managed Agents)** | Isolated headless Chromium | Hosted; per-session / per-browser-minute | The agent's job is in a *browser* (web automation, computer-use), not a shell | Powers Anthropic's Managed Agents (beta, 2026): Anthropic runs the loop, Browserbase supplies the isolated browser |
+| **Firecracker (project)** | The microVM VMM itself | Open source (Apache 2.0), AWS-originated | Sandboxing is your core business and you want to operate your own microVM fleet | Not a product you use directly; it is the isolation primitive under E2B, Fly, Vercel, Lambda |
+| **Cella** (latere.ai) | Author's own runtime | Latere product family; limited public docs | The Latere stack, and as a worked example in this book | **Disclosed as the author's own infrastructure; illustrative, not a neutral recommendation.** One API call spins up a named ephemeral or persistent sandbox |
+
+::: {.callout-important}
+## What's contested
+The microVM-versus-gVisor line is a genuine trade-off, not a solved question.
+MicroVMs (Firecracker) give the strongest hardware boundary but historically cost
+more in cold start and image-build flexibility; gVisor buys faster custom-image
+starts at a slightly thinner boundary; plain containers buy speed and density at a
+real isolation cost. As the gVisor-versus-microVM cost-and-latency curve moves
+through 2026, the "right" tier for a given threat model moves with it. The one
+durable claim: for genuinely adversarial, model-generated code, a shared-kernel
+container is a soft boundary, and hardware or userspace-kernel isolation is the
+provable line.
+:::
+
+### How to choose, concretely
+
+The decision is dominated by three axes: isolation strength versus start latency,
+ephemeral versus persistent, and what the agent needs to touch (shell, GPU, or a
+browser).
+
+- **Pick E2B** when you want the popular, agent-native, microVM-isolated code box
+  with a real open-source SDK and an optional self-host path, running short-lived
+  Python/JS tool calls.
+- **Pick Modal** when the agent needs to run untrusted code *and* hit a GPU in the
+  same isolated environment.
+- **Pick Fly Machines / Sprites** when you want microVM control, snapshot-restore
+  for reproducible eval runs, and zero charge while idle.
+- **Pick Vercel or Cloudflare Sandbox** when your app already lives in that platform.
+  Weigh Cloudflare's edge distribution and V8 fast path against Vercel's Firecracker
+  boxes and provisioned-memory billing.
+- **Pick Runloop** when you build a coding agent and want suspend/resume devboxes
+  plus built-in SWE-style benchmarks.
+- **Pick Browserbase (or Anthropic Managed Agents)** when the agent acts in a
+  browser, not a shell.
+- **Self-host on Firecracker** only when sandboxing is your core business.
+
+Pricing comparisons are treacherous. "Active CPU only" providers can still bill
+provisioned memory for the full lifetime (Vercel), and platform minimums or
+Durable-Object charges (Cloudflare) hide under the headline vCPU rate. Always model
+*your* run shape (lifetime, idle fraction, concurrency), not the per-hour sticker.
+
+**A sensible default.** For a team building a code-running agent in 2026, default
+to **E2B** for hosted, microVM-isolated execution: agent-native, a real open-source
+SDK, a self-host escape hatch, strong (Firecracker) isolation, and per-second
+billing that suits bursty tool calls. If the agent needs a **GPU** in the box,
+default to **Modal** instead. If you specifically want **snapshot-restore for
+reproducible evals** (@sec-eval-practice) and zero-idle billing, default to **Fly
+Machines / Sprites**. For the Latere stack, the in-house analogue is **Cella**,
+disclosed as the author's own infrastructure and therefore not a neutral pick.
+
+## Wiring it together safely
+
+The agent framework is a consumer, not a hub. It calls models through the gateway,
+pulls grounding from retrieval, reaches tools over MCP, runs code in a sandbox, and
+emits traces the eval and observability layers read. @fig-agent-runtime shows the
+shape that holds up in production.
+
+```{mermaid}
+%%| label: fig-agent-runtime
+%%| fig-cap: "The production agent runtime. The framework holds no provider key and no raw credentials; model access, tool access, and compute access each reach in through a governed seam."
+flowchart LR
+  user["User / app"] --> agent["Agent framework<br/>loop + memory + handoffs"]
+  agent -->|"OpenAI-shaped API<br/>virtual key"| gw["Model gateway"]
+  gw --> serve["Inference serving /<br/>hosted APIs"]
+  agent -->|"MCP stdio / HTTP /<br/>in-process"| mcpgw["MCP gateway"]
+  mcpgw --> tools[("MCP tool servers:<br/>db, browser, GitHub, files")]
+  agent -->|"run untrusted code"| sb["Sandbox<br/>microVM / gVisor"]
+  sb -. "default-deny egress<br/>+ allowlist" .-> net[("Internet /<br/>approved APIs")]
+  sb -->|"snapshot / restore"| snap[("Clean baseline<br/>for eval re-runs")]
+  agent -->|"retrieve"| rag[("Retrieval /<br/>vector store")]
+  agent -->|"checkpoint State"| ckpt[("Postgres / SQLite")]
+  agent -->|"traces"| obs[("Eval + OTel + cost")]
+  agent -->|"sensitive action?"| human{"Human approves<br/>payments, prod writes"}
+```
+
+Three things make this hold up:
+
+1. **The framework never holds a provider key or a raw credential.** It holds a
+   gateway virtual key scoped to a model allowlist and a budget, and MCP traffic
+   goes through a gateway that owns tool credentials and the allowlist. Swapping one
+   model for another, or capping a runaway loop, is a server-side change.
+2. **State lives in a checkpointer, not in process memory.** A durable `State`
+   (LangGraph's checkpointer, Pydantic AI's durable execution) is what lets a
+   long-running agent survive a restart and lets a human pause, inspect, and resume.
+3. **The sandbox keeps secrets, model access, and the network outside the box.**
+   They reach in only through narrow, auditable channels: short-lived scoped tokens
+   for credentials, a gateway virtual key for models, default-deny egress for the
+   network.
+
+A minimal safe-usage config sketch. The shape matters more than the exact keys;
+adapt it to your sandbox provider.
+
+```yaml
+sandbox:
+  isolation: microvm          # firecracker/gvisor; not a bare container for untrusted code
+  lifetime: ephemeral         # destroy after the run: nothing persists, nothing leaks
+  timeouts:
+    per_tool_call: 30s
+    per_task: 10m
+    max_lifetime: 30m
+  network:
+    egress: deny              # default-deny
+    allow: ["pypi.org", "api.internal.example.com"]
+  secrets:
+    inject: none              # no raw provider keys in the box
+    model_access_via: gateway # short-lived scoped virtual key only
+  audit:
+    log: [commands, network_requests, file_writes]   # immutable trail
+  approval:
+    require_human_for: [payments, production_writes]
+```
+
+The safety practices that recur across 2026 sources, and that close this chapter on
+the **capability, efficiency, trust** lens: least-privilege, short-lived
+credentials; treat every tool or browser output as untrusted input, separating
+"thinking" from "acting"; default-deny egress with an explicit allowlist; hard
+timeouts at tool, task, and sandbox-lifetime granularity; immutable audit logs;
+ephemeral-by-default so state and credentials do not accumulate; and
+human-in-the-loop gates for irreversible actions. The framework choice is
+reversible. The gateway, sandbox, and approval discipline is what keeps it
+reversible.
+
+## Further reading
+
+Frameworks and MCP, primary sources:
+
+- OpenAI Agents SDK (docs): <https://openai.github.io/openai-agents-python/>; GitHub: <https://github.com/openai/openai-agents-python>
+- OpenAI, "A practical guide to building agents": <https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/>
+- Claude Agent SDK (Python, GitHub): <https://github.com/anthropics/claude-agent-sdk-python>; docs: <https://platform.claude.com/docs/en/agent-sdk/python>
+- LangGraph (GitHub): <https://github.com/langchain-ai/langgraph>; 1.0 announcement: <https://www.langchain.com/blog/langchain-langgraph-1dot0>
+- CrewAI: <https://www.crewai.com/>; docs: <https://docs.crewai.com/>
+- Pydantic AI (docs): <https://ai.pydantic.dev/>; durable execution: <https://pydantic.dev/docs/ai/integrations/durable_execution/overview/>
+- LlamaIndex: <https://docs.llamaindex.ai/>
+- Mastra: <https://mastra.ai/>
+- Google ADK: <https://adk.dev/>; <https://github.com/google/adk-python>
+- AWS Strands Agents: <https://strandsagents.com/>
+- Microsoft Agent Framework (Microsoft Learn): <https://learn.microsoft.com/en-us/agent-framework/overview/>; AutoGen maintenance-mode status: <https://github.com/microsoft/autogen/discussions/7210>
+- AG2 (GitHub): <https://github.com/ag2ai/ag2>
+- MCP specification: <https://modelcontextprotocol.io/>; 2026 roadmap: <https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/>; `2026-07-28` release candidate: <https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/>
+
+Sandboxes, primary sources:
+
+- E2B pricing and overview: <https://e2b.dev/pricing>; <https://e2b.dev/>
+- Modal sandboxes (gVisor, GPU pricing): <https://modal.com/resources/best-code-execution-sandboxes-ai-agents>
+- Fly.io agent sandbox / Sprites: <https://fly.io/learn/agent-sandbox/>; architecture: <https://fly.io/docs/reference/architecture/>
+- Firecracker project: <https://firecracker-microvm.github.io/>
+- Cloudflare Containers & Sandboxes GA (Apr 13 2026): <https://developers.cloudflare.com/changelog/post/2026-04-13-containers-sandbox-ga/>; Dynamic Workers: <https://blog.cloudflare.com/dynamic-workers/>
+- Vercel Sandbox vs E2B (official KB): <https://vercel.com/kb/guide/vercel-sandbox-vs-e2b>
+- Daytona pricing: <https://www.daytona.io/pricing>
+- Runloop pricing: <https://runloop.ai/pricing>
+- Northflank AI sandbox pricing comparison (2026): <https://northflank.com/blog/ai-sandbox-pricing>
+- Browserbase + Anthropic Managed Agents: <https://docs.browserbase.com/integrations/anthropic/managed-agents/introduction>
+- Firecrawl, "AI Agent Sandbox: How to Safely Run Autonomous Agents in 2026": <https://www.firecrawl.dev/blog/ai-agent-sandbox>
+- Cella (latere.ai, author's own product): <https://cella.latere.ai/>
+
+Secondary comparisons (used for corroboration only; rankings and opinions in these
+are not independently verified): QubitTool 2026 framework showdown; TURION.AI
+LangGraph vs OpenAI vs Claude Agent SDK; WorkOS "Everything your team needs to know
+about MCP in 2026"; Northflank best sandbox runners (2026).

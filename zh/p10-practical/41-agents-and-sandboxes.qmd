@@ -1,0 +1,335 @@
+# 智能体、框架与沙箱 {#sec-agents-practice}
+
+这是一章实践内容。它把 @sec-agent-architectures 的智能体架构、@sec-the-harness 的
+harness、以及 @sec-security-authorization 的授权模型，落实为一名工程师在 2026 年发布
+智能体时的选型与接线决策。目标不是遍历每一个库，而是给你一种选择的方法，以及一个不太
+会后悔的默认项。
+
+智能体运行时由三部分组成，2026 年的大多数混乱都来自把它们混为一谈：
+
+1. **框架 / SDK** 是那个循环。模型本身只输出 token。要让它调用工具、读取结果、决定下一
+   步、记住此前的轮次、把工作交给另一个智能体、为人类暂停、并在崩溃后恢复，你需要一个
+   控制循环和它周围的管道。
+2. **MCP（Model Context Protocol）** 是工具的线缆协议。它之于工具集成，正如 OpenAI Chat
+   Completions 的形态之于模型调用：那个公共接口，让一个工具服务器写一次就能被每个框架复用。
+3. **沙箱** 是执行基底。智能体一旦运行代码，安全的叙事就不再关乎模型，而关乎运行时。沙箱
+   就是代码运行其中的那台被隔离的计算机。
+
+贯穿始终的主线是：框架、工具与盒子都把密钥和模型访问留在*外面*，只通过受治理的接缝伸进
+来：模型用网关虚拟密钥，凭据用短时效的受限令牌，出网用默认拒绝的网络。把这套纪律做对，
+具体的产品就成了可逆的选择。
+
+::: {.callout-note}
+## 截至 2026 年年中
+下文的一切都是一份带日期的快照（2026 年 6 月）。在这个品类里，版本号、价格与“最适合”的判断
+变动很快。把排名和具体数字当作有来源、可核验的，而非永恒的事实，在投入之前请到各项目自身的
+文档核对当前值。耐用的内容是*类别与权衡*，而非版本字符串。
+:::
+
+## 框架：全景
+
+功能清单会掩盖真正的决策。真正重要的轴是**框架如何组织智能体循环**，因为它决定了你能表达
+什么、要写多少样板、以及控制权在哪里。五种原型覆盖了这个领域，并且直接对应到
+@sec-agent-architectures 的循环结构：
+
+1. **图 / 状态机**（LangGraph、Google ADK、Pydantic AI 的 `pydantic-graph`）。你声明节点与
+   边；运行时遍历这张图，持久化一个有类型的 `State`，并支持循环、并行分支、条件路由，以及
+   从检查点崩溃恢复。最有表达力、最有控制力、最多样板。这是唯一原生处理“智能体 A 然后 B 再
+   回到 A”和“B 与 C 并行”的原型。
+2. **线性交接链**（OpenAI Agents SDK）。一小组原语；智能体通过*交接*对话来委派，接收方看到
+   完整的会话记录。环形或并行拓扑必须手工建模。到能跑的智能体最快。
+3. **harness / CLI 引擎**（Claude Agent SDK）。循环就是 @sec-the-harness 的 Claude Code 引擎：
+   内置真实文件系统、bash、网页搜索、以及自动的上下文压实，你用 hook、进程内 MCP 工具和
+   subagent 来扩展它。在“一个模型在仓库里工作”这件事上无可匹敌。
+4. **角色 / 团队编排**（CrewAI）。你定义专才角色与目标；团队协作。当工作按角色分解时很自然，
+   不如图那样细粒度。
+5. **模型优先的自主循环**（AWS Strands）。一个系统提示加上工具，由模型驱动。脚手架最少，
+   确定性控制最少。
+
+工具与记忆的处理是第二根轴，而 MCP 已经把它大部分抹平。工具要么是原生函数工具（一个被装饰
+的函数，其签名成为 schema），要么是 MCP 服务器（经 stdio/HTTP 外部接入，或进程内）。记忆从
+“框架每轮重放消息列表”（OpenAI Sessions，最简单）到“一个可回放的、带检查点的 `State`”
+（LangGraph、Pydantic AI 的持久化执行）不等。决定性的问题是你是否必须在任务中途熬过一次
+重启。若是，你要的是检查点机制，而不是消息列表。
+
+### 选手对比
+
+下文的版本与许可声明截至 2026 年 6 月，并在*延伸阅读*中给出出处。当“最适合”的判断属于该领域
+松散的共识而非厂商事实时，请把它读作方向性的。
+
+| 名称 | 循环原型 | 许可 / 背后 | 何时选它 | 备注 |
+| --- | --- | --- | --- | --- |
+| **LangGraph** | 图 / 状态机 | MIT，LangChain Inc.；托管为付费 Platform | 工作流确实是一张图：循环、并行分支、审批门、长时运行、必须熬过崩溃 | 已达 1.0 GA；控制最多，样板最多。“时间旅行”可把 `State` 回退到此前的检查点 |
+| **OpenAI Agents SDK** | 线性交接链 | MIT，OpenAI | 你要的是到中等复杂度生产智能体的最短路径，并看重一组小而易学的原语胜过极致控制 | 名字虽如此却与提供方无关：经 Chat Completions / LiteLLM 支持 100+ 模型。环形/并行路由需手工搭 |
+| **Claude Agent SDK** | harness / CLI 引擎 | MIT，Anthropic；模型用量经 Claude API 计费 | 智能体本质上是 Claude 在文件系统或 CLI 上工作：编码智能体、仓库自动化、运维 | 2025 年底由 Claude Code SDK 改名。MCP 原生与生命周期 hook 的故事最强；进程内工具避免子进程开销 |
+| **CrewAI** | 角色 / 团队 | MIT，CrewAI Inc.；付费企业版 | 问题能清晰地分解为专才角色，且你想快速做一个多智能体原型 | 独立于 LangChain。起步快，不如图细粒度 |
+| **Pydantic AI** | 图 / 状态机 | MIT，Pydantic Services Inc. | 你是讲究类型的 Python 团队，想要经校验的结构化输出与持久化执行 | 校验与结构化输出是一等公民。持久化执行在重启间保住进度 |
+| **LlamaIndex** | 数据 / RAG + 智能体层 | MIT，LlamaIndex Inc.；付费 LlamaCloud | 难点在检索与文档解析，而非编排 | 差异点在检索栈（见 @sec-retrieval-practice）；常与另一框架搭配做编排 |
+| **Mastra** | 确定性 TS 工作流 | MIT/Apache（按包核实），Mastra（YC W25） | 你的团队活在 TypeScript 里，想要开箱即用而不跨入 Python | 2026 年初发布，势头很快。工作流是显式的确定性流水线 |
+| **Google ADK** | 图 / 状态机 | Apache-2.0，Google；多语言 | 你在 Google Cloud/Gemini 上，或想要原生图引擎做环形与并行路由 | 为 Gemini 优化但与模型和部署无关 |
+| **AWS Strands** | 模型优先循环 | Apache-2.0，AWS | 你以 AWS 为中心，想要一个极简的、模型驱动的循环，不手写编排 | 以编排控制换简洁；靠模型驱动循环 |
+| **Microsoft Agent Framework** | 基于 SK 的图工作流 | MIT，Microsoft | 你是 .NET/Azure 企业，想要微软支持的、富遥测的栈 | 2026 年发布 1.0，是 Semantic Kernel + AutoGen 的合流。**两个前身现已仅维护** |
+| **AG2**（前 AutoGen） | 对话驱动多智能体 | Apache-2.0，`ag2ai/ag2`；志愿者维护 | 你确实想要 AutoGen 的对话血统与人在环对话模式 | 创始团队离开微软后，社区延续了 AutoGen 的 PyPI 包；创新已放缓 |
+
+::: {.callout-important}
+## 尚有争议
+若干 2026 年的对比博客发布了这些框架的有序“生产排名”（例如 LangGraph 第一、Claude Agent SDK
+第二、CrewAI 第三）。这些是个别作者基于小样本的观点，不是测量出来的基准，并未经独立核验。把
+它们当作方向性情绪，绝不当作证据。站得住的主张是关于*循环原型契合度*，而非排行榜名次。
+:::
+
+### 如何具体地选
+
+- *选 **LangGraph*** 当工作流是一张图：循环、并行分支、审批门、长时运行、必须熬过崩溃。为控制
+  接受样板。
+- *选 **OpenAI Agents SDK*** 当你要到中等复杂度生产智能体的最短路径，并看重一组小而易学的原语。
+- *选 **Claude Agent SDK*** 当智能体是 Claude 在文件系统或 CLI 上工作。在编码智能体的人体工学
+  上无人能及。
+- *选 **CrewAI*** 当问题能清晰地拆成专才角色，且你想快速做多智能体原型。
+- *选 **Pydantic AI*** 当你在 Python 里要类型安全、经校验的结构化输出与持久化执行。
+- *选 **LlamaIndex*** 当价值在检索与文档解析；用它做数据层，编排保持轻薄。
+- *选 **Mastra*** 当你的团队以 TypeScript 为先。
+- *选 **Google ADK** 或 **AWS Strands*** 当你已绑定那朵云，想要第一方工具包。
+- *选 **Microsoft Agent Framework*** 当你是 .NET/Azure 企业；它是 AutoGen 与 Semantic Kernel
+  的受支持继任者，二者现已仅维护。
+
+**一个合理的默认。** 对于构建首个正经智能体的产品团队，按循环原型走，而非按品牌忠诚。若智能体
+是编码、运维或文件系统智能体，从 **Claude Agent SDK** 起步：它直接给你一个可用的循环，带真实
+工具、上下文压实和 MCP，你用 hook 与 subagent 扩展它。若是中等复杂度的通用任务/工具智能体，从
+**OpenAI Agents SDK** 起步：一个下午就能学会那组原语，它与提供方无关，且内置追踪。当工作流超出
+线性链、你需要循环、并行分支、审批门或持久的崩溃恢复时，**升级到 LangGraph**。那次迁移是成长的
+标志，而非失败。
+
+::: {.callout-tip}
+## 约束之箭
+框架不可能比它之下的网关与服务层更可靠（@sec-serving-stack，@sec-wiring-stack）。这正是“持久化
+执行”与“检查点”成为 2026 年头条特性的原因：它们是框架在试图熬过下层的故障。让框架指向带虚拟密钥
+的模型网关，而非原始的提供方凭据，这样下层的治理，包括允许列表、预算上限、模型切换，就成了一次
+服务端改动，无需重新部署智能体。
+:::
+
+## MCP：万物之下的工具层
+
+MCP 是这个故事的一半。它是那个协议，让一个写一次的工具服务器能被上面每个框架消费，因此“框架 X
+支持哪些工具”成了一个无须回答的问题：答案是“任何 MCP 服务器”。到 2026 年，它是表中几乎所有框架
+之下的默认工具层。
+
+规范现状，截至 2026 年年中：
+
+- **稳定版：`2025-11-25`。** 有状态，带 `initialize`/`initialized` 握手以及每会话状态。传输为
+  stdio（本地子进程）与 Streamable HTTP（远程服务）。
+- **候选版 `2026-07-28`**（2026 年 5 月 21 日发布），维护者称之为发布以来最大的一次修订。头条是
+  **无状态内核**：移除 init 握手与会话状态，把协议元数据放进 `_meta`，并加入路由头
+  （`Mcp-Method`、`Mcp-Name`），让负载均衡器无须检查正文就能路由。要点是在普通 HTTP 基础设施上
+  做横向扩展：任何服务器实例都能服务任何请求。它还把独立版本化的**扩展**正式化（随发 MCP Apps
+  用于服务端渲染 UI、Tasks 用于异步工作），加上 12 个月的弃用策略和一套合规测试。这些相对
+  `2025-11-25` 是破坏性变更。在依赖无状态行为之前，请确认最终发布日期与你的客户端/服务器支持情况。
+- **注册表与发现。** 存在一个带命名空间验证的官方 MCP Registry，而 MCP Server Cards（一种
+  `.well-known` 元数据格式）让注册表与爬虫无须实时连接即可发现服务器。常被引用的“500+ 个公开
+  服务器”是一个移动的、二手来源的数字。
+
+在生产中，你不会让每个智能体直接拨号任意 MCP 服务器。你把 MCP 流量经一个受治理的代理（一个
+“MCP 网关”，agentgateway 及类似产品）路由，它施加认证、允许列表与审计，正如模型网关治理 token
+流量那样。无论哪种方式，框架都说 MCP；一个工具是本地子进程、远程 HTTP 服务，还是进程内函数，几乎
+不改变智能体代码。这种可移植性正是 MCP 作为线缆协议而非库 API 的全部要点。
+
+进程内 MCP 工具模式的一段最小草图，采用 Claude Agent SDK 的形态。确切的当前 API 请查 SDK 文档。
+
+```python
+from claude_agent_sdk import tool, create_sdk_mcp_server, query, ClaudeAgentOptions
+
+@tool("lookup_order", "Look up an order by id", {"order_id": str})
+async def lookup_order(args):
+    row = await db.fetch_order(args["order_id"])
+    return {"content": [{"type": "text", "text": row.summary()}]}
+
+server = create_sdk_mcp_server(name="ops-tools", version="1.0.0", tools=[lookup_order])
+
+async for msg in query(
+    prompt="Refund the late order for customer 4471 and explain why.",
+    options=ClaudeAgentOptions(
+        mcp_servers={"ops": server},
+        allowed_tools=["lookup_order", "Read"],
+        # model access resolves through the gateway base_url + virtual key,
+        # not a raw provider credential
+    ),
+):
+    print(msg)
+```
+
+同一个智能体也可以改为指向 MCP 网关之后、经 HTTP 接入的*外部* MCP 服务器。框架代码几乎不变。
+
+## 沙箱：执行基底
+
+沙箱是交给智能体在其中运行不受信任代码的一台一次性的、被隔离的计算机。模型写一段 Python、一条
+shell 命令、一次 `git` 操作，或一整套开发循环，而这些代码运行在某个*不是*你笔记本、*不是*你生产
+集群、*也不*与另一租户的密钥共享内核的地方。
+
+安全论证直白且值得内化：智能体一旦能执行代码，网关上的越狱过滤器对 `rm -rf`、一个挖矿程序、或一个
+模型被诱导发出的外泄 `curl` 毫无作用。2026 年的安全共识（Firecrawl 及其他）是：唯一稳健的防御是
+隔离代码运行其中的物理环境，而不是在系统提示里好言相劝。这正是 @sec-security-authorization 的
+实践面：运行时，而非提示，才是执行边界。
+
+两种隔离模型占主导，二者之间的选择几乎就是全部：
+
+- **微虚拟机隔离**（Firecracker、Cloud Hypervisor、Kata）。每个沙箱是一台真实的、最小的虚拟机，
+  带自己的来宾内核，靠硬件虚拟化（KVM）与宿主分隔。这是对不受信任代码最强的常见部署边界，与
+  AWS Lambda 同源。Firecracker 报告可在低至约 125 毫秒内启动用户代码，每主机每秒创建多达约 150
+  个微虚拟机（项目文档，截至 2026 年）。
+- **用户态内核 / gVisor 隔离。** 一个用户态内核拦截系统调用，使来宾从不直接与宿主内核对话。生产
+  级（Google Cloud Run 即用此），以微虚拟机硬件分隔的一丝换取自定义镜像上更快的启动。Modal 用
+  这个模型。
+
+第三个更弱的层级，共享宿主内核的普通容器，很常见，但对不受信任代码应视为软边界，除非在其下用
+gVisor 或微虚拟机加固。第四个，V8 isolate（Cloudflare Dynamic Workers），更快，但只运行被沙箱化
+的 JS/WASM，而非任意操作系统。
+
+### 选手对比
+
+下文的所有延迟与价格声明截至 2026 年年中，来自厂商或第三方报告，未经独立核验。把表当作一张起点
+地图，而非价格表，在投入前请到各厂商的定价页核对当前费率。
+
+| 名称 | 隔离 | 计费模型（2026） | 何时选它 | 备注 |
+| --- | --- | --- | --- | --- |
+| **E2B** | Firecracker 微虚拟机 | 开源 SDK；托管含免费 Hobby + 额度、Pro 档、按秒用量计费 | 你想要一个流行的、智能体原生的、微虚拟机隔离的代码盒，带开源 SDK 与自托管出路，运行短时 Python/JS 工具调用 | 官网称启动“低于 200ms”；流传的“p50 约 78ms”出自对比博客，**不在** E2B 自己的页面上 |
+| **Modal** | gVisor（用户态内核） | 托管；Sandbox CPU 计费高于 Function 费率；可选 GPU | 智能体必须在同一隔离盒里运行不受信任代码*并*触及 GPU（推理、微调步骤） | 与 Google Cloud Run 同隔离模型；自定义镜像启动更快，边界比完整微虚拟机略薄 |
+| **Fly.io（Machines / Sprites）** | Firecracker 微虚拟机 | 托管；按秒计 CPU+RAM，空闲不计费 | 你想要微虚拟机控制，或为干净可复现的评测运行做快照/恢复，且空闲零计费 | Sprites“一秒内启动”（厂商）。10ms 内恢复与“28ms 启动”出自第三方，视为未核验 |
+| **Vercel Sandbox** | Firecracker 微虚拟机 | 托管；按活跃 CPU 计费，内存按整次运行的预置量计费 | 你的应用在 Vercel 生态内，运行最长约 45 分钟生命周期的智能体生成代码 | 按活跃 CPU 计费但内存按预置计费，留意空闲内存成本 |
+| **Cloudflare Sandbox SDK** | 容器 + V8 isolate 档 | 托管；按活跃 CPU 计费，需 Workers Paid | 你在 Cloudflare/Workers 上，想要带实时预览 URL 的边缘分布式执行 | 2026 年 4 月 GA。两档：V8 isolate（JS/WASM）与完整容器沙箱。核实含 Durable Objects 的成本 |
+| **Daytona** | 容器底座 | 托管；按用量计费，含免费额度 | 你想要为短时智能体代码运行做极快的沙箱创建 | 称“低于 90ms”创建，但是**容器**底座，所以请按你的威胁模型核实隔离模型 |
+| **Runloop** | 双层（VM + 容器） | 托管；免费 + 用量、Pro 档、企业版 | 你构建*编码*智能体，想要挂起/恢复的 devbox 加内置 SWE 式基准 | 差异点是评测/基准 + 挂起/恢复工具，而不只是隔离 |
+| **Northflank** | 微虚拟机（按基础设施 Kata/gVisor） | 自助 + 企业；更低的标称 vCPU/GB 费率 | 你想要一个平台同时做应用部署与智能体代码执行，且计算费率更低 | 隔离随底层基础设施而变；定位于成本 + 自带云 |
+| **Browserbase（+ Anthropic Managed Agents）** | 被隔离的 headless Chromium | 托管；按会话 / 按浏览器分钟计费 | 智能体的工作在*浏览器*里（网页自动化、computer-use），而非 shell | 驱动 Anthropic 的 Managed Agents（beta，2026）：Anthropic 跑循环，Browserbase 提供被隔离的浏览器 |
+| **Firecracker（项目）** | 微虚拟机 VMM 本身 | 开源（Apache 2.0），源自 AWS | 沙箱化是你的核心业务，你想运营自己的微虚拟机机队 | 不是你直接使用的产品；它是 E2B、Fly、Vercel、Lambda 之下的隔离原语 |
+| **Cella**（latere.ai） | 作者自有运行时 | Latere 产品族；公开文档有限 | Latere 栈，以及作为本书的一个范例 | **披露为作者自有的基础设施；用于示例，而非中立推荐。** 一次 API 调用启动一个具名的临时或持久沙箱 |
+
+::: {.callout-important}
+## 尚有争议
+微虚拟机对 gVisor 这条线是一个真实的权衡，而非已解决的问题。微虚拟机（Firecracker）给出最强的
+硬件边界，但历史上在冷启动与镜像构建灵活性上代价更高；gVisor 以略薄的边界换取自定义镜像更快的
+启动；普通容器以真实的隔离代价换取速度与密度。随着 gVisor 对微虚拟机的成本与延迟曲线在 2026 年
+推移，对某个威胁模型“正确”的层级也随之移动。唯一耐用的主张是：对真正具有对抗性的、模型生成的
+代码，共享内核的容器是软边界，而硬件或用户态内核隔离才是可证明的那条线。
+:::
+
+### 如何具体地选
+
+决策由三根轴主导：隔离强度对启动延迟、临时对持久、以及智能体需要触及什么（shell、GPU，还是
+浏览器）。
+
+- **选 E2B** 当你想要流行的、智能体原生的、微虚拟机隔离的代码盒，带真正的开源 SDK 与可选自托管
+  出路，运行短时 Python/JS 工具调用。
+- **选 Modal** 当智能体需要在同一隔离环境里运行不受信任代码*并*触及 GPU。
+- **选 Fly Machines / Sprites** 当你想要微虚拟机控制、为可复现评测运行做快照恢复、且空闲零计费。
+- **选 Vercel 或 Cloudflare Sandbox** 当你的应用已在那个平台上。权衡 Cloudflare 的边缘分布与 V8
+  快路径，对 Vercel 的 Firecracker 盒子与预置内存计费。
+- **选 Runloop** 当你构建编码智能体，想要挂起/恢复的 devbox 加内置 SWE 式基准。
+- **选 Browserbase（或 Anthropic Managed Agents）** 当智能体在浏览器里行动，而非 shell。
+- **在 Firecracker 上自托管** 仅当沙箱化是你的核心业务。
+
+价格对比很险。“仅活跃 CPU”的提供商仍可能按整个生命周期对预置内存计费（Vercel），而平台起步费或
+Durable-Object 费用（Cloudflare）藏在标称 vCPU 费率之下。永远对*你自己的*运行形态建模（生命周期、
+空闲比例、并发），而非按小时的标价。
+
+**一个合理的默认。** 对于 2026 年构建运行代码的智能体的团队，默认用 **E2B** 做托管的、微虚拟机
+隔离的执行：智能体原生、有真正的开源 SDK、有自托管的出口、强（Firecracker）隔离、且按秒计费适合
+突发的工具调用。若智能体需要盒内 **GPU**，改为默认 **Modal**。若你特别想要**为可复现评测做快照
+恢复**（@sec-eval-practice）且空闲零计费，默认 **Fly Machines / Sprites**。对于 Latere 栈，内部的
+对应物是 **Cella**，已披露为作者自有的基础设施，因此并非中立之选。
+
+## 安全地接线在一起
+
+智能体框架是消费者，不是中枢。它经网关调用模型，从检索拉取依据，经 MCP 触及工具，在沙箱里运行
+代码，并发出评测与可观测层读取的追踪。@fig-agent-runtime 给出在生产中站得住的形态。
+
+```{mermaid}
+%%| label: fig-agent-runtime
+%%| fig-cap: "生产智能体运行时。框架不持有提供方密钥、也不持有原始凭据；模型访问、工具访问、计算访问各自经一个受治理的接缝伸进来。"
+flowchart LR
+  user["用户 / 应用"] --> agent["智能体框架<br/>循环 + 记忆 + 交接"]
+  agent -->|"OpenAI 形态 API<br/>虚拟密钥"| gw["模型网关"]
+  gw --> serve["推理服务 /<br/>托管 API"]
+  agent -->|"MCP stdio / HTTP /<br/>进程内"| mcpgw["MCP 网关"]
+  mcpgw --> tools[("MCP 工具服务器：<br/>db、browser、GitHub、files")]
+  agent -->|"运行不受信任代码"| sb["沙箱<br/>微虚拟机 / gVisor"]
+  sb -. "默认拒绝出网<br/>+ 允许列表" .-> net[("互联网 /<br/>已批准 API")]
+  sb -->|"快照 / 恢复"| snap[("评测重跑的<br/>干净基线")]
+  agent -->|"检索"| rag[("检索 /<br/>向量库")]
+  agent -->|"检查点 State"| ckpt[("Postgres / SQLite")]
+  agent -->|"追踪"| obs[("评测 + OTel + 成本")]
+  agent -->|"敏感动作？"| human{"人类批准<br/>支付、生产写入"}
+```
+
+三件事让它站得住：
+
+1. **框架从不持有提供方密钥或原始凭据。** 它持有一个限定到模型允许列表与预算的网关虚拟密钥，而
+   MCP 流量经一个拥有工具凭据与允许列表的网关。把一个模型换成另一个，或给失控循环封顶，是一次
+   服务端改动。
+2. **状态住在检查点机制里，而非进程内存里。** 一个持久的 `State`（LangGraph 的检查点、Pydantic AI
+   的持久化执行）才是让长时智能体熬过重启、并让人类暂停、检查、恢复的东西。
+3. **沙箱把密钥、模型访问与网络留在盒子外面。** 它们只通过狭窄、可审计的通道伸进来：凭据用短时效
+   受限令牌，模型用网关虚拟密钥，网络用默认拒绝出网。
+
+一段最小的安全用法配置草图。形态比确切的键更重要；按你的沙箱提供商调整它。
+
+```yaml
+sandbox:
+  isolation: microvm          # firecracker/gvisor; not a bare container for untrusted code
+  lifetime: ephemeral         # destroy after the run: nothing persists, nothing leaks
+  timeouts:
+    per_tool_call: 30s
+    per_task: 10m
+    max_lifetime: 30m
+  network:
+    egress: deny              # default-deny
+    allow: ["pypi.org", "api.internal.example.com"]
+  secrets:
+    inject: none              # no raw provider keys in the box
+    model_access_via: gateway # short-lived scoped virtual key only
+  audit:
+    log: [commands, network_requests, file_writes]   # immutable trail
+  approval:
+    require_human_for: [payments, production_writes]
+```
+
+那些在 2026 年的来源里反复出现、并以**能力、效率、信任**之镜收束本章的安全实践：最小权限、短时效
+凭据；把每一份工具或浏览器输出当作不受信任的输入，把“思考”与“行动”分开；带显式允许列表的默认拒绝
+出网；在工具、任务、沙箱生命周期粒度上的硬超时；不可变的审计日志；默认临时，使状态与凭据不累积；
+以及对不可逆动作的人在环关卡。框架的选择是可逆的。网关、沙箱与审批的纪律才是让它保持可逆的东西。
+
+## 延伸阅读
+
+框架与 MCP，一手来源：
+
+- OpenAI Agents SDK（文档）：<https://openai.github.io/openai-agents-python/>；GitHub：<https://github.com/openai/openai-agents-python>
+- OpenAI，"A practical guide to building agents"：<https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/>
+- Claude Agent SDK（Python，GitHub）：<https://github.com/anthropics/claude-agent-sdk-python>；文档：<https://platform.claude.com/docs/en/agent-sdk/python>
+- LangGraph（GitHub）：<https://github.com/langchain-ai/langgraph>；1.0 公告：<https://www.langchain.com/blog/langchain-langgraph-1dot0>
+- CrewAI：<https://www.crewai.com/>；文档：<https://docs.crewai.com/>
+- Pydantic AI（文档）：<https://ai.pydantic.dev/>；持久化执行：<https://pydantic.dev/docs/ai/integrations/durable_execution/overview/>
+- LlamaIndex：<https://docs.llamaindex.ai/>
+- Mastra：<https://mastra.ai/>
+- Google ADK：<https://adk.dev/>；<https://github.com/google/adk-python>
+- AWS Strands Agents：<https://strandsagents.com/>
+- Microsoft Agent Framework（Microsoft Learn）：<https://learn.microsoft.com/en-us/agent-framework/overview/>；AutoGen 维护模式状态：<https://github.com/microsoft/autogen/discussions/7210>
+- AG2（GitHub）：<https://github.com/ag2ai/ag2>
+- MCP 规范：<https://modelcontextprotocol.io/>；2026 路线图：<https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/>；`2026-07-28` 候选版：<https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/>
+
+沙箱，一手来源：
+
+- E2B 定价与概览：<https://e2b.dev/pricing>；<https://e2b.dev/>
+- Modal 沙箱（gVisor、GPU 定价）：<https://modal.com/resources/best-code-execution-sandboxes-ai-agents>
+- Fly.io 智能体沙箱 / Sprites：<https://fly.io/learn/agent-sandbox/>；架构：<https://fly.io/docs/reference/architecture/>
+- Firecracker 项目：<https://firecracker-microvm.github.io/>
+- Cloudflare Containers & Sandboxes GA（2026 年 4 月 13 日）：<https://developers.cloudflare.com/changelog/post/2026-04-13-containers-sandbox-ga/>；Dynamic Workers：<https://blog.cloudflare.com/dynamic-workers/>
+- Vercel Sandbox vs E2B（官方 KB）：<https://vercel.com/kb/guide/vercel-sandbox-vs-e2b>
+- Daytona 定价：<https://www.daytona.io/pricing>
+- Runloop 定价：<https://runloop.ai/pricing>
+- Northflank AI 沙箱定价对比（2026）：<https://northflank.com/blog/ai-sandbox-pricing>
+- Browserbase + Anthropic Managed Agents：<https://docs.browserbase.com/integrations/anthropic/managed-agents/introduction>
+- Firecrawl，"AI Agent Sandbox: How to Safely Run Autonomous Agents in 2026"：<https://www.firecrawl.dev/blog/ai-agent-sandbox>
+- Cella（latere.ai，作者自有产品）：<https://cella.latere.ai/>
+
+二手对比（仅用于佐证；其中的排名与观点未经独立核验）：QubitTool 2026 框架对决；TURION.AI 的
+LangGraph vs OpenAI vs Claude Agent SDK；WorkOS 的“Everything your team needs to know about MCP
+in 2026”；Northflank 的最佳沙箱运行器（2026）。

@@ -1,0 +1,276 @@
+# 训练与微调实践 {#sec-training-practice}
+
+这是一章实践内容。权重如何变化的理论在 @sec-sft-peft（监督微调与参数高效方法）与
+@sec-training-at-scale（把优化器分片到众多加速器上）中。这里的问题更窄、更直接：现在是
+2026 年年中，你手上有一个任务和一笔预算，必须挑选改变模型权重的工具，把它们接进你其余的
+技术栈，并判断你是否真的应该去训练。答案是带有立场且有时效的。先讲那些经久耐用的类别与
+取舍，把每一个版本号、价格和排名都当作一份需要重新核对的快照。
+
+::: {.callout-note}
+## 截至 2026 年年中
+下文的框架、价格、GitHub star 数和营收数字是 2026 年 6 月的快照，各自标注了来源。每词元
+价格展示的是定价的*形态*，而非权威报价。凡是被称为不确定的内容，在你投入预算之前都需要
+重新核实。类别与“如何选择”的逻辑老化得慢；具体数字以月为单位老化。
+:::
+
+## 这一层及其内容
+
+训练与微调是改变权重的那一层，与只做前向传播的服务层（@sec-serving-stack）相对，也与用
+上下文引导一个冻结模型的智能体和检索层（@sec-agents-practice、@sec-retrieval-practice）
+相对。在 2026 年真实的技术栈里，它分为三个容易混淆、行为却很不一样的子层。
+
+```{dot}
+//| label: fig-training-layers
+//| fig-cap: "2026 年训练与微调栈的三个子层。多数团队只接触中间一行；引擎在其下，托管服务则替换全部三层。"
+digraph layers {
+  rankdir=TB;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11];
+  edge [fontname="Helvetica", fontsize=10];
+
+  toolkit [label="Post-training toolkits\nTRL, Axolotl, Unsloth, LLaMA-Factory\n(SFT, DPO, GRPO)", fillcolor="#d9e8ff"];
+  peft [label="Parameter-efficient methods\nPEFT: LoRA, QLoRA, DoRA", fillcolor="#d9ffd9"];
+  engine [label="Distributed engines\nFSDP2 / TorchTitan, Megatron-Core,\nDeepSpeed, JAX / MaxText", fillcolor="#ffd9d9"];
+  managed [label="Managed services\nTogether, Fireworks, Bedrock,\nAzure, Vertex", fillcolor="#fff4d9"];
+
+  toolkit -> peft [label="uses"];
+  toolkit -> engine [label="runs on"];
+  managed -> toolkit [label="hides all of this", style=dashed];
+}
+```
+
+1. **分布式引擎。** 把模型及其优化器状态分片到众多加速器上的重型系统：PyTorch FSDP2 与
+   TorchTitan、NVIDIA Megatron-Core、Microsoft DeepSpeed（ZeRO），以及 TPU 上的
+   JAX/XLA 栈（MaxText）。4D 与 5D 并行、FP8 训练、万亿参数规模都在这里。
+   @sec-training-at-scale 讲解其机制。
+2. **后训练工具包。** 把这些引擎封装起来、用于监督微调（SFT）、偏好优化（DPO、ORPO）和
+   强化学习（GRPO、GSPO、PPO）的更高层库：Hugging Face TRL、Axolotl、Unsloth、
+   LLaMA-Factory。这是多数团队真正接触的层。
+3. **参数高效方法与托管服务。** 由 PEFT 库承载的 LoRA、QLoRA、DoRA，加上完全隐藏加速器的
+   托管微调 API。
+
+两个 2026 年的主题把这一层与全书其余部分串起来。FP8 训练已走向主流：Google 的 Ironwood
+TPU 在其矩阵单元中原生支持 FP8，Megatron-Core 提供 FP8 训练，Unsloth 做 FP8 强化学习
+（[Google Cloud, 2026](https://cloud.google.com/blog/products/compute/training-large-models-on-ironwood-tpus)）。
+对一本基础设施之书更重要的是，RL 后训练已把训练与推理服务融合：现代 RL 工具包内嵌一个
+推理引擎（几乎总是 vLLM）来生成 rollout，于是训练这个盒子里装着一个服务盒子。这正是本章
+末尾的接线故事。
+
+## 第一个岔路：你到底要不要训练？
+
+在挑工具之前，先回答更难的问题。在 2026 年，对许多任务而言，诚实的默认选择是*不要训练
+权重*。提示工程、少样本示例、检索（@sec-retrieval-practice）和结构化输出，覆盖了过去人们
+诉诸微调的很大一部分需求。OpenAI 在收缩其自助微调产品的同时，把用户引向提示缓存、更小的
+基座模型和 RAG
+（[explainx.ai，二手](https://explainx.ai/blog/openai-gpt-55-pricing-fine-tuning-api-wind-down-2026)）。
+
+当你需要一个上下文窗口无法廉价承载的*持久行为改变*时，再去微调：
+
+- 提示一直偏离的一致输出格式或固定文风，
+- 一个基座模型缺少其词汇或惯例的狭窄领域，
+- 把一个大模型的行为蒸馏进一个小型专用模型所带来的延迟或成本收益（这就是下面的约束箭头），
+- 一项由强化学习针对可验证奖励塑造出的能力，即 @sec-training-to-reason 的推理与智能体情形。
+
+如果以上都不成立，那就把这一周花在更好的提示和检索上，而不是一次训练运行上。
+
+::: {.callout-tip}
+## 约束箭头
+服务层向上伸手，证成了微调最常见的那个理由。一个你已经专用化的小模型，每词元的服务成本远
+低于 API 背后的大型通用模型（@sec-serving-stack）。当你大量服务时，这次训练运行会以推理
+节省把自身赚回来，这正是 @sec-scaling-laws 中“为推理而过度训练”的逻辑上移了一层。这里的
+微调是一个穿着*训练*外衣的*服务成本*决策。
+:::
+
+## 主要参与者（2026 年年中）
+
+下表有时效且标注来源。选择之前请核实当前版本与价格。
+
+### 分布式引擎
+
+| 名称 | 是什么 | 许可 | 最适合 | 备注（2026 年年中） |
+|------|--------|------|--------|---------------------|
+| **PyTorch FSDP2** | 原生全分片数据并行；把参数、梯度、优化器状态作为 DTensor 分片 | BSD | 不上重型框架的 PyTorch 原生分片训练 | FSDP2 是当前版本；FSDP1 自 PyTorch 2.11+ 起弃用。新增逐参数冻结、FP8/BF16 混合（[PyTorch 教程](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html)） |
+| **TorchTitan** | 基于 FSDP2 的 PyTorch 原生预训练平台；可组合 4D 并行 | BSD | PyTorch 上的生产级预训练 / 继续预训练 | 在 128 到 512 GPU 规模的 Llama 3.1 配方上报告了加速（[arXiv 2410.06511](https://arxiv.org/pdf/2410.06511)）；torchforge 之下的基座 |
+| **NVIDIA Megatron-Core** | GPU 优化的张量/流水线/专家/上下文并行；有产品支持 | Apache-2.0 风格 + NVIDIA 支持 | NVIDIA GPU 上的大型稠密、MoE 与多模态训练 | 2026 年 1 月新增动态上下文并行（在变长序列上报告至多约 1.48 倍）；FP8 训练（[文档](https://docs.nvidia.com/megatron-core/index.html)、[路线图](https://github.com/NVIDIA/Megatron-LM/issues/4003)） |
+| **NeMo / Megatron Bridge** | Megatron-Core 之上的更高层编排；配方、导出、对齐 | 开源 + NVIDIA 支持 | 端到端标准化在 NVIDIA 栈上的团队 | Bridge 0.4.0（2026 年 4 月）新增 Kimi 2.5、Nemotron 3、Qwen 3.5 VL、FP8 导出（[文档](https://docs.nvidia.com/nemo/megatron-bridge/latest/)） |
+| **DeepSpeed (ZeRO)** | ZeRO 分片、CPU/NVMe 卸载、训练优化 | Apache-2.0 / MIT | 内存受限训练、卸载、超大模型 | 稳定版 v0.18.9（2026 年 3 月）；为 ZeRO-3 新增 Muon 优化器（[发布](https://github.com/deepspeedai/DeepSpeed/releases)） |
+| **JAX + MaxText** | JAX/XLA 上、为 TPU 调优的纯解码器 LLM 参考实现 | Apache-2.0 | Cloud TPU 上的基础模型训练 | Ironwood TPU FP8；Qwen3-Next 与 DeepSeek 特性（2026 年 3 月）。配合 Tunix 做 RL（[文档](https://maxtext.readthedocs.io/)、[Cloud TPU + JAX](https://docs.cloud.google.com/tpu/docs/jax-ai-stack)） |
+
+### 后训练工具包（多数团队接触的层）
+
+| 名称 | 是什么 | 许可 | 最适合 | 备注（2026 年年中） |
+|------|--------|------|--------|---------------------|
+| **Hugging Face TRL** | 官方 HF 后训练：SFT、DPO、GRPO、奖励建模 | Apache-2.0 | 参考实现；别人封装的基础构件 | 事实标准的训练器；集成 PEFT、accelerate、FSDP/DeepSpeed（[文档](https://huggingface.co/docs/trl)） |
+| **Axolotl** | 基于 TRL/PEFT 的配置驱动（YAML）封装；LoRA、QLoRA、全量微调、多模态 | Apache-2.0 | 几块 GPU 上可复现的配置即代码运行 | 自 2025 年起支持多模态；“改个 YAML，得到一次运行”（[仓库](https://github.com/axolotl-ai-cloud/axolotl)） |
+| **Unsloth** | 自定义 Triton kernel，在 1 到 2 块 GPU 上更快、更省显存的 SFT 与 RL | Apache-2.0 核心；付费 Pro | 单 GPU 效率；长上下文 GRPO | 开源版实质上是单 GPU；稳健的多 GPU 在 Pro（**不确定**，状态在演变）。24GB GPU 上的 GRPO；FP8 RL 约为 BF16 的 1.4 倍（[文档](https://unsloth.ai/docs)） |
+| **LLaMA-Factory** | 广覆盖工具包 + Web UI（LlamaBoard）；模型支持最广 | Apache-2.0 | 众多模型家族、低代码 UI，重广度而非峰值速度 | 约 68k GitHub star；据报可用 Unsloth 后端、与原生速度相差约 6%（[二手](https://theaiengineer.substack.com/p/unsloth-vs-axolotl-vs-llama-factory)） |
+| **torchtune** | PyTorch 原生后训练（SFT/DPO/PPO/GRPO/QAT），抽象极少 | BSD | PyTorch 上可改写的配方 | **仅维护：** 2025 年 7 月 15 日停止活跃开发；一个未命名的 PyTorch 原生后继者正在开发中（[issue #2883](https://github.com/meta-pytorch/torchtune/issues/2883)） |
+| **torchforge** | Monarch + TorchTitan + vLLM 之上的 PyTorch 原生 RL 与智能体后训练 | 开源，**实验性** | 不写分布式基础设施的可扩展 RL 后训练 | 2025 年 10 月发布。并非 torchtune 后继者；建于 TorchTitan（训练）与 vLLM（rollout）之上（[PyTorch 博客](https://pytorch.org/blog/introducing-torchforge/)） |
+| **HF PEFT** | 实现 LoRA、QLoRA、DoRA、rsLoRA 的库 | Apache-2.0 | TRL/Axolotl/LLaMA-Factory 之下的适配器层 | LoRA 家族方法真正所在之处（[文档](https://huggingface.co/docs/peft)） |
+
+### 托管服务（无需自有加速器）
+
+| 名称 | 是什么 | 最适合 | 备注（2026 年年中） |
+|------|--------|--------|---------------------|
+| **OpenAI fine-tuning** | GPT 模型上的托管 SFT/RFT | （正在收缩） | **自助微调正在收缩。** 自 2026 年 5 月 7 日起不再接纳新组织；所有新任务于 2027 年 1 月 6 日终止（[弃用](https://developers.openai.com/api/docs/deprecations)） |
+| **Together AI** | 开放权重上的托管 SFT、DPO、LoRA；按训练词元计费 | 开放权重上廉价的 LoRA/SFT + 专用服务 | 例如 LoRA SFT 约 $0.48/M 词元（16B）、全量微调约 $3.20/M（70 到 100B）、DPO 约 $8/M；服务端点另行计费（[二手](https://www.cloudzero.com/blog/together-ai-pricing/)） |
+| **Fireworks AI** | 自助后训练 + 快速服务一处搞定 | 调优与服务合一 | 据报约 $800M ARR（2026 年 5 月），自约 $305M（2025 年底）上升（[二手](https://sacra.com/c/fireworks-ai/)） |
+| **AWS Bedrock** | 托管 SFT + RFT，含开放权重，OpenAI 兼容 API | AWS 原生团队；开放权重上的 RFT | 开放权重的 RFT 与 OpenAI 兼容 FT 于 2026 年 2 月加入（[新功能](https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-bedrock-reinforcement-fine-tuning-openai)） |
+| **Modal** | 无服务器 GPU 算力；自行运行 torchtune/Unsloth/Axolotl | 在按需 GPU 上自带配方 | 并非完全托管的 FT；训练代码要你自己写（[参考](https://www.spheron.network/blog/fireworks-ai-alternatives/)） |
+| **Azure AI Foundry / Google Vertex** | 云原生托管微调（Azure OpenAI、Gemini 调优） | 标准化在 Azure/GCP 上的企业 | Azure 有 FT 成本管理工具（[Microsoft Learn](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning-cost-management)） |
+
+### 参数高效方法
+
+这些是技术，不是产品；它们活在 PEFT、Unsloth 和 TRL 里。为什么一个低秩更新就够，其理论见
+@sec-sft-peft。
+
+- **LoRA。** 低秩适配器；默认选择。一旦合并进基座权重，推理零额外延迟。
+- **QLoRA。** 4-bit（NF4）冻结基座加 LoRA；大约 1K 到 50K 样本时的单 GPU 甜区。
+- **DoRA。** 权重分解的 LoRA（幅度加方向）；收敛更好，数据更大时值得，大约 50K 到 500K 样本。
+- **rsLoRA。** 用于高秩的秩稳定 LoRA。
+- 更新的 arXiv 变体（RandLoRA、激活空间方法）存在但还不是默认。**视为前沿、生产中未经验证**
+  （[AppScale 2026](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026)）。
+
+## 如何选择
+
+一旦你确定真的需要训练权重，四个问题就能定下工具。
+
+**运行规模。** 一块消费级或单块 GPU 指向 **Unsloth**，因其 kernel 与低显存。几块 GPU 加
+配置即代码指向 **Axolotl** 或 **LLaMA-Factory**。多节点预训练或继续预训练指向
+**TorchTitan/FSDP2**、**Megatron-Core**，或 TPU 上的 **MaxText**。
+
+**你所在的生态。** NVIDIA GPU 加上想要厂商支持，指向 **Megatron-Core/NeMo**。PyTorch
+原生且可改写，指向 **FSDP2/TorchTitan + TRL**。TPU 指向 **JAX/MaxText**。纯粹的 Hugging
+Face 肌肉记忆，直接指向 **TRL**。
+
+**方法。** 文风或格式加小数据指向 **QLoRA**。更深的领域迁移加更多数据指向 **DoRA** 或高秩
+LoRA。结构性的领域变更加 500K 以上样本指向 **全量微调**。针对奖励的推理或智能体行为指向
+Unsloth、TRL 或 torchforge 中的 **GRPO/GSPO**（@sec-training-to-reason）。
+
+**自托管对托管。** 托管胜在首次运行时间、无需 GPU 运维、弹性成本，以及可预测的按训练词元
+定价。自托管胜在数据驻留与 IP 控制、非常规配方、可摊销硬件的重复或大型运行，以及避免厂商
+锁定或突然弃用。注意便利税：Together 按训练词元给 LoRA 计费，*再加上*一个单独的按小时专用
+端点来服务结果，所以那个便宜的标价并非全部账单。
+
+具体选择：
+
+- **当你**在一块 24 到 80GB GPU 上、想要最快、最省显存的 SFT 或长上下文 GRPO 时，**选 Unsloth**。
+- **当你**想要几块 GPU 上可复现的 YAML 配置运行、并看重 CI 里的配置即代码时，**选 Axolotl**。
+- **当你**需要模型支持的广度、或给非专家用的低代码 UI 时，**选 LLaMA-Factory**。
+- **当你**在编写自定义后训练逻辑、想要权威训练器时，**直接选 TRL**。
+- **当你**在做真正的多节点预训练或继续预训练时，**选 TorchTitan/FSDP2 或 Megatron-Core**。
+- **当你**在 TPU 上时，**选 MaxText**。
+- **当你**没有 GPU 运维意愿、且是标准的 SFT/LoRA/DPO/RFT 工作负载时，**选一个托管服务**，
+  但考虑到 2026 年的弃用先例，要设计好导出路径。
+
+## 一个合理的默认（2026 年年中）
+
+对一个已确定真的需要微调一个开放权重模型的典型产品团队，截至 2026 年 6 月：
+
+**默认：Axolotl（YAML 配置）建于 TRL + PEFT 之上、做 QLoRA**，在租用的 GPU 上（Modal、
+Runpod 或你自己的云）。它可复现，配置即代码契合 CI 与评估（@sec-eval-practice），QLoRA
+让它停在单块或几块 GPU，而你保留自己的权重和数据。起步配方是 `r=16`、开启 DoRA、
+`target_modules="all-linear"`，更难的任务再提高秩
+（[AppScale 2026](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026)）。
+
+- **备选 A，最大单 GPU 效率或 RL：** Unsloth，尤其用于消费级 GPU 或长上下文 GRPO。
+- **备选 B，完全没有 GPU 运维：** 一个托管服务。Together 用于廉价的开放权重 LoRA/SFT，
+  Fireworks 若你想调优与服务合一，Bedrock 若你是 AWS 原生。建好导出与可移植路径；不要假定
+  一个托管 FT 产品是永久的。OpenAI 在 2026 年 5 月宣布的自助收缩，就是那则告诫。
+
+若是多节点预训练而非微调，默认转向 **TorchTitan/FSDP2** 或 **Megatron-Core**，或 TPU 上的
+**MaxText**。
+
+## 接进技术栈
+
+2026 年决定性的接线事实是：**RL 后训练如今内嵌了推理层。** 一个 GRPO 或 PPO 循环从当前
+策略生成 rollout，用奖励为它们打分，然后更新权重。生成是瓶颈，于是工具包把它委托给一个
+快速推理引擎，几乎总是 **vLLM**。Unsloth 驱动 vLLM 做 rollout；torchforge 用 vLLM 做生成、
+TorchTitan 做训练，并通过一个 RDMA 张量存储在两者之间搬运权重
+（[PyTorch 博客](https://pytorch.org/blog/introducing-torchforge/)）。于是你架构图里的训练
+盒子里装着一个服务盒子。这就是 @sec-serving-stack 里那个 vLLM，如今被当作训练子组件使用，
+是本书论点的一个干净实例：这些层是一套基础设施。
+
+```{mermaid}
+%%| label: fig-training-wiring
+%%| fig-cap: "端到端接线。一个工具包驱动 PEFT 与一个分布式引擎产出权重，权重随后流经服务、网关、评估，以及智能体与检索层。在 RL 情形里，服务引擎（vLLM）坐在训练循环内部。"
+flowchart TD
+  data["Data\n(SFT / preference / reward)"] --> toolkit["Toolkit\nTRL / Axolotl / Unsloth"]
+  toolkit -->|uses| peft["PEFT\nLoRA / QLoRA / DoRA"]
+  toolkit -->|runs on| engine["Engine\nFSDP2 / DeepSpeed / Megatron"]
+  peft --> weights["Adapter or merged weights"]
+  engine --> weights
+  toolkit -.RL loop.-> vllm["vLLM rollouts"]
+  vllm -->|reward| toolkit
+  weights --> serving["Serving engine\nvLLM / TGI"]
+  serving --> gateway["Gateway"]
+  gateway --> eval["Eval harness\n(gate before promotion)"]
+  eval --> agents["Agents / retrieval"]
+```
+
+训练完成后，你合并适配器，或用一个适配器感知的引擎直接服务它，把权重交给网关背后的服务层
+（@sec-serving-stack），并在晋升之前对它跑一遍评估 harness（@sec-eval-practice）。检索与
+智能体层随后消费这个被服务的模型。适配器感知的服务，即一个基座上的众多 LoRA，正是托管适配器
+平台历来契合之处。整个流程汇入 @sec-wiring-stack 的端到端技术栈。
+
+## 一份可改写的配置与启动
+
+一份最小的 Axolotl QLoRA 配置，仅作说明、意在被编辑：
+
+```yaml
+# qlora.yml
+base_model: Qwen/Qwen3-8B
+load_in_4bit: true          # QLoRA: 4-bit NF4 frozen base
+adapter: lora
+lora_r: 16
+lora_alpha: 32
+lora_target_modules: all-linear
+datasets:
+  - path: ./data/sft.jsonl
+    type: chat_template
+gradient_checkpointing: true
+sequence_len: 4096
+micro_batch_size: 2
+num_epochs: 3
+# distributed backend (FSDP2 or DeepSpeed) configured via accelerate
+```
+
+启动它，再为服务合并适配器：
+
+```bash
+# train (single or few GPUs via accelerate)
+accelerate launch -m axolotl.cli.train qlora.yml
+
+# merge the LoRA adapter back into the base for adapter-free serving
+python -m axolotl.cli.merge_lora qlora.yml --lora_model_dir ./out
+```
+
+合并后的权重随后交给服务栈。把配置放进版本控制，让一次训练运行成为一个可审阅的 diff，与你
+对技术栈其余部分施加的纪律相同。
+
+## 收束：能力、效率、信任
+
+透过本书收束的视角，微调首先是一个*能力*杠杆，即提示无法承载的持久行为改变。它越来越是一个
+*效率*杠杆，把一个大模型蒸馏成一个廉价可服务的小模型，这也是服务成本约束箭头如此频繁向上
+指的原因。它还是一个*信任*面：一个被微调的模型吸收了你的数据，于是数据驻留、可复现的配置
+即代码，以及晋升前的评估闸门，不是锦上添花，而是让你能把权重发出去的那些控制。2026 年诚实
+的默认，仍然是先伸手去拿提示与检索，只有当行为改变必须活在权重里时才去训练。
+
+## 延伸阅读
+
+一手来源优先。
+
+- PyTorch, "Getting Started with Fully Sharded Data Parallel (FSDP2)." [docs.pytorch.org](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html)
+- Liang et al., "TorchTitan: One-stop PyTorch Native Solution for Production-Ready LLM Pre-training," 2024. [arXiv:2410.06511](https://arxiv.org/pdf/2410.06511); 仓库 [github.com/pytorch/torchtitan](https://github.com/pytorch/torchtitan)
+- NVIDIA, "Megatron-Core documentation" 与路线图. [docs.nvidia.com](https://docs.nvidia.com/megatron-core/index.html); [roadmap #4003](https://github.com/NVIDIA/Megatron-LM/issues/4003)
+- NVIDIA, "NeMo Megatron Bridge documentation." [docs.nvidia.com](https://docs.nvidia.com/nemo/megatron-bridge/latest/)
+- Microsoft DeepSpeed releases. [github.com/deepspeedai/DeepSpeed](https://github.com/deepspeedai/DeepSpeed/releases)
+- Google, "MaxText documentation" 与 "Training large models on Ironwood TPUs," 2026. [maxtext.readthedocs.io](https://maxtext.readthedocs.io/); [cloud.google.com](https://cloud.google.com/blog/products/compute/training-large-models-on-ironwood-tpus); [Cloud TPU + JAX](https://docs.cloud.google.com/tpu/docs/jax-ai-stack)
+- Hugging Face, "TRL" 与 "PEFT" 文档. [huggingface.co/docs/trl](https://huggingface.co/docs/trl); [huggingface.co/docs/peft](https://huggingface.co/docs/peft)
+- Axolotl. [github.com/axolotl-ai-cloud/axolotl](https://github.com/axolotl-ai-cloud/axolotl)
+- Unsloth 文档与长上下文 GRPO 指南. [unsloth.ai/docs](https://unsloth.ai/docs); [GRPO long-context](https://unsloth.ai/docs/get-started/reinforcement-learning-rl-guide/grpo-long-context)
+- torchtune 未来方向. [issue #2883](https://github.com/meta-pytorch/torchtune/issues/2883)
+- PyTorch, "Introducing torchforge," 2025. [pytorch.org/blog](https://pytorch.org/blog/introducing-torchforge/); 仓库 [github.com/meta-pytorch/forge](https://github.com/meta-pytorch/forge)
+- OpenAI, "Deprecations"（微调收缩）. [developers.openai.com](https://developers.openai.com/api/docs/deprecations)
+- AWS, "Reinforcement fine-tuning for open-weight models on Bedrock," 2026 年 2 月. [aws.amazon.com](https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-bedrock-reinforcement-fine-tuning-openai)
+- Microsoft, "Fine-tuning cost management." [learn.microsoft.com](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning-cost-management)
+- 二手对比与定价（使用前核实）：AppScale, "LoRA, QLoRA, full fine-tuning compared," 2026 [appscale.blog](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026); CloudZero, "Together AI pricing" [cloudzero.com](https://www.cloudzero.com/blog/together-ai-pricing/); Sacra, "Fireworks AI" [sacra.com](https://sacra.com/c/fireworks-ai/); "Fine-tuning in 2026" 工具包对比 [dev.to](https://dev.to/ultraduneai/eval-003-fine-tuning-in-2026-axolotl-vs-unsloth-vs-trl-vs-llama-factory-2ohg); All Things Open, "LLM fine-tuning as an open-source developer workflow" [allthingsopen.org](https://allthingsopen.org/articles/llm-fine-tuning-open-source-developer-workflow).
