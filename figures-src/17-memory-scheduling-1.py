@@ -54,7 +54,7 @@ ax.plot([r0, r0], [rm0, pg0], color=INK, lw=1.0, alpha=0.5)
 ax.set_xlim(0, 1.0)
 ax.set_ylim(0, 1.05)
 ax.set_xlabel("mean / max request length (length spread)", color=INK)
-ax.set_ylabel("KV memory utilization (fraction of pool in use)", color=INK)
+ax.set_ylabel("KV memory utilization", color=INK)
 
 for spine in ("top", "right"):
     ax.spines[spine].set_visible(False)

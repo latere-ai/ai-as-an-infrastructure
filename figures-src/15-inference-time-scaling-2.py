@@ -59,7 +59,8 @@ for txt in leg.get_texts():
     txt.set_color(INK)
 
 fig.tight_layout()
-fig.savefig(
+for _out in (
     "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/en/figures/15-inference-time-scaling-2.svg",
-    format="svg", bbox_inches="tight", transparent=True,
-)
+    "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/zh/figures/15-inference-time-scaling-2.svg",
+):
+    fig.savefig(_out, format="svg", bbox_inches="tight", transparent=True)

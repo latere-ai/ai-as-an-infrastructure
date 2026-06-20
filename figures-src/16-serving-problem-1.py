@@ -63,12 +63,13 @@ ax.tick_params(colors=INK, which="both")
 for lbl in ax.get_xticklabels() + ax.get_yticklabels():
     lbl.set_color(INK)
 
-leg = ax.legend(frameon=False, fontsize=8, loc="upper left")
+leg = ax.legend(frameon=False, fontsize=8, loc="lower right")
 for txt in leg.get_texts():
     txt.set_color(INK)
 
 fig.tight_layout()
-fig.savefig(
+for _out in (
     "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/en/figures/16-serving-problem-1.svg",
-    format="svg", bbox_inches="tight", transparent=True,
-)
+    "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/zh/figures/16-serving-problem-1.svg",
+):
+    fig.savefig(_out, format="svg", bbox_inches="tight", transparent=True)

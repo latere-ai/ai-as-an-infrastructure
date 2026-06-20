@@ -49,7 +49,7 @@ ax.tick_params(colors=INK, which="both")
 for lbl in ax.get_xticklabels() + ax.get_yticklabels():
     lbl.set_color(INK)
 
-leg = ax.legend(frameon=False, fontsize=8, loc="upper right",
+leg = ax.legend(frameon=False, fontsize=8, loc="lower left",
                 title="acceptance alpha = 0.8")
 leg.get_title().set_color(INK)
 leg.get_title().set_fontsize(8)

@@ -31,9 +31,9 @@ ax.plot(length, dpo_reward, color=DATA, lw=1.8, linestyle="-",
 ax.plot(length, simpo_reward, color=INK, lw=1.8, linestyle="--",
         label="SimPO length-normalized reward (flat)")
 
-ax.annotate("wordiness raises\nthe DPO score", xy=(300, dpo_reward[-20]),
-            xytext=(150, dpo_reward[-20] * 1.02), color=INK, fontsize=8,
-            arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
+ax.annotate("wordiness raises\nthe DPO score", xy=(285, per_token * 285),
+            xytext=(175, per_token * 285 * 0.45), color=INK, fontsize=8,
+            ha="left", arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 
 ax.set_xlabel("response length (tokens)", color=INK)
 ax.set_ylabel("implicit reward (idealized units)", color=INK)

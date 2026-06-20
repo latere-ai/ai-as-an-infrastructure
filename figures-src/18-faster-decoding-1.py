@@ -31,7 +31,7 @@ alpha = np.linspace(0.0, 1.0, 400)
 fig, ax = plt.subplots(figsize=(5, 3))
 
 gammas = [2, 4, 8]
-shades = [0.45, 0.7, 1.0]
+shades = [0.55, 0.75, 1.0]
 for g, sh in zip(gammas, shades):
     ax.plot(alpha, expected_tokens(alpha, g), color=DATA, lw=1.8, alpha=sh,
             label=f"draft length gamma = {g}")

@@ -21,8 +21,14 @@ proxy = 1.0 - np.exp(-kl / 2.6)
 # True quality: rises, peaks at a knee, then declines as the proxy is gamed.
 # A rise term minus a penalty that grows once the policy leaves the trusted
 # region the reward model understands.
-knee = 3.4
-true = (1.0 - np.exp(-kl / 2.6)) - 0.022 * np.clip(kl - knee, 0, None) ** 2
+penalty_onset = 3.4
+true = (1.0 - np.exp(-kl / 2.6)) - 0.022 * np.clip(kl - penalty_onset, 0, None) ** 2
+
+# The knee is where true quality actually peaks, derived from the curve so the
+# marker, the vline, and the shaded region all coincide with the visible apex.
+peak_idx = int(np.argmax(true))
+knee = float(kl[peak_idx])
+true_peak = float(true[peak_idx])
 
 fig, ax = plt.subplots(figsize=(5, 3))
 
@@ -35,7 +41,6 @@ ax.plot(kl, true, color=DATA, lw=1.8, ls=(0, (5, 2)), zorder=3,
         label="true quality")
 
 # Mark the knee where true quality peaks.
-true_peak = (1.0 - np.exp(-knee / 2.6))
 ax.axvline(knee, color=INK, lw=0.9, ls=":", zorder=2)
 ax.scatter([knee], [true_peak], s=30, color=DATA, zorder=4)
 ax.annotate("knee", xy=(knee, true_peak),

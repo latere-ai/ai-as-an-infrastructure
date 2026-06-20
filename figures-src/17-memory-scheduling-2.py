@@ -56,7 +56,7 @@ ax.annotate("block size that\nminimizes total cost",
 ax.set_xlim(0, 128)
 ax.set_ylim(0, max(total[0], total[-1]) * 1.05)
 ax.set_xlabel("block size (tokens per block)", color=INK)
-ax.set_ylabel("wasted fraction of KV memory / work", color=INK)
+ax.set_ylabel("wasted fraction of KV memory", color=INK)
 
 for spine in ("top", "right"):
     ax.spines[spine].set_visible(False)

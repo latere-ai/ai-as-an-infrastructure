@@ -21,7 +21,7 @@ data_color = "#3b82f6"
 r = np.linspace(0.05, 4.0, 400)        # compute-to-communication ratio
 hidden = np.minimum(1.0, r)            # fraction of the collective hidden under compute
 
-fig, ax = plt.subplots(figsize=(5, 3))
+fig, ax = plt.subplots(figsize=(5.2, 3.6))
 
 ax.plot(r, hidden, "-", color=data_color)
 ax.axhline(1.0, color=fig_color, lw=0.8, ls=":", alpha=0.5)
@@ -48,6 +48,9 @@ ax.spines["right"].set_visible(False)
 
 fig.tight_layout()
 
-path = "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/en/figures/30-accelerators-networking-2.svg"
-os.makedirs(os.path.dirname(path), exist_ok=True)
-fig.savefig(path, format="svg", bbox_inches="tight", transparent=True)
+for path in (
+    "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/en/figures/30-accelerators-networking-2.svg",
+    "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/zh/figures/30-accelerators-networking-2.svg",
+):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fig.savefig(path, format="svg", bbox_inches="tight", transparent=True)

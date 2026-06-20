@@ -31,6 +31,9 @@ weights = 1.0  # model weights, the flat reference, in the same relative units
 
 fig, ax = plt.subplots(figsize=(5, 3))
 
+# Small vertical nudges keep the closely spaced MQA and MLA end labels apart.
+label_dy = {"MHA": 0.0, "GQA": 0.0, "MQA": 4.0, "MLA": -4.0}
+
 for name in ["MHA", "GQA", "MQA", "MLA"]:
     cache = slopes[name] * seq
     ax.plot(seq, cache, color=BLUE, linewidth=1.8)
@@ -38,7 +41,7 @@ for name in ["MHA", "GQA", "MQA", "MLA"]:
     ax.annotate(
         name,
         xy=(seq[-1], cache[-1]),
-        xytext=(4, 0),
+        xytext=(4, label_dy[name]),
         textcoords="offset points",
         color=GRAY,
         fontsize=9,
@@ -64,11 +67,12 @@ if x_cross <= seq[-1]:
     ax.annotate(
         "cache overtakes weights",
         xy=(x_cross, weights),
-        xytext=(6, -14),
+        xytext=(34, -40),
         textcoords="offset points",
         color=GRAY,
         fontsize=8,
         va="top",
+        ha="left",
         arrowprops=dict(arrowstyle="-", color=GRAY, linewidth=0.7),
     )
 

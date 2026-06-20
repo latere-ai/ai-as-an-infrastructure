@@ -33,11 +33,11 @@ ax.plot(gap, ipo, color=INK, lw=1.8, linestyle="--",
 # Mark the IPO target: the gap the bounded loss settles on.
 ax.axvline(tau, color=INK, lw=0.9, alpha=0.4)
 ax.annotate("IPO optimum\nstays finite", xy=(tau, 0.0),
-            xytext=(tau + 0.5, 3.4), color=INK, fontsize=8,
-            arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
+            xytext=(3.4, 3.4), color=INK, fontsize=8,
+            ha="left", arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 ax.annotate("DPO keeps\npushing the gap", xy=(7.0, dpo[np.argmin(np.abs(gap - 7.0))]),
-            xytext=(4.3, 5.3), color=INK, fontsize=8,
-            arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
+            xytext=(5.2, 1.3), color=INK, fontsize=8,
+            ha="left", arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 
 ax.set_ylim(-0.3, 8.0)
 ax.set_xlabel("implicit reward gap (chosen minus rejected)", color=INK)
@@ -51,7 +51,8 @@ ax.tick_params(colors=INK, which="both")
 for lbl in ax.get_xticklabels() + ax.get_yticklabels():
     lbl.set_color(INK)
 
-leg = ax.legend(frameon=False, fontsize=8, loc="upper center")
+leg = ax.legend(frameon=False, fontsize=8, loc="upper center",
+                bbox_to_anchor=(0.5, 1.18), ncol=1)
 for txt in leg.get_texts():
     txt.set_color(INK)
 

@@ -80,12 +80,13 @@ handles = [
     Line2D([0], [0], color=DATA, lw=1.8, label="throughput"),
     Line2D([0], [0], color=TPOT_C, lw=1.8, ls="--", label="TPOT"),
 ]
-leg = ax.legend(handles=handles, frameon=False, fontsize=8, loc="center right")
+leg = ax.legend(handles=handles, frameon=False, fontsize=8, loc="lower right")
 for txt in leg.get_texts():
     txt.set_color(INK)
 
 fig.tight_layout()
-fig.savefig(
+for _out in (
     "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/en/figures/16-serving-problem-2.svg",
-    format="svg", bbox_inches="tight", transparent=True,
-)
+    "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/zh/figures/16-serving-problem-2.svg",
+):
+    fig.savefig(_out, format="svg", bbox_inches="tight", transparent=True)

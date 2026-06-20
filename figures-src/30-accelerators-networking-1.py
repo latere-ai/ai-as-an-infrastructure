@@ -30,7 +30,7 @@ exposed_comm = (tp / bandwidth) * 0.0012
 mfu = compute / (compute + exposed_comm)
 mfu = mfu / mfu.max()       # normalize the plateau to 1.0 for a clean schematic
 
-fig, ax = plt.subplots(figsize=(5, 3))
+fig, ax = plt.subplots(figsize=(5.2, 3.6))
 
 inside = tp <= nvlink_domain
 ax.plot(tp[inside], mfu[inside], "-", color=data_color, label="within NVLink domain")
@@ -59,6 +59,9 @@ for txt in leg.get_texts():
 
 fig.tight_layout()
 
-path = "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/en/figures/30-accelerators-networking-1.svg"
-os.makedirs(os.path.dirname(path), exist_ok=True)
-fig.savefig(path, format="svg", bbox_inches="tight", transparent=True)
+for path in (
+    "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/en/figures/30-accelerators-networking-1.svg",
+    "/Users/changkun/dev/latere.ai/ai-as-an-infrastructure/zh/figures/30-accelerators-networking-1.svg",
+):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fig.savefig(path, format="svg", bbox_inches="tight", transparent=True)
