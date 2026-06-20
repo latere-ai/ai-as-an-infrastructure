@@ -55,6 +55,8 @@ export interface ReaderSettings {
   fontScale: number;
   navCollapsed: boolean;
   tocCollapsed: boolean;
+  navW: number; // resizable sidebar width
+  tocW: number; // resizable mini-TOC width
 }
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
@@ -65,4 +67,6 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   fontScale: 1,
   navCollapsed: false,
   tocCollapsed: false,
+  navW: 264,
+  tocW: 208,
 };
