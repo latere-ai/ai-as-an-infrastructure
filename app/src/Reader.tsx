@@ -11,7 +11,7 @@ type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
   palette: string; ink: string; clay: string; rose: string; theme: string; light: string; dark: string;
   body: string; sans: string; kai: string; size: string; layout: string;
-  codex: string; manuscript: string; atlas: string; prev: string; next: string; lang: string; resize: string; download: string;
+  codex: string; manuscript: string; atlas: string; prev: string; next: string; lang: string; resize: string;
   author: string; updated: string; readtimeLabel: string; noResults: string;
 };
 
@@ -20,14 +20,14 @@ const STRINGS: Record<Lang, Strings> = {
     sidebar: "目录侧栏", onThisPage: "本页目录", settings: "阅读设置", search: "搜索章节…",
     palette: "配色", ink: "墨纸", clay: "靛蓝", rose: "玫瑰", theme: "主题", light: "浅色", dark: "深色",
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
-    codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", lang: "EN", resize: "拖动调整宽度", download: "下载",
+    codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", lang: "EN", resize: "拖动调整宽度",
     author: "作者", updated: "更新于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
   },
   en: {
     sidebar: "Sidebar", onThisPage: "On this page", settings: "Reading settings", search: "Search chapters…",
     palette: "Palette", ink: "Ink", clay: "Azure", rose: "Rose", theme: "Theme", light: "Light", dark: "Dark",
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
-    codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", lang: "中", resize: "Drag to resize", download: "Download",
+    codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", lang: "中", resize: "Drag to resize",
     author: "Author", updated: "Updated", readtimeLabel: "Reading time", noResults: "No matching results",
   },
 } as const;
@@ -701,17 +701,6 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
           <button style={{ ...segBtn(false), color: "var(--fg-1)", fontSize: 15 }} onClick={() => set({ fontScale: Math.max(0.8, +(s.fontScale - 0.1).toFixed(1)) })}>−</button>
           <span style={{ minWidth: 42, textAlign: "center", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--fg-1)" }}>{Math.round(s.fontScale * 100)}%</span>
           <button style={{ ...segBtn(false), color: "var(--fg-1)", fontSize: 15 }} onClick={() => set({ fontScale: Math.min(1.4, +(s.fontScale + 0.1).toFixed(1)) })}>+</button>
-        </div>
-      </div>
-      <div style={{ ...row, paddingTop: 12, marginTop: 14, borderTop: "1px solid var(--border)" }}>
-        <span style={label}>{t.download}</span>
-        <div style={{ display: "flex", gap: 8 }}>
-          {(["pdf", "epub"] as const).map((ext) => (
-            <a key={ext} href={`${chapter.prefix}ai-as-an-infrastructure-${chapter.lang}.${ext}`} download
-              style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, letterSpacing: ".04em", textTransform: "uppercase", color: "var(--accent)", textDecoration: "none", padding: "4px 10px", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)" }}>
-              {ext}
-            </a>
-          ))}
         </div>
       </div>
     </div>

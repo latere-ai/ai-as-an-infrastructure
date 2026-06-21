@@ -35,8 +35,6 @@ reading.
   also what `.githooks/pre-commit` runs on every commit, so `_book` is vendored
   (committed); enable the hook once per clone with
   `git config core.hooksPath .githooks`.
-- `make export` regenerates the vendored PDF + EPUB (on demand; slow — headless
-  Chrome + pandoc). Not run by the pre-commit hook.
 - `make og` regenerates the vendored English social-share cards into `_book/og/`
   (Open Graph / Twitter cards, one 1200x630 PNG per chapter; on demand; slow —
   headless Chrome). Re-run after adding or retitling a chapter. `make build`

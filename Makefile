@@ -1,4 +1,4 @@
-.PHONY: dev build export og lint clean
+.PHONY: dev build og lint clean
 
 # Live dev server for the reader (renders a sample chapter with hot client rebuild).
 dev:
@@ -7,10 +7,6 @@ dev:
 # Build the static site into _book/{en,zh} (what the pre-commit hook runs).
 build:
 	cd app && bun install --frozen-lockfile && bun run build
-
-# Generate the vendored PDF + EPUB into _book/<lang>/ (on demand; slow).
-export:
-	cd app && bun run export
 
 # Generate the vendored English social-share cards into _book/og/ (on demand;
 # slow, needs headless Chrome). Re-run after adding or retitling chapters.

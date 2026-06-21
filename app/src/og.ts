@@ -4,7 +4,7 @@
 // Output is vendored under _book/og/<href>.png and referenced absolutely from
 // every page head (see html.ts / site.ts). Cards render an on-brand HTML template
 // via headless Chrome (real Instrument Serif + Inter from Google Fonts), so this
-// is slow and Chrome-dependent: it runs like `make export`, NOT in the per-commit
+// is slow and Chrome-dependent: it runs on demand, NOT in the per-commit
 // build. Re-run `make og` after adding or retitling chapters.
 
 import { loadBook } from "./pipeline/book.ts";

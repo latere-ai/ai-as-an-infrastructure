@@ -48,16 +48,18 @@ over. See [`CONVENTIONS.md`](CONVENTIONS.md).
 
 ## Build
 
-Built with [Quarto](https://quarto.org).
+A custom React + Bun reader (`app/`) compiles the bilingual `.qmd` sources to
+static HTML in `_book/{en,zh}`. The book is web-only: its runnable cells, viz
+components, and interactive diagrams do not survive a static PDF or EPUB.
 
 ```sh
-# Install Quarto: https://quarto.org/docs/get-started/
-make preview       # live English preview (make preview-zh for Chinese)
-make render-html   # build both languages, what CI checks
-make render        # both languages, all formats (PDF needs tinytex)
+make dev     # live reader dev server (hot client rebuild)
+make build   # build both languages into _book/{en,zh} (what the pre-commit hook and CI run)
+make og      # regenerate the vendored social-share cards (on demand)
+make lint    # style/diagram lint on the .qmd sources
 ```
 
-CI renders both `en` and `zh` on every push and pull request.
+CI builds both `en` and `zh` on every push and pull request.
 
 ## License
 
