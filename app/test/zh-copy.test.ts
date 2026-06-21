@@ -146,6 +146,38 @@ test("polished chapter openings preserve key source theses", () => {
       ["重复采样买到的是覆盖率，而不是答案", "串行修订与并行搜索", "计算最优分配按问题难度调度预算", "选择器并不完美"],
     ],
     [
+      "en/orchestration/01-training-agents-to-act.qmd",
+      ["rollout is now the agent's full interaction", "masking the environment's tokens out of the loss", "credit assignment over a long trajectory", "environment becomes a training asset", "training run now", "contains a serving engine"],
+    ],
+    [
+      "zh/orchestration/01-training-agents-to-act.qmd",
+      ["rollout 如今是智能体与环境的完整交互", "把环境的词元从损失中屏蔽出去", "长轨迹上的信用分配", "环境本身成了一项训练资产", "内含一个服务引擎"],
+    ],
+    [
+      "en/orchestration/02-agent-architectures.qmd",
+      ["planning, memory, tool use", "interleaves reasoning with action", "last action revealed", "turns a text", "generator into something that changes the world"],
+    ],
+    [
+      "zh/orchestration/02-agent-architectures.qmd",
+      ["规划、记忆、工具使用", "把推理和行动交织起来", "上一步行动暴露出的事实", "让一个文本生成器真正改变世界"],
+    ],
+    [
+      "en/orchestration/03-memory-systems.qmd",
+      ["durable record of a session", "Session logs must record intent", "branching a conversation is cheap", "shared vector store is a data-breach risk"],
+    ],
+    [
+      "zh/orchestration/03-memory-systems.qmd",
+      ["一次会话的持久记录", "会话日志必须把意图和结果分开记", "给对话开分支便宜", "共享向量存储是数据泄露风险"],
+    ],
+    [
+      "en/orchestration/04-the-harness.qmd",
+      ["runtime around the model", "pause, redirect, fork, or kill", "move an evaluation score as much as a model swap"],
+    ],
+    [
+      "zh/orchestration/04-the-harness.qmd",
+      ["模型周围的运行时层", "暂停、重定向、分叉", "评估分数的撬动也不亚于一次模型更换"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -291,6 +323,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/reasoning/01-eliciting-reasoning.qmd",
     "en/reasoning/02-training-to-reason.qmd",
     "en/reasoning/03-inference-time-scaling.qmd",
+    "en/orchestration/01-training-agents-to-act.qmd",
+    "en/orchestration/02-agent-architectures.qmd",
+    "en/orchestration/03-memory-systems.qmd",
+    "en/orchestration/04-the-harness.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -327,6 +363,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/reasoning/01-eliciting-reasoning.qmd",
     "zh/reasoning/02-training-to-reason.qmd",
     "zh/reasoning/03-inference-time-scaling.qmd",
+    "zh/orchestration/01-training-agents-to-act.qmd",
+    "zh/orchestration/02-agent-architectures.qmd",
+    "zh/orchestration/03-memory-systems.qmd",
+    "zh/orchestration/04-the-harness.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
