@@ -23,3 +23,12 @@ test("ch17 memory-scheduling uses paged-attention in both languages", () => {
   expect(src("en/p4-inference/17-memory-scheduling.qmd")).toContain('data-viz="paged-attention"');
   expect(src("zh/p4-inference/17-memory-scheduling.qmd")).toContain('data-viz="paged-attention"');
 });
+
+test("the viz runtime registers the moe-routing component", () => {
+  expect(rt).toMatch(/R\['moe-routing'\]\s*=\s*function/);
+});
+
+test("ch07 moe-ssm-hybrids uses moe-routing in both languages", () => {
+  expect(src("en/p1-foundations/07-moe-ssm-hybrids.qmd")).toContain('data-viz="moe-routing"');
+  expect(src("zh/p1-foundations/07-moe-ssm-hybrids.qmd")).toContain('data-viz="moe-routing"');
+});
