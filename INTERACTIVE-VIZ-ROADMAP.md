@@ -62,12 +62,66 @@ All 10 Tier-1 signature spots, all 6 process steppers (BPE, spec-decode, R1, ReA
 control-protocol, privacy, DPO-derivation, RLHF-loop, prefill/decode, swiss-cheese,
 GRPO), and the bulk of the full catalog are done.
 
-**Genuinely remaining (low-value or double-covered; the chapter already carries a
-related interactive):** swap-the-judge (ch12), spec-decode-payoff curve (ch18),
-continuous-batching stepper (ch17, has paged-attention), RAG-interaction explorer
-(ch25, has rrf-fusion), SAE dictionary (ch32, has superposition), time-to-power (ch47),
-cross-datacenter latency (ch48). Pick up opportunistically. `verbosity-bias` (ch28) is
-deliberately skipped: a static figure already covers it.
+**Remaining: 7 components, each the interactive companion to a static figure the
+chapter already has** (the same value-adding pattern as `tree-of-thoughts` vs its
+static dot, or `ssm-vs-attention` vs its static cost curve, not duplicates). Content
+is gathered; each spec below is turnkey. `verbosity-bias` (ch28) stays skipped: its
+static figure already animates the same win-rate-vs-length point.
+
+### Turnkey build specs for the final 7
+
+Pattern for all: new `R['name']` in `viz-runtime.html`, then a `<figure>` block in
+both `en/` and `zh/` at the line below, then a guard test in
+`app/src/canvas-viz.test.ts`, build, screenshot-verify, commit, deploy.
+
+1. **`swap-the-judge`** — `adaptation/04-synthetic-data-self-improvement`.
+   Section "The one line that decides everything" (en L287 / zh L145 「决定一切的那一行」).
+   Insert after the static `fig-synthetic-data-tradeoff` dot (en after L273 / zh after L141), bare `<figure>`.
+   Toggle the judge across 4 roles, a marker slides on a coverage↔trust axis:
+   stronger teacher → distillation; reward/scorer → rejection sampling; AI critic+principles → RLAIF;
+   verifier/ground-truth → verifier self-improvement. Broad/gameable ↔ narrow/unspoofable.
+
+2. **`spec-decode-payoff`** — `inference/03-faster-decoding`.
+   Section "One trick, stated once" (en L18 / zh L5 「一个只说一次的把戏」), formula at en L42 / zh L13.
+   Insert after the `@fig-faster-decoding-1` ref (en after L49 / zh after L15), before the runnable; bare `<figure>`.
+   (Existing spec-decode stepper at en L93 / zh L44 — do not collide.)
+   Two sliders α, γ; plot expected tokens E = (1−α^(γ+1))/(1−α), rising 1 → γ+1; longer draft helps only when α high.
+
+3. **`continuous-batching`** — `inference/02-memory-scheduling`.
+   Section "Iteration, not request" (en L15 / zh L15 「以迭代为粒度，而非请求」).
+   Insert before the `paged-attention` viz (en/zh before L66, after the mermaid at L34); bare `<figure>`.
+   Toggle static-cohort (fixed batch, all wait for the longest, padding) vs continuous/iteration-level
+   (sliding window, finished leave at their stop token, slots refill each step; Orca). Throughput readout diverges.
+
+4. **`rag-interaction`** — `orchestration/06-rag-retrieval`.
+   Section "Reranking" (en L126 / zh L58 「重排」), three-way contrast at en L151 / zh L69.
+   Insert after the reranking curve (en after L149 / zh after L67), before mermaid `fig-rag-interaction`; `{=html}` fence.
+   (Existing `rrf-fusion` en L119, reranking curve en L144 — do not collide.)
+   Three architectures by WHERE query+chunk meet: bi-encoder (only at final dot product; fast, coarse) →
+   ColBERT (late MaxSim, per-token) → cross-encoder (full joint attention; sharp, slow). Cost/accuracy slides.
+
+5. **`sae-dictionary`** — `safety/01-mechanistic-interpretability`.
+   Section "Two ideas that climb the wall" (en L45 / zh L13 「攀越这堵墙的两个想法」), SAE at en L71 / zh L24.
+   Insert after the trade-off fig + code (en after L192 / zh after L80); bare `<figure>`.
+   (Existing `superposition` at en L64 / zh L19 — problem; this is the solution.)
+   Sweep dictionary size m (≫ d) and top-k; polysemantic neurons resolve to monosemantic features,
+   then over-split (feature splitting) when m too large; dead latents waste capacity [@gao2024scaling].
+
+6. **`time-to-power`** — `infrastructure/05-powering-it`.
+   Section "The chips arrive in months, the megawatts in years"
+   (en L18 / zh L7 「芯片以月计到货，兆瓦以年计到货」).
+   Insert after mermaid `fig-powering-queues` (en after L56 / zh after L26); bare `<figure>`.
+   Gantt of real lead-time bars: chips ~months; grid interconnection ~multiple years (~2000 GW queue);
+   large power transformer ~128 weeks; gas turbines backlog ~80 GW sold out through 2030. Energized
+   date = the critical path (snaps to the slowest bar).
+
+7. **`cross-datacenter`** — `infrastructure/06-the-machine-that-breaks`.
+   Section "The latency hierarchy is a wall" (en L93 / zh L37 「延迟层级是一道墙」).
+   Insert at end of the latency section (en after L120 / zh after L42), before "The decode wall…"; bare `<figure>`.
+   (Existing prefill/decode stepper at en L150 / zh L66 — do not collide.)
+   Place a parallelism axis (TP/PP/DP/EP) into a tier; latency cost lights up with the book's real multipliers:
+   rack 1× → another rack ~7× → another zone ~15× → another building ~30× [@meta2025ncclx]. The
+   communication-hungriest axis must stay in the scale-up domain; only sparse-comm axes can cross.
 
 ---
 
