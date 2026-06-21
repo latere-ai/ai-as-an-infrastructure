@@ -44,8 +44,9 @@ test("every internal link in _book resolves under nginx try_files", () => {
       if (skip(raw)) continue;
       const path = raw.split("#")[0].split("?")[0];
       if (!path) continue; // pure #anchor
-      // resolve relative to the file's directory, like a browser would
-      const abs = resolve(dirname(f), path);
+      // root-absolute (/favicon.svg) resolves against the site root; otherwise
+      // relative to the file's directory, like a browser would.
+      const abs = path.startsWith("/") ? join(bookRoot, path) : resolve(dirname(f), path);
       // a trailing-slash link (directory) → its index.html
       const target = path.endsWith("/") ? join(abs, "index.html") : abs;
       if (!resolves(target)) dangling.push(`${f.replace(bookRoot + "/", "")} -> ${raw}`);

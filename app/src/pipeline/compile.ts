@@ -113,6 +113,18 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     next: next ? { label: `${next.num ? next.num + " · " : ""}${next.title}`, href: linkHref(next.href, prefix) } : null,
     langHref: langHrefFor(book.lang, ch.href),
     prefix,
+    path: ch.href === "index" ? "" : ch.href, // home is the lang root
+    description: metaDescription(html),
     toc,
   };
+}
+
+// First real paragraph of the body, de-tagged and truncated, for <meta
+// description> / SERP snippets. Skips callout/figure chrome by taking the first
+// reasonably long <p>.
+function metaDescription(html: string): string {
+  const paras = [...html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/g)].map((m) =>
+    m[1].replace(/<[^>]+>/g, "").replace(/&[a-z#0-9]+;/g, " ").replace(/\s+/g, " ").trim());
+  const text = paras.find((p) => p.length >= 60) ?? paras[0] ?? "";
+  return text.length > 155 ? text.slice(0, 152).replace(/\s+\S*$/, "") + "…" : text;
 }

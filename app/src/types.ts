@@ -49,6 +49,8 @@ export interface ChapterData {
   next: PrevNext | null;
   langHref: string; // the same page in the other language
   prefix: string; // "../" * depth, to make lang-root-relative hrefs page-relative
+  path: string; // own lang-root-relative clean path ("" for home), shared across langs
+  description: string; // meta description (first paragraph, for SEO snippets)
   toc: NavPart[]; // full-book nav
 }
 

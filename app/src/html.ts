@@ -21,12 +21,24 @@ export function page(opts: {
   const { chapter, bodyHtml, css, clientHref, afterBody = "" } = opts;
   const title = `${chapter.title} · AI as an Infrastructure`;
   const data = JSON.stringify(chapter).replace(/</g, "\\u003c");
+  // Per-language canonical URLs + hreflang so both languages are independently
+  // indexable and Google serves the right one. en/zh share the chapter path.
+  const BASE = "https://aaai.latere.ai";
+  const htmlLang = chapter.lang === "zh" ? "zh-Hans" : "en";
+  const url = (lang: string) => `${BASE}/${lang}/${chapter.path}`; // path "" → /<lang>/
+  const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  const desc = chapter.description ? `\n<meta name="description" content="${attr(chapter.description)}">` : "";
   return `<!DOCTYPE html>
-<html lang="${chapter.lang}">
+<html lang="${htmlLang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title}</title>
+<title>${title}</title>${desc}
+<link rel="canonical" href="${url(chapter.lang)}">
+<link rel="alternate" hreflang="en" href="${url("en")}">
+<link rel="alternate" hreflang="zh-Hans" href="${url("zh")}">
+<link rel="alternate" hreflang="x-default" href="${url("en")}">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 ${FONT_LINKS}
 <style>${css}</style>
 </head>

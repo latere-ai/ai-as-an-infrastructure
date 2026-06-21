@@ -49,6 +49,7 @@ const afterBody = runtime("live-runtime.html") + runtime("viz-runtime.html") + m
 const graphviz = await loadGraphviz();
 
 let pageCount = 0;
+const pathsByLang: Record<Lang, Set<string>> = { en: new Set(), zh: new Set() };
 for (const lang of ["en", "zh"] as Lang[]) {
   const book = loadBook(lang, repoRoot);
   const bib = loadBibliographyDir(join(repoRoot, "refs"));
@@ -77,10 +78,28 @@ for (const lang of ["en", "zh"] as Lang[]) {
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, html);
     searchDocs.push(buildSearchDoc(data, ch.href));
+    pathsByLang[lang].add(ch.href === "index" ? "" : ch.href); // clean path for sitemap
     pageCount++;
   }
   writeFileSync(join(langOut, "search.json"), JSON.stringify(searchDocs));
   console.log(`  ${lang}: ${book.chapters.length} pages`);
 }
+
+// Root artifacts (served from _book root): favicon, robots, hreflang sitemap.
+const BASE = "https://aaai.latere.ai";
+cpSync(join(repoRoot, "app", "assets", "favicon.svg"), join(outRoot, "favicon.svg"));
+writeFileSync(join(outRoot, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${BASE}/sitemap.xml\n`);
+
+const allPaths = [...new Set([...pathsByLang.en, ...pathsByLang.zh])].sort();
+const loc = (lang: string, p: string) => `${BASE}/${lang}/${p}`;
+const sitemap = allPaths.map((p) => {
+  const langs = (["en", "zh"] as Lang[]).filter((l) => pathsByLang[l].has(p));
+  const alts = langs.map((l) => `    <xhtml:link rel="alternate" hreflang="${l === "zh" ? "zh-Hans" : "en"}" href="${loc(l, p)}"/>`);
+  if (langs.includes("en")) alts.push(`    <xhtml:link rel="alternate" hreflang="x-default" href="${loc("en", p)}"/>`);
+  // one <url> per existing language version, each carrying the full alternate set
+  return langs.map((l) => `  <url>\n    <loc>${loc(l, p)}</loc>\n${alts.join("\n")}\n  </url>`).join("\n");
+}).join("\n");
+writeFileSync(join(outRoot, "sitemap.xml"),
+  `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${sitemap}\n</urlset>\n`);
 
 console.log(`built ${pageCount} pages into ${outRoot}`);

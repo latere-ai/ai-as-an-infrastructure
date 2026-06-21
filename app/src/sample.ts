@@ -14,8 +14,10 @@ export const sampleChapter: ChapterData = {
   author: "Changkun Ou",
   updated: "June 20, 2026",
   readtime: "~14 min",
-  langHref: "../zh/p1-foundations/06-transformer-architecture.html",
+  langHref: "../zh/p1-foundations/06-transformer-architecture",
   prefix: "../",
+  path: "p1-foundations/06-transformer-architecture",
+  description: "Sample chapter for the dev server.",
   headings: [
     { id: "one-block-two-jobs", text: "One block, two jobs", level: 2 },
     { id: "three-questions", text: "Three questions the field has closed", level: 2 },
