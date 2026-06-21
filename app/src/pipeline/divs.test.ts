@@ -2,7 +2,7 @@
 // author-supplied blank line) must not be swallowed into the `</div>` HTML
 // block. Without a blank line after `</div>`, a following list / bold /
 // citations render as literal text (CommonMark type-6 HTML block absorbs every
-// line until the next blank). See zh/p1-foundations/08-training-at-scale.qmd.
+// line until the next blank). See zh/foundations/06-training-at-scale.qmd.
 
 import { test, expect } from "bun:test";
 import { expandDivs } from "./divs.ts";

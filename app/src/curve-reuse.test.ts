@@ -15,10 +15,10 @@ test("the curve runtime registers the pow-base, u-shape, and elo families", () =
 });
 
 const homes: [string, string][] = [
-  ["en/p13-operations/53-reliability-nondeterministic.qmd", "pow-base"],
-  ["en/p11-frontiers/51-the-capability-horizon.qmd", "logistic"],
-  ["en/p5-orchestration/26-context-engineering.qmd", "u-shape"],
-  ["en/p6-evaluation/28-judging-holistic.qmd", "elo"],
+  ["en/practice/10-reliability-nondeterministic.qmd", "pow-base"],
+  ["en/infrastructure/08-the-capability-horizon.qmd", "logistic"],
+  ["en/orchestration/08-context-engineering.qmd", "u-shape"],
+  ["en/evaluation/02-judging-holistic.qmd", "elo"],
 ];
 
 test("each curve-reuse home uses its family in both languages", () => {
@@ -31,6 +31,6 @@ test("each curve-reuse home uses its family in both languages", () => {
 test("zh viz blocks keep English data-*label attributes (translate only the caption)", () => {
   // The zh curve <div> is byte-identical to en; a Chinese label would break the
   // book-wide convention. Sample the reliability home.
-  const zh = src("zh/p13-operations/53-reliability-nondeterministic.qmd");
+  const zh = src("zh/practice/10-reliability-nondeterministic.qmd");
   expect(zh).toContain('data-plabel="per-step reliability p"');
 });

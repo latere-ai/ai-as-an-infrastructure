@@ -6,10 +6,10 @@ import { readFileSync } from "node:fs";
 
 const rt = readFileSync(new URL("../../viz-runtime.html", import.meta.url), "utf8");
 const homes = [
-  "en/p9-ecosystem/37-economics.qmd",
-  "en/p10-practical/38-choosing-a-model.qmd",
-  "en/p10-practical/40-training-finetuning-practice.qmd",
-  "en/p10-practical/44-wiring-a-2026-stack.qmd",
+  "en/ecosystem/03-economics.qmd",
+  "en/practice/01-choosing-a-model.qmd",
+  "en/practice/04-training-finetuning-practice.qmd",
+  "en/practice/08-wiring-a-2026-stack.qmd",
 ];
 
 test("the viz runtime registers the cost-crossover component", () => {

@@ -6,8 +6,8 @@ import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const rt = readFileSync(new URL("../../viz-runtime.html", import.meta.url), "utf8");
-const en = readFileSync(new URL("../../en/p1-foundations/06-transformer-architecture.qmd", import.meta.url), "utf8");
-const zh = readFileSync(new URL("../../zh/p1-foundations/06-transformer-architecture.qmd", import.meta.url), "utf8");
+const en = readFileSync(new URL("../../en/foundations/04-transformer-architecture.qmd", import.meta.url), "utf8");
+const zh = readFileSync(new URL("../../zh/foundations/04-transformer-architecture.qmd", import.meta.url), "utf8");
 
 test("the viz runtime registers the attention-heatmap component and its styles", () => {
   expect(rt).toMatch(/R\['attention-heatmap'\]\s*=\s*function/);

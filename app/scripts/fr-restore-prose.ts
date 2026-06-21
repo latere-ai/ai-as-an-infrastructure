@@ -6,14 +6,14 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 
 const intros: [string, string][] = [
-  ["en/p10-practical/38-choosing-a-model.qmd", "First-hand sources first."],
-  ["zh/p10-practical/38-choosing-a-model.qmd", "一手来源优先。"],
-  ["en/p10-practical/40-training-finetuning-practice.qmd", "First-hand sources first."],
-  ["zh/p10-practical/40-training-finetuning-practice.qmd", "一手来源放前面。"],
-  ["en/p5-orchestration/23-the-harness.qmd", "Cited sources appear on the book's References page. One item is referenced\ninline only as an attribution and is listed here for the reader who wants the\nprimary artifact."],
-  ["zh/p5-orchestration/23-the-harness.qmd", "被引用的来源会出现在本书的参考文献页。下面这一项仅在正文里作为出处被提及，为想要原始材料的读者列在此处。"],
-  ["en/p5-orchestration/26-context-engineering.qmd", "The sources cited inline above appear on the book's References page. The\nsurvey below is a fuller map of the field for a reader who wants the broader\nlandscape."],
-  ["zh/p5-orchestration/26-context-engineering.qmd", "上面正文中引用的来源会出现在本书的参考文献页。下面这篇综述为想了解更广阔图景的读者提供了该领域更完整的地图。"],
+  ["en/practice/01-choosing-a-model.qmd", "First-hand sources first."],
+  ["zh/practice/01-choosing-a-model.qmd", "一手来源优先。"],
+  ["en/practice/04-training-finetuning-practice.qmd", "First-hand sources first."],
+  ["zh/practice/04-training-finetuning-practice.qmd", "一手来源放前面。"],
+  ["en/orchestration/04-the-harness.qmd", "Cited sources appear on the book's References page. One item is referenced\ninline only as an attribution and is listed here for the reader who wants the\nprimary artifact."],
+  ["zh/orchestration/04-the-harness.qmd", "被引用的来源会出现在本书的参考文献页。下面这一项仅在正文里作为出处被提及，为想要原始材料的读者列在此处。"],
+  ["en/orchestration/08-context-engineering.qmd", "The sources cited inline above appear on the book's References page. The\nsurvey below is a fuller map of the field for a reader who wants the broader\nlandscape."],
+  ["zh/orchestration/08-context-engineering.qmd", "上面正文中引用的来源会出现在本书的参考文献页。下面这篇综述为想了解更广阔图景的读者提供了该领域更完整的地图。"],
 ];
 for (const [f, prose] of intros) {
   let s = readFileSync(f, "utf8");
@@ -33,10 +33,10 @@ const frBounds = (lines: string[], headRe: RegExp): [number, number] | null => {
 };
 const EN = /^##\s+Further [Rr]eading\s*$/, ZH = /^##\s+延伸阅读\s*$/;
 const revert: [string, RegExp][] = [
-  ["en/p10-practical/41-agents-and-sandboxes.qmd", EN],
-  ["zh/p10-practical/41-agents-and-sandboxes.qmd", ZH],
-  ["en/p10-practical/44-wiring-a-2026-stack.qmd", EN],
-  ["zh/p10-practical/44-wiring-a-2026-stack.qmd", ZH],
+  ["en/practice/05-agents-and-sandboxes.qmd", EN],
+  ["zh/practice/05-agents-and-sandboxes.qmd", ZH],
+  ["en/practice/08-wiring-a-2026-stack.qmd", EN],
+  ["zh/practice/08-wiring-a-2026-stack.qmd", ZH],
 ];
 for (const [f, headRe] of revert) {
   const orig = execFileSync("git", ["show", "d7a1314:" + f], { encoding: "utf8" }).split("\n");
