@@ -1,6 +1,5 @@
-// Guard the curve-family reuses and the convention that viz data-*labels stay
-// English in zh (only the figcaption is translated, matching every existing
-// curve block).
+// Guard the curve-family reuses and the convention that zh curve labels are
+// allowed to localize visible axis/slider text alongside the figcaption.
 
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -28,9 +27,12 @@ test("each curve-reuse home uses its family in both languages", () => {
   }
 });
 
-test("zh viz blocks keep English data-*label attributes (translate only the caption)", () => {
-  // The zh curve <div> is byte-identical to en; a Chinese label would break the
-  // book-wide convention. Sample the reliability home.
-  const zh = src("zh/practice/10-reliability-nondeterministic.qmd");
-  expect(zh).toContain('data-plabel="per-step reliability p"');
+test("zh viz blocks localize visible data-*label attributes", () => {
+  // These attributes are rendered as visible axis and slider labels by the viz
+  // runtime, so zh pages should be able to translate them. Sample a localized
+  // orientation curve.
+  const zh = src("zh/orientation/02-field-map.qmd");
+  expect(zh).toContain('data-xlabel="训练算力（FLOPs）"');
+  expect(zh).toContain('data-ylabel="损失"');
+  expect(zh).toContain('data-plabel="指数"');
 });
