@@ -38,10 +38,9 @@ where a lower layer dictates an upper layer's choice.
 
 ## Layout
 
-- `en/` and `zh/` are two standalone Quarto book projects, same chapter
-  paths and labels under each. Chapters live at `en/pN-*/NN-slug.qmd`.
-- `CONVENTIONS.md`: how chapters are written. `INTEGRATION.md`: how the
-  research notes and blog series map into chapters (the book is canonical).
+- `en/` and `zh/` are parallel language trees, with `book.yml` as the reader
+  manifest and the same chapter paths and labels under each.
+- `CONVENTIONS.md`: how chapters are written.
 
 ## Philosophy
 

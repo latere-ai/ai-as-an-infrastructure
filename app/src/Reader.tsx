@@ -177,7 +177,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   // Initialize the article runtimes (mermaid, interactive viz/3d, runnable
   // Python, table wrapping) AFTER React has hydrated the article — they operate
   // on dangerouslySetInnerHTML nodes that React owns, so booting them on
-  // DOMContentLoaded (the old Quarto path) races hydration and leaves them dead.
+  // DOMContentLoaded (the old static-renderer path) races hydration and leaves them dead.
   useEffect(() => {
     let cancelled = false;
     const w = window as unknown as Record<string, (() => void) | undefined>;
@@ -536,7 +536,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
       <SearchTrigger t={t} onOpen={onOpenSearch} />
       <nav ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", paddingBottom: 60 }}>
         {chapter.toc.map((part) => {
-          const active = part.chapters.some((ch) => ch.active);
+          const active = !!part.active || part.chapters.some((ch) => ch.active);
           if (part.single) {
             return (
               <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
@@ -547,17 +547,50 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
             );
           }
           const open = isOpen(part);
+          const labelStyle: React.CSSProperties = {
+            flex: 1,
+            minWidth: 0,
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: ".06em",
+            textTransform: "uppercase",
+            color: active ? "var(--accent)" : "var(--fg-2)",
+            textDecoration: "none",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          };
+          const chevron = (
+            <svg width={12} height={12} viewBox="0 0 12 12" fill="none" stroke="var(--fg-3)" strokeWidth={1.5} style={{ flex: "none", transform: open ? "none" : "rotate(-90deg)", transition: "transform .2s" }}>
+              <path d="M3 4.5L6 7.5L9 4.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          );
           return (
             <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
-              <button onClick={() => setClosed((c) => ({ ...c, [part.id]: open }))} style={{
+              <div style={{
                 width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                padding: "9px 16px 6px", background: "none", border: "none", cursor: "pointer", textAlign: "left",
+                padding: "9px 10px 6px 16px", textAlign: "left",
               }}>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--fg-2)" }}>{part.label}</span>
-                <svg width={12} height={12} viewBox="0 0 12 12" fill="none" stroke="var(--fg-3)" strokeWidth={1.5} style={{ flex: "none", transform: open ? "none" : "rotate(-90deg)", transition: "transform .2s" }}>
-                  <path d="M3 4.5L6 7.5L9 4.5" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </button>
+                {part.href ? (
+                  <a href={part.href} onClick={onNavigate} style={labelStyle}>{part.label}</a>
+                ) : (
+                  <button onClick={() => setClosed((c) => ({ ...c, [part.id]: open }))} style={{
+                    ...labelStyle,
+                    display: "block",
+                    padding: 0,
+                    background: "none",
+                    border: "none",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}>{part.label}</button>
+                )}
+                <button onClick={() => setClosed((c) => ({ ...c, [part.id]: open }))} aria-label={open ? "collapse part" : "expand part"} style={{
+                  flex: "none", width: 24, height: 24, display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  border: "none", background: "none", borderRadius: "var(--radius-sm)", cursor: "pointer", color: "var(--fg-3)",
+                }}>
+                  {chevron}
+                </button>
+              </div>
               {open && part.chapters.map((ch) => (
                 <a key={ch.href} href={ch.href} onClick={onNavigate} style={{
                   display: "flex", gap: 9, padding: "6px 16px 6px 18px", textDecoration: "none",

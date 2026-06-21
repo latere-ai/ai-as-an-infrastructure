@@ -102,15 +102,21 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     html = html.replace(/(<div class="rdr-block"[^>]*id="further-reading"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderFurtherReading(ctx.refsDir, slug, book.lang, ctx.xref, ch.href, prefix)}$3`);
   }
   const { prev, next } = prevNext(book, ch.href);
+  const isPartIntro = ch.role === "part";
   // nav hrefs are lang-root-relative; make them relative to this page.
-  const toc = navFor(book, ch.href).map((p) => ({ ...p, chapters: p.chapters.map((c) => ({ ...c, href: linkHref(c.href, prefix) })) }));
+  const toc = navFor(book, ch.href).map((p) => ({
+    ...p,
+    href: p.href ? linkHref(p.href, prefix) : undefined,
+    chapters: p.chapters.map((c) => ({ ...c, href: linkHref(c.href, prefix) })),
+  }));
   return {
     lang: book.lang,
     partLabel: ch.partLabel || book.title,
     partShort: ch.partLabel ? shortPart(ch.partLabel) : book.title,
     chapterNum: ch.num,
-    eyebrow: eyebrowFor(book, ch),
-    crumbChapter: ch.num ? chapterWord(book.lang, ch.num) : ch.title,
+    isPartIntro,
+    eyebrow: isPartIntro ? shortPart(ch.partLabel) : eyebrowFor(book, ch),
+    crumbChapter: isPartIntro ? (book.lang === "zh" ? "概览" : "Overview") : ch.num ? chapterWord(book.lang, ch.num) : ch.title,
     title: ch.title,
     author: book.author,
     updated: gitDate(book.lang, ch.qmdPath),

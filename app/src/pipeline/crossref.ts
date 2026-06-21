@@ -64,7 +64,7 @@ export function relHref(target: RefTarget, currentHref: string, prefix = ""): st
 
 // Resolve bare @sec-x / @fig-x cross-refs inside a plain-text fragment that does
 // not pass through the markdown-it inline pipeline (figure captions, Further-
-// reading glosses). Mirrors the cross-ref branch of the quarto_refs inline rule.
+// reading glosses). Mirrors the cross-ref branch of the inline-ref rule.
 // Escaping-neutral: it only rewrites ref tokens and leaves all other characters
 // byte-identical, so callers control escaping (pass already-escaped text in).
 // The leading (^|[^A-Za-z0-9]) guard keeps it from firing inside words or emails.

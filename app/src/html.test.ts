@@ -11,7 +11,7 @@ import type { ChapterData } from "./types.ts";
 
 const base: ChapterData = {
   lang: "en", partLabel: "Part I: Foundations", partShort: "Part I", chapterNum: "3",
-  eyebrow: "Part I · Chapter 3", crumbChapter: "Chapter 3",
+  isPartIntro: false, eyebrow: "Part I · Chapter 3", crumbChapter: "Chapter 3",
   title: "Scaling Laws & Compute", author: "Changkun Ou", updated: "2026-06-01",
   readtime: "~14 min", contentHtml: "<p>body</p>", headings: [], prev: null, next: null,
   langHref: "../zh/p1/03", prefix: "../", path: "p1-foundations/03-scaling-laws",

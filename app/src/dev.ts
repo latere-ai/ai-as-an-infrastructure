@@ -10,12 +10,14 @@ import { compileChapter } from "./pipeline/compile.ts";
 import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
+import { loadGlossary } from "./pipeline/glossary.ts";
 import { join } from "node:path";
 
 const css = await Bun.file(new URL("./theme.css", import.meta.url)).text();
 const repoRoot = new URL("../../", import.meta.url).pathname;
 const book = loadBook("en", repoRoot);
-const ctx = { bib: loadBibliographyDir(join(repoRoot, "refs")), xref: buildCrossref(book), graphviz: await loadGraphviz(), refsDir: join(repoRoot, "refs") };
+const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
+const ctx = { bib: loadBibliographyDir(join(repoRoot, "refs")), xref: buildCrossref(book), graphviz: await loadGraphviz(), refsDir: join(repoRoot, "refs"), glossary, glossaryUsed: new Set<string>() };
 const devChapter = compileChapter(book, book.chapters.find((c) => c.href.includes("03-scaling-laws"))!, ctx);
 
 async function buildClient(): Promise<string> {

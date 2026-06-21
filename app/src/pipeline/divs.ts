@@ -1,4 +1,4 @@
-// Expand Pandoc/Quarto fenced divs (::: {.class}) into HTML wrappers before
+// Expand Pandoc-style fenced divs (::: {.class}) into HTML wrappers before
 // markdown-it runs. Opens carry attributes ({.class} / {#id}); closes are bare
 // colon rows. Blank lines around the wrappers let markdown-it process the inner
 // markdown normally (html:true passes the divs through). Callouts get a title
@@ -71,7 +71,7 @@ export function expandDivs(src: string): string {
         const { classes, id } = parseAttrs(fence[2]);
         const isCallout = classes.some((c) => c.startsWith("callout-"));
         // Keep the original class name too (e.g. .runnable, .viz) so the ported
-        // client runtimes hook the same selectors they did under Quarto.
+        // client runtimes hook these stable selectors.
         const cls = ["rdr-block", ...classes.flatMap((c) => c.startsWith("callout-") ? [`rdr-callout`, `rdr-${c}`] : [`rdr-${c}`, c])].join(" ");
         const idAttr = id ? ` id="${id}"` : "";
         out.push(`<div class="${cls}"${idAttr}>`);

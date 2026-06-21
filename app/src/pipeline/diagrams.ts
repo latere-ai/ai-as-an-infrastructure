@@ -1,7 +1,7 @@
 // Diagram rendering. Graphviz (```{dot}```) is rendered to inline SVG at build
 // time via @hpcc-js/wasm (no system dependency). Mermaid (```{mermaid}```) is
-// emitted as <pre class="mermaid"> and rendered client-side (as Quarto does),
-// themed from the palette. Both support Quarto's //| label: / %%| label: and
+// emitted as <pre class="mermaid"> and rendered client-side,
+// themed from the palette. Both support Pandoc-style //| label: / %%| label: and
 // fig-cap: directives and become numbered <figure>s via the crossref map.
 
 import { Graphviz } from "@hpcc-js/wasm";

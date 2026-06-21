@@ -1,5 +1,5 @@
 // Glossary engine: a \ref-style mechanism for professional terms. Authors write
-// @gls-<key> in the .qmd; the inline rule (quarto-refs.ts) resolves it against
+// @gls-<key> in the .qmd; the inline-ref rule resolves it against
 // glossary.yml. First use in a chapter expands to the full term plus its English
 // original in parens (e.g. 混合专家（MoE） / mixture-of-experts (MoE)); later uses
 // in the same chapter show the short form. Every use links to the auto-generated

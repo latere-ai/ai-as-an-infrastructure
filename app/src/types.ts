@@ -17,6 +17,8 @@ export interface NavChapter {
 export interface NavPart {
   id: string;
   label: string;
+  href?: string; // optional part-intro page
+  active?: boolean;
   single?: boolean; // a top-level chapter with no part (Preface, Summary…)
   chapters: NavChapter[];
 }
@@ -37,6 +39,7 @@ export interface ChapterData {
   partLabel: string; // full part, e.g. "Part I: Foundations and Pretraining"
   partShort: string; // short part, e.g. "Part I" / "第一部分"
   chapterNum: string; // "6" or ""
+  isPartIntro: boolean; // true for unnumbered intro pages attached to a part
   eyebrow: string; // "Part 1 · Chapter 6"
   crumbChapter: string; // breadcrumb tail, "Chapter 6" / "第 6 章"
   title: string;

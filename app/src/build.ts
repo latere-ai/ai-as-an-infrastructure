@@ -1,6 +1,5 @@
 // Static site generator: compile every chapter of both languages to static HTML
-// under _book/{en,zh}, matching the paths Quarto produced (so the existing
-// nginx/Docker/K8s deploy serves it unchanged). Copies figures, emits the
+// under _book/{en,zh}, matching the canonical clean chapter paths. Copies figures, emits the
 // hydration bundle, wires the runtime scripts (Pyodide runnable, viz, mermaid),
 // and writes a search index.
 

@@ -1,5 +1,6 @@
-// Book model: parse a language's _quarto.yml into the nav tree the reader shell
-// needs (parts, numbered chapters, titles, hrefs, prev/next, breadcrumbs).
+// Book model: parse a language's book.yml into the nav tree the reader shell
+// needs (parts, optional part-intro pages, numbered chapters, titles, hrefs,
+// prev/next, breadcrumbs).
 // Chapter titles come from each .qmd's H1; chapter numbers are assigned in
 // order, skipping unnumbered front/back matter (Preface, Summary, References).
 
@@ -15,6 +16,7 @@ export interface BookChapter {
   num: string; // "" for unnumbered
   partLabel: string; // "" for front/back matter
   unnumbered: boolean;
+  role: "chapter" | "part";
 }
 
 export interface Book {
@@ -22,7 +24,7 @@ export interface Book {
   title: string;
   author: string;
   langDir: string; // absolute path to en/ or zh/
-  parts: { label: string; single: boolean; chapters: BookChapter[] }[];
+  parts: { label: string; single: boolean; intro?: BookChapter; chapters: BookChapter[] }[];
   chapters: BookChapter[]; // flat, in order
 }
 
@@ -50,12 +52,13 @@ function readHeading(qmdPath: string): { title: string; unnumbered: boolean } {
 // The .html extension is added only when writing to disk (build.ts) and resolved
 // by nginx try_files; every internal link uses the clean form.
 function qmdToHref(qmdRel: string): string {
-  return qmdRel.replace(/\.qmd$/, "").replace(/\/\d+-/, "/");
+  const href = qmdRel.replace(/\.qmd$/, "").replace(/\/\d+-/, "/");
+  return href !== "index" && href.endsWith("/index") ? href.slice(0, -"/index".length) : href;
 }
 
 export function loadBook(lang: Lang, repoRoot: string): Book {
   const langDir = join(repoRoot, lang);
-  const yml = parseYaml(readFileSync(join(langDir, "_quarto.yml"), "utf8"));
+  const yml = parseYaml(readFileSync(join(langDir, "book.yml"), "utf8"));
   const bookTitle: string = yml?.book?.title ?? "AI as an Infrastructure";
   const bookAuthor: string = yml?.book?.author ?? "Changkun Ou";
   const rawChapters: unknown[] = yml?.book?.chapters ?? [];
@@ -65,16 +68,17 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
   let frontSingle: BookChapter[] = []; // top-level chapters with no part
   let chapterCounter = 0;
 
-  // A chapter listed in _quarto.yml whose .qmd does not exist yet (e.g. a
+  // A chapter listed in book.yml whose .qmd does not exist yet (e.g. a
   // translation in progress) is skipped with a warning, so an in-progress TOC
   // never breaks the build.
-  const makeChapter = (qmdRel: string, partLabel: string): BookChapter | null => {
+  const makeChapter = (qmdRel: string, partLabel: string, opts: { role?: BookChapter["role"]; forceUnnumbered?: boolean } = {}): BookChapter | null => {
     const qmdPath = join(langDir, qmdRel);
     if (!existsSync(qmdPath)) { console.warn(`  skip (missing): ${lang}/${qmdRel}`); return null; }
-    const { title, unnumbered } = readHeading(qmdPath);
+    const heading = readHeading(qmdPath);
+    const unnumbered = opts.forceUnnumbered || heading.unnumbered;
     let num = "";
     if (!unnumbered) num = String(++chapterCounter);
-    return { qmdPath, href: qmdToHref(qmdRel), title, num, partLabel, unnumbered };
+    return { qmdPath, href: qmdToHref(qmdRel), title: heading.title, num, partLabel, unnumbered, role: opts.role ?? "chapter" };
   };
 
   for (const entry of rawChapters) {
@@ -82,10 +86,12 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
       const ch = makeChapter(entry, "");
       if (ch) { frontSingle.push(ch); flat.push(ch); }
     } else if (entry && typeof entry === "object" && "part" in entry) {
-      const part = entry as { part: string; chapters: string[] };
+      const part = entry as { part: string; intro?: string; chapters?: string[] };
+      const intro = typeof part.intro === "string" ? makeChapter(part.intro, part.part, { role: "part", forceUnnumbered: true }) : null;
       const chs = (part.chapters ?? []).map((c) => makeChapter(c, part.part)).filter((c): c is BookChapter => !!c);
+      if (intro) flat.push(intro);
       flat.push(...chs);
-      if (chs.length) parts.push({ label: part.part, single: false, chapters: chs });
+      if (intro || chs.length) parts.push({ label: part.part, single: false, intro: intro ?? undefined, chapters: chs });
     }
   }
 
@@ -104,17 +110,22 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
 
 // Build the shell's NavPart[] for a given current chapter href.
 export function navFor(book: Book, currentHref: string): NavPart[] {
-  return book.parts.map((p, i) => ({
-    id: `p${i}`,
-    label: p.label,
-    single: p.single,
-    chapters: p.chapters.map<NavChapter>((c) => ({
-      n: c.num,
-      label: c.title,
-      href: c.href,
-      active: c.href === currentHref,
-    })),
-  }));
+  return book.parts.map((p, i) => {
+    const active = p.intro?.href === currentHref || p.chapters.some((c) => c.href === currentHref);
+    return {
+      id: `p${i}`,
+      label: p.label,
+      href: p.intro?.href,
+      active,
+      single: p.single,
+      chapters: p.chapters.map<NavChapter>((c) => ({
+        n: c.num,
+        label: c.title,
+        href: c.href,
+        active: c.href === currentHref,
+      })),
+    };
+  });
 }
 
 export function prevNext(book: Book, href: string): { prev: BookChapter | null; next: BookChapter | null } {

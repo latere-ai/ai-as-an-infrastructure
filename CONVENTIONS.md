@@ -40,7 +40,7 @@ explain it.
 ## Math and diagrams
 
 - Math is LaTeX: inline `$...$` and display `$$...$$`.
-- Diagrams are Mermaid in `` ```{mermaid} `` blocks (Quarto's executable
+- Diagrams are Mermaid in `` ```{mermaid} `` blocks (the reader-recognized
   diagram fence, with braces). A plain `` ```mermaid `` block renders as a
   code listing, not a diagram. Verify they render, not just that the syntax
   parses. Use a static image only when Mermaid cannot express the figure.
@@ -56,7 +56,7 @@ explain it.
 
 ## Cross-references and links
 
-Use Quarto labels for cross-references (`@sec-scaling-laws`) and relative
+Use Pandoc-style labels for cross-references (`@sec-scaling-laws`) and relative
 links within the book tree. Keep section anchors stable across edits.
 
 ## Debate boxes and constraint arrows
@@ -82,9 +82,32 @@ and the **capability, efficiency, trust** lens that closes a chapter.
 
 ## Bilingual
 
-The book is two standalone Quarto projects, `en/` and `zh/`, mirroring the
-`under-the-hood` split. A chapter exists as the same path under both trees
-with the same `{#sec-...}` label. The zh side follows
+The book has two parallel language trees, `en/` and `zh/`, mirroring the
+`under-the-hood` split. A chapter exists as the same path under both trees with
+the same `{#sec-...}` label, and each tree is ordered by its `book.yml`
+manifest. The zh side follows
 `../specs/research/llm-training/TRANSLATION-GLOSSARY.md`: keep code, symbols,
 math, URLs, and author names byte-verbatim, use Chinese punctuation, and
 never carry over an em dash.
+
+Chinese prose should read native, not translated: professional, direct, and
+not over-explained. Preserve structure, code, formulas, diagrams, citations,
+runnable blocks, visualizations, `{#sec-...}` / `{#fig-...}` labels, and
+`@sec` / `@fig` / `[@cite]` references.
+
+- Avoid formulaic openings such as "this chapter explains..." and start each
+  chapter in its own way.
+- Use the established agent phrasing: a model is wrapped in an execution loop.
+- Break English-style stacked modifiers into shorter sentences.
+- Translate idiomatically rather than literally. For example, "didn't buy
+  anything" should become the Chinese equivalent of "gained nothing".
+- Vary sentence length. Do not make every sentence fully padded and complete.
+- Use parallel structures and "not X but Y" sparingly.
+- Do not over-explain. Make the point and move on.
+- Use plain accurate words, not coined clever terms.
+- Translate abstract headings by meaning. For example, "live tensions" should
+  become "open trade-offs", not a literal "living tension".
+- Use full-width Chinese punctuation in Chinese prose: ，。：；？！「」（）。
+  Keep punctuation inside code, formulas, URLs, and English titles unchanged.
+- Make cross-reference prose read naturally. Prefer "留到 @sec-X 再谈" or
+  "@sec-X 会进一步展开" over stiff constructions such as "归 @sec-X 去管".

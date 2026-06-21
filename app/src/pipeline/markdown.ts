@@ -1,5 +1,5 @@
 // Markdown → HTML for chapter bodies. markdown-it core + attributes ({#id} on
-// headings/images) + KaTeX math + Quarto references + fenced divs (callouts,
+// headings/images) + KaTeX math + inline refs/citations + fenced divs (callouts,
 // runnable) + diagrams (dot inline SVG, mermaid client-side) + numbered figures.
 // Raw {=html} viz blocks pass through verbatim (html:true).
 
@@ -7,7 +7,7 @@ import MarkdownIt from "markdown-it";
 import attrs from "markdown-it-attrs";
 import { katex } from "@mdit/plugin-katex";
 import type { Heading } from "../types.ts";
-import { quartoRefs } from "./quarto-refs.ts";
+import { inlineRefs } from "./inline-refs.ts";
 import type { Bibliography } from "./citations.ts";
 import type { CrossrefMap } from "./crossref.ts";
 import { resolveXrefsInText } from "./crossref.ts";
@@ -51,7 +51,7 @@ function createMd(ctx: RenderContext): MarkdownIt {
   const md = new MarkdownIt({ html: true, linkify: false, typographer: false, breaks: false, highlight: highlightCode });
   md.use(attrs, { allowedAttributes: ["id", "class", /^data-/] });
   md.use(katex);
-  md.use(quartoRefs, { bib: ctx.bib, xref: ctx.xref, currentHref: ctx.currentHref, prefix: ctx.prefix, lang: ctx.lang, glossary: ctx.glossary, glossarySeen: ctx.glossarySeen, glossaryUsed: ctx.glossaryUsed });
+  md.use(inlineRefs, { bib: ctx.bib, xref: ctx.xref, currentHref: ctx.currentHref, prefix: ctx.prefix, lang: ctx.lang, glossary: ctx.glossary, glossarySeen: ctx.glossarySeen, glossaryUsed: ctx.glossaryUsed });
 
   // Diagram fences: ```{dot}``` and ```{mermaid}```.
   const defFence = md.renderer.rules.fence!.bind(md.renderer.rules);

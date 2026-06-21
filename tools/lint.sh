@@ -1,7 +1,7 @@
 #!/bin/sh
 # Lint book sources for two recurring mistakes:
 #   1. em dashes (house style bans them)
-#   2. plain ```mermaid fences (Quarto needs ```{mermaid} to render a diagram)
+#   2. plain ```mermaid fences (the reader expects ```{mermaid})
 set -eu
 cd "$(dirname "$0")/.."
 fail=0

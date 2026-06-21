@@ -8,15 +8,13 @@ Released under latere.ai, licensed CC BY-NC-ND 4.0.
 
 ## Layout
 
-- Content is bilingual markdown: `en/pN-*/NN-slug.qmd` and the `zh/` twin, with
-  the same chapter paths and `{#sec-...}` labels under each. `en/_quarto.yml`
-  and `zh/_quarto.yml` are kept ONLY as the chapter/part manifest (the reader
-  reads `book.chapters` from them); Quarto itself is no longer used to render.
-- The site is a **custom React + Bun reader** in `app/` (replaced Quarto). It
+- Content is bilingual markdown: `en/<part>/NN-slug.qmd` and the `zh/` twin,
+  with the same chapter paths and `{#sec-...}` labels under each. `en/book.yml`
+  and `zh/book.yml` are the chapter/part manifests read by the custom reader.
+- The site is a **custom React + Bun reader** in `app/`. It
   compiles the `.qmd` content (markdown, KaTeX math, citations from
   `references.bib`, `@sec`/`@fig` cross-refs, graphviz/mermaid, callouts,
   runnable/viz) to static HTML in `_book/{en,zh}`. See `app/src/pipeline/`.
-- `INTEGRATION.md` maps source material to chapters. The book is canonical.
 
 ## Authoring philosophy
 
