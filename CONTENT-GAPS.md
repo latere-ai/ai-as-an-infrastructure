@@ -32,10 +32,11 @@ different-book decision, taken one chapter at a time.
   (contrastive training, in-batch/hard negatives, SimCSE, Matryoshka,
   instruction-tuned and LLM-bootstrapped embedders, MTEB). Built; the RAG chapter
   used embeddings, this teaches how they are trained.
-- [ ] **Diffusion & flow matching** (in progress) — DDPM/score matching, latent
-  diffusion, flow matching / rectified flow, classifier-free guidance, sampling.
-  The generative-media foundation; `50-beyond-text` names flow matching once but
-  does not teach it.
+- [x] **Diffusion & flow matching** → `p11-frontiers/52-diffusion-flow-matching`
+  (DDPM/noise-prediction, score/SDE + probability-flow ODE, DDIM, latent
+  diffusion, classifier-free guidance, DiT, flow matching / rectified flow,
+  consistency models, and the loop back to text via LLaDA). Built; placed before
+  `50-beyond-text`, which references flow matching but did not teach it.
 - [ ] **Speech & realtime voice** — ASR, TTS, neural audio codecs, full-duplex
   voice agents and their latency budget.
 - [ ] **Non-autoregressive / diffusion language models** — distinct from
