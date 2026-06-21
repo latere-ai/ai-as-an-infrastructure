@@ -111,7 +111,7 @@ validate_image() {
     return 0
   fi
 
-  if command -v podman >/dev/null 2>&1 && podman manifest inspect "docker://$image" >/dev/null 2>&1; then
+  if command -v podman >/dev/null 2>&1 && podman manifest inspect "$image" >/dev/null 2>&1; then
     log "Image exists: $image"
     return 0
   fi
