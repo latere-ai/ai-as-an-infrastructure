@@ -51,13 +51,19 @@ different-book decision, taken one chapter at a time.
   llama.cpp/GGUF, the memory constraint arrow). Built; placed after the
   cloud-serving chapter in Part X.
 
-**Done:** the generative/multimodal chapters now live in their own
-**Part XII: The Generative and Multimodal Stack** (diffusion, NAR/diffusion LMs,
-speech, beyond-text); Operations moved to Part XIII. Note: those four files still
-physically sit under `p11-frontiers/` (manifest-only regroup, to avoid colliding
-with the in-flight prose sweep); a later pass can relocate them to a dedicated
-directory. The remaining "broaden the book" option is to lift `50-beyond-text`'s
-native-multimodality material into a full image/video generation chapter.
+- [x] **Multimodal models (fusion + image/video generation)** →
+  `p11-frontiers/58-multimodal-models` (CLIP/Flamingo/LLaVA fusion; text-to-image
+  via diffusion (Imagen, DALL-E 2) and via tokens (VQGAN, Parti); video diffusion
+  and spacetime-patch DiT (Sora); unified vs modular, Chameleon/Transfusion).
+  Built; placed before `50-beyond-text`.
+
+**Done:** the scope-expansion menu is complete. The generative/multimodal
+chapters now live in their own **Part XII: The Generative and Multimodal Stack**
+(diffusion, NAR/diffusion LMs, speech, multimodal models, beyond-text);
+Operations moved to Part XIII. Note: those files still physically sit under
+`p11-frontiers/` (manifest-only regroup, to avoid colliding with the in-flight
+prose sweep); a later pass can relocate them to a dedicated directory. No
+discrete items remain on this roadmap.
 
 ## Deliberately ceded (unchanged)
 
