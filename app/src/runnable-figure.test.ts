@@ -24,3 +24,12 @@ test("the figure canvas is transparent (no baked-in background color)", () => {
 test("the result panel is displayed from an svg+xml data URI", () => {
   expect(rt).toContain("data:image/svg+xml;base64,");
 });
+
+test("the result panel shares the cell surface, not the near-white --bg-surface", () => {
+  // --bg-surface is near-white in light mode; using it made the result half a
+  // white block lighter than the editor. The panel must be transparent so it
+  // inherits the cell's --bg-code (and the transparent figure blends in).
+  const rule = rt.match(/\.live-result \{[^}]*\}/)?.[0] ?? "";
+  expect(rule).toContain("background: transparent");
+  expect(rule).not.toContain("--bg-surface");
+});
