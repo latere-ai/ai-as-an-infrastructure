@@ -51,5 +51,7 @@ loc    /en/p11-frontiers/45-the-compute-frontier       /en/infrastructure/the-co
 loc    /zh/p13-operations/deployment-lifecycle         /zh/practice/deployment-lifecycle
 loc    /en/p10-practical/38-choosing-a-model           /en/practice/choosing-a-model
 noloop /en/p3-reasoning/16-training-agents-to-act      # cross-part old path chains to a 200
+noloop /en/p11-frontiers/45-the-compute-frontier       # frontiers -> infrastructure chains to a 200
+noloop /zh/p13-operations/52-deployment-lifecycle      # operations -> practice chains to a 200
 
 [ "$fail" = 0 ] && echo "nginx routing: all checks passed" || { echo "nginx routing: FAILURES"; exit 1; }
