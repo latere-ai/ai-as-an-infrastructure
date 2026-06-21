@@ -6,89 +6,175 @@ turns, calls tools, and reads what comes back before it is done. This chapter
 extends the verifiable-reward recipe from rewarding an answer to rewarding a
 whole trajectory, and covers the systems that make that loop run. By the end a
 reader can explain why a rollout becomes an agent's full interaction with an
-environment, why the environment is now a training asset in its own right, why
-credit assignment is the hard part and stays unsettled, and how a training run
-comes to contain a serving engine.
+environment and why that is a different problem rather than a longer one, why
+masking the environment's tokens out of the loss is the move that makes it train,
+why credit assignment over a long trajectory is the hard part and stays
+unsettled, why the environment is now a training asset in its own right, and how a
+training run comes to contain a serving engine.
 
 ## Rewarding a trajectory, not an answer
 
 The machinery carries over, GRPO or PPO over sampled rollouts against a
 verifiable reward (@sec-training-to-reason), but a rollout is now an agent's full
-interaction with an environment rather than one completion. This is where the
-training loop reaches into the agentic loop of @sec-the-harness: the harness that
-runs an agent at inference becomes, pointed at a checkable environment, the thing
-that generates training trajectories.
+interaction with an environment rather than one completion. The shift is formal,
+not just longer. Ordinary language-model RL is a degenerate single-step decision
+problem, prompt in, one response out, reward, done; agentic RL is a temporally
+extended partially-observable process over *turns*, where the agent emits an
+action, the environment returns an observation, and this repeats
+[@zhang2025agenticrlsurvey]. This is where the training loop reaches into the
+agentic loop of @sec-the-harness: the harness that runs an agent at inference
+becomes, pointed at a checkable environment, the thing that generates training
+trajectories.
+
+A rollout is then a single token sequence that *interleaves* two sources, the
+model's own action tokens (its reasoning, the tool or search call) and the
+environment's observation tokens (retrieved passages, tool output, browser state).
+The decisive mechanical trick is **loss masking**: the policy gradient is computed
+only over the tokens the model generated, with the observation tokens masked out,
+so the model is never trained to imitate text it did not author. Search-R1 states
+this precisely, masking retrieved tokens out of the loss, and reports that without
+it the gradient flows into copying retrieved text and training destabilizes
+[@jin2025searchr1]. Everything downstream assumes this mask is in place.
 
 The early exemplars are domain-shaped. WebGPT pointed here as far back as 2021,
 fine-tuning a model to browse and gather references, though its best system used
 behavior cloning and rejection sampling rather than full RL [@nakano2021webgpt].
-Search-R1 trains a model to interleave reasoning with live search queries across
-a multi-turn trajectory, rewarded only by whether the final answer matches and
-with the retrieved tokens masked out of the loss [@jin2025searchr1]. ToolRL
-applies GRPO to general tool use and reports that a coarse answer-matching reward
-is not enough, so it shapes a finer reward over the tool-call steps
-[@qian2025toolrl]. SWE-RL scales the idea to software engineering, rewarding a
-patch by its similarity to the developer's real fix mined from open-source
-history [@wei2025swerl].
-
-## Environments as the training substrate
-
-The environment becomes a training asset in its own right. SWE-Gym packages real
-repositories with executable runtimes and unit tests so an agent's trajectory can
-be sampled and scored in the loop, the unit test serving as the verifier
-[@pan2024swegym], which is the sandbox of @sec-agents-practice turned from a place
-to run an agent into a place to train one. The shift is large enough that
-environments are now collected and sold as products, a 2025 market of training
-grounds for agents [@techcrunch2025environments], though the value of any single
-environment is contested, since a model that masters a skill can generate cheap
-substitute data for it [@anderson2025rlenv].
+Search-R1 trains a model to interleave reasoning with live search queries across a
+multi-turn trajectory, rewarded only by whether the final answer matches
+[@jin2025searchr1]. ToolRL applies GRPO to general tool use and reports that a
+coarse answer-matching reward is not enough [@qian2025toolrl]. SWE-RL scales the
+idea to software engineering, rewarding a patch by its similarity to the
+developer's real fix mined from open-source history [@wei2025swerl], and ARTIST
+interleaves tool calls into the reasoning chain under an outcome reward
+[@singh2025artist]. In each the reward is verifiable, computed by a checker rather
+than a learned reward model, which is what lets the loop run without a
+human-in-the-loop.
 
 ## Credit assignment over a trajectory
 
-What does not carry over cleanly is credit assignment. An outcome reward at the
-end of a long trajectory cannot say which tool call or which turn earned or lost
-the run, and that sparse, delayed signal is where multi-turn RL gets hard. RAGEN
-makes the difficulty concrete with StarPO, a trajectory-level method that
-optimizes the whole reasoning-and-action sequence: without a finer signal,
-training tends to fall into what its authors call an Echo Trap, collapsing onto a
-few locally rewarded patterns as gradients spike and entropy drops
-[@wang2025ragen].
+What does not carry over cleanly is credit assignment, and it is the heart of the
+problem. GRPO drops the value critic and estimates each rollout's advantage
+*group-relatively*, sampling a group of rollouts for one prompt and normalizing
+their returns against the group's mean and spread [@shao2024deepseekmath]. Carried
+to agents, a group of full trajectories is scored by one outcome reward at the end
+and normalized across the group, but that single end-of-trajectory scalar is then
+broadcast to *every* action token in the episode. A good final answer rewards a
+wasted early tool call exactly as much as the decisive one. The signal is sparse
+and delayed, and that is where multi-turn RL gets hard: a value function estimated
+over many turns is high-variance, and the critic-free group methods give up
+per-step resolution entirely.
+
+Three granularities of fix have emerged. The first shapes the reward over the
+action's *form*: ToolRL decomposes the reward into a format term that checks the
+tool call's structure and a correctness term that scores tool name, parameters,
+and values, a finer signal than answer-matching alone [@qian2025toolrl]. The
+second manufactures step-level credit without a process-reward model. GiGPO keeps
+GRPO's critic-free stability but adds a second level of grouping: alongside the
+episode-level group it builds *step-level* groups by finding environment states
+that recur across different rollouts, an anchor-state grouping, and computes a
+local relative advantage among all the actions taken from the same recurring
+state, so each step gets a normalized credit at no extra rollout cost and reports
+double-digit gains over GRPO on agent benchmarks [@feng2025gigpo]. ARPO takes a
+third route, noticing that token entropy spikes right after a tool call and
+branching its sampling at exactly those high-uncertainty steps to attribute
+tool-use credit [@dong2025arpo].
+
+The instability this provokes has a name. RAGEN, which optimizes the whole
+state-thinking-action-reward sequence with a method it calls StarPO, identifies an
+*Echo Trap*: the agent overfits to a few locally-rewarded patterns, and the
+collapse announces itself through a drop in reward *variance* across the group as
+an early warning, then an entropy drop and a spike in gradient norm after which it
+is hard to recover [@wang2025ragen]. Its stabilized variant filters for the
+highest-variance prompts and borrows DAPO's asymmetric clipping, but the general
+lesson is that the multi-turn regime, with its compounding errors and larger
+correlated action space, pushes a policy to latch onto one template far harder
+than single-turn reasoning RL does.
+
+```{mermaid}
+%%| label: fig-agent-rl-loop
+%%| fig-cap: "The agentic RL loop. The policy generates a group of full multi-turn rollouts through the environment, interleaving its action tokens with the environment's observation tokens; a verifier scores each trajectory; group-relative normalization turns the scores into advantages, broadcast to the action tokens (with observation tokens masked out) for the policy update. Generation through the environment is the wall-clock bottleneck. After Shao et al. (2024) and Jin et al. (2025)."
+flowchart LR
+  pol["policy (current weights)"] --> gen["generate group of rollouts<br/>(vLLM)"]
+  gen --> env["environment<br/>tool / search / sandbox<br/>returns observations"]
+  env --> gen
+  gen --> ver["verifier scores<br/>each trajectory"]
+  ver --> adv["group-relative<br/>advantages<br/>(observations masked)"]
+  adv --> upd["policy update"]
+  upd --> pol
+```
 
 ::: {.callout-important}
 ## What's contested
-Whether outcome-only rewards suffice for agentic tasks is unsettled. Search-R1
-and ToolRL report strong results from outcome or lightly-shaped rewards in narrow
+Whether outcome-only rewards suffice for agentic tasks is unsettled. Search-R1 and
+ToolRL report strong results from outcome or lightly-shaped rewards in narrow
 domains, while RAGEN finds that reasoning fails to emerge without reasoning-aware
-credit in stylized ones [@wang2025ragen]. This is the outcome-versus-process
-tension of @sec-training-to-reason, now stretched over a trajectory instead of a
-chain, and which way it resolves looks domain-dependent and tied to how dense a
-signal the environment can supply, rather than settled by a single best answer.
+credit in stylized ones [@wang2025ragen], and GiGPO's gains come precisely from
+manufacturing step-level credit the outcome reward cannot supply [@feng2025gigpo].
+This is the outcome-versus-process tension of @sec-training-to-reason, now
+stretched over a trajectory instead of a chain. Which way it resolves looks
+domain-dependent and tied to how dense a signal the environment can supply, rather
+than settled by a single best answer.
 :::
+
+## Environments as the training substrate
+
+The environment becomes a training asset in its own right, because in
+verifiable-reward RL the environment *is* the reward function. SWE-Gym packages
+roughly twenty-four hundred real repository tasks with executable runtimes and
+unit tests so an agent's trajectory can be sampled and scored in the loop, the
+unit test serving as the verifier, and training on it lifts resolve rates on
+SWE-bench by close to twenty points [@pan2024swegym]; this is the sandbox of
+@sec-agents-practice turned from a place to run an agent into a place to train one.
+The same executable-environment pattern is being mined from existing benchmarks,
+the app-and-API world of AppWorld and the self-hosted websites of WebArena among
+them, repurposed from evaluation harnesses into training grounds.
+
+Building one is harder than it looks, and the difficulty is systems-shaped:
+runtimes must be reproducible, sandboxes isolated at scale, and the environment's
+execution latency now sits *inside* the RL loop, where a slow checker starves the
+trainer. The verifier is also gameable, so an agent can spec-game an imperfect
+test rather than solve the task, the reward-hacking risk of @sec-training-to-reason
+moved into the environment. The shift is large enough that environments are now
+collected and sold as products, a 2025 market of training grounds for agents
+[@techcrunch2025environments], though the value of any single environment is
+contested, since a model that masters a skill can generate cheap substitute data
+for it [@anderson2025rlenv]. Both of those last sources are journalism and
+opinion, not peer-reviewed, and are flagged as such.
 
 ## The systems split: generation and learning
 
 An agentic RL loop generates rollouts from the current policy, scores them, and
-updates the weights, and generation is the bottleneck, so modern toolkits embed
-an inference engine, almost always vLLM, to produce the rollouts
-(@sec-training-practice). The training box now contains a serving box, and two
-architectural patterns split its compute. The colocated pattern keeps the trainer
-and the rollout engine on the same GPUs and reshards the model between them:
-HybridFlow, whose open implementation is veRL, reshards the actor between its
-training and generation layouts with what it calls a 3D-HybridEngine, reusing the
-training weights for generation so no memory is duplicated [@sheng2024hybridflow].
-The disaggregated pattern puts the actor, reward, reference, and critic models on
+updates the weights, and generation is the bottleneck: OpenRLHF measures the
+rollout phase at around eighty percent of RLHF wall-clock [@hu2024openrlhf]. So
+modern toolkits embed an inference engine, almost always vLLM, to produce the
+rollouts (@sec-training-practice). The training box now contains a serving box,
+and two architectural patterns split its compute. The colocated pattern keeps the
+trainer and the rollout engine on the same GPUs and reshards the model between
+them: HybridFlow, whose open implementation is veRL, reshards the actor between
+its training and generation layouts with what it calls a 3D-HybridEngine, reusing
+the training weights for generation so no memory is duplicated, under a hybrid
+single- and multi-controller programming model [@sheng2024hybridflow]. The
+disaggregated pattern puts the actor, reward, reference, and critic models on
 separate GPU pools and schedules them with Ray: OpenRLHF takes this route,
-embedding vLLM for the rollout phase that dominates RLHF wall-clock, by its own
-measure around 80 percent of it [@hu2024openrlhf]. The choice is the familiar one
-between packing for utilization and disaggregating for scheduling flexibility,
-now made inside a single training run.
+embedding vLLM for the rollout phase that dominates wall-clock [@hu2024openrlhf].
+The choice is the familiar one between packing for utilization and disaggregating
+for scheduling flexibility, now made inside a single training run.
 
 The deeper knob is how fresh the rollouts must be. Strict on-policy RL waits for
 the latest weights before each batch, which leaves the trainer idle while the
-slower generator runs. Asynchronous RL lets generation run ahead on slightly
-stale weights and overlaps the two, trading a controlled amount of off-policy
-staleness for throughput, the same staleness-against-utilization trade the
-pipeline schedules of @sec-training-at-scale make at the gradient level.
+slower generator runs, an idleness made acute by long agent trajectories where the
+batch waits on its slowest rollout. Asynchronous RL lets generation run ahead on
+slightly stale weights and overlaps the two [@noukhovitch2024asyncrlhf], trading a
+controlled amount of off-policy staleness for throughput, the same
+staleness-against-utilization trade the pipeline schedules of @sec-training-at-scale
+make at the gradient level. Pushed to its limit the two sides fully decouple, with
+rollout workers generating continuously while the trainer updates whenever a batch
+arrives; AReaL reports up to a 2.77x speedup this way [@fu2025areal]. The price is
+that the data is off-policy, corrected by the importance-sampling ratio that PPO
+already carries, and how far staleness can be pushed is itself a research question,
+with methods that constrain the variance of those importance weights rather than
+just clipping them training stably on data hundreds of updates old
+[@zheng2025m2po].
 
 ## Further reading
 
