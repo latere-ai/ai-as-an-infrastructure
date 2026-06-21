@@ -73,14 +73,14 @@ wait_for_workflow() {
       --event push \
       --limit 1 \
       --json databaseId,status,conclusion,url \
-      --jq '.[] | [.databaseId, .status, (.conclusion // "none"), .url] | @tsv' 2>/dev/null || true)
+      --jq '.[] | [.databaseId, .status, (.conclusion // "none"), (.url // "pending")] | @tsv' 2>/dev/null || true)
 
     if [ -n "$line" ]; then
       set -- $line
-      run_id="$1"
-      status="$2"
-      conclusion="$3"
-      url="$4"
+      run_id="${1:-unknown}"
+      status="${2:-unknown}"
+      conclusion="${3:-none}"
+      url="${4:-pending}"
 
       if [ "$status" = "completed" ]; then
         if [ "$conclusion" = "success" ]; then
