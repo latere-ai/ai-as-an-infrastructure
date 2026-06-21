@@ -105,6 +105,30 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/inference/02-memory-scheduling.qmd",
       ["连续批处理消除静态批的浪费", "@gls-pagedattention 消除缓存碎片化", "基数树前缀缓存", "阶段拆分"],
     ],
+    [
+      "en/inference/03-faster-decoding.qmd",
+      ["one target pass verifies several guesses", "Speculative decoding", "Medusa, Hydra, the EAGLE line", "memory-bound regime"],
+    ],
+    [
+      "zh/inference/03-faster-decoding.qmd",
+      ["一次目标传播验证多个猜测", "@gls-speculative-decoding", "Medusa、Hydra、EAGLE 系列", "小批大小的内存受限场景"],
+    ],
+    [
+      "en/inference/04-quantization-kernels.qmd",
+      ["makes weights or activations smaller", "attention intermediates off high-bandwidth memory", "GPTQ, AWQ, and SmoothQuant", "FlashAttention"],
+    ],
+    [
+      "zh/inference/04-quantization-kernels.qmd",
+      ["量化把权重或激活表示得更小", "融合算子把注意力中间结果留在高带宽内存之外", "GPTQ、AWQ 与 SmoothQuant", "FlashAttention"],
+    ],
+    [
+      "en/inference/05-structured-long-context.qmd",
+      ["masks logits against a @gls-fsm", "precomputed index and jump-forward", "decides which keys and values survive", "heavy-hitter eviction"],
+    ],
+    [
+      "zh/inference/05-structured-long-context.qmd",
+      ["拿 logits 对照一台@gls-fsm做掩码", "预计算索引和跳跃式前向", "滑动窗口、@gls-attention-sink 与重击者驱逐", "查询感知策略"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -133,6 +157,9 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/generative/05-beyond-text.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
+    "en/inference/03-faster-decoding.qmd",
+    "en/inference/04-quantization-kernels.qmd",
+    "en/inference/05-structured-long-context.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -149,6 +176,9 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/generative/05-beyond-text.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
+    "zh/inference/03-faster-decoding.qmd",
+    "zh/inference/04-quantization-kernels.qmd",
+    "zh/inference/05-structured-long-context.qmd",
   ];
   const banned = /By the end|This chapter tells one story|读者读完本章|本章把一个故事/;
 
