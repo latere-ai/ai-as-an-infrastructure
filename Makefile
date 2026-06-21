@@ -1,4 +1,4 @@
-.PHONY: dev build og lint clean
+.PHONY: dev build og lint clean publish deploy
 
 # Live dev server for the reader (renders a sample chapter with hot client rebuild).
 dev:
@@ -16,6 +16,11 @@ og:
 # Style/diagram lint on the .qmd sources (no em dashes, no plain ```mermaid).
 lint:
 	sh tools/lint.sh
+
+publish:
+	sh deploy/publish.sh
+
+deploy: publish
 
 clean:
 	rm -rf _book
