@@ -116,6 +116,40 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     return () => { el.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onScroll); };
   }, [chapter.headings]);
 
+  // Own the #fragment scroll. The browser's native anchor scroll is unreliable
+  // in this inner-scroll shell: arriving via a deep-link it can scroll the
+  // DOCUMENT (pushing the fixed header off-screen) rather than <main>, and the
+  // overflow:hidden lock then traps it there with no way back. So always pin the
+  // document to the top (the header can never leave) and scroll <main> to the
+  // target ourselves, with a small gap below the header.
+  useEffect(() => {
+    const align = () => {
+      const se = document.scrollingElement;
+      if (se) se.scrollTop = 0;
+      const main = mainRef.current;
+      const id = decodeURIComponent(location.hash.replace(/^#/, ""));
+      if (!main || !id) return;
+      const el = main.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
+      if (!el) return;
+      const delta = el.getBoundingClientRect().top - main.getBoundingClientRect().top;
+      main.scrollTo({ top: main.scrollTop + delta - 16, behavior: "auto" });
+    };
+    // The document must never scroll in this fixed shell; snap any stray scroll
+    // (a late/programmatic native fragment scroll) back so the header can't be
+    // pushed off. document-level 'scroll' does not fire for <main>'s own scroll.
+    const pin = () => { const se = document.scrollingElement; if (se && se.scrollTop !== 0) se.scrollTop = 0; };
+    // Correct across hydration + late native scroll + async diagram layout.
+    const r1 = requestAnimationFrame(() => requestAnimationFrame(align));
+    const t1 = setTimeout(align, 120);
+    window.addEventListener("hashchange", align);
+    document.addEventListener("scroll", pin, { passive: true });
+    return () => {
+      cancelAnimationFrame(r1); clearTimeout(t1);
+      window.removeEventListener("hashchange", align);
+      document.removeEventListener("scroll", pin);
+    };
+  }, [chapter.path]);
+
   // Initialize the article runtimes (mermaid, interactive viz/3d, runnable
   // Python, table wrapping) AFTER React has hydrated the article — they operate
   // on dangerouslySetInnerHTML nodes that React owns, so booting them on

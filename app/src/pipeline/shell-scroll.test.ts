@@ -22,6 +22,14 @@ test("<main> disables overscroll so it neither chains nor rubber-band bounces", 
   expect(css).toMatch(/html,\s*body\s*\{[^}]*overscroll-behavior:\s*none/);
 });
 
+test("the reader owns #fragment scrolling and pins the document to the top", () => {
+  // Defensive: the native anchor scroll can move the document (header off-
+  // screen) in this inner-scroll shell, so the reader resets document scroll to
+  // 0 and scrolls <main> itself. Guard the document-pin so it isn't dropped.
+  expect(reader).toMatch(/scrollingElement/);
+  expect(reader).toMatch(/document\.addEventListener\("scroll"/);
+});
+
 test("the mermaid tooltip is pinned out of flow so it adds no scrollable height", () => {
   // mermaid.run() appends a <div.mermaidTooltip> to <body>, positioned absolute
   // inline at the bottom; without this it adds a few px of document overflow.
