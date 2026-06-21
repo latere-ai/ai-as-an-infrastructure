@@ -15,8 +15,11 @@ test("the document viewport is locked so the app shell cannot scroll", () => {
   expect(css).toMatch(/html,\s*body\s*\{[^}]*overflow:\s*hidden/);
 });
 
-test("<main> contains its overscroll so it does not chain to the document", () => {
-  expect(reader).toMatch(/overscrollBehavior:\s*"contain"/);
+test("<main> disables overscroll so it neither chains nor rubber-band bounces", () => {
+  // `none` (not `contain`): contain stops scroll-chaining but still allows the
+  // macOS elastic bounce that drags content and reveals blank above/below.
+  expect(reader).toMatch(/overscrollBehavior:\s*"none"/);
+  expect(css).toMatch(/html,\s*body\s*\{[^}]*overscroll-behavior:\s*none/);
 });
 
 test("the mermaid tooltip is pinned out of flow so it adds no scrollable height", () => {

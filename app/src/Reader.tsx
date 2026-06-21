@@ -255,7 +255,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             style={{ flex: "none", width: 7, marginLeft: -1, cursor: "col-resize", zIndex: 6 }} />
         )}
 
-        <main ref={mainRef} style={{ flex: 1, minWidth: 0, overflowY: "auto", overscrollBehavior: "contain", scrollBehavior: "smooth" }}>
+        <main ref={mainRef} style={{ flex: 1, minWidth: 0, overflowY: "auto", overscrollBehavior: "none", scrollBehavior: "smooth" }}>
           <article style={{
             maxWidth: "none", margin: 0,
             padding: mobile ? "26px 18px 60px" : "40px 56px 80px",
