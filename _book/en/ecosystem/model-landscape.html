@@ -926,6 +926,19 @@ figure:has(> .viz), .figure:has(> .viz) { display: block; width: 100%; }
 .viz-ce-arch { font-size: 0.79em; color: var(--accent, #c2603f); margin-bottom: 0.12em; }
 .viz-ce-meta { font-size: 0.77em; opacity: 0.6; font-family: ui-monospace, monospace; }
 .viz-ce-count { font-size: 0.8em; opacity: 0.6; margin-top: 0.85em; font-family: ui-monospace, monospace; }
+/* decision-tree: a guided chooser, question + option chips + recommendation */
+.viz-dt { border: 1px solid var(--border, rgba(128,128,128,0.22)); border-radius: 12px; padding: 1.2em 1.2em 1.3em; margin-bottom: 0.7em; }
+.viz-dt-path { font-size: 0.78em; opacity: 0.55; font-family: ui-monospace, monospace; min-height: 1.1em; margin-bottom: 0.6em; }
+.viz-dt-q { font-weight: 600; font-size: 1.02em; margin-bottom: 0.9em; }
+.viz-dt-result { font-size: 0.95em; line-height: 1.5; padding: 0.7em 0.9em; border-radius: 8px; background: var(--bg-raised, rgba(128,128,128,0.1)); border-left: 3px solid var(--accent, #c2603f); }
+/* float-bits: a number-format bit inspector, sign / exponent / mantissa fields */
+.viz-fb-formats { display: flex; flex-wrap: wrap; gap: 0.4em; margin-bottom: 0.9em; }
+.viz-fb-bits { display: flex; gap: 2px; margin-bottom: 0.7em; flex-wrap: wrap; }
+.viz-fb-bit { width: 15px; height: 22px; border-radius: 3px; }
+.viz-fb-legend { display: flex; gap: 1.1em; font-size: 0.8em; flex-wrap: wrap; }
+.viz-fb-key { display: inline-flex; align-items: center; gap: 0.35em; }
+.viz-fb-sw { width: 11px; height: 11px; border-radius: 2px; display: inline-block; }
+.viz-fb-note { font-size: 0.82em; opacity: 0.7; margin-top: 0.6em; font-family: ui-monospace, monospace; }
 </style>
 <script>
 // Interactive visualizations, client-side. A chapter embeds one with:
@@ -1947,6 +1960,245 @@ figure:has(> .viz), .figure:has(> .viz) { display: block; width: 100%; }
     }
     btn.addEventListener('click', function () { op = op === 'add' ? 'negate' : 'add'; draw(); });
     host.appendChild(slider('angle between τA and τB', 0, 180, 5, ang, function (v) { ang = v; draw(); }).wrap);
+    draw();
+  };
+
+  // GRPO group-relative advantage: G completions to one prompt, each rewarded.
+  // The advantage is each reward minus the group mean over the group std, so it
+  // drops the critic. The reward-spread slider scales the rewards around their
+  // mean; at zero spread every reward is equal, std is zero, and the advantages
+  // collapse to nothing, the no-spread-no-signal case.
+  R['grpo-advantage'] = function (host) {
+    var G = 6, spread = 1, base = [0.92, 0.18, 0.7, 0.08, 0.5, 0.85], m0 = 0;
+    base.forEach(function (x) { m0 += x; }); m0 /= G;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 240);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 32 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var r = base.map(function (x) { return m0 + (x - m0) * spread; });
+      var m = 0; r.forEach(function (x) { m += x; }); m /= G;
+      var vv = 0; r.forEach(function (x) { vv += (x - m) * (x - m); }); var sd = Math.sqrt(vv / G);
+      var adv = r.map(function (x) { return sd > 1e-6 ? (x - m) / sd : 0; });
+      var z = H * 0.6, bw = (W - 2 * pd) / G, half = z - pd, amax = 1.7;
+      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr; ctx.beginPath(); ctx.moveTo(pd, z); ctx.lineTo(W - pd, z); ctx.stroke();
+      ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.fillText('advantage Aᵢ', pd, pd - 4 * cv.dpr);
+      adv.forEach(function (a, i) {
+        var x = pd + bw * i + bw * 0.22, w = bw * 0.56, bh = (a / amax) * half;
+        ctx.fillStyle = a >= 0 ? '#3dbd8a' : '#e0936b';
+        if (a >= 0) ctx.fillRect(x, z - bh, w, bh); else ctx.fillRect(x, z, w, -bh);
+        ctx.fillStyle = 'rgba(128,128,128,0.85)'; ctx.font = (10 * cv.dpr) + 'px ui-monospace,monospace'; ctx.textAlign = 'center';
+        ctx.fillText('r ' + r[i].toFixed(2), x + w / 2, H - pd + 14 * cv.dpr);
+      });
+      read.textContent = sd > 1e-6 ? ('advantages span ' + (Math.max.apply(null, adv) - Math.min.apply(null, adv)).toFixed(2) + ' · learning signal') : 'no spread in rewards · all advantages 0 · no signal';
+    }
+    host.appendChild(slider('reward spread', 0, 1.5, 0.01, spread, function (x) { spread = x; draw(); }).wrap);
+    draw();
+  };
+
+  // SSM vs attention recall: attention keeps every past token exactly
+  // addressable (a cache that grows with length), while an SSM compresses the
+  // past into a fixed-size state, so distant tokens fade. Grow the sequence and
+  // watch the attention cache grow while the SSM's recall of old tokens decays.
+  R['ssm-vs-attention'] = function (host) {
+    var len = 12;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 230);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var half = W / 2, y = H / 2, S = 4;
+      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('attention: addressable cache', half / 2, pd);
+      ctx.fillText('SSM: fixed state', half + half / 2, pd);
+      var cw = Math.min(16 * cv.dpr, (half - 2 * pd) / len);
+      for (var i = 0; i < len; i++) {
+        var x = pd + i * cw;
+        ctx.globalAlpha = 1; ctx.fillStyle = t.accent; ctx.fillRect(x, y - cw / 2, cw - 2 * cv.dpr, cw - 2 * cv.dpr);
+        var x2 = half + pd + i * cw;
+        ctx.globalAlpha = Math.max(0.08, Math.exp(-(len - 1 - i) / S));
+        ctx.fillStyle = t.accent2; ctx.fillRect(x2, y - cw / 2, cw - 2 * cv.dpr, cw - 2 * cv.dpr);
+      }
+      ctx.globalAlpha = 1;
+      var fid = Math.min(1, S / len);
+      read.textContent = 'length ' + len + ' · attention caches ' + len + ' tokens, exact · SSM state fixed, far recall ' + Math.round(fid * 100) + '%';
+    }
+    host.appendChild(slider('sequence length', 4, 40, 1, len, function (v) { len = Math.round(v); draw(); }).wrap);
+    draw();
+  };
+
+  // RL systems split: colocated keeps generation and learning on one GPU pool
+  // and alternates them, leaving reshard idle gaps but staying on-policy;
+  // disaggregated/async runs them on separate pools in parallel, near-full
+  // utilization at the cost of a controlled off-policy staleness. Toggle the two.
+  R['rl-timeline'] = function (host) {
+    var mode = 'colocated';
+    var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
+    bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 180);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, x0 = 78 * cv.dpr, x1 = W - 18 * cv.dpr, span = x1 - x0;
+      ctx.clearRect(0, 0, W, H);
+      function lane(y, label) { ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right'; ctx.fillText(label, x0 - 8 * cv.dpr, y + 4 * cv.dpr); ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
+      function block(y, a, b, col, lab) { ctx.fillStyle = col; ctx.fillRect(x0 + span * a, y - 11 * cv.dpr, span * (b - a), 22 * cv.dpr); ctx.fillStyle = '#fff'; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(lab, x0 + span * (a + b) / 2, y + 3.5 * cv.dpr); }
+      if (mode === 'colocated') {
+        var y = H / 2; lane(y, '1 GPU pool');
+        block(y, 0, 0.28, t.accent, 'gen'); block(y, 0.32, 0.5, t.accent2, 'learn'); block(y, 0.55, 0.83, t.accent, 'gen'); block(y, 0.87, 1, t.accent2, 'learn');
+        read.textContent = 'colocated · reshard idle gaps · on-policy, no staleness';
+      } else {
+        var yg = H * 0.36, yl = H * 0.66; lane(yg, 'gen pool'); lane(yl, 'learn pool');
+        block(yg, 0, 1, t.accent, 'generate'); block(yl, 0.1, 1, t.accent2, 'learn');
+        read.textContent = 'disaggregated/async · near-full utilization · ~1 step off-policy';
+      }
+    }
+    btn.addEventListener('click', function () { mode = mode === 'colocated' ? 'async' : 'colocated'; btn.textContent = 'mode: ' + mode; draw(); });
+    btn.textContent = 'mode: colocated'; draw();
+  };
+
+  // Reciprocal rank fusion: a document's fused score sums 1/(k+rank) across the
+  // dense and sparse lists, so a chunk ranked decently by both can beat one
+  // ranked first by only one. Shuffle the sparse list or change k and watch the
+  // fused order recompute; the winner is often high in neither list alone.
+  R['rrf-fusion'] = function (host) {
+    var k = 60, names = ['A', 'B', 'C', 'D', 'E'];
+    var dense = [0, 2, 1, 3, 4], sparse = [3, 1, 2, 0, 4], rot = 0;
+    var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
+    bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 250);
+    function rankOf(order, d) { return order.indexOf(d) + 1; }
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var sp = [3, 1, 2, 0, 4]; sp = sp.map(function (_, i) { return [3, 1, 2, 0, 4][(i + rot) % 5]; });
+      var score = names.map(function (_, d) { return 1 / (k + rankOf(dense, d)) + 1 / (k + rankOf(sp, d)); });
+      var fused = names.map(function (_, d) { return d; }).sort(function (a, b) { return score[b] - score[a]; });
+      var cols = [['dense', dense], ['sparse', sp], ['fused', fused]];
+      var cw = (W - 2 * pd) / 3, rh = (H - 2 * pd - 14 * cv.dpr) / names.length;
+      cols.forEach(function (c, ci) {
+        var x = pd + ci * cw;
+        ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(c[0], x + cw / 2, pd - 2 * cv.dpr);
+        c[1].forEach(function (d, r) {
+          var y = pd + 12 * cv.dpr + r * rh;
+          ctx.fillStyle = (ci === 2 && r === 0) ? t.accent : 'rgba(128,128,128,0.13)';
+          ctx.fillRect(x + 8 * cv.dpr, y, cw - 16 * cv.dpr, rh - 5 * cv.dpr);
+          ctx.fillStyle = (ci === 2 && r === 0) ? '#fff' : t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+          ctx.fillText('doc ' + names[d], x + cw / 2, y + rh / 2 + 2 * cv.dpr);
+        });
+      });
+      read.textContent = 'k=' + k + ' · fused top: doc ' + names[fused[0]];
+    }
+    btn.addEventListener('click', function () { rot = (rot + 1) % 5; draw(); });
+    btn.textContent = 'shuffle sparse list';
+    host.appendChild(slider('RRF constant k', 5, 100, 1, k, function (v) { k = Math.round(v); draw(); }).wrap);
+    draw();
+  };
+
+  // Decision tree: a guided model-choosing flow. Answer each branch and the path
+  // walks to a recommendation; mirrors the chapter's decision diagram. Start over
+  // resets. Recommendations are the book's own, as of its 2026 snapshot.
+  R['decision-tree'] = function (host) {
+    var TASK = { q: 'Task shape?', opts: [
+      { a: 'Agentic coding', r: 'Claude Opus 4.8 / GPT-5.5' },
+      { a: 'Heavy multimodal', r: 'Gemini 3.1 Pro' },
+      { a: 'High-volume cheap', r: 'Grok 4.1 Fast, DeepSeek V3.2, Gemini Flash-Lite, Haiku 4.5' },
+      { a: 'Enterprise RAG', r: 'Cohere Command A + Embed v4, frontier model on top' }
+    ] };
+    var TREE = { q: 'Hard governance or sovereignty constraint?', opts: [
+      { a: 'Yes (EU residency, strict data)', r: 'EU regions, Mistral, or self-hosted open weights' },
+      { a: 'No', next: { q: 'Rent or own?', opts: [
+        { a: 'Rent (hosted API)', next: { q: 'Where are you already billed?', opts: [
+          { a: 'AWS', r: 'Bedrock: Claude, Nova, now OpenAI' },
+          { a: 'Azure', r: 'Azure OpenAI: GPT-5.x' },
+          { a: 'GCP', r: 'Vertex: Gemini, Claude' },
+          { a: 'Cloud-agnostic', next: TASK }
+        ] } },
+        { a: 'Own (open weights)', next: { q: 'Hardware budget?', opts: [
+          { a: 'Laptop / 16-24GB', r: 'Gemma 4, Ministral 3, Qwen3.5 small, gpt-oss-20b' },
+          { a: 'Single 80GB GPU', r: 'gpt-oss-120b, Gemma 4 31B, Qwen3.5-35B-A3B, OLMo 3-Think 32B' },
+          { a: 'Cluster', r: 'DeepSeek-V4-Pro, Kimi K2.6, Mistral Large 3, GLM-5.1' }
+        ] } }
+      ] } }
+    ] };
+    var wrap = el('div', 'viz-dt'), path = el('div', 'viz-dt-path'), qEl = el('div', 'viz-dt-q'), opts = el('div', 'viz-ce-chips');
+    var resetBtn = el('button', 'viz-pa-toggle'); resetBtn.type = 'button'; resetBtn.textContent = 'start over';
+    wrap.appendChild(path); wrap.appendChild(qEl); wrap.appendChild(opts); host.appendChild(wrap); host.appendChild(resetBtn);
+    var crumbs = [];
+    function show(node) {
+      opts.textContent = ''; path.textContent = crumbs.join('  ›  '); qEl.textContent = node.q;
+      node.opts.forEach(function (o) {
+        var b = el('button', 'viz-ce-chip'); b.type = 'button'; b.textContent = o.a;
+        b.addEventListener('click', function () {
+          crumbs.push(o.a); path.textContent = crumbs.join('  ›  ');
+          if (o.r) { qEl.textContent = 'Recommended'; opts.textContent = ''; var res = el('div', 'viz-dt-result'); res.textContent = o.r; opts.appendChild(res); }
+          else show(o.next);
+        });
+        opts.appendChild(b);
+      });
+    }
+    resetBtn.addEventListener('click', function () { crumbs = []; show(TREE); });
+    show(TREE);
+  };
+
+  // Float-bit inspector: each number format spends one sign bit then splits the
+  // rest between exponent (dynamic range) and mantissa (precision). bf16 keeps
+  // fp32's eight exponent bits, so it never needed fp16's loss scaling; fp8
+  // trades range (E5M2) against precision (E4M3). Pick a format to see the split.
+  R['float-bits'] = function (host) {
+    var FORM = [
+      { n: 'fp32', e: 8, m: 23 }, { n: 'fp16', e: 5, m: 10 }, { n: 'bf16', e: 8, m: 7 },
+      { n: 'fp8 E4M3', e: 4, m: 3 }, { n: 'fp8 E5M2', e: 5, m: 2 }
+    ];
+    var sel = 2;
+    var COL = { s: '#888', e: '#2d63a8', m: '#e0936b' };
+    var formats = el('div', 'viz-fb-formats'), bits = el('div', 'viz-fb-bits'), note = el('div', 'viz-fb-note');
+    var legend = el('div', 'viz-fb-legend');
+    [['sign', COL.s], ['exponent (range)', COL.e], ['mantissa (precision)', COL.m]].forEach(function (L) {
+      var k = el('span', 'viz-fb-key'); var sw = el('span', 'viz-fb-sw'); sw.style.background = L[1]; var tx = el('span'); tx.textContent = L[1] === COL.s ? 'sign' : (L[1] === COL.e ? 'exponent (range)' : 'mantissa (precision)'); k.appendChild(sw); k.appendChild(tx); legend.appendChild(k);
+    });
+    var chipEls = [];
+    FORM.forEach(function (f, i) {
+      var b = el('button', 'viz-ce-chip'); b.type = 'button'; b.textContent = f.n;
+      b.addEventListener('click', function () { sel = i; render(); });
+      formats.appendChild(b); chipEls.push(b);
+    });
+    host.appendChild(formats); host.appendChild(bits); host.appendChild(legend); host.appendChild(note);
+    function render() {
+      chipEls.forEach(function (b, i) { b.classList.toggle('on', i === sel); });
+      var f = FORM[sel]; bits.textContent = '';
+      function cells(n, col) { for (var i = 0; i < n; i++) { var c = el('div', 'viz-fb-bit'); c.style.background = col; bits.appendChild(c); } }
+      cells(1, COL.s); cells(f.e, COL.e); cells(f.m, COL.m);
+      note.textContent = (1 + f.e + f.m) + ' bits = 1 sign + ' + f.e + ' exponent + ' + f.m + ' mantissa';
+    }
+    render();
+  };
+
+  // Pipeline bubble: stages process micro-batches in a wavefront, idle during the
+  // fill and drain at each end. The bubble fraction is (p-1)/(m+p-1): more
+  // micro-batches per step shrink it, steeply at first then flattening. Slide the
+  // stage count and micro-batch count and watch the idle wedge and the fraction.
+  R['pipeline-bubble'] = function (host) {
+    var p = 4, m = 6;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 240);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 26 * cv.dpr, lx = 60 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var laneH = (H - 2 * pd) / p, slots = m + p - 1, sw = (W - lx - pd) / slots;
+      for (var s = 0; s < p; s++) {
+        var y = pd + s * laneH;
+        ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right'; ctx.fillText('stage ' + (s + 1), lx - 6 * cv.dpr, y + laneH / 2 + 3 * cv.dpr);
+        for (var mb = 0; mb < m; mb++) {
+          var col = s + mb; // wavefront slot
+          var x = lx + col * sw;
+          ctx.fillStyle = t.accent;
+          ctx.fillRect(x + cv.dpr, y + 2 * cv.dpr, sw - 2 * cv.dpr, laneH - 4 * cv.dpr);
+        }
+      }
+      var bub = (p - 1) / (m + p - 1);
+      read.textContent = 'p=' + p + ' stages · m=' + m + ' micro-batches · bubble ' + Math.round(bub * 100) + '%';
+    }
+    host.appendChild(slider('pipeline stages p', 2, 8, 1, p, function (v) { p = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider('micro-batches m', 1, 16, 1, m, function (v) { m = Math.round(v); draw(); }).wrap);
     draw();
   };
 
