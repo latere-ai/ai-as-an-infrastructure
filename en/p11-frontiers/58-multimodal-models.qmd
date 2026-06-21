@@ -4,54 +4,190 @@
 about where multimodality is heading; this chapter is the stack in between. It
 covers how vision is fused into a language model so the model can understand an
 image, and how the diffusion engine is wired into a system that generates images
-and video. By the end a reader can explain the two ways to bolt vision onto a
-language model, the two routes to text-to-image, why video generation needs a
-latent autoencoder, and the live split between unified and modular multimodal
-models.
+and video. By the end a reader can explain the three ways to connect a vision
+encoder to a language model and what each trades, why the image token count is
+the cost that governs a vision-language model at serving time, why classifier-free
+guidance is the knob behind prompt adherence, the two routes to text-to-image and
+why the field drifted from noise-prediction to rectified flow, why video
+generation only becomes tractable through a learned spacetime autoencoder, and the
+live split between unified and modular multimodal models, down to the
+quantize-versus-continuous fight being run inside a single lab.
 
 ## Fusing vision into language
 
 The shared space comes first. CLIP contrastively aligns an image encoder and a
-text encoder over 400 million pairs into a single embedding space, so an image
-can be classified zero-shot by matching it against text prompts
-[@radford2021clip], and that aligned space is the conditioning signal much of
-image generation later reuses. To make a language model itself see, two fusion
-patterns compete. Cross-attention injection keeps both towers frozen and inserts
-trainable layers between them: Flamingo bridges a frozen vision encoder and a
-frozen language model with gated cross-attention blocks trained on interleaved
-image-text, enabling few-shot multimodal tasks [@alayrac2022flamingo].
-Projection instead meets the modalities at the input: LLaVA projects a vision
-encoder's features into the language model's token space and fine-tunes on
-GPT-4-generated visual instruction data [@liu2023llava]. The design axis is how
-much of each tower stays frozen and where the modalities meet, deep inside via
-cross-attention or shallow at the input via a thin projection.
+text encoder over 400 million pairs into a single embedding space with a softmax
+InfoNCE loss over an in-batch similarity matrix, so an image can be classified
+zero-shot by matching it against text prompts [@radford2021clip], and that aligned
+space is the conditioning signal much of image generation later reuses. SigLIP
+replaces the softmax with a pairwise sigmoid loss, turning every image-text pair
+into an independent binary decision; because a sigmoid needs no global
+normalization across the batch, it drops the all-gather of the full similarity
+matrix, decouples the loss from batch size, and trains well at both small and very
+large batches [@zhai2023siglip]. A separate and often-confused fact is the
+*modality gap*: in CLIP-style spaces the image embeddings and the text embeddings
+do not intermix but sit in two narrow cones held apart, a geometry that forms at
+initialization and that contrastive training preserves [@liang2022modalitygap].
+The gap is geometric, the sigmoid loss is computational, and they are unrelated
+results worth keeping apart.
+
+To make a language model itself see, three connector patterns compete, and the
+design axis is how much of each tower stays frozen, how many trainable parameters
+the bridge adds, and where the modalities meet.
+
+```{mermaid}
+%%| label: fig-vlm-connectors
+%%| fig-cap: "Three ways to connect a frozen vision encoder to a language model. Flamingo inserts gated cross-attention deep inside a frozen LM and resamples the visual features to a fixed 64 tokens. BLIP-2's Q-Former extracts 32 query tokens through a learned bottleneck. LLaVA projects the ViT patch features into the token space with a thin MLP at the input. After Alayrac et al. (2022), Li et al. (2023), and Liu et al. (2023)."
+flowchart TD
+  img["image"] --> venc["frozen vision encoder (ViT)"]
+  venc --> A["Flamingo:<br/>Perceiver Resampler<br/>-> 64 tokens<br/>+ gated cross-attn<br/>deep in frozen LM"]
+  venc --> B["BLIP-2:<br/>Q-Former<br/>32 learned queries<br/>(bottleneck)"]
+  venc --> C["LLaVA:<br/>2-layer MLP<br/>at the input"]
+  A --> lm["language model"]
+  B --> lm
+  C --> lm
+```
+
+Cross-attention injection keeps both towers frozen and inserts trainable layers
+between them. Flamingo bridges a frozen vision encoder and a frozen Chinchilla
+language model with gated cross-attention dense layers interleaved through the
+LM, each opened by a tanh gate initialized at zero so the layers are no-ops at
+the start and do not perturb the pretrained weights; a Perceiver Resampler in
+front maps a variable number of visual features to a fixed 64 visual tokens,
+which is what lets the model ingest interleaved images and do few-shot
+multimodal tasks [@alayrac2022flamingo]. BLIP-2 keeps both towers frozen too but
+bridges them with a lightweight Querying Transformer: a small set of 32 learnable
+query vectors (32 by 768) cross-attends to the frozen image features and passes
+that fixed-length summary to the frozen LLM, the lightest connector of the three
+and a hard information bottleneck, trained in two stages [@li2023blip2].
+Projection instead meets the modalities at the input: LLaVA maps the vision
+encoder's patch features straight into the language model's token space, as a
+single linear layer in the original and a two-layer MLP in LLaVA-1.5, and
+fine-tunes on instruction data [@liu2023llava; @liu2023llava15]. The clean
+contrast is Flamingo deep, frozen-both, heavy, fixed at 64 tokens; BLIP-2 a
+frozen bottleneck at 32; LLaVA shallow and cheap, with the token count set by
+whatever the ViT emits.
+
+That last clause is where the cost lives. A vision-language model spends most of
+its inference budget on the image's tokens, because each visual token is a
+sequence position the language model attends over, and attention is quadratic in
+sequence length while the key-value cache grows linearly. CLIP ViT-L/14 at 336
+pixels emits a 24-by-24 grid, so LLaVA-1.5 spends 576 tokens per image
+[@liu2023llava15], and the push to read dense documents and small text makes that
+number grow. LLaVA-NeXT tiles a high-resolution image into 336-pixel crops plus a
+downscaled global view, so a many-tile image can reach thousands of visual tokens
+[@liu2024llavanext]. Qwen2-VL processes images at native resolution into a
+variable token count and shares one positional scheme across text, image, and
+video with a multimodal rotary embedding [@wang2024qwen2vl], and InternVL scales
+the vision tower itself to a six-billion-parameter encoder [@chen2024internvl].
+Higher resolution buys accuracy on dense visual content and is paid for, per
+image, on every forward pass, the same token-count pressure @sec-serving-multimodal
+feels at serving time.
+
+The training recipe that made open vision-language models practical is visual
+instruction tuning, and its trick was to manufacture the data. With no large
+image-instruction dataset, LLaVA bootstrapped one from a language-only GPT-4: it
+fed the model an image's symbolic description, its captions and bounding boxes,
+which are text, and prompted it to write conversations and reasoning grounded in
+that scene, yielding about 158 thousand samples from a model that never saw a
+pixel [@liu2023llava]. Training runs in two stages, first aligning only the
+projection layer so visual features land in the right space, then fine-tuning the
+projection and the language model together on the instruction data. Whether to
+also unfreeze the vision encoder is unsettled: freezing preserves CLIP's general
+representation and avoids forgetting on limited data, while unfreezing lets the
+encoder adapt to fine-grained tasks like OCR and grounding that frozen features
+under-serve, at the cost of more data and compute.
 
 ## Generating images
 
-Built on the diffusion engine of @sec-diffusion, two system routes reach
-text-to-image. The diffusion route conditions a diffusion model on text. Imagen
-uses a large frozen text encoder with cascaded diffusion and reports that scaling
-the text encoder helps sample fidelity and alignment more than scaling the
-diffusion model itself [@saharia2022imagen]. DALL-E 2 splits the problem: a prior
-maps the caption to a CLIP image embedding, and a diffusion decoder renders an
-image from that embedding [@ramesh2022dalle2]. Latent diffusion, the Stable
-Diffusion line of @sec-diffusion, is the open variant. The autoregressive route
-is the diffusion-versus-tokens tension of @sec-nar-lm applied to pixels: tokenize
-the image into a learned discrete codebook with VQGAN [@esser2021vqgan], then
-model those tokens with a transformer, which Parti scales to twenty billion
-parameters as text-to-image sequence-to-sequence over image tokens
-[@yu2022parti].
+Built on the diffusion engine of @sec-diffusion, the systems that reach
+text-to-image share one ingredient before they split into routes. Classifier-free
+guidance is the knob behind prompt adherence. A single network is trained both
+conditional and unconditional by randomly dropping the text condition for a null
+token on a fraction of steps, and at sampling the two predictions are extrapolated
+apart,
+
+$$
+\tilde{\boldsymbol{\epsilon}}_\theta(z_t, c) =
+(1 + w)\,\boldsymbol{\epsilon}_\theta(z_t, c) - w\,\boldsymbol{\epsilon}_\theta(z_t),
+$$
+
+with $w = 0$ recovering the unguided model (later papers rename the dial as a
+guidance scale $s = w + 1$) [@ho2022cfg]. The extrapolation pushes a sample toward
+what the conditional model prefers and away from the unconditional prior,
+sharpening alignment without a separately trained classifier of the kind
+@dhariwal2021 had needed. It is also a dial with a cost: small guidance gives the
+best distributional fidelity, while strong guidance gives the sharpest, most
+on-prompt single samples at the expense of diversity, which is the fidelity-versus-
+variety trade-off every production system exposes.
+
+The diffusion route then conditions a diffusion model on text in one of two
+shapes. The cascaded shape generates a small image and upsamples it with further
+diffusion stages: Imagen renders at 64 pixels and super-resolves to 256 and 1024,
+conditioned on a frozen T5-XXL text encoder, and reports the finding that scaling
+that frozen language model lifts sample fidelity and image-text alignment far more
+than scaling the diffusion model itself [@saharia2022imagen], a clean case of a
+language model dictating a visual generator's ceiling. The latent shape, the
+Stable Diffusion line of @sec-diffusion, runs diffusion in a pretrained
+autoencoder's latent space instead of on pixels [@rombach2022ldm], and SDXL scales
+that line with a roughly threefold larger UNet, a second text encoder, and a
+separate refinement model applied as a post-hoc step [@podell2023sdxl]. DALL-E 2
+splits the problem differently, mapping the caption to a CLIP image embedding with
+a prior and rendering from it with a diffusion decoder [@ramesh2022dalle2]. The
+sharpest lesson of the route, though, is about data, not architecture: DALL-E 3
+retrains on a corpus relabeled by a bespoke captioner, a blend that is 95 percent
+synthetic captions, and finds image-text alignment improves monotonically with
+the synthetic share [@betker2023dalle3].
+
+The training objective itself moved. The modern text-to-image systems train with
+rectified flow rather than noise-prediction, learning a straight velocity field
+from noise to data so an ODE sampler needs far fewer steps, the flow-matching idea
+of @sec-diffusion. With the linear interpolant $x_t = (1-t)\,x_0 + t\,\boldsymbol{
+\epsilon}$ the target is simply $\boldsymbol{\epsilon} - x_0$, and Stable Diffusion
+3 is the canonical instance: it adds a logit-normal weighting that concentrates
+training on the perceptually important middle noise scales, and an MMDiT
+transformer that keeps separate weights for the text and image token streams while
+letting information flow between them, improving typography and prompt
+comprehension [@esser2024sd3].
+
+The autoregressive route is the diffusion-versus-tokens tension of @sec-nar-lm
+applied to pixels: tokenize the image into a learned discrete codebook with VQGAN
+[@esser2021vqgan], improved by a ViT-based quantizer [@yu2022vitvqgan], then model
+those tokens with a transformer, which Parti scales to twenty billion parameters
+as text-to-image sequence-to-sequence over image tokens [@yu2022parti]. The route
+was widely written off until a 2024 revival recast image autoregression as
+coarse-to-fine next-scale prediction: VAR predicts each higher-resolution token
+map from all coarser ones rather than scanning left to right, recovering
+state-of-the-art class-conditional ImageNet generation at an order of magnitude
+less inference and showing language-model-like scaling [@tian2024var]. That result
+is class-conditional rather than text-to-image, so it reopens the route as an
+architecture rather than settling it as a system.
 
 ## Generating video
 
 Video adds time, and time adds cost. The first step extended image diffusion with
 a space-time factorized 3D U-Net to keep frames temporally coherent
-[@ho2022videodiffusion]. The 2024 shift applies the diffusion transformer of
-@sec-diffusion to spacetime latent patches, trained across variable durations,
-resolutions, and aspect ratios; OpenAI's Sora is the prominent example, described
-in a non-peer-reviewed report [@brooks2024sora]. What makes any of this tractable
-is compression: a learned autoencoder shrinks pixels into a far smaller grid of
-latent tokens before the quadratic-cost transformer runs over them.
+[@ho2022videodiffusion]. The 2024 shift puts a diffusion transformer over latent
+patches, the DiT backbone whose sample quality scales with its compute
+[@peebles2022dit], and trains it across variable durations, resolutions, and
+aspect ratios; OpenAI's Sora is the prominent example, compressing video with a
+causal autoencoder into a spacetime latent grid and cutting that grid into
+patches that act as transformer tokens, so packing rather than a fixed frame count
+is what lets one model span clip lengths and shapes, described in a
+non-peer-reviewed report [@brooks2024sora]. The open systems make the compression
+concrete. CogVideoX pairs a 3D causal autoencoder that compresses by four in time
+and eight on each spatial axis with an expert transformer for text-video fusion
+[@yang2024cogvideox], and Meta's Movie Gen trains a thirty-billion-parameter
+transformer with the flow-matching objective over a temporal autoencoder that
+compresses by eight on every axis, a 512-fold reduction before the transformer
+runs [@polyak2024moviegen].
+
+What makes any of this tractable is that compression, and the reason it bites on
+the time axis is specific. Spatial compression removes more redundancy per axis,
+eight by eight against four, but temporal compression is the lever because
+*duration scales the token count linearly and without bound* while spatial
+resolution is fixed per model. Compressing time is what keeps a longer clip inside
+the quadratic-cost transformer's reach.
 
 :::: {.runnable}
 ```python
@@ -68,19 +204,68 @@ print("attention is quadratic in tokens; latent compression is what makes video 
 ```
 ::::
 
+## Unified or modular
+
+The deepest open question is whether one model should both understand and generate
+every modality, or whether a system should compose specialized pieces. Inside the
+unified camp there is a sharper fight, and it is being run inside one lab: whether
+to quantize images into discrete tokens or keep them continuous.
+
+Chameleon takes the discrete, early-fusion bet, quantizing images into codebook
+tokens, interleaving them with text into one sequence, and training a single
+transformer with one next-token objective over the mixed vocabulary
+[@chameleon2024]. Its load-bearing contribution is a stability story that says
+something general about mixed-modal training. Because softmax is invariant to
+adding a constant to all its logits, two modalities sharing one set of weights can
+*compete* by slowly growing the norm of their activations, harmless at first but
+eventually pushing values outside the range of bf16 and diverging, what the paper
+calls the logit drift problem. The fix is layer-norm on the query and key vectors
+before the attention dot-product to bound the norm feeding the inner softmaxes,
+without which their seven-billion model diverges after about a fifth of training,
+plus a z-loss to control the final output softmax and a norm reordering for the
+SwiGLU path. Transfusion takes the opposite bet, keeping images continuous: one
+transformer carries a next-token loss on discrete text and a diffusion loss on
+continuous image patches in the same sequence, and reports that not quantizing
+beats Chameleon at less than a third of the compute on image generation
+[@zhou2024transfusion]. The reason is the tokenizer: a VQ codebook is lossy
+compression, so its reconstruction error sets a ceiling that no model over those
+codes can exceed, which is the deep argument for staying continuous. Variants sit
+between the poles, Show-o unifying autoregressive text with masked-token image
+diffusion [@xie2024showo] and Emu3 pushing the pure-discrete bet to image, text,
+and video under one next-token loss [@wang2024emu3].
+
+The commercial instance of the unified bet is GPT-4o, which OpenAI describes as a
+single model trained end-to-end across text, vision, and audio so that one network
+processes every input and output, replacing the older three-model voice pipeline
+and cutting audio latency to a few hundred milliseconds [@openai2024gpt4o]. Its
+architecture, tokenizer, and whether image generation is autoregressive or
+diffusion are undisclosed, so any specific claim past that framing is speculation.
+The modular bet keeps a strong vision-language model for understanding and separate
+specialized generators for images and video, composed through tool calls; OpenAI
+ships both, GPT-4 invoking DALL-E 3 as a tool against GPT-4o's native generation,
+which makes the split concrete rather than abstract. The two evaluation axes that
+keep these systems comparable are understanding benchmarks like MMMU, hard enough
+that frontier models score in the high fifties [@yue2024mmmu], and text-to-image
+alignment benchmarks like the object-focused GenEval [@ghosh2023geneval] and the
+dense-prompt DPG-Bench [@hu2024ella].
+
 ::: {.callout-important}
 ## What's contested
 Whether one model should both understand and generate every modality, or whether
-specialization wins, is unsettled. The unified bet trains a single any-to-any
-model: Chameleon quantizes images to discrete tokens and trains one transformer
-over interleaved image-text tokens, pure next-token prediction across modalities
-[@chameleon2024], while Transfusion keeps images continuous and trains one
-transformer with a next-token loss on text and a diffusion loss on images,
-reporting that this beats quantizing everything [@zhou2024transfusion]. The
-modular bet keeps a strong vision-language model for understanding and separate
-specialized generators for images and video. The unified models are simpler to
-compose and share representation across tasks; the modular ones let each piece be
-the best of its kind and evolve independently. Which way it settles is open.
+specialization wins, is unsettled, and the debate has two layers. At the system
+layer the unified models are simpler to compose and share representation across
+tasks, while the modular ones let each piece be the best of its kind and evolve
+independently; the same lab shipping GPT-4o native generation and GPT-4-plus-DALL-E-3
+as a tool shows the question is live in production, not just on paper. At the
+representation layer, even granting one model, the field disagrees on whether to
+quantize images or keep them continuous: Chameleon trains one transformer over
+discrete image and text tokens with pure next-token prediction
+[@chameleon2024], Emu3 extends that to video [@wang2024emu3], while Transfusion
+keeps images continuous under a diffusion loss and reports it beats quantizing at a
+fraction of the compute because the VQ codebook's reconstruction error caps what
+the discrete route can generate [@zhou2024transfusion]. Whether a future tokenizer
+closes that reconstruction gap, or whether continuous representations win
+permanently, is the open question under the open question.
 :::
 
 ::: {.callout-tip}
@@ -90,8 +275,13 @@ afford. Attention is quadratic in token count, and a minute of video is millions
 of pixels per frame, so generation is only tractable because a learned
 autoencoder compresses pixels into a far smaller latent grid before the diffusion
 transformer runs, the same latent move @sec-diffusion made for images and the
-same token-count pressure @sec-serving-multimodal feels at serving time. The
-generator's compute budget dictates how aggressive the visual tokenizer must be.
+same token-count pressure @sec-serving-multimodal feels at serving time. The arrow
+runs the other way too: on the understanding side, the image token count a
+vision-language model emits, 576 for LLaVA-1.5 and thousands once a document is
+tiled to native resolution, is what the serving budget must pay per image on every
+forward pass. The generator's compute budget dictates how aggressive the visual
+tokenizer must be, and the server's budget dictates how many visual tokens an
+understander can afford to look at.
 :::
 
 ## Further reading
