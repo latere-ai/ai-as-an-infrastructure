@@ -34,7 +34,9 @@ noloop /zh/
 code   /en/ 200
 code   /zh/ 200
 code   /zh/reasoning/inference-time-scaling 200       # number-free final URL serves
-code   /zh/nope 404
+code   /zh/nope 302                                  # missing content paths return to the site entrypoint
+loc    /zh/nope /
+noloop /zh/nope
 loc    /en/index.html /en/                            # index.html canonicalizes
 loc    /zh/reasoning/inference-time-scaling.html /zh/reasoning/inference-time-scaling
 # Reorg 2026-06: old numbered AND the brief de-numbered path both 301 to the final part.
