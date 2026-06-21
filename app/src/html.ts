@@ -3,6 +3,7 @@
 // hydration data, then the client bundle and after-body runtime scripts.
 
 import type { ChapterData } from "./types.ts";
+import { BASE, SITE_NAME, AUTHOR, OG_W, OG_H, ogImageUrl } from "./site.ts";
 
 const FONT_LINKS = `
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -17,28 +18,64 @@ export function page(opts: {
   css: string;
   clientHref: string; // relative path to the hydration bundle
   afterBody?: string; // raw runtime <script> blocks
+  // English share-card text (title + description) and image, used verbatim for
+  // the Open Graph / Twitter tags so a shared link unfurls an English card even
+  // on zh pages. Omitted by the dev server, which falls back to the page itself.
+  share?: { title: string; description: string; imageUrl: string };
 }): string {
   const { chapter, bodyHtml, css, clientHref, afterBody = "" } = opts;
-  const title = `${chapter.title} · AI as an Infrastructure`;
+  const title = `${chapter.title} · ${SITE_NAME}`;
   const data = JSON.stringify(chapter).replace(/</g, "\\u003c");
   // Per-language canonical URLs + hreflang so both languages are independently
   // indexable and Google serves the right one. en/zh share the chapter path.
-  const BASE = "https://aaai.latere.ai";
   const htmlLang = chapter.lang === "zh" ? "zh-Hans" : "en";
   const url = (lang: string) => `${BASE}/${lang}/${chapter.path}`; // path "" → /<lang>/
   const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   const desc = chapter.description ? `\n<meta name="description" content="${attr(chapter.description)}">` : "";
+
+  // Social share card. Always English (the user-facing requirement): the card
+  // title/description come from the English twin via `share`; the home page is a
+  // "website", inner pages "article". The PNG is generated on demand by `make og`.
+  const ogHref = chapter.path === "" ? "index" : chapter.path;
+  const card = {
+    title: opts.share?.title ?? chapter.title,
+    description: opts.share?.description ?? chapter.description,
+    imageUrl: opts.share?.imageUrl ?? ogImageUrl(ogHref),
+  };
+  const ogType = chapter.path === "" ? "website" : "article";
+  const social = [
+    `<meta property="og:type" content="${ogType}">`,
+    `<meta property="og:site_name" content="${attr(SITE_NAME)}">`,
+    `<meta property="og:title" content="${attr(card.title)}">`,
+    card.description ? `<meta property="og:description" content="${attr(card.description)}">` : "",
+    `<meta property="og:url" content="${url(chapter.lang)}">`,
+    `<meta property="og:locale" content="en_US">`,
+    `<meta property="og:image" content="${card.imageUrl}">`,
+    `<meta property="og:image:type" content="image/png">`,
+    `<meta property="og:image:width" content="${OG_W}">`,
+    `<meta property="og:image:height" content="${OG_H}">`,
+    `<meta property="og:image:alt" content="${attr(`${card.title} · ${SITE_NAME}`)}">`,
+    ogType === "article" ? `<meta property="article:author" content="${attr(AUTHOR)}">` : "",
+    `<meta name="twitter:card" content="summary_large_image">`,
+    `<meta name="twitter:title" content="${attr(card.title)}">`,
+    card.description ? `<meta name="twitter:description" content="${attr(card.description)}">` : "",
+    `<meta name="twitter:image" content="${card.imageUrl}">`,
+    `<meta name="twitter:image:alt" content="${attr(`${card.title} · ${SITE_NAME}`)}">`,
+  ].filter(Boolean).join("\n");
+
   return `<!DOCTYPE html>
 <html lang="${htmlLang}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>${desc}
+<meta name="author" content="${attr(AUTHOR)}">
 <link rel="canonical" href="${url(chapter.lang)}">
 <link rel="alternate" hreflang="en" href="${url("en")}">
 <link rel="alternate" hreflang="zh-Hans" href="${url("zh")}">
 <link rel="alternate" hreflang="x-default" href="${url("en")}">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+${social}
 <script>document.cookie="lang=${chapter.lang};path=/;max-age=31536000;samesite=lax"</script>
 ${FONT_LINKS}
 <style>${css}</style>

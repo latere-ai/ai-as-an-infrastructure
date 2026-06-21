@@ -14,6 +14,7 @@ import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDoc } from "./pipeline/search.ts";
+import { BASE, ogImageUrl } from "./site.ts";
 import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Lang } from "./types.ts";
@@ -50,6 +51,11 @@ const graphviz = await loadGraphviz();
 
 let pageCount = 0;
 const pathsByLang: Record<Lang, Set<string>> = { en: new Set(), zh: new Set() };
+// English share-card text keyed by chapter href (shared across languages). Filled
+// on the en pass and read on the zh pass so zh pages unfurl an English card.
+// Relies on en rendering before zh below; the zh lookup falls back gracefully.
+const enShare: Record<string, { title: string; description: string }> = {};
+const missingCards: string[] = [];
 for (const lang of ["en", "zh"] as Lang[]) {
   const book = loadBook(lang, repoRoot);
   const bib = loadBibliographyDir(join(repoRoot, "refs"));
@@ -71,7 +77,12 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const bodyHtml = renderToString(createElement(Reader, { chapter: data }));
     const depth = ch.href.split("/").length - 1;
     const clientHref = "../".repeat(depth) + "reader.js?v=" + clientHash;
-    const html = page({ chapter: data, bodyHtml, css, clientHref, afterBody });
+    // English-only share card (same image + text for en/zh at this path).
+    if (lang === "en") enShare[ch.href] = { title: data.title, description: data.description };
+    const en = enShare[ch.href] ?? { title: data.title, description: data.description };
+    const share = { title: en.title, description: en.description, imageUrl: ogImageUrl(ch.href) };
+    if (!existsSync(join(outRoot, "og", ch.href + ".png"))) missingCards.push(ch.href);
+    const html = page({ chapter: data, bodyHtml, css, clientHref, afterBody, share });
     // hrefs are extensionless; the file on disk keeps .html (nginx try_files
     // serves the clean URL from it).
     const outPath = join(langOut, ch.href + ".html");
@@ -86,7 +97,6 @@ for (const lang of ["en", "zh"] as Lang[]) {
 }
 
 // Root artifacts (served from _book root): favicon, robots, hreflang sitemap.
-const BASE = "https://aaai.latere.ai";
 cpSync(join(repoRoot, "app", "static", "favicon.svg"), join(outRoot, "favicon.svg"));
 writeFileSync(join(outRoot, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${BASE}/sitemap.xml\n`);
 
@@ -101,5 +111,11 @@ const sitemap = allPaths.map((p) => {
 }).join("\n");
 writeFileSync(join(outRoot, "sitemap.xml"),
   `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${sitemap}\n</urlset>\n`);
+
+// Pages reference /og/<href>.png, generated on demand by `make og` and vendored.
+// Warn (don't fail) if any are missing so a new/renamed chapter doesn't silently
+// ship a broken card; CI stays green since the vendored PNGs are present there.
+const missing = [...new Set(missingCards)];
+if (missing.length) console.warn(`  ⚠ ${missing.length} share card(s) missing (run \`make og\`): ${missing.join(", ")}`);
 
 console.log(`built ${pageCount} pages into ${outRoot}`);
