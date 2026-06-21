@@ -7,12 +7,18 @@ import type MarkdownIt from "markdown-it";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { renderCite, type Bibliography } from "./citations.ts";
 import { relHref, type CrossrefMap } from "./crossref.ts";
+import { renderGloss, type Glossary } from "./glossary.ts";
+import type { Lang } from "../types.ts";
 
 export interface RefContext {
   bib: Bibliography;
   xref: CrossrefMap;
   currentHref: string;
   prefix: string;
+  lang: Lang;
+  glossary: Glossary;
+  glossarySeen: Set<string>;
+  glossaryUsed: Set<string>;
 }
 
 const KEY = /^[A-Za-z][\w:.-]*/;
@@ -57,6 +63,17 @@ export function quartoRefs(md: MarkdownIt, ctx: RefContext) {
           const target = ctx.xref.get(key);
           if (target) push(state, `<a href="${relHref(target, ctx.currentHref, ctx.prefix)}" class="rdr-xref">${target.label}</a>`);
           else push(state, `<span class="rdr-xref rdr-xref-missing">?@${key}</span>`);
+        } else if (key.startsWith("gls-")) {
+          const gkey = key.slice(4);
+          const entry = ctx.glossary.get(gkey);
+          if (entry) {
+            const first = !ctx.glossarySeen.has(gkey);
+            ctx.glossarySeen.add(gkey);
+            ctx.glossaryUsed.add(gkey);
+            push(state, renderGloss(entry, ctx.lang, first, ctx.prefix));
+          } else {
+            push(state, `<span class="rdr-gls rdr-gls-missing">?gls-${gkey}</span>`);
+          }
         } else {
           push(state, renderCite(ctx.bib, { keys: [key], bare: true }, ctx.prefix));
         }

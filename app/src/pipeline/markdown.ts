@@ -14,6 +14,8 @@ import { resolveXrefsInText } from "./crossref.ts";
 import { renderDot, renderMermaid, type GraphvizInstance } from "./diagrams.ts";
 import { expandDivs } from "./divs.ts";
 import { highlightCode } from "./highlight.ts";
+import type { Glossary } from "./glossary.ts";
+import type { Lang } from "../types.ts";
 
 export interface RenderContext {
   bib: Bibliography;
@@ -21,6 +23,10 @@ export interface RenderContext {
   currentHref: string;
   prefix: string; // "../" * depth for page-relative hrefs
   graphviz: GraphvizInstance;
+  lang: Lang;
+  glossary: Glossary;
+  glossarySeen: Set<string>; // keys already expanded in THIS chapter (per-chapter first-use)
+  glossaryUsed: Set<string>; // keys used anywhere in the book (accumulates; feeds the glossary page)
 }
 
 export interface RenderedChapter {
@@ -45,7 +51,7 @@ function createMd(ctx: RenderContext): MarkdownIt {
   const md = new MarkdownIt({ html: true, linkify: false, typographer: false, breaks: false, highlight: highlightCode });
   md.use(attrs, { allowedAttributes: ["id", "class", /^data-/] });
   md.use(katex);
-  md.use(quartoRefs, { bib: ctx.bib, xref: ctx.xref, currentHref: ctx.currentHref, prefix: ctx.prefix });
+  md.use(quartoRefs, { bib: ctx.bib, xref: ctx.xref, currentHref: ctx.currentHref, prefix: ctx.prefix, lang: ctx.lang, glossary: ctx.glossary, glossarySeen: ctx.glossarySeen, glossaryUsed: ctx.glossaryUsed });
 
   // Diagram fences: ```{dot}``` and ```{mermaid}```.
   const defFence = md.renderer.rules.fence!.bind(md.renderer.rules);

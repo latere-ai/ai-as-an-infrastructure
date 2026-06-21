@@ -11,6 +11,7 @@ import { page } from "./html.ts";
 import { loadBook } from "./pipeline/book.ts";
 import { compileChapter } from "./pipeline/compile.ts";
 import { loadBibliographyDir } from "./pipeline/citations.ts";
+import { loadGlossary } from "./pipeline/glossary.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDocs } from "./pipeline/search.ts";
@@ -48,6 +49,7 @@ if (window.__rdrRuntimesReady) window.__rdrRuntimesReady();
 const afterBody = runtime("live-runtime.html") + runtime("viz-runtime.html") + mermaidInit;
 
 const graphviz = await loadGraphviz();
+const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
 
 let pageCount = 0;
 const pathsByLang: Record<Lang, Set<string>> = { en: new Set(), zh: new Set() };
@@ -60,7 +62,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
   const book = loadBook(lang, repoRoot);
   const bib = loadBibliographyDir(join(repoRoot, "refs"));
   const xref = buildCrossref(book);
-  const ctx = { bib, xref, graphviz, refsDir: join(repoRoot, "refs") };
+  const ctx = { bib, xref, graphviz, refsDir: join(repoRoot, "refs"), glossary, glossaryUsed: new Set<string>() };
   const langOut = join(outRoot, lang);
   // Clean the per-language tree before regenerating: a renamed or moved chapter
   // would otherwise leave its old .html behind (stale dead pages, broken-link
