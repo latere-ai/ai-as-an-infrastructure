@@ -14,9 +14,14 @@ export function stripCjkSoftBreaks(src: string): string {
     if (/^\s*(`{3,}|~{3,})/.test(line)) inCode = !inCode;
     if (inCode || line.trim() === "") { out.push(line); continue; }
     const next = lines[i + 1];
+    // A heading line is a complete block; its text must not absorb the next
+    // line. This matters for a callout whose "## Title" is immediately followed
+    // by a CJK body line (no author blank line): joining them would fold the
+    // body into the pulled callout title, so its inline refs never render.
+    const lineIsHeading = /^\s*#{1,6}\s/.test(line);
     // Join with the next line (no space) when this line ends and the next begins
     // with a CJK char, and the next line is regular prose (not a block marker).
-    if (next && CJK.test(line.slice(-1)) && CJK.test(next.trimStart()[0] ?? "") &&
+    if (next && !lineIsHeading && CJK.test(line.slice(-1)) && CJK.test(next.trimStart()[0] ?? "") &&
         !/^\s*([#>\-*+:|]|\d+\.|`{3,}|~{3,})/.test(next)) {
       out.push(line);
       lines[i + 1] = line.match(/\s$/) ? next : next.replace(/^\s+/, "");
