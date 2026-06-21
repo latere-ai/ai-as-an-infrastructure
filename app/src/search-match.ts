@@ -24,6 +24,29 @@ const W_TITLE = 4;
 const W_HEADING = 2;
 const W_TEXT = 1;
 
+// Fuzzy fallback: is `needle` an in-order subsequence of `hay`, and how tight?
+// Returns 0 when it is not a subsequence, else a small positive score (always
+// below the exact tiers) that rewards consecutive runs and a prefix start. Used
+// only on short fields (title/heading): a subsequence scan over long body text
+// would match almost any short query. Handles dropped/extra letters, not
+// transpositions (which break in-order matching). Needle must be >= 2 chars.
+export function fuzzyScore(needle: string, hay: string): number {
+  if (needle.length < 2 || !hay) return 0;
+  let h = 0, consec = 0, first = -1, last = -2;
+  for (let n = 0; n < needle.length; n++) {
+    const c = needle[n];
+    let found = -1;
+    while (h < hay.length) { if (hay[h] === c) { found = h++; break; } h++; }
+    if (found < 0) return 0; // not a subsequence
+    if (first < 0) first = found;
+    if (found === last + 1) consec++;
+    last = found;
+  }
+  // Reject loose matches whose characters are scattered across the field.
+  if (last - first + 1 > needle.length * 4) return 0;
+  return 1 + consec * 0.5 + (first === 0 ? 1 : 0);
+}
+
 // A snippet of body text centred on the first query hit, split so the match can
 // be wrapped in <mark> as a React node (the body contains literal <, >, & from
 // code/math, so string-injecting HTML is unsafe).
@@ -58,10 +81,16 @@ export function runSearch(docs: SearchDoc[], rawQuery: string, limit = 12): Scor
       const inTitle = title.includes(tok);
       const inHeading = heading.includes(tok);
       const inText = text.includes(tok);
-      if (!inTitle && !inHeading && !inText) { ok = false; break; }
-      exact += 1;
-      total += (inTitle ? W_TITLE : 0) + (inHeading ? W_HEADING : 0) + (inText ? W_TEXT : 0);
-      if (!snipToken && inText) snipToken = tok;
+      if (inTitle || inHeading || inText) {
+        exact += 1;
+        total += (inTitle ? W_TITLE : 0) + (inHeading ? W_HEADING : 0) + (inText ? W_TEXT : 0);
+        if (!snipToken && inText) snipToken = tok;
+        continue;
+      }
+      // No exact hit: fall back to a fuzzy subsequence on the short fields.
+      const fuzzy = Math.max(fuzzyScore(tok, title) * W_TITLE, fuzzyScore(tok, heading) * W_HEADING);
+      if (fuzzy <= 0) { ok = false; break; }
+      total += fuzzy * 0.25; // tie-break only; `exact` count is the primary rank
     }
     if (!ok) continue;
     if (!snipToken) snipToken = tokens[0];

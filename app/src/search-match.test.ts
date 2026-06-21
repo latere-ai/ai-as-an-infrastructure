@@ -1,7 +1,7 @@
 // The client matcher: multi-word AND, ranking, per-chapter cap, snippet.
 
 import { test, expect } from "bun:test";
-import { runSearch, snippet, type SearchDoc } from "./search-match.ts";
+import { runSearch, snippet, fuzzyScore, type SearchDoc } from "./search-match.ts";
 
 const doc = (p: Partial<SearchDoc>): SearchDoc => ({
   href: "ch", anchor: "", num: "1", title: "", heading: "", text: "", ...p,
@@ -59,6 +59,29 @@ test("snippet centres on the token and marks the hit, preserving original case",
   const s = snippet("The Reward signal is learned.", "reward");
   expect(s.hit).toBe("Reward"); // original case kept
   expect((s.pre + s.hit + s.post).includes("Reward")).toBe(true);
+});
+
+test("fuzzy: a typo with a dropped/extra letter still matches via the title", () => {
+  const docs = [doc({ href: "a", title: "Transformer attention", text: "self-attention" })];
+  expect(runSearch(docs, "transfomer").length).toBe(1); // dropped 'r'
+  expect(runSearch(docs, "atention").length).toBe(1); // dropped 't'
+  // a token that is not even a subsequence of any short field matches nothing
+  expect(runSearch(docs, "zzzz").length).toBe(0);
+});
+
+test("fuzzy never displaces an exact match", () => {
+  const exact = doc({ href: "exact", title: "Transformer" });
+  const fuzzy = doc({ href: "fuzzy", title: "Transfomer architecture is great" });
+  const ranked = runSearch([fuzzy, exact], "transformer").map((r) => r.doc.href);
+  expect(ranked[0]).toBe("exact");
+});
+
+test("fuzzyScore: subsequence with bonuses, 0 when not a subsequence or too loose", () => {
+  expect(fuzzyScore("abc", "abc")).toBeGreaterThan(0);
+  expect(fuzzyScore("abc", "axbxc")).toBeGreaterThan(0); // subsequence with gaps
+  expect(fuzzyScore("abc", "acb")).toBe(0); // transposition: not in-order
+  expect(fuzzyScore("a", "abc")).toBe(0); // single char too short for fuzzy
+  expect(fuzzyScore("abc", "a-very-long-string-b-then-c")).toBe(0); // scattered: rejected
 });
 
 test("empty / whitespace query yields nothing", () => {
