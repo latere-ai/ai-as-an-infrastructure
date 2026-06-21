@@ -1,6 +1,6 @@
 # Transformer 架构及其变体 {#sec-transformer-architecture}
 
-前沿的稠密模型，是一摞几乎完全相同的 Transformer 块，而这个块自 2023 年以来几乎没变过 [@touvron2023llama; @bai2023qwen]。它内部几乎一切都是已经回答清楚、就此盖棺的问题：怎么归一化、怎么激活、怎么编码位置。唯有一个问题悬而未决，而它根本不在前向传播的数学里。这是一笔生成期间驻留在内存里的成本，也就是 KV 缓存的大小。它也是唯一一股仍然够强的力量，强到足以让架构师把一个能用的块重画一遍。本章把这个块读两遍：一遍读作已经定型的前向传播，一遍读作那唯一开放的成本，正是它驱动了从 MHA 经 MQA、GQA 到 MLA 的注意力变体。
+分词之后，模型终于拿到一串整数 id。前沿稠密模型用一摞几乎完全相同的 Transformer 块，把这些 id 变成预测，而这个块自 2023 年以来几乎没变过 [@touvron2023llama; @bai2023qwen]。它内部几乎一切都是已经回答清楚、就此盖棺的问题：怎么归一化、怎么激活、怎么编码位置。唯有一个问题悬而未决，而且它根本不在前向传播的数学里。这是一笔生成期间驻留在内存里的成本，也就是 KV 缓存的大小。它也是唯一一股仍然够强的力量，强到足以让架构师把一个能用的块重画一遍。因此，读这个块要读两遍：一遍读作已经定型的前向传播，一遍读作那唯一开放的成本，正是它驱动了从 MHA 经 MQA、GQA 到 MLA 的注意力变体。
 
 ## Transformer 块的两项职责
 
@@ -49,7 +49,7 @@ digraph block {
 
 **归一化**有两条正交的轴线。一条是形式。LayerNorm [@ba2016layernorm] 用可学习的增益与偏置做重新居中与重新缩放；RMSNorm [@zhang2019rmsnorm] 只做重新缩放，弃掉了均值减除与偏置。均值居中带来的收益很小，所以 RMSNorm 更便宜，如今成了默认。另一条是位置。后置归一化是原始设计，把归一化放在残差相加之后 [@vaswani2017attention]；前置归一化把归一化放进分支内部，让一条恒等路径笔直沿残差流而下。前置归一化保持一条从堆叠顶端到底端的干净梯度高速路，正是它让深层模型无需精心设计的预热就能训练 [@xiong2020prenorm]。
 
-**激活函数**有一条清晰的谱系：ReLU，简单但容易出死单元，然后是 GeLU [@hendrycks2016gelu]，平滑的 BERT 与 GPT-2 时代默认，再然后是门控线性单元，其中 SwiGLU 是现代的赢家 [@shazeer2020glu]。SwiGLU 计算 $(\text{Swish}(xW_1) \odot xV)\, W_2$，是三个矩阵而非两个。读者常弄错的细节：隐藏维度被按约 $2/3$ 缩放，让门控@gls-ffn保持与普通 $4\times$ 前馈网络相同的参数量，这正是让同等条件比较公平的原因。
+**激活函数**有一条清晰的谱系：ReLU，简单但容易出死单元，然后是 GeLU [@hendrycks2016gelu]，平滑的 BERT 与 GPT-2 时代默认，再然后是门控线性单元，其中 SwiGLU 是现代的赢家 [@shazeer2020glu]。SwiGLU 计算 $(\text{Swish}(xW_1) \odot xV)\, W_2$，是三个矩阵而非两个。容易漏掉的细节是：隐藏维度被按约 $2/3$ 缩放，让门控@gls-ffn保持与普通 $4\times$ 前馈网络相同的参数量，这正是让同等条件比较公平的原因。
 
 **位置**是第三个。注意力本身对置换不变，所以块必须被告知词元位于何处。RoPE 把查询与键向量按与绝对位置成正比的角度旋转，在二维子空间里成对地进行，使得点积 $q \cdot k$ 只依赖于相对偏移 $i - j$ [@su2021roformer]。一个基础频率参数 theta，设定旋转转得多快，并悄然支配着上下文随后能扩展多远。ALiBi 走的是另一条路：在 softmax 之前的分数上加一个静态的、每个头各自的线性惩罚 $-m \cdot (i - j)$，完全不带可学习的位置参数 [@press2022alibi]。两者的对比，是向量上的旋转还是分数上的偏置。RoPE 成了稠密模型的默认。
 
@@ -102,20 +102,20 @@ $$
 import numpy as np
 import matplotlib.pyplot as plt
 
-layers, d_head, dtype, params = 32, 128, 2, 7e9  # fp16 bytes, 7B weights
+layers, d_head, dtype, params = 32, 128, 2, 7e9  # fp16 字节数，7B 权重
 weights_gb = params * dtype / 1e9
 seq = np.linspace(0, 200_000, 400)
 
 for name, n_kv in [("MHA", 32), ("GQA", 8), ("MQA", 1)]:
-    per_tok = 2 * layers * n_kv * d_head * dtype  # bytes per token
+    per_tok = 2 * layers * n_kv * d_head * dtype  # 每词元字节数
     cache_gb = per_tok * seq / 1e9
     crossover = weights_gb * 1e9 / per_tok
-    print(f"{name:3s}: {per_tok/1024:6.0f} KB/token, 在 {crossover:>7.0f} 个 token 处越过权重大小")
+    print(f"{name:3s}: {per_tok/1024:6.0f} KB/词元，在 {crossover:>7.0f} 个词元处越过权重大小")
     plt.plot(seq / 1000, cache_gb, label=name)
 
 plt.axhline(weights_gb, ls="--", color="gray", label=f"权重 ({weights_gb:.0f} GB)")
-plt.xlabel("上下文长度（千 token）"); plt.ylabel("KV cache（GB）")
-plt.legend(); plt.title("KV cache 与上下文长度，batch=1"); plt.show()
+plt.xlabel("上下文长度（千词元）"); plt.ylabel("KV 缓存（GB）")
+plt.legend(); plt.title("KV 缓存与上下文长度，批量=1"); plt.show()
 ```
 ::::
 
@@ -198,7 +198,7 @@ MLA 是否真的打破了质量与缓存之间的权衡，尚无定论。DeepSee
 
 ## 装配这个块，以及它如何崩坏
 
-一旦上述选择做定，装配共识稠密块大体上只是核对账目：在每个子层的输入上用 RMSNorm 做前置归一化、一个隐藏维度按 $2/3$ 重新缩放的 SwiGLU 前馈网络、在点积之前对查询与键施加 RoPE、为 KV 头做 GQA 分组，以及任何地方都不带偏置项。读者能在自 LLaMA 以来几乎每一个开源稠密模型中认出这一形状 [@touvron2023llama]。
+一旦上述选择做定，装配共识稠密块大体上只是核对账目：在每个子层的输入上用 RMSNorm 做前置归一化、一个隐藏维度按 $2/3$ 重新缩放的 SwiGLU 前馈网络、在点积之前对查询与键施加 RoPE、为 KV 头做 GQA 分组，以及任何地方都不带偏置项。自 LLaMA 以来，几乎每一个开源稠密模型都能看出这一形状 [@touvron2023llama]。
 
 失效模式值得逐一点名，因为它们各在不同时刻咬人。深度上的后置归一化会在训练早期爆掉或停滞，这正是前置归一化被发明出来要修复的经典症状 [@xiong2020prenorm]。为短上下文选定的位置方案，或过小的 RoPE theta，会限制日后的长上下文行为，代价只在第一次提升上下文窗口时浮现。切换到门控前馈网络时忘了 $2/3$ 重新缩放，会悄悄放大或缩小参数预算，并破坏同等条件的比较。不绑定、未正则化的输出 logits 可能无界漂移，这正是 z-loss 防护它们的原因，机制见 @sec-scaling-laws。而过度坍缩到 MQA 会破坏训练稳定性、并让质量非平滑地下降，这正是 GQA 之所以存在的原因 [@ainslie2023gqa]：最便宜的缓存，并不保险地等于最好的缓存。
 
