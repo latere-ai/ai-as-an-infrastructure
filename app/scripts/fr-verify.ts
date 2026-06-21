@@ -58,7 +58,9 @@ function verify(slug: string): { ok: boolean; problems: string[] } {
 
   // 2. rendered FR set == snapshot set
   const snapshot: Record<string, string[]> = JSON.parse(readFileSync(join(import.meta.dir, "..", "test", "fr-snapshot.json"), "utf8"));
-  const rendered = new Set(furtherReadingEntries(refsDir, slug).filter((e) => e.inFurther).map((e) => normalizeUrl(e.url ?? "")));
+  // URL-keyed comparison; drop empty (a no-URL work like a book can't be tracked
+  // this way — its presence rides on the bullet order and the gloss audit).
+  const rendered = new Set(furtherReadingEntries(refsDir, slug).filter((e) => e.inFurther).map((e) => normalizeUrl(e.url ?? "")).filter(Boolean));
   const baseline = new Set((snapshot[slug] ?? []).map(normalizeUrl));
   const missing = [...baseline].filter((u) => !rendered.has(u));
   const extra = [...rendered].filter((u) => !baseline.has(u));
@@ -66,10 +68,20 @@ function verify(slug: string): { ok: boolean; problems: string[] } {
   if (extra.length) problems.push(`FR has extra works (mark them further={no} if inline-only): ${extra.join(", ")}`);
 
   // 3. every inline [@key] has a bib entry
-  const bibKeys = new Set(parseBib(readFileSync(bibPath, "utf8"), { errorHandler: () => {} }).entries.map((e: any) => e.key));
+  const bibEntries = parseBib(readFileSync(bibPath, "utf8"), { errorHandler: () => {} }).entries;
+  const bibKeys = new Set(bibEntries.map((e: any) => e.key));
   const keys = new Set([...inlineKeys(enSrc), ...inlineKeys(zhSrc)]);
   const unresolved = [...keys].filter((k) => !bibKeys.has(k));
   if (unresolved.length) problems.push(`inline [@key] with no refs/${slug}.bib entry: ${unresolved.join(", ")}`);
+
+  // 4. no duplicate entries (same work entered twice → renders twice but the
+  // URL set still matches, so set-equality above can't catch it).
+  const dupKeys = bibEntries.map((e: any) => e.key).filter((k, i, a) => a.indexOf(k) !== i);
+  if (dupKeys.length) problems.push(`duplicate bib keys: ${[...new Set(dupKeys)].join(", ")}`);
+  const fr = furtherReadingEntries(refsDir, slug);
+  const urls = fr.map((e) => normalizeUrl(e.url ?? "")).filter(Boolean);
+  const dupUrls = urls.filter((u, i, a) => a.indexOf(u) !== i);
+  if (dupUrls.length) problems.push(`duplicate work URLs across entries: ${[...new Set(dupUrls)].join(", ")}`);
 
   return { ok: problems.length === 0, problems };
 }

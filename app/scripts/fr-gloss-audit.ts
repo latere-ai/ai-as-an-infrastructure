@@ -21,6 +21,8 @@ import { normalizeUrl } from "./fr-snapshot.ts";
 const BASELINE = "d7a1314";
 const repoRoot = join(import.meta.dir, "..", "..");
 const refsDir = join(repoRoot, "refs");
+const baselinePath = join(import.meta.dir, "..", "test", "fr-gloss-baseline.json");
+const BASELINE_GLOSS: Record<string, { en: string; zh: string }> = existsSync(baselinePath) ? JSON.parse(readFileSync(baselinePath, "utf8")) : {};
 const hasCJK = (s: string) => /[㐀-鿿　-〿＀-￯]/.test(s);
 
 function gitShow(rev: string, path: string): string | null {
@@ -34,23 +36,35 @@ function enPath(slug: string): string | null {
   return null;
 }
 
-// Per work URL -> the full bullet text (links stripped), so a gloss is detected
-// whether it's parenthetical ("Title" (gloss)) or a trailing clause
-// (". Gloss." / "，gloss。"). Faithfulness is then checked by substring
-// containment of the migrated note in this original text.
-function glossesByUrl(src: string): Map<string, string> {
-  const out = new Map<string, string>();
+// One Further-reading bullet: its work URLs and its text (links stripped), so a
+// gloss is detected whether parenthetical ("Title" (gloss)) or a trailing clause
+// (". Gloss." / "，gloss。").
+interface Bullet { urls: string[]; text: string }
+
+function bullets(src: string): Bullet[] {
+  const out: Bullet[] = [];
   const lines = src.split("\n");
   let inSection = false;
   for (const line of lines) {
     if (/^##\s+(Further [Rr]eading|延伸阅读)\s*$/.test(line)) { inSection = true; continue; }
     if (inSection && /^##\s+/.test(line)) break;
     if (!inSection || !line.trim().startsWith("-")) continue;
-    const noLinks = line.replace(/\[[^\]]*\]\([^)]*\)/g, "");
-    const urls = [...line.matchAll(/\]\((https?:\/\/[^)]+)\)/g)].map((m) => normalizeUrl(m[1]));
-    for (const u of urls) out.set(u, noLinks);
+    out.push({
+      urls: [...line.matchAll(/\]\((https?:\/\/[^)]+)\)/g)].map((m) => normalizeUrl(m[1])),
+      text: line.replace(/\[[^\]]*\]\([^)]*\)/g, ""),
+    });
   }
   return out;
+}
+
+// The original bullet text for an entry: match by URL when it has one, else
+// (a book/doc with no link) by its first-author surname or a distinctive title
+// word appearing in the bullet. "" if no bullet matches.
+function bulletFor(bs: Bullet[], url: string, authorSurname: string, title: string): string {
+  if (url) { const b = bs.find((x) => x.urls.includes(url)); if (b) return b.text; }
+  const titleWord = (title.match(/[A-Za-z]{5,}/) ?? [""])[0];
+  const b = bs.find((x) => (authorSurname && x.text.includes(authorSurname)) || (titleWord && x.text.includes(titleWord)));
+  return b ? b.text : "";
 }
 
 // Loose containment: drop spaces and the punctuation that legitimately varies
@@ -67,9 +81,13 @@ function audit(slug: string): Finding[] {
   const bibPath = join(refsDir, `${slug}.bib`);
   if (!ep || !existsSync(bibPath)) return findings;
   const zp = ep.replace(/^en\//, "zh/");
-  const enSrc = gitShow(BASELINE, ep), zhSrc = gitShow(BASELINE, zp);
+  // Prefer the pre-migration gloss baseline (covers chapters that postdate the
+  // git baseline commit); fall back to d7a1314 for the originally-migrated set.
+  const base = BASELINE_GLOSS[slug];
+  const enSrc = base ? base.en : gitShow(BASELINE, ep);
+  const zhSrc = base ? base.zh : gitShow(BASELINE, zp);
   if (!enSrc || !zhSrc) return findings;
-  const enG = glossesByUrl(enSrc), zhG = glossesByUrl(zhSrc);
+  const enB = bullets(enSrc), zhB = bullets(zhSrc);
 
   const lib = parseBib(readFileSync(bibPath, "utf8"), { errorHandler: () => {}, sentenceCase: false });
   for (const e of lib.entries) {
@@ -78,8 +96,10 @@ function audit(slug: string): Finding[] {
     const url = f.url ? normalizeUrl(String(f.url)) : eprint ? `arxiv:${eprint}` : "";
     const note = f.note ? String(f.note) : undefined;
     const noteZh = f["note-zh"] ? String(f["note-zh"]) : undefined;
-    const origZh = zhG.get(url) ?? "";
-    const origEn = enG.get(url) ?? "";
+    const author0 = Array.isArray(f.author) && f.author[0] ? (f.author[0].lastName ?? f.author[0].name ?? "") : "";
+    const title = String(f.title ?? "").replace(/[{}]/g, "");
+    const origEn = bulletFor(enB, url, author0, title);
+    const origZh = bulletFor(zhB, url, author0, title);
     // note-zh is faithful iff its text appears in the original zh bullet.
     if (noteZh && !contains(origZh, noteZh)) {
       findings.push({ slug, kind: "INVENTED-ZH", key: e.key, detail: `note-zh={${noteZh}} not found in original zh bullet` });
