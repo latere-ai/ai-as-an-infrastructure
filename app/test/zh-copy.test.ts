@@ -122,6 +122,30 @@ test("polished chapter openings preserve key source theses", () => {
       ["训练信号就必须来自别处", "数据飞轮", "每个回路都有自己的天花板", "受判断者质量所界定"],
     ],
     [
+      "en/reasoning/01-eliciting-reasoning.qmd",
+      ["@gls-cot helps because", "sampling many chains and voting helps", "useful branches", "verifier is the component that turns best-of-N"],
+    ],
+    [
+      "zh/reasoning/01-eliciting-reasoning.qmd",
+      ["@gls-cot管用", "采样许多条链再投票更稳", "问题存在可探索分支", "验证器则是把 best-of-N"],
+    ],
+    [
+      "en/reasoning/02-training-to-reason.qmd",
+      ["checkable ground", "truth rather than a learned human-preference proxy", "removes the learned proxy gap", "dropping the critic", "long-horizon reasoning can emerge", "reweights what the base model could already sample"],
+    ],
+    [
+      "zh/reasoning/02-training-to-reason.qmd",
+      ["可核查的真值", "移除了习得代理缺口", "丢掉了评论者", "没有步级监督也能产出长程推理", "重加权了基座模型本来就能采样到的路径"],
+    ],
+    [
+      "en/reasoning/03-inference-time-scaling.qmd",
+      ["Repeated sampling buys coverage but not an answer", "sequential", "revision and parallel search", "compute-optimal allocation routes a budget", "selector is imperfect"],
+    ],
+    [
+      "zh/reasoning/03-inference-time-scaling.qmd",
+      ["重复采样买到的是覆盖率，而不是答案", "串行修订与并行搜索", "计算最优分配按问题难度调度预算", "选择器并不完美"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -263,6 +287,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/adaptation/02-rlhf-reward-modeling.qmd",
     "en/adaptation/03-dpo-variants.qmd",
     "en/adaptation/04-synthetic-data-self-improvement.qmd",
+    "en/reasoning/index.qmd",
+    "en/reasoning/01-eliciting-reasoning.qmd",
+    "en/reasoning/02-training-to-reason.qmd",
+    "en/reasoning/03-inference-time-scaling.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -295,6 +323,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/adaptation/02-rlhf-reward-modeling.qmd",
     "zh/adaptation/03-dpo-variants.qmd",
     "zh/adaptation/04-synthetic-data-self-improvement.qmd",
+    "zh/reasoning/index.qmd",
+    "zh/reasoning/01-eliciting-reasoning.qmd",
+    "zh/reasoning/02-training-to-reason.qmd",
+    "zh/reasoning/03-inference-time-scaling.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
@@ -310,7 +342,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/infrastructure/07-where-learning-hits-limits.qmd",
     "zh/infrastructure/08-the-capability-horizon.qmd",
   ];
-  const banned = /By the end|This chapter tells one story|读者读完本章|本章把一个故事/;
+  const banned = /By the end|This chapter is about|This chapter tells one story|读者读完|读完这一部分|本章把一个故事/;
 
   for (const path of polished) {
     const text = readFileSync(join(repoRoot, path), "utf8");
