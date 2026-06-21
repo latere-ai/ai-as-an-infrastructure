@@ -258,6 +258,38 @@ test("polished chapter openings preserve key source theses", () => {
       ["带着某人的授权在世界里行动", "长期存在的宽泛令牌，加上一次@gls-prompt-injection，就等于一次入侵", "身份与治理", "经过验证的主体的下游"],
     ],
     [
+      "en/safety/04-runtime-safety.qmd",
+      ["aligned model's own refusal is necessary but not sufficient", "input and output have to be screened separately", "policy-conditioned classifiers", "indirect @gls-prompt-injection", "streaming decision reaches up"],
+    ],
+    [
+      "zh/safety/04-runtime-safety.qmd",
+      ["已对齐模型自己的拒绝必要但不充分", "输入与输出要分开筛", "由策略条件化的分类器", "间接@gls-prompt-injection", "流式决定会反伸上来"],
+    ],
+    [
+      "en/safety/05-adversarial-robustness.qmd",
+      ["four families of @gls-jailbreak", "@gls-red-teaming is a measurement discipline", "every known defense is partial", "@gls-adversarial-robustness is a property of the system rather than of the model alone"],
+    ],
+    [
+      "zh/safety/05-adversarial-robustness.qmd",
+      ["@gls-jailbreak攻击的四个家族", "@gls-red-teaming是一项度量工作", "每一种已知防御都是局部的", "@gls-adversarial-robustness从结构上说是系统的属性"],
+    ],
+    [
+      "en/safety/06-privacy-provenance-unlearning.qmd",
+      ["lossy compression of its training set", "leaks at serving time what it absorbed at training time", "upstream or in a retraining run rather than at the output", "@gls-machine-unlearning can and cannot promise", "Memorization is not a bug layered on top of learning"],
+    ],
+    [
+      "zh/safety/06-privacy-provenance-unlearning.qmd",
+      ["训练集的一次有损压缩", "服务时泄露它在训练时吸收的内容", "上游或一次重训练里，而不是输出端", "@gls-machine-unlearning能承诺什么、不能承诺什么", "记忆不是叠在学习之上的 bug"],
+    ],
+    [
+      "en/safety/07-law-regulation-policy.qmd",
+      ["European Union's risk tiers", "documents a release now legally requires", "copyright is the unsettled ground", "rule written by a regulator rewrite a data-curation decision"],
+    ],
+    [
+      "zh/safety/07-law-regulation-policy.qmd",
+      ["欧盟的风险分级", "发布如今在法律上要求哪些文档", "版权为什么是每一份预训练语料底下尚未夯实的地基", "监管者写下的规则改写"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -421,6 +453,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/safety/01-mechanistic-interpretability.qmd",
     "en/safety/02-scalable-oversight-control.qmd",
     "en/safety/03-security-authorization.qmd",
+    "en/safety/04-runtime-safety.qmd",
+    "en/safety/05-adversarial-robustness.qmd",
+    "en/safety/06-privacy-provenance-unlearning.qmd",
+    "en/safety/07-law-regulation-policy.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -473,6 +509,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/safety/01-mechanistic-interpretability.qmd",
     "zh/safety/02-scalable-oversight-control.qmd",
     "zh/safety/03-security-authorization.qmd",
+    "zh/safety/04-runtime-safety.qmd",
+    "zh/safety/05-adversarial-robustness.qmd",
+    "zh/safety/06-privacy-provenance-unlearning.qmd",
+    "zh/safety/07-law-regulation-policy.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
