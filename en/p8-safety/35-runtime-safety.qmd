@@ -1,0 +1,179 @@
+# Runtime Safety: Guardrails and Moderation {#sec-runtime-safety}
+
+Alignment in @sec-rlhf taught the model to refuse a harmful request most of
+the time. Most of the time is not a deployment guarantee. A served system
+answers untrusted input on every request, the policy it must enforce changes
+faster than the model can be retrained, and the next chapter shows the refusal
+itself can be jailbroken (@sec-adversarial-robustness). So production systems
+add a second safety layer that runs at inference time and does not depend on
+the model behaving. By the end of this chapter a reader can explain why an
+aligned model's own refusal is necessary but not sufficient, where a guardrail
+sits in the request path, why input and output are screened separately, and
+why the serving layer's streaming decision reaches up to dictate how the
+guardrail is built.
+
+## Why the aligned model is not enough
+
+The oversight chapter drew a line between teaching a model the right behavior
+and bounding its behavior from outside (@sec-oversight-control). Runtime safety
+is that same line drawn one layer down, at serving time. The reason a built-in
+refusal is not enough is structural, not a matter of insufficient training.
+The model's compliance is probabilistic: it refuses with high probability, not
+certainty, and a system serving billions of requests meets the tail. The
+policy is also a moving target. A platform's content rules, a regulator's new
+prohibition, a customer's domain restriction all change on a timescale of days,
+while retraining the model to encode them costs weeks and risks regressing
+everything else. And the model's safety can be actively attacked, which the
+next chapter takes up in full.
+
+The standard response is the one control theory and security both reach for: a
+control that is external to the thing it controls. A guardrail is a separate,
+usually smaller, classifier placed in the request path, cheap enough to run on
+every call, and updated independently of the model it guards.
+
+## The shape of a guardrail
+
+The guardrail screens twice, because the two screens catch different failures.
+
+```{dot}
+//| label: fig-runtime-guard-path
+//| fig-cap: "A guardrail screens the request path twice. The input classifier catches a disallowed request before the expensive model runs; the output classifier catches a disallowed generation before it reaches the user. Both are separate models, updated independently of the served model, and both fail closed."
+digraph guard {
+  rankdir=LR;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontsize=9];
+
+  u   [label="user input"];
+  gi  [label="input guard\n(classifier)", color="#3b82f6", fontcolor="#3b82f6"];
+  m   [label="served model"];
+  go  [label="output guard\n(classifier)", color="#3b82f6", fontcolor="#3b82f6"];
+  o   [label="response"];
+  ref [label="refuse / replace"];
+
+  u -> gi -> m -> go -> o;
+  gi -> ref [label="blocked"];
+  go -> ref [label="blocked"];
+}
+```
+
+Input screening catches a disallowed request before the model spends a single
+token on it, which is both a safety win and a cost win: the cheapest harmful
+generation is the one never produced. Output screening catches what input
+screening cannot, because a benign-looking prompt can still elicit a
+disallowed completion, and because the model can be steered by content it
+retrieved or a tool returned mid-generation. The two screens are independent
+classifiers, and the practical default is to fail closed: if the guard errors
+or times out, the request is refused rather than passed through.
+
+## Evolution: from blocklists to policy as input
+
+The lineage runs from crude to programmable. The earliest filters were keyword
+blocklists, trivially bypassed by spelling and trivially wrong on benign text.
+Learned toxicity classifiers replaced them with a model of the category, but a
+fixed model of a fixed category. The next step put a language model in the
+moderator's seat: a single endpoint trained to flag content across a taxonomy
+of harm, more robust to paraphrase than a keyword list and able to explain its
+verdict [@markov2023moderation].
+
+The decisive shift was making the policy an input rather than a baked-in
+category. Llama Guard is fine-tuned to take a safety taxonomy in its prompt and
+classify a conversation against *that* taxonomy, so the same guard model serves
+many policies and a policy change is a prompt change, not a retraining
+[@inan2023llamaguard]. A parallel line added control above the single
+classification: programmable rails that constrain the dialogue itself, routing
+or rephrasing or refusing according to declared flows rather than a single
+yes-or-no [@rebedea2023nemoguardrails]. The arc is from a fixed filter toward a
+configurable policy engine that sits beside the model.
+
+## Trade-offs
+
+The first trade-off is precision against recall, and it is unforgiving in both
+directions. A guard tuned to catch everything blocks benign requests, and
+over-refusal is a real cost: it is the failure users feel, and it pushes them
+to systems with weaker safety. A guard tuned to preserve utility lets harm
+through. There is no setting that escapes the curve; there is only the choice
+of operating point, and the right point differs by domain.
+
+The second trade-off is safety against latency, and it is sharpened by the
+serving layer. Output screening wants the whole generation, but the serving
+stack streams tokens to the user as they are produced (@sec-faster-decoding).
+A system cannot both stream a token and wait to screen the complete output. It
+must either buffer the generation and screen it whole, paying latency and
+giving up the streaming experience, or screen incrementally in chunks, risking
+that a disallowed prefix reaches the user before the chunk that condemns it.
+
+::: {.callout-tip}
+## Constraint arrow
+
+The serving layer's streaming decision reaches up and dictates the guardrail's
+architecture. Because @sec-serving-problem streams tokens to cut perceived
+latency, the output guard cannot assume it has the complete response to
+classify. The safety layer is forced to choose incremental screening, with its
+prefix-leak risk, or whole-response buffering, which discards the very
+streaming the serving layer was built to provide. A latency optimization three
+layers down decides whether the safety layer can stream, and that is why a
+guardrail cannot be designed without knowing how the model is served.
+:::
+
+## Implementation
+
+The control flow is small, and its smallness is the point: a guardrail must be
+cheap enough to run on every request.
+
+```python
+def guarded_generate(request, policy):
+    verdict = input_guard.classify(request, policy)   # separate small model
+    if verdict.blocked:
+        return refusal(verdict.category)
+    output = model.generate(request)                  # the served model
+    verdict = output_guard.classify(output, policy)   # policy passed as input
+    if verdict.blocked:
+        return replacement(verdict.category)
+    return output
+```
+
+Two details carry the design. The policy is passed as an argument, not compiled
+into the classifier, which is what lets one guard model serve many products and
+absorb a rule change without retraining [@inan2023llamaguard]. And the guard is
+a different model from the one it guards, often much smaller, so that screening
+every request is affordable and so that a single jailbreak does not compromise
+both the generator and its monitor at once.
+
+::: {.callout-important}
+## What's contested
+
+- **Do guardrails add safety or only move the attack surface?** A guard is
+  itself a model with an input channel, so it can be attacked like any other
+  (@sec-adversarial-robustness). Skeptics argue a separate classifier mostly
+  relocates the jailbreak target; defenders argue defense in depth still
+  raises the cost of an attack even if no single layer is complete.
+- **Is policy-as-input classification robust enough?** Passing the taxonomy in
+  the prompt is flexible, but it inherits the brittleness of in-context
+  instructions. Whether a configurable guard matches a purpose-trained
+  classifier on a fixed policy is an open empirical question.
+- **Centralized or per-application policy?** A platform-wide guard is
+  consistent and auditable but blunt; per-application policy fits the use but
+  fragments the safety story and the evaluation.
+:::
+
+## Reading runtime safety through the lens
+
+Capability, at this layer, is mostly something the guardrail spends rather than
+adds: every block is a refused request, so the discipline is to subtract as
+little utility as possible while removing the harm, which is the precision
+against recall curve made concrete. Efficiency is why the guard is a small,
+separate model: screening every request is only viable if the screen is cheap,
+and input screening pays for itself by killing harmful generations before the
+expensive model runs. Trust is the whole purpose. A built-in refusal asks the
+user to trust that the model will behave; an external guard that fails closed
+and is auditable independently of the model is what lets an operator make a
+claim about the system's behavior that does not rest on the model's good
+intentions. The guardrail is the runtime instrument of the same control
+agenda that @sec-oversight-control argued for at training time.
+
+## Further reading
+
+- Markov et al., "A Holistic Approach to Undesired Content Detection in the Real World," AAAI 2023 (a language-model moderation endpoint over a harm taxonomy). [arXiv:2208.03274](https://arxiv.org/abs/2208.03274)
+- Inan et al., "Llama Guard: LLM-based Input-Output Safeguard for Human-AI Conversations," 2023 (policy-as-input safety classification). [arXiv:2312.06674](https://arxiv.org/abs/2312.06674)
+- Rebedea et al., "NeMo Guardrails: A Toolkit for Controllable and Safe LLM Applications with Programmable Rails," EMNLP 2023 (dialogue-level programmable rails). [arXiv:2310.10501](https://arxiv.org/abs/2310.10501)

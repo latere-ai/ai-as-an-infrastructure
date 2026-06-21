@@ -1,0 +1,233 @@
+# Adversarial Robustness and Red-Teaming {#sec-adversarial-robustness}
+
+Alignment is a trained disposition, not a guarantee. A model that refuses a
+harmful request in the average case still holds, somewhere in its weights, the
+capability the refusal is meant to suppress, and an adversary with access to the
+input can search for the phrasing that recovers it. This chapter is about that
+search and the effort to defeat it. By the end a reader can name the four
+families of jailbreak and what each exploits, explain why red-teaming is a
+measurement discipline rather than a one-time audit, see why every known defense
+is partial, and understand the structural reason robustness is a property of the
+system rather than of the model alone.
+
+The boundary with the two neighboring chapters matters. @sec-runtime-safety adds
+a filter around the model that inspects inputs and outputs; @sec-security-authorization
+bounds what a compromised agent can reach by scoping its authority. This chapter
+sits between them, on the manipulation itself: how an attacker turns a refusal
+into compliance, how a defender measures the rate at which that succeeds, and
+whether the rate can be driven to zero at all.
+
+## The problem: a refusal is a soft boundary
+
+Post-training installs refusal by example (@sec-rlhf): the model is shown
+harmful requests paired with declines and learns to reproduce the pattern. The
+result is a decision boundary in a space the operator cannot enumerate. Refusal
+holds densely over the prompts seen in training and thins out in the corners no
+one wrote down. An attack is a procedure for finding those corners, and the
+unsettling discovery of the period is that the corners are not rare accidents
+but a reliably reachable surface, often by automated search.
+
+Four families of attack have stabilized, and they differ in what part of the
+model they exploit.
+
+```{mermaid}
+%%| label: fig-adv-taxonomy
+%%| fig-cap: "Four jailbreak families, grouped by what each exploits. Optimization attacks search token space directly; many-shot attacks exploit the long-context window; multi-turn attacks exploit conversational state; indirect injection exploits the open input channel of a tool-using agent. Defenses below address different families, and none covers all four."
+flowchart TB
+  M["aligned model<br/>refusal boundary"]
+  O["optimization<br/>adversarial suffix (GCG)"] --> M
+  MS["many-shot<br/>fake dialogue in context"] --> M
+  MT["multi-turn<br/>persona, crescendo"] --> M
+  I["indirect injection<br/>untrusted tool content"] --> M
+  M --> H["harmful completion"]
+```
+
+The first family is optimization-based. The Greedy Coordinate Gradient attack
+treats jailbreaking as a search problem: append a suffix of tokens to a harmful
+request and optimize the suffix, by gradient over a white-box model, to maximize
+the probability that the model begins its answer with an affirmative phrase
+[@zou2023gcg]. The suffixes look like noise, they are found by machine rather
+than by a person, and the central result is that they transfer: a suffix tuned
+against open weights often jailbreaks closed models it never saw. Optimization
+turned jailbreaking from craft into a reproducible pipeline.
+
+The second family exploits scale in the context window rather than the token
+search. Many-shot jailbreaking fills the prompt with a long fabricated dialogue
+in which an assistant answers a sequence of escalating harmful questions, then
+asks the real one [@anil2024manyshot]. The model, completing a pattern, extends
+the fabricated assistant's compliance to the final question. The attack's
+effectiveness grows with the number of shots in a roughly power-law fashion, so
+the same long-context capability that makes a model useful (@sec-structured-long-context)
+widens the surface this attack runs on.
+
+The third family is conversational. Rather than break the boundary in one shot,
+a multi-turn attack walks the model across it. A persona attack asks the model
+to role-play a character not bound by the policy; a crescendo attack opens with
+a benign request and escalates over several turns, each step a small increment
+from an answer the model already gave, so no single turn looks like a violation
+[@russinovich2024crescendo]. These attacks exploit that the model conditions on
+its own prior outputs, and that a request is judged against the visible turn
+rather than the trajectory.
+
+The fourth family does not come through the user at all. Indirect prompt
+injection plants instructions in content the agent will read as data: a web
+page, a document, a tool's output [@greshake2023injection]. When the agent
+ingests that content, it cannot reliably tell the planted instruction from the
+operator's. This is the family that breaks agents specifically, because an
+agent's reason for existing is to read untrusted external content and act on it.
+It is the hinge between this chapter and @sec-security-authorization, and the
+constraint arrow below names why no model-level fix closes it.
+
+## Red-teaming as measurement, not audit
+
+If attacks are a reliably reachable surface, then a one-time security review is
+the wrong instrument. What a deployer needs is a continuous estimate of how
+often an adversary succeeds, recomputed as both the model and the attacks
+change. Red-teaming is that estimate, and treating it as a measurement
+discipline, with a metric, a dataset, and a reproducible harness, is what
+separates it from anecdote.
+
+The metric is attack success rate: over a fixed set of harmful behaviors and a
+fixed attack method, the fraction of attempts that elicit a genuinely harmful
+completion. The honesty of the number lives in the judge that decides what
+counts as harmful, which is itself a model or a rubric and carries the same
+construct-validity worries as any judge (@sec-judging-holistic). A standardized
+harness fixes the behaviors, the attacks, and the judge so that two models or
+two defenses can be compared on the same footing; HarmBench is one such
+framework, pairing a behavior set with a battery of attacks and an automated
+classifier [@mazeika2024harmbench]. The harmful-behaviors dataset that the GCG
+work introduced, often called AdvBench, became a common substrate underneath
+many of these evaluations [@zou2023gcg].
+
+Generating the attacks is itself automatable, and this is where red-teaming
+scales past a human team. A language model can be pointed at a target and asked
+to generate prompts that make it misbehave, then trained on which of its prompts
+succeeded, turning attack discovery into its own optimization loop
+[@perez2022redteaming]. Automated red-teaming widens coverage far beyond what a
+human team can hand-write, at the cost that it finds the attacks its generator
+is shaped to find and can miss whole families the generator never models. Human
+red teams remain the source of genuinely novel attack classes; the automation
+amortizes them across every model release.
+
+::: {.callout-tip}
+## Constraint arrow
+
+The harness in @sec-the-harness reads untrusted content by construction: an
+agent that cannot ingest a web page or a tool result cannot do its job. That
+open input channel dictates that indirect injection cannot be closed at the
+prompt layer, because the model has no reliable channel-level signal separating
+the operator's instruction from one planted in the data it was asked to read.
+The defense therefore cannot live in the model. It moves down to authority
+scoping (@sec-security-authorization), which bounds what a manipulated agent can
+reach, and out to runtime filtering (@sec-runtime-safety), which inspects the
+crossing. Robustness is a property of the system that wraps the model, not of
+the weights. A more aligned model raises the cost of the first family and barely
+touches the fourth.
+:::
+
+## Defenses, and why each is partial
+
+Defenses divide by where they intervene, and reading them as a defense-in-depth
+stack rather than a search for the one fix is the realistic posture.
+
+```{dot}
+//| label: fig-adv-defense-layers
+//| fig-cap: "Defense in depth against jailbreaks and injection. Each layer catches a different family and leaks others: training-time hardening generalizes poorly to optimized suffixes, classifiers add latency and miss novel phrasings, representation defenses can be re-broken, and only authority scoping bounds the damage when the upstream layers fail."
+digraph defenses {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+
+  atk [label="attack", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  adv [label="training-time\nadversarial training, refusal tuning"];
+  cls [label="inference-time\ninput/output classifiers"];
+  rep [label="representation-level\ncircuit breakers"];
+  aut [label="authority scoping\nbound the blast radius"];
+  safe [label="contained", color="#3b82f6", fontcolor="#3b82f6"];
+
+  atk -> adv -> cls -> rep -> aut -> safe;
+  adv -> safe [label="leaks optimized suffixes", style=dashed, constraint=false];
+  cls -> safe [label="leaks novel phrasings", style=dashed, constraint=false];
+  rep -> safe [label="can be re-broken", style=dashed, constraint=false];
+}
+```
+
+Training-time hardening adds adversarial examples to the post-training mix so
+the refusal boundary covers more corners. It raises the floor against known
+attack styles and generalizes poorly to optimized suffixes found after the model
+froze, because the attacker optimizes against the deployed boundary while the
+defender trained against last quarter's.
+
+Inference-time classifiers, the subject of @sec-runtime-safety, place a separate
+model on the input and the output to catch attacks the target itself missed.
+They are independent of the target's alignment, which is their strength, and
+they add a latency and cost tax on every call while missing phrasings their own
+training never covered.
+
+Representation-level defenses intervene inside the model rather than around it.
+Circuit breakers reach into the residual stream and reroute the internal
+representations that precede a harmful completion, so that when an attack steers
+the model toward producing harm, the rerouted representation derails the
+generation into incoherence rather than compliance [@zou2024circuitbreakers].
+The appeal is that the defense attaches to the harmful internal state rather than
+to surface phrasing, which is what optimized and many-shot attacks vary. Whether
+it generalizes durably or is re-broken by attacks that find new internal routes
+is exactly the open question the next box names, and it ties this work to the
+interpretability program in @sec-interpretability, which supplies the picture of
+internal features the defense acts on.
+
+System-prompt hardening, instructing the model to distrust embedded
+instructions and to treat tool content as data, is the cheapest layer and the
+weakest in isolation: it is itself just text in the context window, subject to
+the same override the attacks demonstrate.
+
+::: {.callout-important}
+## What's contested
+
+- **Is jailbreak robustness achievable, or perpetual whack-a-mole?** One camp
+  holds that robustness is a reachable engineering target, with circuit breakers
+  and adversarial training driving attack success rate down release over
+  release. The other holds that an unbounded input space against a fixed model
+  guarantees a residual attack surface, so the realistic goal is raising
+  attacker cost and bounding blast radius, not closing the boundary. The
+  transfer result of optimized suffixes [@zou2023gcg] is read by the first camp
+  as a bug to patch and by the second as evidence the surface is intrinsic.
+- **Do representation-level defenses generalize?** Circuit breakers
+  [@zou2024circuitbreakers] act on internal state rather than surface form, which
+  should generalize across phrasings. Skeptics expect adaptive attacks that find
+  new internal routes to re-break them, the same pattern that defeated earlier
+  defenses, and note that published breaks tend to follow published defenses.
+- **Is automated red-teaming a safety signal or an arms race?** Automated attack
+  generation [@perez2022redteaming] widens coverage cheaply, but it measures
+  robustness against the attacks its generator models, so a falling attack
+  success rate may mean a safer model or only a generator that stopped finding
+  what a human still can.
+:::
+
+## Trade-offs: capability, efficiency, trust
+
+Every defense in this chapter trades against the three. The capability cost is
+over-refusal: a model hardened against attacks declines benign requests that
+resemble them, and the same boundary that blocks a jailbreak blocks a security
+researcher's legitimate question, so robustness and helpfulness are tuned
+against each other rather than independently maximized. The efficiency cost is
+the classifier tax of @sec-runtime-safety and the training cost of adversarial
+and representation-level methods, paid on every request or every release. Trust
+is the point of the whole exercise, and the honest form of it is a published
+attack success rate against a named harness rather than a claim of safety:
+robustness that cannot be measured the way HarmBench measures it
+[@mazeika2024harmbench] is an assertion, not a property. The discipline's
+contribution to @sec-oversight-control is precisely this, a number that says how
+far the deployed boundary can be pushed and by whom, recomputed every time the
+model or the attack changes.
+
+## Further reading
+
+- Zou, Wang, Carlini, Nasr, Kolter, Fredrikson, "Universal and Transferable Adversarial Attacks on Aligned Language Models," 2023 (GCG and the AdvBench harmful-behaviors set). [arXiv:2307.15043](https://arxiv.org/abs/2307.15043)
+- Greshake, Abdelnabi, Mishra, Endres, Holz, Fritz, "Not what you've signed up for: Compromising Real-World LLM-Integrated Applications with Indirect Prompt Injection," 2023. [arXiv:2302.12173](https://arxiv.org/abs/2302.12173)
+- Anil et al., "Many-shot Jailbreaking," Anthropic, 2024 (long-context attack scaling). [anthropic.com](https://www.anthropic.com/research/many-shot-jailbreaking)
+- Russinovich, Salem, Eldan, "Great, Now Write an Article About That: The Crescendo Multi-Turn LLM Jailbreak Attack," 2024. [arXiv:2404.01833](https://arxiv.org/abs/2404.01833)
+- Perez et al., "Red Teaming Language Models with Language Models," 2022 (automated attack generation). [arXiv:2202.03286](https://arxiv.org/abs/2202.03286)
+- Mazeika et al., "HarmBench: A Standardized Evaluation Framework for Automated Red Teaming and Robust Refusal," 2024. [arXiv:2402.04249](https://arxiv.org/abs/2402.04249)
+- Zou et al., "Improving Alignment and Robustness with Circuit Breakers," 2024 (representation-level defense). [arXiv:2406.04313](https://arxiv.org/abs/2406.04313)

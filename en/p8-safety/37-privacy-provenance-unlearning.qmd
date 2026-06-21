@@ -1,0 +1,245 @@
+# Privacy, Provenance, and Unlearning {#sec-privacy-provenance}
+
+A model is a lossy compression of its training set, and some of what it
+compresses is a person. By the end of this chapter a reader can explain why a
+model leaks at serving time what it absorbed at training time, why the only
+sound place to fix that is upstream or in a retraining run rather than at the
+output, what machine unlearning can and cannot promise when the law demands a
+fact be removed, and why provenance for generated content is a separate problem
+from privacy that the same chapter has to carry. The argument is that
+memorization is not a bug layered on top of learning but the same mechanism seen
+from the privacy side, so the controls that work are the ones applied before the
+weights set, and everything attempted after is mitigation against a fact already
+encoded.
+
+## What the weights remember
+
+The first thing to establish is that the leak is real and not hypothetical. A
+large language model trained on web text will, under the right prompt, emit
+sequences from its training data verbatim: names, phone numbers, addresses,
+fragments of private correspondence that happened to be scraped. The founding
+demonstration extracted hundreds of verbatim training examples from a deployed
+model, including personally identifiable information, using only query access
+[@carlini2021extracting]. This is not the model reasoning about a person. It is
+the model returning a stored string.
+
+How much a model memorizes is not random, and the follow-up work made the
+dependence precise. Verbatim memorization grows with model scale, with the
+number of times a sequence is duplicated in the training set, and with the
+length of context used to prompt for it [@carlini2022quantifying]. All three
+knobs point upstream. A bigger model from @sec-scaling-laws memorizes more, a
+corpus that was not deduplicated in @sec-data-curation memorizes the duplicated
+spans hardest, and a longer prompt pulls more out. The privacy exposure of the
+deployed system is set by decisions made before serving existed.
+
+A weaker but more general attack does not need the model to regurgitate
+anything. Membership inference asks only whether a given record was in the
+training set, by exploiting the fact that a model is more confident, lower loss,
+on data it trained on than on data it did not [@shokri2017membership]. That is
+enough to violate privacy on its own: confirming that a particular patient's
+record was in a medical training set leaks the diagnosis category before a
+single token is regurgitated. Membership inference is the cheapest privacy
+attack and the hardest to fully close, because the signal it uses, the
+generalization gap, is a property of learning itself.
+
+```{dot}
+//| label: fig-privacy-lifecycle
+//| fig-cap: "The lifecycle of a private fact through the stack, and the three places one can intervene. Upstream controls (dedup, differential privacy) act before the weights set; retraining or unlearning acts on the frozen artifact at high cost; a downstream output filter is the tempting and weakest option, because it cannot remove what the weights already encoded."
+digraph privacy {
+  rankdir=LR;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+
+  fact  [label="private fact\nin source data"];
+  train [label="training\nmemorizes it", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  weights [label="frozen weights\nfact encoded"];
+  serve [label="serving\nextraction / inference"];
+
+  fact -> train -> weights -> serve;
+
+  up   [label="upstream:\ndedup, DP\n(sound)"];
+  re   [label="retrain / unlearn\n(costly)"];
+  down [label="output filter\n(leaky)"];
+
+  up -> train [style=dashed, label="before weights set"];
+  re -> weights [style=dashed, label="on the artifact"];
+  down -> serve [style=dashed, label="after the fact"];
+}
+```
+
+## Privacy you can buy before the weights set
+
+If exposure is set upstream, the cheapest control is also upstream, and it is
+the one already motivated for a different reason. Deduplication, introduced in
+@sec-data-curation to stop the model wasting capacity on repeated text, is also
+the single most effective memorization control, because the sequences a model
+regurgitates are overwhelmingly the duplicated ones [@carlini2022quantifying].
+Privacy here is a free rider on an efficiency decision, which is the cleanest
+kind of control: it costs nothing extra and the constraint arrow runs the right
+way.
+
+The principled control is stronger and more expensive. Differential privacy
+bounds how much any single training record can change the trained model, by
+adding calibrated noise so that the output distribution is nearly identical
+whether or not that record was present. Applied to deep learning as DP-SGD, the
+recipe clips per-example gradients and adds Gaussian noise at each step, with a
+privacy budget that accounts across the whole run [@abadi2016dpsgd]. The
+guarantee is real and quantified, and it is the only training-time control that
+provably bounds memorization rather than merely reducing it. The cost is the
+problem. At frontier scale the noise and clipping degrade utility enough that no
+flagship general model is trained end to end under a tight DP budget, and DP is
+reserved for fine-tuning on a sensitive corpus or for models where the privacy
+guarantee is the product. Whether DP belongs in the pretraining loop at all,
+given the utility hit, is one of the open questions below.
+
+PII handling and data residency are usually filed under deployment, the choice
+of which region a request runs in, and that framing undersells them. Read as
+privacy controls they are upstream interventions wearing operational clothing.
+Stripping or tokenizing personal identifiers before a record ever reaches the
+training set removes the string that could later be extracted; keeping a
+sensitive corpus inside a jurisdiction and out of the pretraining mix is a
+decision about what the weights are allowed to encode, not merely where a server
+sits. The same residency knob that @sec-security-authorization treats as a
+regulatory boundary is, from this chapter's side, a choice about which facts the
+model is permitted to memorize.
+
+## Removing what was already learned
+
+The hard case is when the fact is already in the weights and someone with a
+legal right asks for it to be gone. The honest baseline is brutal: the only way
+to guarantee a training record's influence is removed is to retrain the model
+from scratch on the corpus minus that record. For a frontier model that is
+millions of dollars and weeks per deletion request, which is no answer at all.
+Machine unlearning is the field that tries to approximate that guarantee for
+less.
+
+The one approach that retains an exact guarantee buys it with architecture
+rather than cleverness. Sharded, isolated training, the SISA scheme, partitions
+the data into shards, trains a separate model per shard, and aggregates their
+predictions; deleting a record then requires retraining only the one shard it
+sat in, not the whole model [@bourtoule2019unlearning]. The guarantee is exact
+because the deleted record provably never touched the other shards. The price is
+paid up front and permanently: sharding caps how much each sub-model sees, which
+costs capability, and the aggregate of small models is weaker than one model
+trained on everything. SISA is the clearest statement of the unlearning
+trade-off, that an exact deletion guarantee is something you architect for in
+advance, not something you bolt on after.
+
+Everything cheaper is approximate, and approximate unlearning runs into a
+measurement problem before it runs into anything else. Suppose a method
+fine-tunes the model to raise its loss on the target record, or to match the
+behavior of a model that never saw it. How do you verify the fact is actually
+gone rather than merely suppressed on the prompts you tested? A model that
+refuses to recite a memorized address when asked directly may still complete it
+from an oblique prompt, or retain the influence in a way membership inference
+can still detect. Evaluating unlearning is close to evaluating a negative, and
+the field has no agreed test that a capability has been removed rather than
+hidden, which is the contested point below.
+
+Knowledge editing attacks a narrower target: not deleting a record but changing
+a specific fact the model will state, for instance updating who holds an office.
+Locating the factual association to a small set of mid-layer feed-forward weights
+and editing them directly, the ROME method, showed that a single fact can be
+rewritten with a rank-one update [@meng2022rome], and the follow-up scaled it to
+thousands of edits at once [@meng2022memit]. The technique is precise and cheap,
+and that is also its limit. Edits are brittle: they hold for the exact phrasing
+targeted and can fail to propagate to paraphrases or logical consequences, so
+the model asserts the new fact in one form and the old one in another. Editing
+moves the surface a probe touches without guaranteeing the underlying
+representation moved with it, which connects directly to the open question in
+@sec-interpretability of whether we can even locate a fact precisely enough to
+say it was changed.
+
+## Provenance is a different promise
+
+Privacy asks what the model should not reveal. Provenance asks the opposite
+question about output: given a piece of text or media, can anyone tell that a
+model produced it, and trust that answer. The two share this chapter because
+both are claims about the relationship between a model and a specific string,
+but they pull in opposite directions, and conflating them is a common error.
+
+For text, the dominant idea is statistical watermarking: at generation time,
+bias the sampling toward a pseudo-randomly chosen "green" subset of the
+vocabulary at each step, so that text from the model carries a detectable
+statistical signature that ordinary text does not, recoverable without access to
+the model [@kirchenbauer2023watermark]. The scheme is elegant and adds little
+cost. Its weakness is robustness: paraphrasing the output, translating it and
+back, or having a second model rewrite it degrades the signal, and a determined
+evader can usually launder a watermark out. So a text watermark is a useful
+signal at population scale and a weak one against an adversary, which is exactly
+the wrong way round for the high-stakes attribution cases people most want it
+for.
+
+For images, audio, and video, the more durable approach is not to watermark the
+pixels but to sign the provenance metadata. Content Credentials, standardized as
+C2PA, attach a cryptographically signed manifest recording how an asset was made
+and edited, so a viewer can verify the chain rather than guess from the content
+[@c2pa2024]. This inverts the watermarking bet: instead of hiding a signal in
+the content and hoping it survives, it binds a signature to the content and
+makes tampering detectable. The limit is adoption and stripping. A signed
+manifest only helps where the capture device, the editing tool, and the platform
+all participate, and an unsigned asset is not proof of anything, only the absence
+of a credential. Provenance for the generated media of @sec-beyond-text is
+therefore a coordination problem as much as a cryptographic one.
+
+::: {.callout-tip}
+## Constraint arrow
+The privacy exposure of a deployed model is fixed before serving begins.
+Training-time memorization, set by model scale in @sec-scaling-laws and by the
+deduplication and filtering choices in @sec-data-curation, dictates what can be
+extracted at inference time. The arrow runs strictly upward and forward: you
+cannot filter out at the output what the weights already encoded, because an
+output filter sees only the tokens it is shown and not the thousand oblique
+prompts that reach the same memorized string. The only controls that bound the
+exposure rather than chase it are the upstream ones (dedup, differential
+privacy, PII stripping) and the expensive downstream one (retraining or
+unlearning the artifact). A serving-time guardrail, the subject of the runtime
+safety chapter, is the weakest link in the chain precisely because it acts last.
+:::
+
+::: {.callout-important}
+## What's contested
+- **Does approximate unlearning remove a capability or hide it?** One camp
+  treats a model that no longer emits the target as unlearned; the other holds
+  that without an exact guarantee like sharded retraining, the influence may
+  persist below the surface and resurface under an unprobed prompt, and that the
+  field lacks a test to tell the two apart.
+- **Is text watermarking robust enough to deploy?** Proponents point to strong
+  population-level detection at low cost; skeptics note that paraphrase and
+  rewrite attacks launder the signal, so the watermark fails against exactly the
+  motivated adversary that high-stakes attribution targets.
+- **Does differential privacy belong in frontier pretraining?** The guarantee is
+  the only provable bound on memorization, but the utility cost at scale is large
+  enough that no flagship is trained under a tight budget, and whether the
+  guarantee is worth the capability it sacrifices is unsettled.
+:::
+
+## Reading privacy, provenance, and unlearning
+
+The capability, efficiency, trust lens reads this layer as almost pure trust,
+bought against the other two. Capability is what memorization quietly adds and
+what differential privacy and unlearning take away: a model trained to forget, or
+trained under noise, knows less. Efficiency is the cost of every honest control
+here, from the deduplication that is nearly free to the full retrain that is the
+price of a guaranteed deletion, with DP and SISA in between as standing taxes on
+the training budget. Trust is the whole point: whether a person can rely on the
+system not to leak them, and whether a viewer can rely on a provenance claim. The
+chapter's thesis is the uncomfortable one, that trust at this layer is mostly
+purchased upstream and is expensive to retrofit, because a fact in the weights is
+not a record in a database that can be deleted with a query. The law that turns
+these engineering limits into obligations is @sec-law-policy, and the
+inference-time controls that try, and largely fail, to contain what the weights
+already hold are the runtime safety layer that follows.
+
+## Further reading
+
+- Carlini, Tramèr, Wallace, et al., "Extracting Training Data from Large Language Models," USENIX Security 2021 (verbatim extraction of PII from a deployed model). [arXiv:2012.07805](https://arxiv.org/abs/2012.07805)
+- Carlini, Ippolito, Jagielski, et al., "Quantifying Memorization Across Neural Language Models," ICLR 2023 (memorization scales with model size, duplication, and context). [arXiv:2202.07646](https://arxiv.org/abs/2202.07646)
+- Shokri, Stronati, Song, Shmatikov, "Membership Inference Attacks Against Machine Learning Models," IEEE S&P 2017 (the generalization-gap attack). [arXiv:1610.05820](https://arxiv.org/abs/1610.05820)
+- Abadi, Chu, Goodfellow, et al., "Deep Learning with Differential Privacy," CCS 2016 (DP-SGD: clipping, noise, privacy accounting). [arXiv:1607.00133](https://arxiv.org/abs/1607.00133)
+- Bourtoule, Chandrasekaran, Choquette-Choo, et al., "Machine Unlearning," IEEE S&P 2021 (the SISA sharded-retraining scheme). [arXiv:1912.03817](https://arxiv.org/abs/1912.03817)
+- Meng, Bau, Andonian, Belinkov, "Locating and Editing Factual Associations in GPT," NeurIPS 2022 (ROME). [arXiv:2202.05262](https://arxiv.org/abs/2202.05262)
+- Meng, Sharma, Andonian, et al., "Mass-Editing Memory in a Transformer," ICLR 2023 (MEMIT). [arXiv:2210.07229](https://arxiv.org/abs/2210.07229)
+- Kirchenbauer, Geiping, Wen, et al., "A Watermark for Large Language Models," ICML 2023 (green-list sampling watermark). [arXiv:2301.10226](https://arxiv.org/abs/2301.10226)
+- Coalition for Content Provenance and Authenticity, "C2PA Technical Specification" (Content Credentials for signed media provenance). [c2pa.org](https://c2pa.org/specifications/)

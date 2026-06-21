@@ -1,0 +1,273 @@
+# Reliability for Nondeterministic Systems {#sec-reliability}
+
+Classical site reliability engineering rests on an assumption that a language
+model breaks: that the same request, served by a healthy system, returns the
+same response. When the response is sampled from a distribution, the apparatus
+built on that assumption, the exact-match health check, the deterministic
+retry, the binary notion of a correct reply, stops describing the system. By
+the end of this chapter a reader can define a service level indicator for an
+output that is never twice the same, explain why an agent that is reliable at
+every single step is unreliable over a long task, and choose between the two
+honest responses to that fact: chase determinism, or embrace sampling and
+verify what comes back. The argument is that reliability does not disappear
+when the system turns stochastic; it moves from the response to the
+distribution, and the whole operational toolkit has to follow it there.
+
+## The health check that no longer works
+
+A conventional service is monitored by asking it a question with a known
+answer and checking that the answer comes back. The probe is deterministic
+because the service is: a load balancer pings `/health`, expects `200`, and
+pulls the instance from rotation when it sees anything else. The reliability
+literature is built on top of this, from the error budget that converts an
+availability target into a quantity of permissible failure
+[@beyer2016sre]. None of it assumes the service might return a different,
+equally valid answer each time.
+
+A model-backed service violates the assumption at the core. Ask it the same
+question twice and the tokens differ, because generation samples from a
+distribution over next tokens (@sec-serving-problem). Two answers can both be
+correct, or both wrong, or one of each, and no exact-match probe can tell
+which case it is in. The failure is not that the service is down. The failure
+is that "up" no longer implies "correct," and the gap between them is exactly
+where a model service fails in production: the endpoint returns `200`, the
+latency is nominal, and the content is wrong.
+
+So reliability for these systems begins by separating three questions that a
+deterministic service let you conflate. Is the service reachable
+(availability)? Did it answer in time (latency)? And was the answer good
+(quality)? The first two carry over unchanged. The third is new, and it is the
+one that decides whether the product works.
+
+## A service level indicator for an answer that is never the same
+
+The fix is to stop measuring the response and start measuring the
+distribution. A service level indicator, an SLI, is the proportion of valid
+events in a window [@beyer2016sre]. For availability the event is a request
+and "valid" means answered; that definition needs no change. For quality the
+event is still a request, but "valid" has to be decided by something that can
+read a free-form answer and judge it, which is the evaluation machinery of
+@sec-evaluating-agents pointed at live traffic rather than a fixed test set.
+
+A quality SLI is therefore a sampled, judged measurement. Take a fraction of
+production responses, score each with an automated judge or a rubric check,
+and report the pass rate. The number is noisy, because the judge is itself a
+model and the traffic drifts, so a quality SLO is a band rather than a line: a
+target of "at least 92 percent of sampled answers pass the rubric over a
+rolling day," with an alert when the lower confidence bound crosses the floor,
+not when a single sample fails. The error budget is then denominated in failed
+*samples* over the window, and it is spent by a bad deployment, a drifting
+prompt, or an upstream model change just as a latency budget is spent by a slow
+dependency.
+
+::: {.callout-tip}
+## Constraint arrow
+
+The achievable task reliability is set one layer down, by the agent's step
+count. If each step of the harness in @sec-agent-architectures succeeds
+independently with probability $p$, a task that needs $n$ steps in sequence
+succeeds with probability $p^n$, which falls fast: at $p = 0.99$, a
+fifty-step task is already near $0.61$. A reliability target on the task
+therefore reaches back down into the architecture and caps $n$, or forces
+checkpoints that let a failed step be retried without restarting the task. The
+SLO does not just measure the system; it dictates how many steps the system is
+allowed to take. An operator who promises 95 percent task success and lets the
+agent run two hundred unguarded steps has promised something the arithmetic
+forbids (cross-ref @sec-the-harness, @sec-capability-horizon).
+:::
+
+## Why a reliable step is not a reliable task
+
+The constraint arrow above is the single most important fact in operating
+agents, and it is worth seeing as a curve rather than a sentence. Per-step
+accuracy that looks excellent in isolation compounds into task accuracy that
+looks broken, because the steps multiply rather than average. The gap between
+"my model is right 99 percent of the time" and "my agent finishes the job"
+is the difference between $p$ and $p^n$.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+steps = np.arange(1, 201)
+for p in (0.999, 0.99, 0.98, 0.95):
+    plt.plot(steps, p**steps, label=f"per-step p={p}")
+plt.axhline(0.5, ls="--", color="gray")
+plt.xlabel("steps in the task (n)")
+plt.ylabel("task success  p^n")
+plt.title("A reliable step is not a reliable task")
+plt.legend(); plt.ylim(0, 1); plt.tight_layout(); plt.show()
+
+# How many steps until a task is more likely to fail than succeed?
+for p in (0.999, 0.99, 0.98, 0.95):
+    n_half = int(np.ceil(np.log(0.5) / np.log(p)))
+    print(f"p={p}: task is coin-flip reliable at n={n_half} steps")
+```
+::::
+
+Two operational consequences follow. The first is that raising per-step
+reliability has a leveraged payoff on long tasks, which is why a small
+reduction in per-step error can matter more than a large feature. The second
+is that the cheapest way to raise task reliability is often to reduce $n$: fold
+three brittle steps into one robust call, or checkpoint so that the effective
+$n$ between recoverable points stays small. Both are architecture decisions
+forced by an operational target, the constraint arrow drawn in practice.
+
+## Fallbacks: making one bad sample not a failure
+
+If any single response can be wrong, a reliable system needs a second chance
+that is not just the first chance repeated. A fallback chain is the ordered set
+of those second chances, and the order encodes a cost and latency budget.
+
+The first link is the retry, and it is the most dangerous, because retrying a
+stochastic failure is sound only when the failure was stochastic. Resampling
+helps when the error was a single bad draw and the underlying request is
+answerable; it does nothing, at added cost and latency, when the request is one
+the model systematically gets wrong, and there it merely hides a defect behind
+a higher bill. A retry should therefore be bounded, and ideally gated by a
+cheap check that the previous answer actually failed, so the budget is spent on
+recoverable errors rather than on hopeless ones.
+
+The later links change the responder rather than repeat it. Fall back from a
+fast small model to a stronger, slower one when the cheap path fails a
+validator, the inverse of the routing that sends easy traffic to the cheap
+model in the first place (@sec-economics). Fall back from a generated answer to
+a cached or templated one when both models fail, so that a degraded but correct
+response beats a fluent wrong one. The chain is drawn in
+@fig-reliability-fallback.
+
+```{mermaid}
+%%| label: fig-reliability-fallback
+%%| fig-cap: "A fallback chain as an ordered set of second chances. Each link is tried only when the previous one fails its validator, and the order trades rising cost and latency for rising reliability. The terminal link is a deterministic path that cannot itself fail to respond."
+flowchart TD
+  req["request"] --> cheap["fast model"]
+  cheap --> v1{"passes<br/>validator?"}
+  v1 -->|yes| done["return answer"]
+  v1 -->|no, budget left| retry["bounded retry / resample"]
+  retry --> v1
+  v1 -->|no, budget spent| strong["stronger model"]
+  strong --> v2{"passes<br/>validator?"}
+  v2 -->|yes| done
+  v2 -->|no| det["cached or templated<br/>deterministic answer"]
+  det --> done
+```
+
+The terminal link matters most. A fallback chain that ends in another model
+ends in another thing that can fail; a chain that ends in a deterministic path,
+a cached answer, a templated response, an honest "I cannot answer this right
+now," has a floor. The discipline is to always have a last link that cannot
+fail to respond, even when every model in front of it has.
+
+## Graceful degradation and the reliability of the tools
+
+Fallbacks swap the responder. Degradation keeps the responder and shrinks the
+job. When an agent is over budget or a dependency is failing, the reliable
+move is to do less rather than to fail: shed the optional tools and answer from
+what is already in context, shrink the retrieved context to the highest-ranked
+chunks (@sec-serving-problem), or return a partial result with its own
+uncertainty marked rather than spending an unbounded amount of compute chasing
+a complete one. A system that can only either fully succeed or fully fail has
+no degraded mode, and a system with no degraded mode fails hard under exactly
+the load where reliability matters most.
+
+The tools an agent calls are themselves a reliability surface, and they are
+governed by the older, deterministic playbook because they are deterministic
+services. Three of its patterns carry the most weight. A timeout bounds the
+wait on any tool call, so one slow dependency cannot stall the whole task; the
+budget for it comes from the tail of the latency distribution, not the median,
+because at scale the rare slow call is the common user experience
+[@dean2013tail]. Idempotency makes a retried side effect safe, so that a tool
+call which times out after it has already committed its effect does not commit
+it twice when retried; an idempotency key on a write is what lets the fallback
+chain above retry a tool at all. A circuit breaker stops calling a dependency
+that is already failing, so a struggling service is given room to recover
+instead of being hammered by retries from every stalled task
+[@nygard2018releaseit]. Its three states are drawn in @fig-reliability-breaker.
+
+```{dot}
+//| label: fig-reliability-breaker
+//| fig-cap: "A circuit breaker as a three-state machine in front of a failing dependency. Closed lets calls through and counts failures; once the failure rate crosses a threshold it trips open and fails fast without calling; after a cooldown it goes half-open and lets one trial through, closing on success or re-opening on failure."
+digraph breaker {
+  rankdir=LR;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+
+  closed [label="CLOSED\ncalls pass, count failures"];
+  open   [label="OPEN\nfail fast, do not call", color="#3b82f6", fontcolor="#3b82f6"];
+  half   [label="HALF-OPEN\nlet one trial through"];
+
+  closed -> open  [label="failure rate > threshold"];
+  open   -> half  [label="cooldown elapsed"];
+  half   -> closed [label="trial succeeds"];
+  half   -> open  [label="trial fails"];
+}
+```
+
+Hedging is the pattern that ties tool reliability back to the stochastic core.
+When a call's tail latency is the problem, issue a second copy of the request
+after a short delay and take whichever returns first [@dean2013tail]. It spends
+a little extra compute to cut the tail, and it composes with sampling: two
+samples of the same prompt, taken in parallel, give both a latency hedge and a
+second draw to validate against, at the cost of paying for the loser.
+
+## Trade-offs: determinism or verified sampling
+
+Underneath every technique above sits one unresolved choice, and an operator
+has to take a side. One path chases determinism: set temperature to zero, pin a
+seed, and try to recover the deterministic service the rest of the playbook
+assumes. It buys reproducibility, which makes debugging and regression testing
+tractable, but it does not buy correctness, because the single greedy decode
+can be confidently wrong and now fails the same way every time; and true
+determinism is hard to reach anyway, since floating-point reductions over
+batched, parallel hardware can reorder and shift the chosen token even at
+temperature zero. The other path embraces sampling and leans on verification:
+accept that the response varies, and put a validator, a judge, or a vote across
+samples between the model and the user, so that reliability comes from checking
+the output rather than from fixing the input. It buys robustness through
+redundancy and a path to higher quality than any single greedy decode, at the
+cost of more compute per answer and a verifier that is itself fallible.
+
+::: {.callout-important}
+## What's contested
+
+- **Do SLOs even apply to open-ended generation?** One camp holds that any
+  task whose success is judged by a rubric can carry a quality SLO like any
+  other; the other holds that for genuinely open-ended work, "success" is too
+  ill-defined to put a number on, and a quality SLO measures the judge more
+  than the system.
+- **Is retrying a stochastic failure principled or a smell?** Resampling is the
+  natural fix when a failure is a bad draw, but if the model is systematically
+  wrong on a request, retries only raise cost while hiding the defect. Whether a
+  retry is sound depends on a distinction the system usually cannot make at
+  runtime.
+- **Determinism or sampling-plus-verification?** Pin the seed and chase a
+  reproducible service, or accept variance and put a verifier in front of it.
+  The first makes failures repeatable; the second makes them survivable. The
+  field has not settled which is the right default, and most production systems
+  end up with an uneasy mix.
+:::
+
+## Reading reliability through the lens
+
+Capability, efficiency, and trust pull against each other sharply here.
+Capability on a long task is bounded by $p^n$, so the reliability work that
+raises per-step success or cuts the step count is what lets an agent attempt
+longer work at all. Efficiency is the cost of every second chance: retries,
+hedged duplicates, stronger-model fallbacks, and sampled judging all spend
+compute to buy reliability, and the fallback order is precisely the dial that
+trades dollars and latency for a higher floor. Trust is the quality SLI itself,
+the admission that "the endpoint is up" was never the promise that mattered,
+and the move that makes a stochastic system operable is to measure, budget, and
+alert on whether the answers are good rather than only on whether they arrive.
+The deepest limit, the one robotics meets in @sec-beyond-text and agents meet
+here, is that a system whose unit of work is a sample can be made reliable only
+by building reliability around the sample, never by pretending the sample is
+deterministic.
+
+## Further reading
+
+- Beyer, Jones, Petoff, and Murphy, eds., *Site Reliability Engineering: How Google Runs Production Systems.* O'Reilly, 2016 (SLIs, SLOs, error budgets). [sre.google/books](https://sre.google/books/)
+- Dean and Barroso, "The Tail at Scale," *Communications of the ACM* 56(2), 2013 (tail latency, hedged requests). [research.google](https://research.google/pubs/the-tail-at-scale/)
+- Nygard, *Release It! Design and Deploy Production-Ready Software*, 2nd ed. Pragmatic Bookshelf, 2018 (timeouts, circuit breakers, bulkheads, stability patterns).

@@ -1,0 +1,102 @@
+# 对抗鲁棒性与红队 {#sec-adversarial-robustness}
+
+对齐是训练出来的倾向，不是保证。一个模型在多数情况下会拒绝有害请求，但它的权重里某处仍然保留着那份拒绝本想压住的能力，而一个能接触输入的对手，可以去搜索那种能把它重新唤出的措辞。这一章讲的就是这场搜索，以及挫败它的努力。读完之后，读者能说出越狱攻击的四个家族各自利用了什么，能解释红队为什么是一项度量工作而非一次性审计，能看清为什么每一种已知防御都是局部的，也能理解为什么鲁棒性从结构上说是系统的属性，而不是模型单独的属性。
+
+与相邻两章的边界很重要。@sec-runtime-safety 在模型周围加一道过滤层，检查输入与输出；@sec-security-authorization 通过约束被攻陷智能体的授权范围，来限定它能触达什么。这一章夹在两者之间，落在操纵本身：攻击者如何把一次拒绝变成顺从，防御者如何度量这种成功发生的频率，以及这个频率究竟能不能被压到零。
+
+## 问题：拒绝是一道软边界
+
+后训练通过示例装上拒绝（@sec-rlhf）：把有害请求与回绝配成对喂给模型，让它学会复现这个模式。结果是在一个运营者无法穷举的空间里画出的一道决策边界。在训练见过的提示词附近，拒绝是稠密的；在没人写下来的角落里，它就稀薄了。攻击就是一套找出这些角落的流程，而这一时期令人不安的发现是：这些角落并非罕见的偶然，而是一片可以可靠抵达的曲面，往往还能用自动搜索抵达。
+
+四个攻击家族已经稳定下来，它们的区别在于各自利用了模型的哪一部分。
+
+```{mermaid}
+%%| label: fig-adv-taxonomy
+%%| fig-cap: "四个越狱家族，按各自利用的对象分组。优化攻击直接在 token 空间里搜索；many-shot 攻击利用长上下文窗口；多轮攻击利用对话状态；间接注入利用一个使用工具的智能体那敞开的输入通道。下方的防御针对的是不同家族，没有一种能覆盖全部四个。"
+flowchart TB
+  M["aligned model<br/>refusal boundary"]
+  O["optimization<br/>adversarial suffix (GCG)"] --> M
+  MS["many-shot<br/>fake dialogue in context"] --> M
+  MT["multi-turn<br/>persona, crescendo"] --> M
+  I["indirect injection<br/>untrusted tool content"] --> M
+  M --> H["harmful completion"]
+```
+
+第一个家族基于优化。贪婪坐标梯度（Greedy Coordinate Gradient）攻击把越狱当成一个搜索问题：在有害请求后面接一段 token 后缀，再用对一个白盒模型的梯度去优化这段后缀，使模型以一句肯定的话开头作答的概率最大化 [@zou2023gcg]。这些后缀看上去像噪声，是机器而非人找出来的，而核心结果是它们会迁移：一段针对开放权重调出来的后缀，常常能越狱它从未见过的闭源模型。优化把越狱从手艺变成了一条可复现的流水线。
+
+第二个家族利用的是上下文窗口里的规模，而不是 token 搜索。many-shot 越狱用一长段伪造的对话填满提示词，对话里一个助手依次回答了一连串逐步升级的有害问题，然后才抛出真正要问的那一个 [@anil2024manyshot]。模型在补全这个模式时，把伪造助手的顺从延续到了最后一问。这种攻击的有效性随示例数量大致按幂律增长，于是那个让模型变得有用的长上下文能力（@sec-structured-long-context），同时也拓宽了这种攻击施展的曲面。
+
+第三个家族是对话式的。多轮攻击不在一击之内击穿边界，而是带着模型一步步走过它。人格攻击让模型扮演一个不受该策略约束的角色；crescendo 攻击以一个无害请求开场，再在若干轮里逐步升级，每一步都只是从模型已经给出的答案上再前进一小格，于是没有哪一轮单独看像是违规 [@russinovich2024crescendo]。这些攻击利用了模型会以自己先前的输出为条件，也利用了一个请求是按可见的那一轮、而非按整条轨迹来评判的。
+
+第四个家族根本不经由用户。间接提示注入把指令植入智能体会当作数据来读的内容里：一个网页、一份文档、某个工具的输出 [@greshake2023injection]。当智能体摄入那段内容时，它无法可靠地把被植入的指令与运营者的指令区分开。这正是专门击穿智能体的那个家族，因为一个智能体存在的理由，就是去读不受信任的外部内容并据此行动。它是本章与 @sec-security-authorization 之间的铰链，下面的约束箭头会说清为什么没有任何模型层面的修补能闭合它。
+
+## 红队是度量，不是审计
+
+如果攻击是一片可以可靠抵达的曲面，那么一次性的安全评审就是错误的工具。部署方需要的，是一个关于对手成功频率的连续估计，并随着模型与攻击的变化不断重算。红队就是这个估计，而把它当成一项度量工作来对待，配上一个指标、一个数据集、一套可复现的测评装置，正是它区别于轶事的地方。
+
+这个指标是攻击成功率：在一组固定的有害行为和一种固定的攻击方法下，引出真正有害补全的尝试所占的比例。这个数字的诚实程度，取决于那个判定何为有害的裁判，而裁判本身是一个模型或一份评分细则，带着与任何裁判一样的构念效度隐忧（@sec-judging-holistic）。一套标准化的测评装置把行为、攻击与裁判都固定下来，好让两个模型或两种防御能在同一基准上比较；HarmBench 就是这样一个框架，把一套行为集合与一组攻击、再加一个自动分类器配在一起 [@mazeika2024harmbench]。GCG 工作引入的那套有害行为数据集，常被称作 AdvBench，成了许多这类评测底下共用的基底 [@zou2023gcg]。
+
+生成攻击本身也是可自动化的，而红队正是在这里超越了人工团队的规模。可以把一个语言模型对准一个目标，要它生成能让目标行为失当的提示词，再根据它哪些提示词奏效来训练它，从而把攻击发现变成它自己的一个优化循环 [@perez2022redteaming]。自动红队把覆盖面拓宽到远超人工团队能手写的范围，代价是它只能找到它的生成器被塑造去找的那些攻击，而可能整族整族地漏掉生成器从未建模的攻击。人工红队仍是真正新颖攻击类别的来源；自动化所做的，是把它们摊薄到每一次模型发布上。
+
+::: {.callout-tip}
+## 约束箭头
+
+@sec-the-harness 里的运行时在构造上就要读取不受信任的内容：一个无法摄入网页或工具结果的智能体，根本干不了它的活。那条敞开的输入通道决定了间接注入无法在提示词层闭合，因为模型没有可靠的、通道级别的信号，去把运营者的指令与那条植入在它被要求阅读的数据里的指令分开。因此防御不能住在模型里。它下移到授权范围约束（@sec-security-authorization），限定一个被操纵的智能体能触达什么；又外移到运行时过滤（@sec-runtime-safety），检查那道跨越。鲁棒性是包裹模型的那个系统的属性，而不是权重的属性。一个对齐得更好的模型，会抬高第一个家族的成本，却几乎触碰不到第四个。
+:::
+
+## 防御，以及每一种为何都是局部的
+
+防御按介入的位置划分，而把它们读作一套纵深防御、而非去寻找那唯一的修补，才是务实的姿态。
+
+```{dot}
+//| label: fig-adv-defense-layers
+//| fig-cap: "针对越狱与注入的纵深防御。每一层抓住一个不同的家族，又漏掉另一些：训练期加固对优化出来的后缀泛化很差，分类器增加延迟又会漏掉新颖措辞，表征级防御可能被重新击穿，而只有授权范围约束能在上游各层都失守时限定损害。"
+digraph defenses {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+
+  atk [label="attack", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  adv [label="training-time\nadversarial training, refusal tuning"];
+  cls [label="inference-time\ninput/output classifiers"];
+  rep [label="representation-level\ncircuit breakers"];
+  aut [label="authority scoping\nbound the blast radius"];
+  safe [label="contained", color="#3b82f6", fontcolor="#3b82f6"];
+
+  atk -> adv -> cls -> rep -> aut -> safe;
+  adv -> safe [label="leaks optimized suffixes", style=dashed, constraint=false];
+  cls -> safe [label="leaks novel phrasings", style=dashed, constraint=false];
+  rep -> safe [label="can be re-broken", style=dashed, constraint=false];
+}
+```
+
+训练期加固把对抗样本加进后训练的配方里，让拒绝边界覆盖更多角落。它抬高了对已知攻击风格的下限，却对模型冻结之后才找到的优化后缀泛化很差，因为攻击者是针对已部署的边界去优化的，而防御者训练的是上个季度的边界。
+
+推理期分类器，也就是 @sec-runtime-safety 的主题，在输入与输出上各放一个独立模型，去抓住目标自己漏掉的攻击。它们独立于目标的对齐，这是它们的长处，而它们在每次调用上都加一笔延迟与成本的税，又会漏掉自己训练从未覆盖的措辞。
+
+表征级防御介入模型内部，而非围着模型转。circuit breakers 伸进残差流，把先于有害补全出现的内部表征重新布线，于是当一次攻击把模型引向产生危害时，被重新布线的表征会让生成脱轨成语无伦次，而不是顺从 [@zou2024circuitbreakers]。它的吸引力在于：防御附着的是有害的内部状态，而不是表面措辞，而表面措辞正是优化攻击与 many-shot 攻击所变换的东西。它究竟是稳固地泛化，还是会被那些找到新内部路径的攻击重新击穿，恰恰是下一个框所点名的开放问题，这也把这项工作与 @sec-interpretability 里的可解释性纲领系在一起，后者提供了防御所作用的那幅内部特征的图景。
+
+系统提示词加固，也就是指示模型不要信任内嵌的指令、把工具内容当作数据，是最便宜的一层，单独看也是最弱的一层：它本身不过是上下文窗口里的一段文字，受制于那些攻击所演示的同一种覆盖。
+
+::: {.callout-important}
+## 有争议之处
+
+- **越狱鲁棒性是可达成的，还是一场永无止境的打地鼠？** 一派认为鲁棒性是一个可抵达的工程目标，circuit breakers 与对抗训练能让攻击成功率一个版本接一个版本地降下去。另一派认为，无界的输入空间面对一个固定的模型，注定留下一片残余攻击曲面，所以务实的目标是抬高攻击者成本、限定爆炸半径，而不是闭合这道边界。优化后缀会迁移这个结果 [@zou2023gcg]，被前一派读作一个待修补的 bug，被后一派读作这片曲面是内禀的证据。
+- **表征级防御会泛化吗？** circuit breakers [@zou2024circuitbreakers] 作用于内部状态而非表面形式，理应跨措辞泛化。怀疑者预期会出现找到新内部路径的自适应攻击把它们重新击穿，正是那个击败了早先防御的同一模式，并指出已发表的攻破往往尾随已发表的防御。
+- **自动红队是一个安全信号，还是一场军备竞赛？** 自动攻击生成 [@perez2022redteaming] 廉价地拓宽了覆盖面，但它度量的是对其生成器所建模的那些攻击的鲁棒性，所以攻击成功率下降，可能意味着模型更安全了，也可能只是生成器不再能找到人类仍能找到的东西。
+:::
+
+## 权衡：能力、效率、信任
+
+本章的每一种防御都在这三者之间做交换。能力的代价是过度拒绝：一个对攻击加固过的模型，会回绝那些与攻击相似的无害请求，而那道挡住越狱的边界，同样挡住了一位安全研究者正当的提问，于是鲁棒性与有用性是相互对调着去调的，而非各自独立地最大化。效率的代价是 @sec-runtime-safety 的分类器税，以及对抗与表征级方法的训练成本，前者付在每次请求上，后者付在每次发布上。信任是整件事的目的，而它诚实的形态，是针对一个具名测评装置发布的攻击成功率，而非一句关于安全的断言：一份无法像 HarmBench 那样去度量的鲁棒性 [@mazeika2024harmbench]，是一个主张，不是一个属性。这门学科对 @sec-oversight-control 的贡献正在于此：一个说明已部署边界能被推到多远、能被谁推动的数字，并在每次模型或攻击变化时重新算过。
+
+## 延伸阅读
+
+- Zou, Wang, Carlini, Nasr, Kolter, Fredrikson, "Universal and Transferable Adversarial Attacks on Aligned Language Models," 2023（GCG 与 AdvBench 有害行为集合）。[arXiv:2307.15043](https://arxiv.org/abs/2307.15043)
+- Greshake, Abdelnabi, Mishra, Endres, Holz, Fritz, "Not what you've signed up for: Compromising Real-World LLM-Integrated Applications with Indirect Prompt Injection," 2023。[arXiv:2302.12173](https://arxiv.org/abs/2302.12173)
+- Anil et al., "Many-shot Jailbreaking," Anthropic, 2024（长上下文攻击的规模效应）。[anthropic.com](https://www.anthropic.com/research/many-shot-jailbreaking)
+- Russinovich, Salem, Eldan, "Great, Now Write an Article About That: The Crescendo Multi-Turn LLM Jailbreak Attack," 2024。[arXiv:2404.01833](https://arxiv.org/abs/2404.01833)
+- Perez et al., "Red Teaming Language Models with Language Models," 2022（自动攻击生成）。[arXiv:2202.03286](https://arxiv.org/abs/2202.03286)
+- Mazeika et al., "HarmBench: A Standardized Evaluation Framework for Automated Red Teaming and Robust Refusal," 2024。[arXiv:2402.04249](https://arxiv.org/abs/2402.04249)
+- Zou et al., "Improving Alignment and Robustness with Circuit Breakers," 2024（表征级防御）。[arXiv:2406.04313](https://arxiv.org/abs/2406.04313)

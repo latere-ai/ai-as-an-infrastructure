@@ -1,0 +1,105 @@
+# 部署生命周期 {#sec-deployment-lifecycle}
+
+一个训练好、并且已经能对外吐出 token 的模型（@sec-serving-problem），仍然不是一个被运维起来的系统。总得有什么来决定哪个版本在线上、把流量迁到新版本上而不至于拿整个用户群去下注、在行为发生漂移时察觉到、并在出错时把改动撤回。本章以这件事作为「在生产中运维 AI」这一部分的开篇，把它当成一门独立的学问来对待。读完本章，读者能说清可部署的产物到底是什么、能描述把一个候选版本提升到生产的那条流水线、能解释为什么这种提升只能是统计意义上的而非逐字精确的，也能说出模型系统的回滚比普通代码的回滚多要求了什么。
+
+把机器学习放到生产里跑了十年，反复学到的一课是：模型只是其中很小的一块。2015 年那篇给问题命名的论文说得很直白：一个真实的机器学习系统里，只有极小一部分是学习代码，其余都是配置、数据管道、服务基础设施，以及让这一切保持诚实的监控 [@sculley2015debt]。部署生命周期就是运维这一圈外围质量的地方，它是本书到目前为止只在训练时和服务时构建过的东西的运行时另一半。
+
+## 产物不是模型
+
+第一个误区，是以为被部署的东西是一组权重。在现代技术栈里，产出一个行为的单位是一个捆绑包：模型版本、系统提示、解码参数、模型被允许调用的工具 schema、它读取的检索索引（@sec-rag-retrieval），以及围绕它的护栏配置。其中任何一项变了，可观察到的行为都可能变得和换权重一样大。在同一个 checkpoint 上换一份新的系统提示，就是一次新的部署，而把它当成一次单纯的文本编辑，正是一处悄无声息的提示改动如何在一周后变成一次无人能归因的回归的原因。
+
+所以登记表（registry）必须给捆绑包做版本，而不是给 checkpoint 做版本。运维上的规则是：每一个能移动输出的元素都被钉住、被一起记录，而一次部署用单一标识符指向一个不可变的捆绑包。这就是 ML Test Score 评分体系背后的纪律，它给一个系统打分，不看它的准确率，而看它的数据、模型与基础设施是否被测试、是否可复现到足以让一个没参与搭建的人也能跑起来 [@breck2017mltestscore]。一项对从业者的访谈研究从一线得出了同样的结论：那些能保持清醒的团队，是把数据与配置的版本管理看得和代码版本一样认真的团队；而没这么做的团队，把时间都花在追查没人能归因的改动上 [@shankar2022operationalizing]。
+
+```{mermaid}
+%%| label: fig-deploy-bundle
+%%| fig-cap: "可部署的产物是一个捆绑包，而非一个 checkpoint。登记表钉住每一个能移动输出的元素，并用一个不可变 id 指向整体，于是行为变化总能归因到一次有名有姓的部署。"
+flowchart LR
+  subgraph B["one deployment bundle (immutable id)"]
+    direction TB
+    W["model version / weights"]
+    P["system prompt"]
+    D["decoding params"]
+    T["tool schemas"]
+    R["retrieval index version"]
+    G["guardrail config"]
+  end
+  B --> S["served behavior"]
+```
+
+## 提升流水线
+
+产物定义清楚之后，问题就变成：一个候选捆绑包如何取代在线上的那个。答案是一条逐级扩大暴露面的流水线，而它之所以要分阶段，是因为每一阶段都能抓住上一阶段抓不住的失败。
+
+第一道闸是离线的。一个候选版本在基准测试套件（@sec-benchmarks）上跑，对智能体而言，还要在 @sec-evaluating-agents 的轨迹评测和 @sec-judging-holistic 的评审准则上跑。这道闸便宜，而且完全在你掌控之内，它能在任何用户看到之前抓住粗大的回归。它的弱点是：它衡量的是你已经知道要去测的那个世界，而生产是你没料到的那个世界。
+
+于是候选版本接下来去见真实流量，却不影响任何人。在影子（shadow）或镜像（mirror）模式下，线上请求被复制一份给候选版本，候选的输出被记录、被打分，而只有在任版本的输出会返回给用户。影子模式以零用户风险揭示你的评测集与线上输入之间的分布差距，它唯一的代价是让两个模型并跑一段时间的算力。
+
+候选版本熬过影子之后，真正的暴露才开始。金丝雀（canary）把一小部分百分比的线上流量导给候选版本，盯住在线指标：延迟、错误率、拒答率，以及产品能测的任何任务成功代理量，然后只在这些指标稳住时才把百分比往上调。在小爆炸半径上放量、在扩大之前先盯住真实信号，这套纪律是 Google 生产手册里最老的一条思想，早在机器学习之前就有了 [@beyer2016sre]。蓝绿（blue-green）是同一个思想的另一种形态：两套完整环境、瞬时切换，代价是同时跑两支机队。这条流水线画在 @fig-deploy-pipeline。
+
+```{mermaid}
+%%| label: fig-deploy-pipeline
+%%| fig-cap: "把提升看作逐级扩大的暴露面。每一阶段抓住上一阶段抓不住的东西：离线闸抓住已知回归，影子流量以零用户风险抓住评测到生产的分布差距，金丝雀放量在全量铺开前在小爆炸半径上抓住线上失败。任一阶段的指标不达标都会折回到回滚。"
+flowchart LR
+  C["candidate bundle"] --> O["offline eval gate"]
+  O -->|pass| SH["shadow / mirror traffic"]
+  SH -->|metrics hold| CA["canary ramp 1% to 100%"]
+  CA -->|metrics hold| F["full rollout"]
+  O -->|fail| RB["rollback / hold"]
+  SH -->|gap too large| RB
+  CA -->|regression| RB
+```
+
+::: {.callout-tip}
+## 约束箭头
+
+服务是从一个分布里采样的，所以同一个输入跑两次并不会返回同样的字节（@sec-serving-problem）。这个完全活在推理层里的事实，规定了两层之上发布流程的形态：你无法靠把候选版本的输出和在任版本逐字相比来提升它，因为哪怕什么都没改，它们也会不一样。提升只能是统计意义上的。你比较的是某个打分指标在大量请求上的分布，问的是候选版本是否在显著性上更差，而不是某一条输出是否变了。这正是为什么 @sec-evaluating-agents 的评测框架会悄悄变成发布闸门：决定一次部署是否上线的东西，和决定一个智能体好不好的，是同一套机器，而一个没有可信框架的团队，也就没有可信的方式去做提升。
+:::
+
+## 当脚下的地面在移动
+
+一次部署在它上线那天是好的，并不会一直好下去，因为它服务的那个世界一直在动。有两种漂移要紧，而且它们朝相反的方向失败。
+
+输入漂移是常见的那种：用户发来什么的分布逐周偏移，一个新用例出现了，一次产品发布改变了在提问的人是谁，于是上个月把评测刷到满分的候选版本，如今在回答它从没见过的问题。防线是让回归套件从生产本身长出来。一条线上系统处理得很糟的轨迹，被用户反馈或在线评审抓到后，被提升进离线套件，于是下一个候选版本就会在它上面被打分。因此这套套件永远没有完工的一天，它是系统已经犯过的每一种错误沉积下来的层积岩，而把这个回路当作基础设施来运维的，是关于生产数据引擎的那一章（@sec-data-engine）。
+
+行为漂移是构建在你并不自己托管的模型之上时特有的那种。当产品调用一个第三方端点（@sec-model-landscape），提供商可以在一个稳定的名字下把模型升级掉，而你以为钉住了的那个捆绑包，在你这边没有任何一次部署的情况下就移动了。你上个季度验证过的输出，这个季度是由一个不同的模型产出的，而你自己的变更日志里没有任何一条记下这件事。唯一的防线，是在提供商提供时钉住一个明确带日期的模型版本，并对线上端点持续跑一支固定输入的金丝雀，让一次悄无声息的升级表现为一个你看得见的指标偏移，而不是一张你解释不了的工单。
+
+## 事件响应，以及你必须有的那次回滚
+
+上面的一切都假定改动能被撤回，而对一个模型系统来说，这个撤回不像对代码那么显然。回滚权重很容易，只要上一个捆绑包在登记表里仍然可寻址，而这正是给捆绑包而非给 checkpoint 做版本的全部回报。回滚一个从提示与检索的交互里冒出来的行为，则只有在提示与索引版本被钉在同一个捆绑包里时才容易，这就是为什么登记表的纪律不是记账，而是恢复的前提。运维上的最低标准是：上一个良好的捆绑包永远只差一次路由改动，且金丝雀的在线指标接到了告警，于是一次回归在抵达所有人之前、而不是之后，触发一次回滚。
+
+一个最小的提升与回滚控制回路让这个形态变得具体。闸门是一次统计比较，回滚是一次路由改动，不是一次重建。
+
+```python
+def promote(candidate, incumbent, traffic, alpha=0.01):
+    # Offline gate: candidate must not regress the held-out suite.
+    if score(candidate, OFFLINE_SUITE) < score(incumbent, OFFLINE_SUITE):
+        return hold(candidate, reason="offline regression")
+
+    # Widen exposure in steps, comparing distributions, not single outputs.
+    for pct in (0, 1, 5, 25, 100):          # pct == 0 is shadow: log, do not serve
+        route(candidate, fraction=pct)
+        cand, base = sample_scored_metrics(candidate, incumbent, traffic)
+        if worse_with_significance(cand, base, alpha):
+            route(incumbent, fraction=100)   # rollback is a routing change
+            return hold(candidate, reason=f"regression at {pct}%")
+    return live(candidate)
+```
+
+::: {.callout-important}
+## 什么仍有争议
+
+- **钉住一个版本，还是追最新。** 钉住一个带日期的模型，换来可复现性和一份稳定的行为契约；追提供商的最新，换来白拿的能力增益，却交出了那份契约。受监管的系统和智能体系统偏向钉住；想要最新能力的消费级功能偏向追新。没有一种设置能两头都赢。
+- **离线评测，还是强制的在线金丝雀。** 一派信任一套强离线套件来把守提升，把金丝雀当成走过场；另一派坚持没有哪套离线套件能把线上行为预测得足够好，所以金丝雀才是真正的闸门，而离线数字只是一道筛子。这场分歧其实是在争：任何人的评测集到底有多大代表性。
+- **轨迹回放对线上行为的预测力有多强。** 把生产轨迹拿来对候选版本回放，是你能买到的最便宜的真实性，但一个随机的、依赖上下文的智能体，在回放时未必会重现它在线上做过的事，所以回放的预测价值本身就尚无定论。
+:::
+
+## 运维一次部署：能力、效率、信任
+
+部署生命周期几乎不买来任何新能力；一个模型在被提升之后，恰好和之前一样能干。它买来的是另外两样。效率是这套机器的成本：影子和金丝雀意味着同时跑不止一个捆绑包，并为把守每次提升的评测算力买单，而运维上的问题是，给定的风险水平能撑得起多少这样的保险。信任才是全部的要点。这条流水线之所以存在，是为了让一次对生产行为的改动可归因、可逆、且被趁小抓住，而一个说不清哪个捆绑包在线上、不靠逐字比对输出就无法提升、或无法用一次路由改动回滚的团队，拥有的是一个能干的模型和一个不可信的系统。下一章把信任的问题进一步带入一个输出在构造上就是非确定的系统的可靠性（@sec-reliability）。
+
+## 延伸阅读
+
+- Sculley, D. et al. "Hidden Technical Debt in Machine Learning Systems." NeurIPS 2015（外围质量占大头的论证，以及配置与管道的现实）。[papers.nips.cc](https://papers.nips.cc/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html)
+- Breck, Eric et al. "The ML Test Score: A Rubric for ML Production Readiness and Technical Debt Reduction." IEEE Big Data 2017（把测试与可复现性作为就绪标准）。[research.google](https://research.google/pubs/pub46555/)
+- Shankar, Shreya et al. "Operationalizing Machine Learning: An Interview Study." 2022（从业者真正在做什么：版本管理、漂移，以及速度与可复现性之间的张力）。[arXiv:2209.09125](https://arxiv.org/abs/2209.09125)
+- Beyer, Betsy et al. *Site Reliability Engineering: How Google Runs Production Systems.* O'Reilly, 2016（金丝雀、错误预算，以及在小爆炸半径上放量）。[sre.google](https://sre.google/sre-book/table-of-contents/)

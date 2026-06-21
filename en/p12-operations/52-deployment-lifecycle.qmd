@@ -1,0 +1,217 @@
+# The Deployment Lifecycle {#sec-deployment-lifecycle}
+
+A trained model that has been made to serve tokens (@sec-serving-problem) is
+still not an operated system. Something has to decide which version is live,
+move traffic onto a new one without betting the whole userbase on it, notice
+when the behavior drifts, and undo the change when it goes wrong. This chapter
+opens the part on operating AI in production by treating that as its own
+discipline. By the end a reader can name what the deployable artifact actually
+is, describe the pipeline that promotes a candidate into production, explain why
+that promotion has to be statistical rather than exact, and say what a rollback
+for a model system requires that a rollback for ordinary code does not.
+
+The recurring lesson of a decade of running machine learning in production is
+that the model is the small part. The 2015 paper that named the problem put it
+bluntly: only a tiny fraction of a real machine-learning system is the learning
+code, and the rest is configuration, data plumbing, serving infrastructure, and
+the monitoring that keeps it honest [@sculley2015debt]. The deployment lifecycle
+is where that surrounding mass is operated, and it is the run-time half of what
+this book has so far built only at training and serving time.
+
+## The artifact is not the model
+
+The first mistake is to think the thing being deployed is a set of weights. In a
+modern stack the unit that produces a behavior is a bundle: the model version,
+the system prompt, the decoding parameters, the tool schemas the model is
+allowed to call, the retrieval index it reads (@sec-rag-retrieval), and the
+guardrail configuration around it. Change any one of them and the observable
+behavior can change as much as swapping the weights would. A new system prompt
+shipped against the same checkpoint is a new deployment, and treating it as a
+mere text edit is how a quiet prompt change becomes an unattributable regression
+a week later.
+
+So the registry has to version the bundle, not the checkpoint. The operational
+rule is that every element that can move the output is pinned and recorded
+together, and a deployment refers to one immutable bundle by a single
+identifier. This is the discipline behind the ML Test Score rubric, which scores
+a system not on its accuracy but on whether its data, model, and infrastructure
+are tested and reproducible enough to be run by someone who did not build them
+[@breck2017mltestscore]. An interview study of practitioners found the same
+thing from the field: the teams that stayed sane were the ones who treated
+versioning of data and configuration as seriously as versioning of code, and the
+ones who did not spent their time chasing changes no one could attribute
+[@shankar2022operationalizing].
+
+```{mermaid}
+%%| label: fig-deploy-bundle
+%%| fig-cap: "The deployable artifact is a bundle, not a checkpoint. The registry pins every element that can move the output and refers to the whole by one immutable id, so a behavior change is always attributable to a named deployment."
+flowchart LR
+  subgraph B["one deployment bundle (immutable id)"]
+    direction TB
+    W["model version / weights"]
+    P["system prompt"]
+    D["decoding params"]
+    T["tool schemas"]
+    R["retrieval index version"]
+    G["guardrail config"]
+  end
+  B --> S["served behavior"]
+```
+
+## The promotion pipeline
+
+With the artifact defined, the question becomes how a candidate bundle replaces
+the live one. The answer is a pipeline of widening exposure, and the reason it
+has stages is that each stage catches a failure the previous one could not.
+
+The first gate is offline. A candidate runs against the benchmark suite
+(@sec-benchmarks) and, for an agent, against the trajectory evaluations of
+@sec-evaluating-agents and the judged rubrics of @sec-judging-holistic. This
+gate is cheap and fully under your control, and it catches gross regressions
+before any user sees them. Its weakness is that it measures the world you
+already knew to test, and production is the world you did not.
+
+So the candidate next sees real traffic without affecting anyone. In shadow or
+mirror mode the live request is duplicated to the candidate, the candidate's
+output is logged and scored, and only the incumbent's output is returned to the
+user. Shadowing surfaces the distribution gap between your eval set and live
+input at zero user risk, and its only cost is the compute to run two models for
+a while.
+
+When the candidate survives shadowing, exposure begins for real. A canary routes
+a small percentage of live traffic to the candidate and watches online metrics,
+latency, error rate, refusal rate, and whatever task-success proxy the product
+can measure, then ramps the percentage up only while those metrics hold. The
+discipline of ramping on a small blast radius and watching real signals before
+widening is the oldest idea in the Google production playbook, predating
+machine learning entirely [@beyer2016sre]. Blue-green is the same idea with two
+full environments and an instant cutover, traded against running two fleets at
+once. The pipeline is drawn in @fig-deploy-pipeline.
+
+```{mermaid}
+%%| label: fig-deploy-pipeline
+%%| fig-cap: "Promotion as widening exposure. Each stage catches what the one before it cannot: the offline gate catches known regressions, shadow traffic catches the eval-to-production distribution gap at zero user risk, and the canary ramp catches live failures on a small blast radius before full rollout. A failed metric at any stage routes back to rollback."
+flowchart LR
+  C["candidate bundle"] --> O["offline eval gate"]
+  O -->|pass| SH["shadow / mirror traffic"]
+  SH -->|metrics hold| CA["canary ramp 1% to 100%"]
+  CA -->|metrics hold| F["full rollout"]
+  O -->|fail| RB["rollback / hold"]
+  SH -->|gap too large| RB
+  CA -->|regression| RB
+```
+
+::: {.callout-tip}
+## Constraint arrow
+
+Serving samples from a distribution, so the same input run twice does not return
+the same bytes (@sec-serving-problem). That fact, which lives entirely in the
+inference layer, dictates the shape of the release process two layers up: you
+cannot promote a candidate by diffing its outputs against the incumbent's,
+because they would differ even if nothing changed. Promotion has to be
+statistical. You compare distributions of a scored metric over many requests and
+ask whether the candidate is worse with significance, not whether any single
+output changed. This is why the evaluation harness of @sec-evaluating-agents
+quietly becomes the release gate: the thing that decides whether a deployment
+ships is the same machinery that decides whether an agent is any good, and a
+team without a trustworthy harness has no trustworthy way to promote.
+:::
+
+## When the ground moves
+
+A deployment that was good on the day it shipped does not stay good, because the
+world it serves keeps moving. Two kinds of drift matter, and they fail in
+opposite directions.
+
+Input drift is the familiar one: the distribution of what users send shifts week
+to week, a new use case arrives, a product launch changes who is asking, and the
+candidate that aced last month's eval is now answering questions it never saw.
+The defense is to grow the regression suite from production itself. A trace that
+the live system handled badly, caught by a user report or by an online judge, is
+promoted into the offline suite so the next candidate is graded on it. The
+suite is therefore never finished; it is a sediment of every way the system has
+already failed, and the chapter on the production data engine (@sec-data-engine)
+is where that loop is operated as infrastructure.
+
+Behavior drift is the one peculiar to building on models you do not host. When
+the product calls a third-party endpoint (@sec-model-landscape), the provider
+can upgrade the model under a stable name, and the bundle you thought was pinned
+moves without a deployment on your side. The output you validated last quarter is
+produced by a different model this quarter, and nothing in your own change log
+records it. The only defenses are to pin an explicitly dated model version when
+the provider offers one, and to run a continuous canary of fixed inputs against
+the live endpoint so a silent upgrade shows up as a metric shift you can see
+rather than a support ticket you cannot explain.
+
+## Incident response and the rollback you must have
+
+Everything above assumes the change can be undone, and for a model system the
+undo is less obvious than for code. Rolling back weights is easy if the previous
+bundle is still addressable in the registry, which is the entire payoff of
+versioning the bundle rather than the checkpoint. Rolling back a behavior that
+emerged from a prompt-and-retrieval interaction is only easy if the prompt and
+the index version were pinned in the same bundle, which is why the registry
+discipline is not bookkeeping but the precondition for recovery. The operational
+minimum is that the previous good bundle is always one routing change away, and
+that the canary's online metrics are wired to an alert so a regression triggers a
+rollback before it reaches everyone, not after.
+
+A minimal promotion-and-rollback control loop makes the shape concrete. The gate
+is a statistical comparison, and the rollback is a routing change, not a rebuild.
+
+```python
+def promote(candidate, incumbent, traffic, alpha=0.01):
+    # Offline gate: candidate must not regress the held-out suite.
+    if score(candidate, OFFLINE_SUITE) < score(incumbent, OFFLINE_SUITE):
+        return hold(candidate, reason="offline regression")
+
+    # Widen exposure in steps, comparing distributions, not single outputs.
+    for pct in (0, 1, 5, 25, 100):          # pct == 0 is shadow: log, do not serve
+        route(candidate, fraction=pct)
+        cand, base = sample_scored_metrics(candidate, incumbent, traffic)
+        if worse_with_significance(cand, base, alpha):
+            route(incumbent, fraction=100)   # rollback is a routing change
+            return hold(candidate, reason=f"regression at {pct}%")
+    return live(candidate)
+```
+
+::: {.callout-important}
+## What's contested
+
+- **Pin a version or ride the latest.** Pinning a dated model gives
+  reproducibility and a stable behavioral contract; riding the provider's latest
+  gives capability gains for free but surrenders the contract. Regulated and
+  agentic systems lean toward pinning; consumer features that want the newest
+  capability lean toward riding. There is no setting that wins both.
+- **Offline eval or mandatory online canary.** One camp trusts a strong offline
+  suite to gate promotion and treats the canary as a formality; the other holds
+  that no offline suite predicts live behavior well enough, so the canary is the
+  real gate and the offline number is only a filter. The disagreement is really
+  about how representative anyone's eval set actually is.
+- **How much trace replay predicts live behavior.** Replaying production traces
+  against a candidate is the cheapest realism you can buy, but a stochastic,
+  context-dependent agent may not reproduce on replay what it did live, so the
+  predictive value of replay is itself unsettled.
+:::
+
+## Operating a deployment: capability, efficiency, trust
+
+The deployment lifecycle buys almost no new capability; a model is exactly as
+capable after it is promoted as before. What it buys is the other two. Efficiency
+is the cost of the machinery: shadowing and canarying mean running more than one
+bundle at once and paying for the eval compute that gates every promotion, and
+the operational question is how much of that insurance a given risk level
+justifies. Trust is the whole point. The pipeline exists so that a change to a
+production behavior is attributable, reversible, and caught small, and a team
+that cannot say which bundle is live, cannot promote without diffing exact
+outputs, or cannot roll back in one routing change has a capable model and an
+untrustworthy system. The next chapter takes the trust question further into the
+reliability of a system whose outputs are nondeterministic by construction
+(@sec-reliability).
+
+## Further reading
+
+- Sculley, D. et al. "Hidden Technical Debt in Machine Learning Systems." NeurIPS 2015 (the surrounding-mass argument and the configuration-and-plumbing reality). [papers.nips.cc](https://papers.nips.cc/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html)
+- Breck, Eric et al. "The ML Test Score: A Rubric for ML Production Readiness and Technical Debt Reduction." IEEE Big Data 2017 (testing and reproducibility as the readiness bar). [research.google](https://research.google/pubs/pub46555/)
+- Shankar, Shreya et al. "Operationalizing Machine Learning: An Interview Study." 2022 (what practitioners actually do: versioning, drift, and the velocity-versus-reproducibility tension). [arXiv:2209.09125](https://arxiv.org/abs/2209.09125)
+- Beyer, Betsy et al. *Site Reliability Engineering: How Google Runs Production Systems.* O'Reilly, 2016 (canarying, error budgets, and rollout on a small blast radius). [sre.google](https://sre.google/sre-book/table-of-contents/)

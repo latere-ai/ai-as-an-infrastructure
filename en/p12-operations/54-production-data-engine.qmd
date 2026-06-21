@@ -1,0 +1,212 @@
+# The Production Data Engine {#sec-data-engine}
+
+The corpus in @sec-data-curation was built once, frozen, and trained on. A
+deployed product cannot stop there, because the moment it ships it begins
+generating the one thing its next model most needs: records of real users
+asking real questions and reacting to real answers. By the end of this chapter
+a reader can describe the standing apparatus that turns that traffic back into
+training signal, say why the human side of it is the part that quietly decides
+quality, name the techniques that spend a scarce labeling budget where it
+matters, and see why a deployment is not the end of the training loop but the
+intake of the next one.
+
+This is a different machine from the one in @sec-synthetic-data. That loop
+manufactures data the model did not have; this one harvests data the product
+already produced and turns it into a label. The two are often run together, but
+confusing them hides the operational cost, because synthetic generation is
+compute and harvesting is people, contracts, and consent.
+
+## The product is a data collector that also answers questions
+
+A served model emits more than an answer. Every request leaves a trace: the
+prompt, the retrieved context, the tool calls, the tokens generated, and, if
+the surface is instrumented, what the user did next. That last part is the
+asset. A user who accepts a suggestion, edits it before using it, regenerates
+it, or abandons the session has graded the output without being asked, and at a
+volume no labeling vendor can match. Implicit signal of this kind is cheap,
+plentiful, and continuous, which is exactly why it is the backbone of a
+production data engine.
+
+It is also biased in ways a held-out benchmark is not. Users who regenerate are
+not a random sample, the edit a user makes reflects their own goal rather than a
+ground truth, and a thumbs-down arrives far more reliably than a thumbs-up. The
+engine therefore pairs cheap implicit signal with a thin stream of expensive
+explicit judgment: a small, deliberately sampled set of traces sent to trained
+humans who answer a precise question under a written guideline. The implicit
+stream finds the interesting cases; the explicit stream says what the right
+answer was. @fig-data-engine-loop draws the circuit.
+
+```{dot}
+//| label: fig-data-engine-loop
+//| fig-cap: "The production data engine as a standing loop. Served traffic emits traces and implicit signal; sampling and active learning select the few traces worth a human label; labeled data splits into a regression eval set and fresh post-training data, which produce the next model that serves the next traffic."
+digraph engine {
+  rankdir=LR;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+
+  serve [label="served model\ntraffic + traces"];
+  imp   [label="implicit signal\naccept / edit / regen / rate"];
+  sel   [label="select\nsampling + active learning", color="#3b82f6", fontcolor="#3b82f6"];
+  label [label="human labeling\nguideline + QA"];
+  data  [label="labeled data"];
+  evalq [label="regression eval\n(promote failures)"];
+  train [label="post-training\npreference + SFT"];
+
+  serve -> imp -> sel;
+  serve -> sel [style=dashed, label="full traces"];
+  sel -> label -> data;
+  data -> evalq;
+  data -> train;
+  train -> serve [label="next model"];
+}
+```
+
+## The labelers are the model
+
+The phrase "human feedback" in @sec-rlhf hides a supply chain. Someone wrote the
+guideline that defines a good answer, someone trained the annotators on it,
+someone measured whether two annotators given the same item agree, and someone
+audited the ones who drifted. The quality of a preference dataset is set there,
+not in the optimizer, and a model trained on labels that encode an ambiguous
+guideline learns the ambiguity faithfully.
+
+The field has a documented blind spot here. The work of defining, collecting,
+and cleaning data is treated as logistics rather than as the engineering it is,
+and the result is data cascades: small upstream labeling problems that surface
+as large, hard-to-diagnose failures downstream [@sambasivan2021datawork]. The
+problem is not exotic. Widely used benchmarks themselves carry pervasive label
+errors, enough that the ranking of models can flip once the test labels are
+corrected [@northcutt2021labelerrors]. If the sets used to crown
+state-of-the-art are this noisy, a hastily assembled production labeling
+operation is noisier.
+
+Three controls keep a labeling operation honest. A written guideline with
+worked examples turns a vague preference into a repeatable judgment.
+Inter-annotator agreement, measured continuously, says whether the guideline is
+actually shared or only nominally so. And a QA layer that re-labels a sample of
+completed work catches drift before it reaches the optimizer. None of this is
+glamorous, and all of it is load-bearing.
+
+::: {.callout-tip}
+## Constraint arrow
+The post-training recipe sets the shape of the operation below it. RLHF in
+@sec-rlhf and verifiable-reward training in @sec-training-to-reason both consume
+fresh, on-distribution preference and outcome data, and they consume it every
+cycle, not once. That appetite reaches down and mandates a standing
+collection-and-labeling apparatus wired into the deployment, because the cheapest
+source of on-distribution data is the model's own production traffic. The
+training loop's hunger, an upper layer, dictates that the serving surface be
+built as a data instrument, a lower one. A product that ships without it starves
+the next model.
+:::
+
+## Spending a labeling budget where it moves the model
+
+If every trace could be labeled, selection would not matter. None can, so the
+engine's intelligence is in which few traces it sends to humans. Random sampling
+wastes the budget on cases the model already handles. Active learning spends it
+on the cases the model is least sure about, on the argument that a label is worth
+most where the model's current guess is closest to a coin flip
+[@settles2009activelearning]. Uncertainty sampling, query-by-committee, and
+selection by expected model change are the standard instruments; in a
+generation setting, disagreement across samples or a low self-consistency score
+stands in for the classical uncertainty estimate.
+
+Active learning chooses which items to label by hand. Weak supervision attacks
+the budget from the other side, by replacing some hand labels with programmatic
+ones. Data programming has domain experts write labeling functions, noisy rules
+that vote on a label, then learns each rule's accuracy from their agreements and
+disagreements and combines them into probabilistic labels without ground truth
+[@ratner2016dataprogramming]. A regex, a heuristic over tool output, and a
+weaker model's judgment each become a voter. The labels are noisier than a
+human's, but there are orders of magnitude more of them, and for many tasks that
+trade wins.
+
+The two compose. Weak supervision labels the bulk cheaply; active learning sends
+the residual that weak rules disagree on to the humans whose judgment is worth
+the cost.
+
+## The failure that becomes a test
+
+Not all harvested data goes to training. The most valuable single output of the
+engine is often an eval case, not a gradient. When a production trace is judged
+wrong, promoting it into the regression suite of @sec-evaluating-agents converts
+a one-time miss into a permanent guard: every future model is now measured
+against the exact failure that reached a user. This is the same promote-failure
+discipline that @sec-deployment-lifecycle relies on to decide whether a new model
+is safe to roll out. The data engine and the deployment lifecycle share a spine
+here, the live trace, and read it for two purposes, one to retrain and one to
+gate the retrained result.
+
+The asymmetry is deliberate. A failure that becomes training data might be fixed;
+a failure that becomes an eval case can never silently regress. Sending the
+sharpest failures to the eval set rather than the training set is how an
+operation stops paying for the same bug twice.
+
+## Trade-offs: the loop that grades itself
+
+A data engine wired to its own model creates feedback the model did not have at
+launch, and the same wiring creates pathologies. The first is sampling bias
+already named: the production distribution is shaped by the current model's
+behavior, so training on it narrows the next model toward what the last one
+already did, and capabilities the current model handles poorly generate little
+traffic to learn from. The second is the grading question. Implicit signal is
+abundant but ambiguous; a small explicit set is trustworthy but thin and slow.
+The third is provenance and consent, which is not optional: every trace
+collected carries the obligations of @sec-privacy-provenance, and a preference
+dataset assembled from user content without a lawful basis is a liability, not an
+asset.
+
+::: {.callout-important}
+## What's contested
+- **Human labels or AI feedback for the standing loop?** RLHF assumes the grader
+  is human [@ouyang2022instructgpt]; Constitutional AI replaces much of that
+  grader with the model judging itself against written principles
+  [@bai2022constitutional], which scales the loop to the model's own speed but
+  inherits the model's blind spots. Whether the ongoing engine should be
+  human-graded, AI-graded, or a measured blend is unsettled and task-dependent.
+- **How far to trust production data.** One camp treats on-distribution
+  production traffic as the highest-value training signal there is; the other
+  warns that a model training on the data its own behavior shaped is optimizing a
+  moving, self-selected target, and that periodic injection of out-of-distribution
+  and adversarial data is required to keep the loop from collapsing inward.
+- **Buy labels or harvest signal.** Purchased expert labels are clean, expensive,
+  and slow; harvested implicit signal is noisy, cheap, and continuous. The mix is
+  a live operational choice, not a settled ratio.
+:::
+
+## Implementation: a thin sketch
+
+The engine is more pipeline than model. A trace logger writes structured records
+at the serving surface. A sampler, run on a schedule, draws candidates by
+uncertainty and by strata the team cares about. A labeling system presents those
+candidates against the current guideline and records the answer plus the
+annotator and the agreement check. A promotion step routes the result: clear
+failures to the eval set, scored pairs to the preference store, everything to a
+governed table with its consent basis attached. None of these steps is novel
+infrastructure; the discipline is in running them continuously and treating the
+guideline, the agreement metric, and the consent basis as first-class artifacts
+rather than afterthoughts.
+
+## Reading the production data engine
+
+Through the capability, efficiency, trust lens, the engine is the mechanism that
+keeps a deployed model improving rather than decaying. Capability comes from the
+freshest possible on-distribution data, the cases real users actually bring,
+which no static corpus contains. Efficiency is the selection problem: active
+learning and weak supervision exist to buy the most model improvement per dollar
+of human judgment, because labeling, not compute, is the binding cost here. Trust
+is the part the field underinvests in, and it lives in the human supply chain and
+the consent ledger, where an ambiguous guideline or an unlawful collection turns
+the engine from an asset into a slow-acting liability. A model is only as good as
+the data it is fed, and after launch the product is what feeds it.
+
+## Further reading
+
+- Sambasivan et al., "Everyone wants to do the model work, not the data work: Data Cascades in High-Stakes AI," CHI 2021 (the under-acknowledged cost of data work). [doi:10.1145/3411764.3445518](https://doi.org/10.1145/3411764.3445518)
+- Northcutt, Athalye, Mueller, "Pervasive Label Errors in Test Sets Destabilize Machine Learning Benchmarks," NeurIPS Datasets and Benchmarks 2021. [arXiv:2103.14749](https://arxiv.org/abs/2103.14749)
+- Settles, "Active Learning Literature Survey," University of Wisconsin-Madison Technical Report 1648, 2009. [minds.wisconsin.edu](https://minds.wisconsin.edu/handle/1793/60660)
+- Ratner et al., "Data Programming: Creating Large Training Sets, Quickly," NeurIPS 2016 (weak supervision). [arXiv:1605.07723](https://arxiv.org/abs/1605.07723)
+- Ouyang et al., "Training language models to follow instructions with human feedback," 2022 (the human grader the loop assumes). [arXiv:2203.02155](https://arxiv.org/abs/2203.02155)
+- Bai et al., "Constitutional AI: Harmlessness from AI Feedback," 2022 (replacing the human grader with the model). [arXiv:2212.08073](https://arxiv.org/abs/2212.08073)
