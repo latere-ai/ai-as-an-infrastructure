@@ -32,3 +32,12 @@ test("ch07 moe-ssm-hybrids uses moe-routing in both languages", () => {
   expect(src("en/p1-foundations/07-moe-ssm-hybrids.qmd")).toContain('data-viz="moe-routing"');
   expect(src("zh/p1-foundations/07-moe-ssm-hybrids.qmd")).toContain('data-viz="moe-routing"');
 });
+
+test("the viz runtime registers the tree-of-thoughts component", () => {
+  expect(rt).toMatch(/R\['tree-of-thoughts'\]\s*=\s*function/);
+});
+
+test("ch13 eliciting-reasoning uses tree-of-thoughts in both languages", () => {
+  expect(src("en/p3-reasoning/13-eliciting-reasoning.qmd")).toContain('data-viz="tree-of-thoughts"');
+  expect(src("zh/p3-reasoning/13-eliciting-reasoning.qmd")).toContain('data-viz="tree-of-thoughts"');
+});
