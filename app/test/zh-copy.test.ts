@@ -178,6 +178,38 @@ test("polished chapter openings preserve key source theses", () => {
       ["模型周围的运行时层", "暂停、重定向、分叉", "评估分数的撬动也不亚于一次模型更换"],
     ],
     [
+      "en/orchestration/05-multi-agent-systems.qmd",
+      ["Voting among similar agents buys less", "structured disagreement buys", "liveness failures", "safety failures", "escalates recoverable failures", "blocks silent ones"],
+    ],
+    [
+      "zh/orchestration/05-multi-agent-systems.qmd",
+      ["相似智能体之间的投票", "结构化的分歧", "活性失败", "安全性失败", "升级那些可恢复", "阻断那些会静默发布"],
+    ],
+    [
+      "en/orchestration/06-rag-retrieval.qmd",
+      ["question into a few hundred tokens of evidence", "chunk and index", "embed the query", "retrieve and fuse", "context window that keeps growing"],
+    ],
+    [
+      "zh/orchestration/06-rag-retrieval.qmd",
+      ["把一个问题变成几百个证据词元", "分块并索引", "嵌入查询", "检索并融合候选", "不断增长的上下文窗口"],
+    ],
+    [
+      "en/orchestration/07-embeddings-representation.qmd",
+      ["generator's hidden states make a poor metric space", "alignment against uniformity", "query-document interaction", "negatives are the central training variable", "web-mined pairs", "decoder itself becoming the embedder"],
+    ],
+    [
+      "zh/orchestration/07-embeddings-representation.qmd",
+      ["生成器的隐藏状态构成一个糟糕的度量空间", "对齐与均匀", "查询与文档交互的位置", "负样本的选择是核心训练变量", "网上挖文本对", "解码器即嵌入器"],
+    ],
+    [
+      "en/orchestration/08-context-engineering.qmd",
+      ["prompt engineering to context engineering", "longer context window does not by itself solve", "token budgets", "tool protocols", "agent can actually do"],
+    ],
+    [
+      "zh/orchestration/08-context-engineering.qmd",
+      ["从提示工程改名为上下文工程", "更长的上下文窗口并不能单凭自身解决问题", "词元预算", "工具协议", "智能体实际能做什么"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -293,8 +325,10 @@ test("polished chapter openings preserve key source theses", () => {
 
   for (const [path, snippets] of checks) {
     const text = readFileSync(join(repoRoot, path), "utf8");
+    const normalizedText = text.replace(/\s+/g, " ");
     for (const snippet of snippets) {
-      expect(text, `${path} should preserve ${snippet}`).toContain(snippet);
+      const normalizedSnippet = snippet.replace(/\s+/g, " ");
+      expect(normalizedText, `${path} should preserve ${snippet}`).toContain(normalizedSnippet);
     }
   }
 });
@@ -327,6 +361,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/orchestration/02-agent-architectures.qmd",
     "en/orchestration/03-memory-systems.qmd",
     "en/orchestration/04-the-harness.qmd",
+    "en/orchestration/05-multi-agent-systems.qmd",
+    "en/orchestration/06-rag-retrieval.qmd",
+    "en/orchestration/07-embeddings-representation.qmd",
+    "en/orchestration/08-context-engineering.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -367,6 +405,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/orchestration/02-agent-architectures.qmd",
     "zh/orchestration/03-memory-systems.qmd",
     "zh/orchestration/04-the-harness.qmd",
+    "zh/orchestration/05-multi-agent-systems.qmd",
+    "zh/orchestration/06-rag-retrieval.qmd",
+    "zh/orchestration/07-embeddings-representation.qmd",
+    "zh/orchestration/08-context-engineering.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
@@ -382,7 +424,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/infrastructure/07-where-learning-hits-limits.qmd",
     "zh/infrastructure/08-the-capability-horizon.qmd",
   ];
-  const banned = /By the end|This chapter is about|This chapter tells one story|读者读完|读完这一部分|本章把一个故事/;
+  const banned = /By the end|reader can explain|This chapter is about|This chapter tells one story|读者读完|读完本章|读完这一部分|本章来讲这个|本章把一个故事/;
 
   for (const path of polished) {
     const text = readFileSync(join(repoRoot, path), "utf8");
