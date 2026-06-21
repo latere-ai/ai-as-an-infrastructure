@@ -37,5 +37,12 @@ code   /zh/p3-reasoning/15-inference-time-scaling 200 # clean URL serves
 code   /zh/nope 404
 loc    /en/index.html /en/                            # index.html canonicalizes
 loc    /zh/p3-reasoning/15-inference-time-scaling.html /zh/p3-reasoning/15-inference-time-scaling
+# Relocated chapters (Part XII/XIII split): old paths 301 to the new dirs.
+loc    /en/p11-frontiers/52-diffusion-flow-matching      /en/p12-generative/52-diffusion-flow-matching
+loc    /zh/p11-frontiers/58-multimodal-models            /zh/p12-generative/58-multimodal-models
+loc    /en/p11-frontiers/52-diffusion-flow-matching.html /en/p12-generative/52-diffusion-flow-matching
+loc    /en/p12-operations/54-production-data-engine       /en/p13-operations/54-production-data-engine
+loc    /zh/p12-operations/52-deployment-lifecycle         /zh/p13-operations/52-deployment-lifecycle
+noloop /en/p11-frontiers/58-multimodal-models            # old path resolves (200) at new location
 
 [ "$fail" = 0 ] && echo "nginx routing: all checks passed" || { echo "nginx routing: FAILURES"; exit 1; }
