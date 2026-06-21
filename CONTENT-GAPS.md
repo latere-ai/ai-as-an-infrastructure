@@ -60,10 +60,10 @@ different-book decision, taken one chapter at a time.
 **Done:** the scope-expansion menu is complete. The generative/multimodal
 chapters now live in their own **Part XII: The Generative and Multimodal Stack**
 (diffusion, NAR/diffusion LMs, speech, multimodal models, beyond-text);
-Operations moved to Part XIII. Note: those files still physically sit under
-`p11-frontiers/` (manifest-only regroup, to avoid colliding with the in-flight
-prose sweep); a later pass can relocate them to a dedicated directory. No
-discrete items remain on this roadmap.
+Operations moved to Part XIII. The chapters now physically live in
+`p12-generative/` and `p13-operations/` (filenames unchanged, so the per-chapter
+`refs/<slug>.bib` lookups and `[@cite]` resolution were unaffected). No discrete
+items remain on this roadmap.
 
 ## Deliberately ceded (unchanged)
 
