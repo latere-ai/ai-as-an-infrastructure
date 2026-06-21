@@ -4,6 +4,7 @@ import { expect, test } from "bun:test";
 
 const zhRoot = join(import.meta.dir, "..", "..", "zh");
 const repoRoot = join(import.meta.dir, "..", "..");
+const enRoot = join(repoRoot, "en");
 const deprecatedLabel = "约束" + "箭头";
 
 function qmdFiles(dir: string): string[] {
@@ -21,6 +22,18 @@ test("zh source uses 下层约束 instead of the calqued old label", () => {
     readFileSync(path, "utf8").includes(deprecatedLabel),
   );
   expect(offenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
+});
+
+test("polished prose avoids loose trick and scaffold calques", () => {
+  const enOffenders = qmdFiles(enRoot).filter((path) =>
+    /\btricks?\b/i.test(readFileSync(path, "utf8")),
+  );
+  const zhOffenders = qmdFiles(zhRoot).filter((path) =>
+    /诀窍|脚手架/.test(readFileSync(path, "utf8")),
+  );
+
+  expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
+  expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
 });
 
 test("polished chapter openings preserve key source theses", () => {
