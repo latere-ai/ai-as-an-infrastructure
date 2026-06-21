@@ -8,9 +8,11 @@ itself can be jailbroken (@sec-adversarial-robustness). So production systems
 add a second safety layer that runs at inference time and does not depend on
 the model behaving. By the end of this chapter a reader can explain why an
 aligned model's own refusal is necessary but not sufficient, where a guardrail
-sits in the request path, why input and output are screened separately, and
-why the serving layer's streaming decision reaches up to dictate how the
-guardrail is built.
+sits in the request path and why input and output are screened separately, how
+the moderator evolved from a blocklist into a policy-conditioned classifier, why
+a tool-using agent reopens the problem in its hardest form through indirect
+prompt injection, and why the serving layer's streaming decision reaches up to
+dictate how the guardrail is built.
 
 ## Why the aligned model is not enough
 
@@ -70,29 +72,118 @@ or times out, the request is refused rather than passed through.
 
 The lineage runs from crude to programmable. The earliest filters were keyword
 blocklists, trivially bypassed by spelling and trivially wrong on benign text.
-Learned toxicity classifiers replaced them with a model of the category, but a
-fixed model of a fixed category. The next step put a language model in the
-moderator's seat: a single endpoint trained to flag content across a taxonomy
-of harm, more robust to paraphrase than a keyword list and able to explain its
-verdict [@markov2023moderation].
+Learned toxicity classifiers replaced them with a model of the category, the
+line whose modern form is Jigsaw's Perspective API, which dropped per-language
+token vocabularies for a single character-level transformer robust to spelling,
+code-switching, and obfuscation [@lees2022perspective]. The next step put a
+language model in the moderator's seat: OpenAI's moderation endpoint is a
+classifier trained over a designed taxonomy of harm with an active-learning
+pipeline to keep catching the rare violations production traffic surfaces, more
+robust to paraphrase than a keyword list and maintained rather than fixed
+[@markov2023moderation].
 
-The decisive shift was making the policy an input rather than a baked-in
+The decisive shift was making the policy an *input* rather than a baked-in
 category. Llama Guard is fine-tuned to take a safety taxonomy in its prompt and
-classify a conversation against *that* taxonomy, so the same guard model serves
-many policies and a policy change is a prompt change, not a retraining
-[@inan2023llamaguard]. A parallel line added control above the single
+classify a conversation against *that* taxonomy, with separate prompt and
+response modes, so the same guard model serves many policies and a policy change
+is a prompt change, not a retraining [@inan2023llamaguard]. Its later versions
+align to the MLCommons hazard taxonomy, a shared vocabulary of harm categories
+that lets guards and benchmarks agree on what they are measuring
+[@vidgen2024mlcommons]. Variations on the guard model fill out the design space:
+ShieldGemma ships a range of sizes with calibrated probabilities so an operator
+can pick a threshold [@zeng2024shieldgemma], and WildGuard folds three jobs into
+one model, scoring prompt harm, response harm, and whether the model refused,
+the last because over-refusal is itself a failure worth measuring
+[@han2024wildguard]. A parallel line added control above the single
 classification: programmable rails that constrain the dialogue itself, routing
 or rephrasing or refusing according to declared flows rather than a single
 yes-or-no [@rebedea2023nemoguardrails]. The arc is from a fixed filter toward a
 configurable policy engine that sits beside the model.
+
+## The injected agent: runtime safety's hardest case
+
+The guardrail above assumes the dangerous content arrives in the user's turn.
+A tool-using agent breaks that assumption. The model of @sec-training-agents is
+trained to emit tool calls, and the harness of @sec-the-harness executes them and
+feeds the results back into the context, so the agent reads web pages, documents,
+emails, and tool output *as data*, and a transformer conditions on its whole
+context without a reliable way to tell which spans are trusted instructions and
+which are untrusted data. That is the structural root of *prompt injection*, named
+by analogy to SQL injection [@willison2022promptinjection]. Direct injection is
+the user typing "ignore the above"; the dangerous case for agents is *indirect*
+injection, where the malicious instruction is hidden in content the agent
+retrieves, demonstrated against real applications by Greshake et al., who showed a
+planted payload in a web page could hijack an LLM-integrated assistant
+[@greshake2023indirect]. The precondition for catastrophe is a *lethal trifecta*:
+an agent that at once has access to private data, exposure to untrusted content,
+and a channel to communicate outward can be made to route the private data to an
+attacker, and removing any one leg breaks the exfiltration path
+[@willison2025lethaltrifecta].
+
+```{mermaid}
+%%| label: fig-lethal-trifecta
+%%| fig-cap: "The lethal trifecta. Indirect prompt injection becomes data exfiltration only when an agent simultaneously holds all three capabilities: access to private data, exposure to untrusted content that can carry an injected instruction, and an outward channel to send data through. Removing any one leg breaks the path, which is why least-privilege tool scoping and outbound-egress screening are load-bearing defenses. After Willison (2025)."
+flowchart TD
+  inj["untrusted content<br/>(retrieved page, email, tool output)"] --> agent["tool-using agent<br/>reads it as data"]
+  priv["private data access"] --> agent
+  agent --> act["injected instruction<br/>triggers a privileged tool call"]
+  act --> exfil["external channel<br/>(URL, email, request)"]
+  exfil --> leak["data exfiltrated"]
+  priv -.->|"remove a leg"| broken["path broken"]
+  inj -.->|"remove a leg"| broken
+  exfil -.->|"remove a leg"| broken
+```
+
+The defenses are real but each is partial. The instruction hierarchy trains the
+model to rank its sources, system above user above tool output, and obey a
+lower-privilege instruction only when it aligns with a higher one
+[@wallace2024instructionhierarchy]; spotlighting marks untrusted spans so the
+model treats them as inert [@hines2024spotlighting]. Both raise the bar but
+remain learned priors a clever framing can defeat. The one approach that offers a
+guarantee rather than a prior is structural: the dual-LLM pattern, generalized by
+CaMeL, runs a privileged model that plans and calls tools but never sees raw
+untrusted content, and a quarantined model that processes untrusted content but
+holds no tools, with a capability layer that fixes the control and data flow from
+the trusted query alone so injected data cannot redirect it
+[@debenedetti2025camel]. It buys provable security at a utility cost, on the
+AgentDojo benchmark solving 77 percent of tasks against 84 percent undefended
+[@debenedetti2024agentdojo; @zhan2024injecagent]. The operational lessons compose
+into defense in depth: scope each tool to least privilege so a hijack inherits a
+small blast radius, require human confirmation for irreversible actions, and
+screen *outbound* tool arguments and URLs, not just prose, because an injected
+agent exfiltrates through a crafted request, the data-flow form of the output
+guard.
+
+## Jailbreak-robust classifiers
+
+A guard is itself a model with an input channel, so it can be jailbroken like the
+model it guards, and the frontier of the field is making the guard hard to break.
+Constitutional Classifiers train input and output classifiers on synthetic data
+generated from a written constitution of permitted and forbidden content,
+augmented with translations and known jailbreak transformations; the output
+classifier is *streaming*, a value head predicting harmfulness token by token so
+generation can be halted mid-stream [@sharma2025constitutional]. Anthropic reports
+the classifiers cut a jailbreak success rate from 86 percent on the unguarded
+model to 4.4 percent, at a 23.7 percent inference overhead and only a 0.38 percent
+rise in production refusals, and that thousands of hours of red-teaming in a
+prototype phase found no universal jailbreak, though a later public demo did
+surface one, which is the honest caveat. A complementary line, rapid response,
+observes a handful of real jailbreaks, automatically proliferates variants, and
+fine-tunes the input guard on them, cutting attack success by more than an order
+of magnitude from a few examples [@peng2024rapidresponse]. The guard is becoming a
+trained, adversarially-hardened component in its own right rather than a simple
+classifier.
 
 ## Trade-offs
 
 The first trade-off is precision against recall, and it is unforgiving in both
 directions. A guard tuned to catch everything blocks benign requests, and
 over-refusal is a real cost: it is the failure users feel, and it pushes them
-to systems with weaker safety. A guard tuned to preserve utility lets harm
-through. There is no setting that escapes the curve; there is only the choice
+to systems with weaker safety. It is now measured directly, by contrast suites
+that pair safe prompts a calibrated model should answer with unsafe ones it
+should refuse [@rottger2024xstest], and at scale by automatically generated
+over-refusal benchmarks [@cui2024orbench]. A guard tuned to preserve utility lets
+harm through. There is no setting that escapes the curve; there is only the choice
 of operating point, and the right point differs by domain.
 
 The second trade-off is safety against latency, and it is sharpened by the
@@ -101,7 +192,9 @@ stack streams tokens to the user as they are produced (@sec-faster-decoding).
 A system cannot both stream a token and wait to screen the complete output. It
 must either buffer the generation and screen it whole, paying latency and
 giving up the streaming experience, or screen incrementally in chunks, risking
-that a disallowed prefix reaches the user before the chunk that condemns it.
+that a disallowed prefix reaches the user before the chunk that condemns it,
+which is exactly why a streaming-aware classifier that scores token by token
+became worth building.
 
 ::: {.callout-tip}
 ## Constraint arrow
@@ -111,9 +204,12 @@ architecture. Because @sec-serving-problem streams tokens to cut perceived
 latency, the output guard cannot assume it has the complete response to
 classify. The safety layer is forced to choose incremental screening, with its
 prefix-leak risk, or whole-response buffering, which discards the very
-streaming the serving layer was built to provide. A latency optimization three
-layers down decides whether the safety layer can stream, and that is why a
-guardrail cannot be designed without knowing how the model is served.
+streaming the serving layer was built to provide. The risk is sharpest for an
+exfiltration URL: a streamed token that *is* the leak reaches its destination
+before a chunked guard can condemn it, which is an argument for buffering
+tool-call and URL outputs specifically even when prose streams. A latency
+optimization three layers down decides whether the safety layer can stream, and
+that is why a guardrail cannot be designed without knowing how the model is served.
 :::
 
 ## Implementation
@@ -147,14 +243,18 @@ both the generator and its monitor at once.
   itself a model with an input channel, so it can be attacked like any other
   (@sec-adversarial-robustness). Skeptics argue a separate classifier mostly
   relocates the jailbreak target; defenders argue defense in depth still
-  raises the cost of an attack even if no single layer is complete.
+  raises the cost of an attack, but only if the layers are genuinely
+  independent, so that an attack beating the guard does not automatically beat
+  the capability layer.
+- **Is prompt injection solvable at all for agents?** Learned defenses are
+  partial by construction, and the only provable approach constrains the data
+  flow at a utility cost most products have not paid; whether indirect injection
+  has a deployable general solution, or stays a managed risk bounded by least
+  privilege, is open [@debenedetti2025camel].
 - **Is policy-as-input classification robust enough?** Passing the taxonomy in
   the prompt is flexible, but it inherits the brittleness of in-context
   instructions. Whether a configurable guard matches a purpose-trained
   classifier on a fixed policy is an open empirical question.
-- **Centralized or per-application policy?** A platform-wide guard is
-  consistent and auditable but blunt; per-application policy fits the use but
-  fragments the safety story and the evaluation.
 :::
 
 ## Reading runtime safety through the lens
