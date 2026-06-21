@@ -1,0 +1,26 @@
+// Guard the runnable-cell matplotlib rendering contract (live-runtime.html).
+// The figure must be a transparent vector SVG with text flattened to paths, so
+// it stays crisp on Retina and blends into the themed (light/dark) result panel.
+// Regression target: a blurry, opaque, white-background raster PNG.
+
+import { test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
+
+const rt = readFileSync(new URL("../../live-runtime.html", import.meta.url), "utf8");
+
+test("matplotlib output is a transparent SVG (vector, theme-fitting), not a PNG", () => {
+  expect(rt).toMatch(/format="svg",\s*bbox_inches="tight",\s*transparent=True/);
+  expect(rt).not.toMatch(/format="png"/);
+});
+
+test("SVG text is flattened to paths so it renders identically inside the <img>", () => {
+  expect(rt).toMatch(/"svg\.fonttype":\s*"path"/);
+});
+
+test("the figure canvas is transparent (no baked-in background color)", () => {
+  expect(rt).toMatch(/"figure\.facecolor":\s*"none",\s*"axes\.facecolor":\s*"none"/);
+});
+
+test("the result panel is displayed from an svg+xml data URI", () => {
+  expect(rt).toContain("data:image/svg+xml;base64,");
+});
