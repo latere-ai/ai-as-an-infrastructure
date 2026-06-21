@@ -13,6 +13,7 @@ import type { CrossrefMap } from "./crossref.ts";
 import { resolveXrefsInText } from "./crossref.ts";
 import { renderDot, renderMermaid, type GraphvizInstance } from "./diagrams.ts";
 import { expandDivs } from "./divs.ts";
+import { highlightCode } from "./highlight.ts";
 
 export interface RenderContext {
   bib: Bibliography;
@@ -39,7 +40,9 @@ function figPrefix(currentHref: string): string {
 }
 
 function createMd(ctx: RenderContext): MarkdownIt {
-  const md = new MarkdownIt({ html: true, linkify: false, typographer: false, breaks: false });
+  // `highlight` colors static code fences (Python) at build time; the default
+  // fence renderer (defFence below) invokes it and adds the <pre><code> wrapper.
+  const md = new MarkdownIt({ html: true, linkify: false, typographer: false, breaks: false, highlight: highlightCode });
   md.use(attrs, { allowedAttributes: ["id", "class", /^data-/] });
   md.use(katex);
   md.use(quartoRefs, { bib: ctx.bib, xref: ctx.xref, currentHref: ctx.currentHref, prefix: ctx.prefix });
