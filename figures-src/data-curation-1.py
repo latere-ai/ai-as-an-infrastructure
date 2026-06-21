@@ -26,9 +26,9 @@ lsh = candidates_per_doc * n
 fig, ax = plt.subplots(figsize=(5, 3))
 
 ax.loglog(n, all_pairs, color=GRAY, linewidth=1.8, linestyle="--",
-          label=r"All-pairs  $O(n^2)$")
+          label="All-pairs O(n^2)")
 ax.loglog(n, lsh, color=BLUE, linewidth=2.0,
-          label=r"MinHash + LSH  $\approx O(n)$")
+          label="MinHash + LSH ≈ O(n)")
 
 ax.set_xlabel("Documents in corpus (n)", color=GRAY)
 ax.set_ylabel("Pairwise comparisons", color=GRAY)

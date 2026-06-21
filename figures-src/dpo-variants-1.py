@@ -28,7 +28,7 @@ fig, ax = plt.subplots(figsize=(5, 3))
 ax.plot(gap, dpo, color=DATA, lw=1.8, linestyle="-",
         label="DPO log-sigmoid (unbounded pull)")
 ax.plot(gap, ipo, color=INK, lw=1.8, linestyle="--",
-        label="IPO squared loss (target at $\\tau$)")
+        label="IPO squared loss (target at τ)")
 
 # Mark the IPO target: the gap the bounded loss settles on.
 ax.axvline(tau, color=INK, lw=0.9, alpha=0.4)
