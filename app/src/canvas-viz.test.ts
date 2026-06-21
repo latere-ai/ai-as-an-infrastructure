@@ -76,3 +76,22 @@ test("ch30 accelerators-networking uses bandwidth-tiers in both languages", () =
   expect(src("en/p7-infrastructure/30-accelerators-networking.qmd")).toContain('data-viz="bandwidth-tiers"');
   expect(src("zh/p7-infrastructure/30-accelerators-networking.qmd")).toContain('data-viz="bandwidth-tiers"');
 });
+
+// Wave 2: steppers + curve reuses authored on existing components, both langs.
+test("ch48 machine-that-breaks adds a prefill/decode stepper in both languages", () => {
+  expect(src("en/p11-frontiers/48-the-machine-that-breaks.qmd")).toContain('data-chip="PREFILL"');
+  expect(src("zh/p11-frontiers/48-the-machine-that-breaks.qmd")).toContain('data-chip="PREFILL"');
+});
+
+test("ch03 scaling-laws adds a u-shape compute-optimal curve in both languages", () => {
+  expect(src("en/p1-foundations/03-scaling-laws.qmd")).toContain('data-viz="curve" data-family="u-shape"');
+  expect(src("zh/p1-foundations/03-scaling-laws.qmd")).toContain('data-viz="curve" data-family="u-shape"');
+});
+
+test("ch36 adversarial-robustness adds swiss-cheese stepper + many-shot power-law, both languages", () => {
+  for (const lang of ["en", "zh"]) {
+    const t = src(`${lang}/p8-safety/36-adversarial-robustness.qmd`);
+    expect(t).toContain('data-chip="CIRCUIT BREAKERS"');
+    expect(t).toContain('data-viz="curve" data-family="power-grow"');
+  }
+});
