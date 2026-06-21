@@ -90,6 +90,22 @@ test("polished chapter openings preserve key source theses", () => {
       ["早期证据更支持后一种读法", "更多是由现成数据支撑起来的"],
     ],
     [
+      "en/adaptation/01-sft-peft.qmd",
+      ["small, low-rank, additive, composable", "rank-16 adapter approximates", "QLoRA", "two fine-tunes can be added together"],
+    ],
+    [
+      "zh/adaptation/01-sft-peft.qmd",
+      ["小的、低秩", "rank-16 的适配器能近似替代", "QLoRA", "两次微调能相加到一起"],
+    ],
+    [
+      "en/adaptation/02-rlhf-reward-modeling.qmd",
+      ["train a reward model on human", "comparisons", "optimize a policy against that reward with @gls-ppo", "constitutional and @gls-rlaif variants", "learned reward needs a KL constraint"],
+    ],
+    [
+      "zh/adaptation/02-rlhf-reward-modeling.qmd",
+      ["人类比较上训练一个奖励模型", "用 @gls-ppo 针对这个奖励优化策略", "宪法式方法与", "@gls-rlaif 变体", "习得奖励需要 KL 约束"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -227,6 +243,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/generative/03-speech-and-voice.qmd",
     "en/generative/04-multimodal-models.qmd",
     "en/generative/05-beyond-text.qmd",
+    "en/adaptation/01-sft-peft.qmd",
+    "en/adaptation/02-rlhf-reward-modeling.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -255,6 +273,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/generative/03-speech-and-voice.qmd",
     "zh/generative/04-multimodal-models.qmd",
     "zh/generative/05-beyond-text.qmd",
+    "zh/adaptation/01-sft-peft.qmd",
+    "zh/adaptation/02-rlhf-reward-modeling.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
