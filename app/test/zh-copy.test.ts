@@ -129,6 +129,14 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/inference/05-structured-long-context.qmd",
       ["拿 logits 对照一台@gls-fsm做掩码", "预计算索引和跳跃式前向", "滑动窗口、@gls-attention-sink 与重击者驱逐", "查询感知策略"],
     ],
+    [
+      "en/inference/06-serving-multimodal.qmd",
+      ["chooses the visual token count", "serving-cost decision", "encoder placement", "Image prefix caching"],
+    ],
+    [
+      "zh/inference/06-serving-multimodal.qmd",
+      ["视觉编码器决定视觉 token 数", "分辨率设置就是服务成本决策", "编码器放在哪里也是服务决策", "图像前缀缓存"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -160,6 +168,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/inference/03-faster-decoding.qmd",
     "en/inference/04-quantization-kernels.qmd",
     "en/inference/05-structured-long-context.qmd",
+    "en/inference/06-serving-multimodal.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -179,6 +188,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/inference/03-faster-decoding.qmd",
     "zh/inference/04-quantization-kernels.qmd",
     "zh/inference/05-structured-long-context.qmd",
+    "zh/inference/06-serving-multimodal.qmd",
   ];
   const banned = /By the end|This chapter tells one story|读者读完本章|本章把一个故事/;
 

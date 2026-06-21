@@ -1,18 +1,18 @@
 # Serving Multimodal Models {#sec-serving-multimodal}
 
-Part IV built a serving stack on one quiet assumption: tokens arrive cheaply.
-A tokenizer turns a prompt into a few hundred integers, and from there the cost
-model of @sec-serving-problem holds, prefill is compute-bound, decode is
-memory-bound, and the key-value cache grows one entry per token. An image
-breaks that assumption at the door. It arrives as raw pixels, and a vision
-encoder mints it into tokens, not a few hundred but often a few thousand. By
-the end of this chapter a reader can trace the multimodal serving pipeline from
-pixels to the backbone, explain why a resolution setting is a serving-cost
-decision, name the levers that set the visual token count and the techniques
-that cut it back down, and decide where the encoder should run. The fusion
-architectures these pipelines serve, the cross-attention and projection
-connectors that turn pixels into tokens a language model can read, are
-@sec-multimodal; here the concern is running them.
+Part IV built a serving stack on one assumption: tokens arrive cheaply. A
+tokenizer turns a prompt into a few hundred integers, and from there the cost
+model of @sec-serving-problem holds: prefill is compute-bound, decode is
+memory-bound, and the key-value cache grows one entry per token. Multimodal
+serving starts before the language model sees a token. A vision encoder
+converts raw pixels into visual tokens, often thousands of them, and the vision
+encoder chooses the visual token count before the scheduler can react. That
+count sets prefill FLOPs, key-value cache bytes, and batch size. A resolution
+setting is therefore a serving-cost decision, and encoder placement is a
+serving decision in its own right. The fusion architectures these pipelines
+serve, the cross-attention and projection connectors that turn pixels into
+tokens a language model can read, are @sec-multimodal; here the concern is
+running them.
 
 ![Schematic of why multimodal serving can be token-expensive. Fixed image patching grows quickly with resolution, while adaptive crops or routing reduce the slope. Idealized token counts, not measured data.](/figures/serving-multimodal-1.svg){#fig-serving-multimodal-1}
 
@@ -22,7 +22,7 @@ In a text request, the expensive object is the prompt, and its length is the
 user's to set. In a multimodal request, the expensive object is the image, and
 its length is set by a model the user never sees. A vision encoder, almost
 always a Vision Transformer, cuts the image into a grid of fixed-size patches
-and emits one embedding per patch [@dosovitskiy2021vit]. The grid is the whole
+and produces one embedding per patch [@dosovitskiy2021vit]. The grid is the whole
 story of cost. A CLIP-style encoder at 336 pixels with a patch size of 14 emits
 a 24 by 24 grid, 576 tokens, for a single image. Those 576 tokens are not
 metaphorical. They are concatenated into the backbone's input sequence and from
@@ -43,7 +43,7 @@ of the request, like an enormous prefix nobody typed.
 
 ```{mermaid}
 %%| label: fig-mm-pipeline
-%%| fig-cap: "The multimodal serving pipeline. The vision encoder and projector run once per image at prefill, minting visual tokens that are concatenated with text tokens and then live in the key-value cache exactly like text. The encoder is an extra compute stage the text stack never had."
+%%| fig-cap: "The multimodal serving pipeline. The vision encoder and projector run once per image at prefill, producing visual tokens that are concatenated with text tokens and then live in the key-value cache exactly like text. The encoder is an extra compute stage the text stack never had."
 flowchart LR
   IMG["raw pixels"] --> ENC["vision encoder<br/>(ViT)"]
   ENC --> PROJ["projector<br/>(MLP / resampler)"]
@@ -129,11 +129,11 @@ every image is before the scheduler in @sec-memory-scheduling ever sees it.
 
 ## Cutting the count back down
 
-Because the count drives the cost, much of multimodal serving is the art of
+Because the count drives the cost, much of multimodal serving is the problem of
 spending fewer tokens per image without losing the pixels that matter. The
-methods divide by where they cut.
+methods divide by where they reduce the count.
 
-Some cut before the backbone. Pixel-shuffle and similar spatial-to-channel
+Some reduce it before the backbone. Pixel-shuffle and similar spatial-to-channel
 folds merge a small neighborhood of patches into one token, dividing the visual
 token count by four at the cost of fine spatial detail, a trade many production
 encoders take by default [@chen2024internvl]. A resampler, the Flamingo move,
@@ -142,9 +142,9 @@ down to a constant small set [@alayrac2022flamingo]. Both decide the count
 before a single backbone layer runs, which makes them cheap and predictable but
 forces the loss to happen blind to the prompt.
 
-Others cut inside the backbone, after the model has begun to read. The
-observation that drives them is that visual tokens stop earning their keep
-early: after the first couple of layers, attention to image tokens collapses, so
+Others reduce it inside the backbone, after the model has begun to read. The
+observation that drives them is that visual token contribution falls early:
+after the first couple of layers, attention to image tokens collapses, so
 most of them can be pruned with little effect on the answer. FastV prunes visual
 tokens after an early layer and reports that an image is worth roughly half its
 tokens past layer two [@chen2024fastv]. Pruning inside the backbone can be
@@ -173,7 +173,7 @@ appended to.
 
 ## Where the encoder runs
 
-The encoder is a compute stage the text stack never had, and its placement is a
+The encoder is a compute stage the text stack never had, and encoder placement is a
 serving decision in its own right. Colocating it with the backbone on the same
 accelerator is simplest and keeps the visual features local, but it lets a burst
 of image-heavy requests starve the decode loop of compute, because the encoder
@@ -184,7 +184,7 @@ for the same reason: it isolates a bursty, compute-bound stage from a
 latency-sensitive one, at the cost of moving embeddings across the wire and
 managing a second fleet.
 
-Caching helps more here than in text, because images repeat. A conversation that
+Image prefix caching helps more here than in text, because images repeat. A conversation that
 refers back to the same uploaded document re-sends it every turn, and a system
 that decorates every request with the same brand image pays for it every time,
 unless the encoder output or the resulting key-value entries are cached and
@@ -194,7 +194,7 @@ encoder and the image's prefill entirely (cross-ref @sec-memory-scheduling).
 The economics are better than for text caching, since an image is a far larger
 block of tokens to reuse.
 
-Video is the same problem with the multiplier turned up. A clip is a sequence of
+Video is the same problem with a larger multiplier. A clip is a sequence of
 frames, each frame is an image, and each image is hundreds to thousands of
 tokens, so a few seconds of video at a naive frame rate exceeds the context
 window before the question is even appended. Every video model therefore pools
@@ -205,7 +205,7 @@ temporal fidelity for a token budget the serving stack can afford.
 ## Reading the multimodal serving layer
 
 Through the capability, efficiency, trust lens, multimodality is a capability
-bought almost entirely in the currency of efficiency. The capability is real:
+paid for mostly through efficiency. The capability is real:
 reading a chart, a screenshot, or a scanned form is what makes a model useful
 beyond chat. But every increment of visual capability is an increment of tokens,
 and tokens are prefill FLOPs and key-value bytes, the two quantities the whole
