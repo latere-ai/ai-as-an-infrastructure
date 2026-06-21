@@ -42,15 +42,22 @@ different-book decision, taken one chapter at a time.
   audio LMs and codec-LM TTS with zero-shot voice cloning; full-duplex
   speech-to-speech and the latency budget). Built; placed after the diffusion
   chapter in the generative-media cluster.
-- [ ] **Non-autoregressive / diffusion language models** — distinct from
-  speculative decoding (which is AR acceleration).
-- [ ] **Edge & on-device** — mobile NPUs, privacy-local inference,
-  edge-constrained quantization.
+- [x] **Non-autoregressive / diffusion language models** →
+  `p11-frontiers/57-nar-diffusion-lms` (parallel/iterative decoding, D3PM,
+  Diffusion-LM, SEDD, LLaDA, block diffusion, Mercury; the AR-vs-diffusion
+  tension). Built; placed beside the diffusion chapter.
+- [x] **Edge & on-device** → `p10-practical/56-edge-on-device` (MobileLLM/OpenELM
+  small-by-design, Gemini Nano / Apple on-device tiers, BitNet 1.58-bit,
+  llama.cpp/GGUF, the memory constraint arrow). Built; placed after the
+  cloud-serving chapter in Part X.
 
-A full **generative/multimodal Part** would fold the first four together (lift
-`50-beyond-text`'s native-multimodality section into a real chapter, add
-image/video/audio generation). That remains the larger "broaden the book"
-decision.
+**Done:** the generative/multimodal chapters now live in their own
+**Part XII: The Generative and Multimodal Stack** (diffusion, NAR/diffusion LMs,
+speech, beyond-text); Operations moved to Part XIII. Note: those four files still
+physically sit under `p11-frontiers/` (manifest-only regroup, to avoid colliding
+with the in-flight prose sweep); a later pass can relocate them to a dedicated
+directory. The remaining "broaden the book" option is to lift `50-beyond-text`'s
+native-multimodality material into a full image/video generation chapter.
 
 ## Deliberately ceded (unchanged)
 
