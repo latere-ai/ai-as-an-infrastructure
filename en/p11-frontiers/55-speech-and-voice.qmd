@@ -1,0 +1,116 @@
+# Speech and Realtime Voice {#sec-speech}
+
+The diffusion models of @sec-diffusion generate media in pixels; this chapter
+handles the other major modality, audio. Speech has its own stack, recognizing it, synthesizing it, and
+holding a conversation in it, and its own governing constraint: latency. A live
+voice has to reply within a few hundred milliseconds, and that single number
+shapes every architectural choice. By the end of this chapter a reader can
+explain how audio became a token-modeling problem like everything else in this
+book, why a three-second clip is enough to clone a voice, and why a voice agent's
+design is decided by its latency budget rather than its components.
+
+## Recognizing speech
+
+Automatic speech recognition maps a waveform to text, and the standard backbone
+pairs convolution, which captures local acoustic detail, with self-attention,
+which captures long-range structure: the Conformer [@gulati2020conformer]. The
+expensive part was always labeled audio, and two ideas drove that cost down.
+Self-supervision came first: wav2vec 2.0 pretrains on raw audio by masking the
+signal in latent space and solving a contrastive task over quantized latent
+representations, then reaches strong recognition from as little as ten minutes of
+labels [@baevski2020wav2vec2]. Scale came next: Whisper trained on 680,000 hours
+of weakly-supervised multilingual, multitask audio and generalizes zero-shot to
+new benchmarks without fine-tuning, approaching human robustness
+[@radford2022whisper]. The arc mirrors the text side of the book, self-supervised
+pretraining then large weakly-supervised scaling.
+
+## Audio as tokens
+
+The move that folded audio into the rest of this book was to stop treating it as
+a continuous signal and start treating it as discrete tokens. A neural codec does
+this: an encoder compresses a waveform, a residual vector quantizer maps it to a
+short sequence of codebook indices, and a decoder reconstructs it, all trained
+end to end. SoundStream at 3 kbps outperforms the traditional Opus codec at 12
+kbps [@zeghidour2021soundstream], and EnCodec pushed fidelity further with a
+streaming encoder-decoder over a quantized latent space [@defossez2022encodec].
+Residual quantization is the key trick: each quantizer codes the leftover the
+previous ones missed, so depth trades bitrate against reconstruction error. Once
+audio is a token sequence, a language model can model it.
+
+:::: {.runnable}
+```python
+import numpy as np
+rng = np.random.default_rng(0)
+
+d, K, Q = 16, 256, 6            # frame dim, codebook size, RVQ depth (num quantizers)
+codebooks = [0.5 * rng.normal(size=(K, d)) for _ in range(Q)]
+x = rng.normal(size=d)          # one audio-frame embedding to compress
+
+residual = x.copy(); tokens = []
+for cb in codebooks:
+    j = int(np.argmin(((cb - residual) ** 2).sum(1)))   # nearest entry to residual
+    tokens.append(j)
+    residual = residual - cb[j]                          # quantize the leftover
+    print(f"{len(tokens)} quantizer(s) -> {len(tokens)} token(s), "
+          f"recon error = {np.linalg.norm(residual):.3f}")
+print("each extra quantizer codes the leftover residual: error falls, bitrate rises")
+```
+::::
+
+## Generating speech
+
+With audio as tokens, generation becomes language modeling. AudioLM casts audio
+generation as predicting the next token over a hierarchy of semantic tokens, from
+a self-supervised model, and acoustic tokens, from the codec, producing coherent
+speech and even piano continuations with no transcript [@borsos2022audiolm].
+Text-to-speech followed the same turn from signal regression to token prediction:
+VALL-E treats TTS as conditional codec-language-modeling and, given a
+three-second enrollment recording of an unseen speaker, clones the voice
+zero-shot, carrying over the speaker's emotion and acoustic environment
+[@wang2023valle]. The older pipeline of predicting a mel-spectrogram and running
+a separate vocoder gives way to one model emitting codec tokens, the same
+consolidation the text stack made.
+
+## Realtime, full-duplex voice
+
+The hard part of a voice agent is not recognition or synthesis but the
+conversation loop: turn-taking, interruption, and latency. The obvious design is
+a cascade, automatic speech recognition into a text model into text-to-speech.
+It is modular and rides text-model progress, but it stacks each stage's latency
+and flattens everything through a text bottleneck that discards timing, overlap,
+and prosody. The alternative models speech to speech directly. Moshi is a
+full-duplex speech-text model that removes explicit speaker turns, models its own
+audio and the user's as two parallel streams alongside an "inner monologue" text
+stream, and reports about 160 ms of theoretical and 200 ms of practical latency
+[@defossez2024moshi]. A parallel line unifies the tasks rather than the duplex
+loop: SeamlessM4T is a single model for speech-to-speech, speech-to-text,
+text-to-speech, and text-to-text translation plus recognition across roughly a
+hundred languages [@seamless2023].
+
+::: {.callout-important}
+## What's contested
+Whether a voice agent should be a cascade or an end-to-end speech-to-speech model
+is unsettled. The cascade is debuggable and inherits every text-model
+improvement, but pays serial latency and throws away paralinguistics, the
+emotion, overlap, and timing that make speech more than its transcript. The
+end-to-end route keeps those and cuts latency, but is harder to train, steer, and
+evaluate, and cannot drop in a better text model the way a cascade can. The
+choice is set by how much the product values expressiveness and sub-second
+response against controllability, not by a general verdict.
+:::
+
+::: {.callout-tip}
+## Constraint arrow
+The latency budget of a conversation reaches back into the architecture. People
+expect a reply within roughly a few hundred milliseconds, and that ceiling, not
+any accuracy target, is what rules out a serial recognize-then-think-then-speak
+cascade for the most demanding cases and forces streaming, token-interleaved,
+full-duplex designs that emit audio before the user has finished. The
+interaction's latency dictates the model, the way the serving cost of a token
+dictates model size in @sec-scaling-laws.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::
