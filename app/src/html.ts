@@ -39,6 +39,7 @@ export function page(opts: {
 <link rel="alternate" hreflang="zh-Hans" href="${url("zh")}">
 <link rel="alternate" hreflang="x-default" href="${url("en")}">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<script>document.cookie="lang=${chapter.lang};path=/;max-age=31536000;samesite=lax"</script>
 ${FONT_LINKS}
 <style>${css}</style>
 </head>
