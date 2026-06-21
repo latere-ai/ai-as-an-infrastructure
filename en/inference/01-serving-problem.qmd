@@ -1,18 +1,19 @@
 # The Serving Problem {#sec-serving-problem}
 
-A trained model is a file; a served model is a system with a clock and a
-budget. By the end of this chapter a reader can explain why inference splits
-into a prefill phase and a decode phase with opposite hardware appetites, why
-latency and throughput pull against each other, why the real objective is
-goodput rather than either one alone, and why the key-value cache is the
-scarce resource that the whole serving layer exists to schedule.
+A trained model is a file; a served model is a system measured in seconds and
+dollars. Serving begins with a split inside one forward pass: prefill reads the
+whole prompt and is compute-bound, while decode emits one token at a time and
+is usually bandwidth-bound. That split turns latency, throughput, and memory
+into the same scheduling problem. Goodput, not raw throughput or raw latency,
+is the objective, and the key-value cache is the resource that sets the ceiling.
 
-That last point is the spine of this chapter. Everything else, the two phases,
-the latency metrics, the entire history of serving engines, and every operator
-knob, turns out to be a fight over one block of accelerator memory. We follow
-that thread from where the tension is born, through the objective that prices
-it, to the resource that bounds it, and finally through the engines and knobs
-that have learned to live inside the bound.
+The chapter follows the resource that makes those claims concrete. The cache is
+fixed by architecture, paid for in accelerator memory, and stretched by every
+in-flight request. Once it becomes the constraint, the history of serving
+engines is easier to read: continuous batching stops wasting finished slots,
+PagedAttention stops reserving unused cache, prefix caching stops recomputing
+shared prompts, and chunked or disaggregated prefill stops one phase from
+blocking the other.
 
 ## A file that has to keep time
 
@@ -30,18 +31,18 @@ latency, is how long each subsequent token takes once the stream has started.
 A chat interface needs a short TTFT so the response feels prompt; a long
 generation needs a short TPOT so the text does not stutter. These two clocks
 are not arbitrary product targets. They fall out of the way a single forward
-pass divides into two phases with opposite hardware appetites.
+pass divides into two phases with different hardware bottlenecks.
 
-## Two phases, two appetites
+## Two Phases, Two Bottlenecks
 
 When a request arrives, the model first reads the entire prompt. This is the
-**prefill** phase: all prompt tokens are processed together in one pass, every
+**@gls-prefill** phase: all prompt tokens are processed together in one pass, every
 position attending to every earlier position, which is a sequence of large
 matrix-matrix multiplications. Prefill is compute-bound. It saturates the
 accelerator's arithmetic units, and its cost grows with prompt length. TTFT is
 essentially the time prefill takes.
 
-Then the model emits the answer one token at a time. This is the **decode**
+Then the model emits the answer one token at a time. This is the **@gls-decode**
 phase: each step feeds the single most recent token through the network to
 produce the next one, a sequence of thin matrix-vector multiplications. Decode
 is memory-bandwidth-bound, not compute-bound. The arithmetic per step is tiny,
@@ -79,20 +80,18 @@ flowchart LR
   dec --> done["Answer streamed"]
 ```
 
-A reader may wonder why this split matters so much. It matters because the two
-phases want opposite things from the hardware, and they run on the same
-hardware. Prefill wants to be fed enough work to keep the arithmetic units
-busy. Decode wants more requests batched together so that one expensive
-weight-streaming pass produces tokens for many users at once. Batching is the
-lever that turns a bandwidth-bound decode into a compute-efficient one,
-because the weights are read once and amortized across every request in the
-batch [@pope2022scaling]. So throughput, tokens per second across all users,
-rises with batch size, while the latency any single user sees can degrade as
-the batch fills. The serving problem is this tension, made concrete: every
-later section is an attempt to win throughput from batching without spending a
-single user's latency budget.
+The split matters because the two phases put pressure on the same hardware in
+different ways. Prefill needs enough work to keep the arithmetic units busy.
+Decode needs enough requests in the batch for one expensive weight-streaming
+pass to serve many users at once. Batching is the lever that turns a
+bandwidth-bound decode into a compute-efficient one, because the weights are
+read once and amortized across every request in the batch [@pope2022scaling].
+So throughput, tokens per second across all users, rises with batch size, while
+the latency any single user sees can degrade as the batch fills. The serving
+problem is this tension made concrete: win throughput from batching without
+spending a user's latency budget.
 
-## The lie of a single number
+## Why One Number Misleads
 
 It is tempting to chase one headline metric, and both obvious candidates lie.
 Throughput counts every token the cluster produces. Latency counts how long
@@ -100,7 +99,7 @@ one user waits. Neither is the business objective. A server can post enormous
 throughput by batching so aggressively that every individual request misses
 its deadline, and it can post tiny latency by running one request at a time on
 idle hardware. The objective that survives contact with reality is
-**goodput**: the rate of requests completed *within their latency targets*.
+**@gls-goodput**: the rate of requests completed *within their latency targets*.
 Tokens produced after a request has already blown its TTFT or TPOT budget are
 not useful work. Goodput is throughput counted only over requests that met
 their service-level objectives (SLOs).
@@ -191,12 +190,12 @@ and expensive to serve, so the serving layer's economics reach back up the
 stack and reshape a decision that looked like pure pre-training.
 :::
 
-## Four fights over one resource
+## Four Ways to Waste Less Cache
 
 With the cache identified as the binding constraint, the history of serving
-engines reads as a sequence of fights to waste less of it. The serving stack
-got its present shape by removing one source of waste at a time, and each
-removal was a scheduling idea before it was a kernel.
+engines reads as a sequence of ways to waste less of it. The serving stack got
+its present shape by removing one source of waste at a time, and each removal
+was a scheduling idea before it was a kernel.
 
 **Stop holding a finished request's slot.** The first systems served requests
 the way a web server serves HTTP: collect a batch, run it to completion, return
@@ -206,7 +205,7 @@ longest generation runs on, holding its slot. Orca replaced request-level
 batching with **iteration-level scheduling**: the scheduler decides what to run
 at the granularity of a single decode step, so a finished request leaves the
 batch immediately and a newly arrived one can join without waiting for the rest
-[@yu2022orca]. This idea, widely called continuous batching, is the foundation
+[@yu2022orca]. This idea, widely called @gls-continuous-batching, is the foundation
 every modern engine builds on.
 
 **Stop reserving cache you will not use.** Iteration-level scheduling exposed
@@ -215,7 +214,7 @@ the instant a slot opens, but only if there is KV cache memory to hold it, and
 early engines allocated that memory in one contiguous block per request sized
 for the maximum possible length. Most requests are far shorter than the
 maximum, so most of that reserved memory sat empty, fragmenting the pool and
-capping the batch size far below what the hardware could run. PagedAttention
+capping the batch size far below what the hardware could run. @gls-pagedattention
 and the vLLM engine borrowed virtual memory's paging from operating systems:
 store the KV cache in fixed-size blocks that need not be contiguous, allocate
 blocks on demand as a sequence grows, and let a block table map logical

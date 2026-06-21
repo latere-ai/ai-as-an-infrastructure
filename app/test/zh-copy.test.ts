@@ -89,6 +89,22 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/generative/05-beyond-text.qmd",
       ["早期证据更支持后一种读法", "更多是由现成数据支撑起来的"],
     ],
+    [
+      "en/inference/01-serving-problem.qmd",
+      ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
+    ],
+    [
+      "zh/inference/01-serving-problem.qmd",
+      ["@gls-prefill先读完整个提示词", "@gls-decode一次只发出一个词元", "真正的目标是@gls-goodput", "KV 缓存"],
+    ],
+    [
+      "en/inference/02-memory-scheduling.qmd",
+      ["Continuous batching removes static-batch waste", "PagedAttention removes fragmented cache", "Radix-tree prefix caching", "Phase splitting removes"],
+    ],
+    [
+      "zh/inference/02-memory-scheduling.qmd",
+      ["连续批处理消除静态批的浪费", "@gls-pagedattention 消除缓存碎片化", "基数树前缀缓存", "阶段拆分"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -96,5 +112,49 @@ test("polished chapter openings preserve key source theses", () => {
     for (const snippet of snippets) {
       expect(text, `${path} should preserve ${snippet}`).toContain(snippet);
     }
+  }
+});
+
+test("polished chapter openings avoid reader-promise templates", () => {
+  const polished = [
+    "en/orientation/01-whole-stack.qmd",
+    "en/orientation/02-field-map.qmd",
+    "en/orientation/03-borrowed-ideas.qmd",
+    "en/foundations/01-scaling-laws.qmd",
+    "en/foundations/02-data-curation.qmd",
+    "en/foundations/03-tokenization.qmd",
+    "en/foundations/04-transformer-architecture.qmd",
+    "en/foundations/05-moe-ssm-hybrids.qmd",
+    "en/foundations/06-training-at-scale.qmd",
+    "en/generative/01-diffusion-flow-matching.qmd",
+    "en/generative/02-nar-diffusion-lms.qmd",
+    "en/generative/03-speech-and-voice.qmd",
+    "en/generative/04-multimodal-models.qmd",
+    "en/generative/05-beyond-text.qmd",
+    "en/inference/01-serving-problem.qmd",
+    "en/inference/02-memory-scheduling.qmd",
+    "zh/orientation/01-whole-stack.qmd",
+    "zh/orientation/02-field-map.qmd",
+    "zh/orientation/03-borrowed-ideas.qmd",
+    "zh/foundations/01-scaling-laws.qmd",
+    "zh/foundations/02-data-curation.qmd",
+    "zh/foundations/03-tokenization.qmd",
+    "zh/foundations/04-transformer-architecture.qmd",
+    "zh/foundations/05-moe-ssm-hybrids.qmd",
+    "zh/foundations/06-training-at-scale.qmd",
+    "zh/generative/01-diffusion-flow-matching.qmd",
+    "zh/generative/02-nar-diffusion-lms.qmd",
+    "zh/generative/03-speech-and-voice.qmd",
+    "zh/generative/04-multimodal-models.qmd",
+    "zh/generative/05-beyond-text.qmd",
+    "zh/inference/01-serving-problem.qmd",
+    "zh/inference/02-memory-scheduling.qmd",
+  ];
+  const banned = /By the end|This chapter tells one story|读者读完本章|本章把一个故事/;
+
+  for (const path of polished) {
+    const text = readFileSync(join(repoRoot, path), "utf8");
+    const opening = text.split(/\n## /)[0] ?? text;
+    expect(opening, `${path} should not use a reader-promise opener`).not.toMatch(banned);
   }
 });
