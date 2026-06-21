@@ -43,8 +43,11 @@ function readHeading(qmdPath: string): { title: string; unnumbered: boolean } {
   return { title: qmdPath, unnumbered: true };
 }
 
+// Extensionless, lang-root-relative href (e.g. "p1-foundations/06-x"). The .html
+// file extension is added only when writing to disk (build.ts) and resolved by
+// nginx try_files; every internal link uses the clean form.
 function qmdToHref(qmdRel: string): string {
-  return qmdRel.replace(/\.qmd$/, ".html");
+  return qmdRel.replace(/\.qmd$/, "");
 }
 
 export function loadBook(lang: Lang, repoRoot: string): Book {
@@ -85,8 +88,8 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
 
   // Front/back single chapters become standalone single-rows in nav order:
   // index first, summary/references last. We keep them grouped as singles.
-  const front = frontSingle.filter((c) => c.href === "index.html");
-  const back = frontSingle.filter((c) => c.href !== "index.html");
+  const front = frontSingle.filter((c) => c.href === "index");
+  const back = frontSingle.filter((c) => c.href !== "index");
   const navParts: Book["parts"] = [
     ...front.map((c) => ({ label: "", single: true, chapters: [c] })),
     ...parts,

@@ -21,12 +21,20 @@ export interface CompileContext {
   refsDir: string; // path to refs/, the per-chapter literature store
 }
 
+// A chapter href as a clickable link relative to the current page. The index
+// (home) chapter is canonically the lang root, so it links to the directory
+// (prefix, or "./" at depth 0), never "/en/index".
+function linkHref(href: string, prefix: string): string {
+  return href === "index" ? (prefix || "./") : prefix + href;
+}
+
 // Depth of a chapter's output file relative to the language root, for building
-// the cross-language href (e.g. p1-foundations/06-x.html → ../zh/p1-.../06-x.html).
+// the cross-language href (e.g. p1-foundations/06-x → ../zh/p1-.../06-x). The
+// home chapter maps to the other lang's root directory.
 function langHrefFor(lang: Lang, href: string): string {
   const other = lang === "en" ? "zh" : "en";
   const up = "../".repeat(href.split("/").length); // climb out of lang dir
-  return `${up}${other}/${href}`;
+  return href === "index" ? `${up}${other}/` : `${up}${other}/${href}`;
 }
 
 function chapterWord(lang: string, num: string): string {
@@ -76,7 +84,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   const prefix = "../".repeat(ch.href.split("/").length - 1); // page depth → "../"*
   let { html, headings } = renderMarkdown(src, { bib: ctx.bib, xref: ctx.xref, currentHref: ch.href, prefix, graphviz: ctx.graphviz });
   // References page: fill the ::: {#refs} slot with the cited-only bibliography.
-  if (ch.href === "references.html") {
+  if (ch.href === "references") {
     html = html.replace(/(<div class="rdr-block"[^>]*id="refs"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderBibliography(ctx.bib)}$3`);
   }
   // Chapter "Further reading": fill the ::: {#further-reading} slot from
@@ -87,7 +95,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   }
   const { prev, next } = prevNext(book, ch.href);
   // nav hrefs are lang-root-relative; make them relative to this page.
-  const toc = navFor(book, ch.href).map((p) => ({ ...p, chapters: p.chapters.map((c) => ({ ...c, href: prefix + c.href })) }));
+  const toc = navFor(book, ch.href).map((p) => ({ ...p, chapters: p.chapters.map((c) => ({ ...c, href: linkHref(c.href, prefix) })) }));
   return {
     lang: book.lang,
     partLabel: ch.partLabel || book.title,
@@ -101,8 +109,8 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     readtime: readingTime(book.lang, html),
     contentHtml: html,
     headings,
-    prev: prev ? { label: `${prev.num ? prev.num + " · " : ""}${prev.title}`, href: prefix + prev.href } : null,
-    next: next ? { label: `${next.num ? next.num + " · " : ""}${next.title}`, href: prefix + next.href } : null,
+    prev: prev ? { label: `${prev.num ? prev.num + " · " : ""}${prev.title}`, href: linkHref(prev.href, prefix) } : null,
+    next: next ? { label: `${next.num ? next.num + " · " : ""}${next.title}`, href: linkHref(next.href, prefix) } : null,
     langHref: langHrefFor(book.lang, ch.href),
     prefix,
     toc,

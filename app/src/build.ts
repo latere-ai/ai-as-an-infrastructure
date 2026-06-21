@@ -71,7 +71,9 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const depth = ch.href.split("/").length - 1;
     const clientHref = "../".repeat(depth) + "reader.js?v=" + clientHash;
     const html = page({ chapter: data, bodyHtml, css, clientHref, afterBody });
-    const outPath = join(langOut, ch.href);
+    // hrefs are extensionless; the file on disk keeps .html (nginx try_files
+    // serves the clean URL from it).
+    const outPath = join(langOut, ch.href + ".html");
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, html);
     searchDocs.push(buildSearchDoc(data, ch.href));

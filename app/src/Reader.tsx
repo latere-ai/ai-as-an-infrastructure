@@ -201,7 +201,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           <Icon d={<><rect x="2" y="3" width="12" height="10" rx="1.5" /><line x1="6.5" y1="3" x2="6.5" y2="13" /></>} />
         </button>
 
-        <a href={`${chapter.prefix}index.html`} style={{ display: "flex", alignItems: "center", gap: 9, flex: "none", color: "var(--fg-1)", textDecoration: "none" }}>
+        <a href={chapter.prefix || "./"} style={{ display: "flex", alignItems: "center", gap: 9, flex: "none", color: "var(--fg-1)", textDecoration: "none" }}>
           <LatereLogo />
           <span style={{ fontFamily: "var(--font-serif)", fontStyle: lang === "zh" ? "normal" : "italic", fontSize: 21, letterSpacing: "-.01em" }}>
             {lang === "zh" ? "AI 基建" : "AI Infra"}
@@ -347,7 +347,7 @@ function SearchBox({ t, prefix }: { t: Strings; prefix: string }) {
       {results.length > 0 && (
         <div style={{ position: "absolute", left: 16, right: 16, top: 40, zIndex: 20, background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)", overflow: "hidden" }}>
           {results.map(({ d }) => (
-            <a key={d.href} href={`${prefix}${d.href}`} style={{ display: "block", padding: "8px 12px", textDecoration: "none", borderBottom: "1px solid var(--border)", color: "var(--fg-1)", fontSize: 13 }}>
+            <a key={d.href} href={d.href === "index" ? (prefix || "./") : `${prefix}${d.href}`} style={{ display: "block", padding: "8px 12px", textDecoration: "none", borderBottom: "1px solid var(--border)", color: "var(--fg-1)", fontSize: 13 }}>
               <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>{d.title}
             </a>
           ))}
