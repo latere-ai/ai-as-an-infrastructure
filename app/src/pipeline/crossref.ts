@@ -61,3 +61,17 @@ export function relHref(target: RefTarget, currentHref: string, prefix = ""): st
   if (path === currentHref) return target.href.slice(path.length); // "#anchor"
   return prefix + target.href;
 }
+
+// Resolve bare @sec-x / @fig-x cross-refs inside a plain-text fragment that does
+// not pass through the markdown-it inline pipeline (figure captions, Further-
+// reading glosses). Mirrors the cross-ref branch of the quarto_refs inline rule.
+// Escaping-neutral: it only rewrites ref tokens and leaves all other characters
+// byte-identical, so callers control escaping (pass already-escaped text in).
+// The leading (^|[^A-Za-z0-9]) guard keeps it from firing inside words or emails.
+export function resolveXrefsInText(text: string, xref: CrossrefMap, currentHref: string, prefix = ""): string {
+  return text.replace(/(^|[^A-Za-z0-9])@((?:sec|fig)-[a-z0-9-]+)/g, (_full, pre: string, key: string) => {
+    const target = xref.get(key);
+    if (target) return `${pre}<a href="${relHref(target, currentHref, prefix)}" class="rdr-xref">${target.label}</a>`;
+    return `${pre}<span class="rdr-xref rdr-xref-missing">?@${key}</span>`;
+  });
+}

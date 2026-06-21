@@ -10,6 +10,7 @@ import type { Heading } from "../types.ts";
 import { quartoRefs } from "./quarto-refs.ts";
 import type { Bibliography } from "./citations.ts";
 import type { CrossrefMap } from "./crossref.ts";
+import { resolveXrefsInText } from "./crossref.ts";
 import { renderDot, renderMermaid, type GraphvizInstance } from "./diagrams.ts";
 import { expandDivs } from "./divs.ts";
 
@@ -50,8 +51,8 @@ function createMd(ctx: RenderContext): MarkdownIt {
     // Fences are renamed to bare tokens before parsing (markdown-it-attrs strips
     // {dot}/{mermaid}/{=html} curly infos), so match the renamed forms.
     if (info === "rdrhtml") return tokens[idx].content; // Pandoc raw HTML block
-    if (info === "rdrdot" || info === "dot") return renderDot(ctx.graphviz, tokens[idx].content, ctx.xref, ctx.currentHref);
-    if (info === "rdrmermaid" || info === "mermaid") return renderMermaid(tokens[idx].content, ctx.xref, ctx.currentHref);
+    if (info === "rdrdot" || info === "dot") return renderDot(ctx.graphviz, tokens[idx].content, ctx.xref, ctx.currentHref, ctx.prefix);
+    if (info === "rdrmermaid" || info === "mermaid") return renderMermaid(tokens[idx].content, ctx.xref, ctx.currentHref, ctx.prefix);
     return defFence(tokens, idx, options, env, self);
   };
   return md;
@@ -98,7 +99,8 @@ function postProcess(html: string, ctx: RenderContext): string {
     const alt = img.match(/\balt="([^"]*)"/)?.[1] ?? "";
     const num = ctx.xref.get(id)?.label ?? "";
     const numPart = num ? `<span class="rdr-fig-num">${num}.</span> ` : "";
-    const caption = alt || num ? `<figcaption>${numPart}${alt}</figcaption>` : "";
+    const altHtml = alt ? resolveXrefsInText(alt, ctx.xref, ctx.currentHref, ctx.prefix) : "";
+    const caption = alt || num ? `<figcaption>${numPart}${altHtml}</figcaption>` : "";
     return `<figure class="rdr-figure" id="${id}">${img}${caption}</figure>`;
   });
 }

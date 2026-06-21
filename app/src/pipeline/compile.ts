@@ -83,7 +83,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   // refs/<slug>.bib (the per-chapter literature store).
   if (html.includes('id="further-reading"')) {
     const slug = ch.href.split("/").pop()!.replace(/\.html$/, "");
-    html = html.replace(/(<div class="rdr-block"[^>]*id="further-reading"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderFurtherReading(ctx.refsDir, slug, book.lang)}$3`);
+    html = html.replace(/(<div class="rdr-block"[^>]*id="further-reading"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderFurtherReading(ctx.refsDir, slug, book.lang, ctx.xref, ch.href, prefix)}$3`);
   }
   const { prev, next } = prevNext(book, ch.href);
   // nav hrefs are lang-root-relative; make them relative to this page.

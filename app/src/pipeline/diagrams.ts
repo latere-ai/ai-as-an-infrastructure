@@ -6,7 +6,7 @@
 
 import { Graphviz } from "@hpcc-js/wasm";
 import type { CrossrefMap } from "./crossref.ts";
-import { relHref } from "./crossref.ts";
+import { resolveXrefsInText } from "./crossref.ts";
 
 export type GraphvizInstance = Awaited<ReturnType<typeof Graphviz.load>>;
 
@@ -35,18 +35,19 @@ function extractDirectives(code: string, marker: "//|" | "%%|"): { body: string;
   return { body: kept.join("\n").trim(), label, cap };
 }
 
-function figureWrap(inner: string, label: string | undefined, cap: string | undefined, xref: CrossrefMap, currentHref: string): string {
+function figureWrap(inner: string, label: string | undefined, cap: string | undefined, xref: CrossrefMap, currentHref: string, prefix: string): string {
   const id = label ? ` id="${label}"` : "";
   let caption = "";
   if (cap || label) {
     const num = label ? xref.get(label)?.label : "";
     const numPart = num ? `<span class="rdr-fig-num">${num}.</span> ` : "";
-    caption = `<figcaption>${numPart}${cap ?? ""}</figcaption>`;
+    const capHtml = cap ? resolveXrefsInText(cap, xref, currentHref, prefix) : "";
+    caption = `<figcaption>${numPart}${capHtml}</figcaption>`;
   }
   return `<figure class="rdr-figure"${id}>${inner}${caption}</figure>`;
 }
 
-export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap, currentHref: string): string {
+export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap, currentHref: string, prefix: string): string {
   const { body, label, cap } = extractDirectives(code, "//|");
   let svg: string;
   try {
@@ -54,14 +55,11 @@ export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap,
     const i = svg.indexOf("<svg"); // drop the <?xml?> + DOCTYPE preamble for inline HTML
     if (i > 0) svg = svg.slice(i);
   } catch (e) { svg = `<pre class="rdr-diagram-error">graphviz error: ${String(e)}</pre>`; }
-  return figureWrap(`<div class="rdr-diagram">${svg}</div>`, label, cap, xref, currentHref);
+  return figureWrap(`<div class="rdr-diagram">${svg}</div>`, label, cap, xref, currentHref, prefix);
 }
 
-export function renderMermaid(code: string, xref: CrossrefMap, currentHref: string): string {
+export function renderMermaid(code: string, xref: CrossrefMap, currentHref: string, prefix: string): string {
   const { body, label, cap } = extractDirectives(code, "%%|");
   const esc = body.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return figureWrap(`<pre class="mermaid">${esc}</pre>`, label, cap, xref, currentHref);
+  return figureWrap(`<pre class="mermaid">${esc}</pre>`, label, cap, xref, currentHref, prefix);
 }
-
-// keep relHref referenced for future intra-page figure links
-void relHref;

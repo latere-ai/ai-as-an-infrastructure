@@ -13,6 +13,7 @@ import { parse as parseBib } from "@retorquere/bibtex-parser";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Lang } from "../types.ts";
+import { resolveXrefsInText, type CrossrefMap } from "./crossref.ts";
 
 export interface FurtherReadingEntry {
   key: string;
@@ -87,10 +88,11 @@ function linkText(e: FurtherReadingEntry): string {
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-function renderEntry(e: FurtherReadingEntry, lang: Lang): string {
+function renderEntry(e: FurtherReadingEntry, lang: Lang, xref: CrossrefMap, currentHref: string, prefix: string): string {
   // zh prefers the zh gloss, falling back to the en gloss; en uses the en gloss.
   const gloss = (lang === "zh" ? e.noteZh ?? e.note : e.note);
-  const glossPart = gloss ? ` (${esc(gloss)})` : "";
+  // Resolve @sec-/@fig- cross-refs that a gloss may carry, on the escaped text.
+  const glossPart = gloss ? ` (${resolveXrefsInText(esc(gloss), xref, currentHref, prefix)})` : "";
   const link = e.url ? ` <a href="${esc(e.url)}" rel="noopener">${esc(linkText(e))}</a>` : "";
 
   // Books: Chicago-ish "Surname, First. *Title.* Publisher, year. [host]".
@@ -109,8 +111,8 @@ function renderEntry(e: FurtherReadingEntry, lang: Lang): string {
 }
 
 // HTML <ul> that fills the ::: {#further-reading} slot for a chapter.
-export function renderFurtherReading(refsDir: string, slug: string, lang: Lang): string {
+export function renderFurtherReading(refsDir: string, slug: string, lang: Lang, xref: CrossrefMap, currentHref: string, prefix: string): string {
   const entries = furtherReadingEntries(refsDir, slug).filter((e) => e.inFurther);
   if (entries.length === 0) return "";
-  return `<ul class="rdr-further-reading">\n${entries.map((e) => renderEntry(e, lang)).join("\n")}\n</ul>`;
+  return `<ul class="rdr-further-reading">\n${entries.map((e) => renderEntry(e, lang, xref, currentHref, prefix)).join("\n")}\n</ul>`;
 }
