@@ -3,7 +3,8 @@
 // section (href#anchor) and the sidebar search box can show a snippet. The box
 // loads this index lazily and does a dependency-free client-side scan.
 
-import type { ChapterData } from "../types.ts";
+import { pinyin } from "pinyin-pro";
+import type { ChapterData, Lang } from "../types.ts";
 
 export interface SearchDoc {
   href: string; // chapter href (lang-root-relative, extensionless)
@@ -12,6 +13,21 @@ export interface SearchDoc {
   title: string; // chapter title
   heading: string; // section heading text; "" for the chapter intro
   text: string; // de-tagged section body
+  py?: string; // zh only: full pinyin of title+heading, e.g. "jiangliqipian"
+  pyi?: string; // zh only: pinyin initials of title+heading, e.g. "jlqp"
+}
+
+// Build the pinyin index for a zh title/heading so a Latin query can find Han
+// content (e.g. "jiangli" or "jl" -> 奖励). Latin/digits/punctuation pass
+// through unchanged; non-Chinese runs are kept consecutive so words stay intact.
+// Only title+heading are indexed (short, high-value); body pinyin would bloat
+// search.json. Returns undefined when there is nothing Han to transliterate.
+function pinyinFields(s: string): { py: string; pyi: string } | undefined {
+  if (!s || !/[㐀-鿿]/.test(s)) return undefined;
+  const opt = { toneType: "none", type: "array", nonZh: "consecutive" } as const;
+  const py = pinyin(s, opt).join("").toLowerCase();
+  const pyi = pinyin(s, { ...opt, pattern: "first" }).join("").toLowerCase();
+  return { py, pyi };
 }
 
 function stripTags(html: string): string {
@@ -61,13 +77,20 @@ export function splitSections(html: string): Section[] {
   return sections;
 }
 
-export function buildSearchDocs(ch: ChapterData, href: string): SearchDoc[] {
-  return splitSections(ch.contentHtml).map((s) => ({
-    href,
-    anchor: s.anchor,
-    num: ch.chapterNum,
-    title: ch.title,
-    heading: s.heading,
-    text: s.text,
-  }));
+export function buildSearchDocs(ch: ChapterData, href: string, lang: Lang): SearchDoc[] {
+  return splitSections(ch.contentHtml).map((s) => {
+    const doc: SearchDoc = {
+      href,
+      anchor: s.anchor,
+      num: ch.chapterNum,
+      title: ch.title,
+      heading: s.heading,
+      text: s.text,
+    };
+    if (lang === "zh") {
+      const p = pinyinFields(`${ch.title} ${s.heading}`);
+      if (p) { doc.py = p.py; doc.pyi = p.pyi; }
+    }
+    return doc;
+  });
 }

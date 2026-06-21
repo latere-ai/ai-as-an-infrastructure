@@ -88,7 +88,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const outPath = join(langOut, ch.href + ".html");
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, html);
-    searchDocs.push(...buildSearchDocs(data, ch.href));
+    searchDocs.push(...buildSearchDocs(data, ch.href, lang));
     pathsByLang[lang].add(ch.href === "index" ? "" : ch.href); // clean path for sitemap
     pageCount++;
   }

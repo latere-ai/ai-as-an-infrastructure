@@ -14,6 +14,8 @@ export interface SearchDoc {
   title: string;
   heading: string;
   text: string;
+  py?: string; // zh only: full pinyin of title+heading (built in pipeline/search.ts)
+  pyi?: string; // zh only: pinyin initials of title+heading
 }
 
 export interface Snip { pre: string; hit: string; post: string }
@@ -87,10 +89,16 @@ export function runSearch(docs: SearchDoc[], rawQuery: string, limit = 12): Scor
         if (!snipToken && inText) snipToken = tok;
         continue;
       }
-      // No exact hit: fall back to a fuzzy subsequence on the short fields.
+      // No literal hit. On zh docs, a full-pinyin substring is a confident match
+      // (Latin query -> Han content, e.g. "jiangli" -> 奖励); count it as exact.
+      // Guard >= 2 chars: a single letter is a substring of almost every index.
+      if (tok.length >= 2 && d.py && d.py.includes(tok)) { exact += 1; total += 3; continue; }
+      // Fuzzy subsequence on the short literal fields (typo tolerance).
       const fuzzy = Math.max(fuzzyScore(tok, title) * W_TITLE, fuzzyScore(tok, heading) * W_HEADING);
-      if (fuzzy <= 0) { ok = false; break; }
-      total += fuzzy * 0.25; // tie-break only; `exact` count is the primary rank
+      if (fuzzy > 0) { total += fuzzy * 0.25; continue; } // tie-break; `exact` is primary rank
+      // Pinyin initials ("jl" -> 奖励): collision-prone, lowest tier, >= 2 chars.
+      if (tok.length >= 2 && d.pyi && d.pyi.includes(tok)) { total += 0.5; continue; }
+      ok = false; break;
     }
     if (!ok) continue;
     if (!snipToken) snipToken = tokens[0];

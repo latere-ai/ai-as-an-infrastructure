@@ -2,7 +2,11 @@
 // match can deep-link to its <h2/h3 id> anchor and the box can show a snippet.
 
 import { test, expect } from "bun:test";
-import { splitSections } from "./search.ts";
+import { splitSections, buildSearchDocs } from "./search.ts";
+import type { ChapterData } from "../types.ts";
+
+const chapter = (title: string, html: string): ChapterData =>
+  ({ title, chapterNum: "10", contentHtml: html } as unknown as ChapterData);
 
 test("intro text before the first heading becomes an anchorless section", () => {
   const html = [
@@ -52,4 +56,17 @@ test("headings without an id are not section boundaries", () => {
   const secs = splitSections(html);
   expect(secs.length).toBe(1);
   expect(secs[0].anchor).toBe("");
+});
+
+test("zh docs carry a pinyin index over title+heading; en docs do not", () => {
+  const html = '<h2 id="a">奖励欺骗</h2><p>正文</p>';
+  const zh = buildSearchDocs(chapter("奖励建模", html), "ch", "zh");
+  const sec = zh.find((d) => d.anchor === "a")!;
+  // full pinyin of title+heading lets a Latin query reach the Han content
+  expect(sec.py).toContain("jiangli"); // 奖励 -> jiangli
+  expect(sec.py).toContain("qipian"); // 欺骗 -> qipian (from the heading)
+  expect(sec.pyi).toContain("jl"); // initials
+  // the same chapter built as en gets no pinyin fields
+  const en = buildSearchDocs(chapter("Reward modeling", '<h2 id="a">Reward hacking</h2><p>body</p>'), "ch", "en");
+  expect(en.find((d) => d.anchor === "a")!.py).toBeUndefined();
 });

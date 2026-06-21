@@ -84,6 +84,28 @@ test("fuzzyScore: subsequence with bonuses, 0 when not a subsequence or too loos
   expect(fuzzyScore("abc", "a-very-long-string-b-then-c")).toBe(0); // scattered: rejected
 });
 
+test("pinyin: a Latin query matches Han content via the full-pinyin index", () => {
+  const docs = [doc({ href: "z", title: "奖励欺骗", py: "jiangliqipian", pyi: "jlqp" })];
+  expect(runSearch(docs, "jiangli").length).toBe(1); // full pinyin substring
+  expect(runSearch(docs, "jl").length).toBe(1); // initials
+  expect(runSearch(docs, "j").length).toBe(0); // single char too short for initials
+  expect(runSearch(docs, "widget").length).toBe(0); // unrelated
+});
+
+test("pinyin: a literal Latin title hit outranks a pinyin-only match", () => {
+  // contrived: a doc whose title literally contains the Latin token...
+  const literal = doc({ href: "lit", title: "jiangli notes" });
+  // ...vs a zh doc that only matches it through the pinyin index.
+  const viaPy = doc({ href: "py", title: "奖励欺骗", py: "jiangliqipian", pyi: "jlqp" });
+  const ranked = runSearch([viaPy, literal], "jiangli").map((r) => r.doc.href);
+  expect(ranked[0]).toBe("lit");
+});
+
+test("pinyin fields are ignored on docs that lack them (en)", () => {
+  const docs = [doc({ href: "en", title: "Reward modeling" })];
+  expect(runSearch(docs, "jiangli").length).toBe(0);
+});
+
 test("empty / whitespace query yields nothing", () => {
   const docs = [doc({ text: "anything" })];
   expect(runSearch(docs, "").length).toBe(0);
