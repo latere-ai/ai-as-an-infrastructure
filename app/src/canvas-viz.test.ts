@@ -95,3 +95,24 @@ test("ch36 adversarial-robustness adds swiss-cheese stepper + many-shot power-la
     expect(t).toContain('data-viz="curve" data-family="power-grow"');
   }
 });
+
+// Wave 3: bespoke canvas components for the remaining catalog spots.
+test("the viz runtime registers judge-kappa, outlier-quant, minhash-buckets, blast-radius", () => {
+  for (const name of ["judge-kappa", "outlier-quant", "minhash-buckets", "blast-radius"]) {
+    expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
+  }
+});
+
+test("wave-3 components are used in their chapters, both languages", () => {
+  const uses: [string, string][] = [
+    ["p10-practical/43-evaluation-and-observability", "judge-kappa"],
+    ["p4-inference/19-quantization-kernels", "outlier-quant"],
+    ["p1-foundations/04-data-curation", "minhash-buckets"],
+    ["p8-safety/34-security-authorization", "blast-radius"],
+  ];
+  for (const [path, viz] of uses) {
+    for (const lang of ["en", "zh"]) {
+      expect(src(`${lang}/${path}.qmd`)).toContain(`data-viz="${viz}"`);
+    }
+  }
+});

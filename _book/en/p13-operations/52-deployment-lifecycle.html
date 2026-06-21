@@ -1551,6 +1551,164 @@ figure:has(> .viz), .figure:has(> .viz) { display: block; width: 100%; }
     tick();
   };
 
+  // Judge agreement vs Cohen's kappa: two judges label items good or bad, each
+  // correct with a fixed accuracy. As the base rate of "good" skews, raw
+  // agreement stays high while kappa collapses, which is why "the judge agrees
+  // 90% of the time" proves little. Sliders sweep the base rate and accuracy.
+  R['judge-kappa'] = function (host) {
+    var base = 0.5, acc = 0.85, N = 1000;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 250);
+    function cells() {
+      function p(labelGood, truthGood) { var pg = truthGood ? acc : (1 - acc); return labelGood ? pg : 1 - pg; }
+      var c = {}; var g = base, b = 1 - base;
+      [['g', true], ['b', false]].forEach(function (a) {
+        [['g', true], ['b', false]].forEach(function (bl) {
+          c[a[0] + bl[0]] = g * p(a[1], true) * p(bl[1], true) + b * p(a[1], false) * p(bl[1], false);
+        });
+      });
+      return c;
+    }
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
+      ctx.clearRect(0, 0, W, H);
+      var c = cells();
+      var po = c.gg + c.bb;
+      var rowG = c.gg + c.gb, rowB = c.bg + c.bb, colG = c.gg + c.bg, colB = c.gb + c.bb;
+      var pe = rowG * colG + rowB * colB;
+      var kappa = (1 - pe) > 1e-9 ? (po - pe) / (1 - pe) : 0;
+      var sz = Math.min(W * 0.46, H - 36 * cv.dpr), x0 = (W - sz) / 2, y0 = 14 * cv.dpr;
+      [['gg', 0, 0], ['gb', 1, 0], ['bg', 0, 1], ['bb', 1, 1]].forEach(function (e) {
+        var v = c[e[0]], x = x0 + e[1] * sz / 2, y = y0 + e[2] * sz / 2, diag = (e[0] === 'gg' || e[0] === 'bb');
+        ctx.fillStyle = (diag ? 'rgba(61,189,138,' : 'rgba(224,147,107,') + Math.min(0.85, 0.12 + v * 1.7) + ')';
+        ctx.fillRect(x, y, sz / 2 - 3 * cv.dpr, sz / 2 - 3 * cv.dpr);
+        ctx.fillStyle = t.ink; ctx.font = (14 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(Math.round(v * N), x + sz / 4, y + sz / 4 + 5 * cv.dpr);
+      });
+      ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('judge B', x0 + sz / 2, y0 - 2 * cv.dpr);
+      ctx.save(); ctx.translate(x0 - 8 * cv.dpr, y0 + sz / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('judge A', 0, 0); ctx.restore();
+      read.textContent = 'raw agreement ' + po.toFixed(2) + '  ·  Cohen’s κ ' + kappa.toFixed(2);
+    }
+    host.appendChild(slider('base rate of “good”', 0.5, 0.97, 0.01, base, function (v) { base = v; draw(); }).wrap);
+    host.appendChild(slider('each judge’s accuracy', 0.6, 0.98, 0.01, acc, function (v) { acc = v; draw(); }).wrap);
+    draw();
+  };
+
+  // The outlier and the shared scale: well-behaved bulk weights plus one
+  // draggable outlier. Per-tensor INT8 picks ONE scale to cover the largest
+  // value, so the integer grid is too coarse and the bulk collapses onto a
+  // couple of levels; per-channel gives the bulk its own scale and the error
+  // nearly vanishes. Toggle the mode, drag the outlier.
+  R['outlier-quant'] = function (host) {
+    var outlier = 7, mode = 'per-tensor', L = 8;
+    var bulk = [0.7, -0.4, 0.9, -0.8, 0.3, -0.6, 0.5, -0.2, 0.75, -0.5, 0.6];
+    var bulkMax = 0.9;
+    var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
+    bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 250);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 26 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var vals = bulk.concat([outlier]);
+      var amax = Math.max(outlier, bulkMax);
+      var tensorScale = amax / (L / 2);
+      function Y(v) { return H / 2 - (v / amax) * (H / 2 - pd); }
+      var gridScale = (mode === 'per-tensor') ? tensorScale : bulkMax / (L / 2);
+      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
+      for (var k = -L / 2; k <= L / 2; k++) { var y = Y(k * gridScale); if (y > 4 && y < H - 4) { ctx.beginPath(); ctx.moveTo(pd, y); ctx.lineTo(W - pd, y); ctx.stroke(); } }
+      var n = vals.length, bw = (W - 2 * pd) / n, err = 0;
+      vals.forEach(function (v, i) {
+        var x = pd + bw * (i + 0.5);
+        var isOut = (i === n - 1);
+        var scale = (mode === 'per-tensor') ? tensorScale : ((isOut ? outlier : bulkMax) / (L / 2));
+        var q = Math.round(v / scale) * scale;
+        if (!isOut) err += (v - q) * (v - q);
+        ctx.fillStyle = isOut ? t.accent2 : t.accent;
+        ctx.beginPath(); ctx.arc(x, Y(v), 5 * cv.dpr, 0, 7); ctx.fill();
+        ctx.strokeStyle = isOut ? t.accent2 : t.accent; ctx.lineWidth = 1.5 * cv.dpr;
+        ctx.beginPath(); ctx.arc(x, Math.max(pd, Math.min(H - pd, Y(q))), 7.5 * cv.dpr, 0, 7); ctx.stroke();
+      });
+      var rms = Math.sqrt(err / bulk.length);
+      btn.textContent = 'mode: ' + mode;
+      read.textContent = 'bulk RMS error ' + rms.toFixed(3) + '  ·  grid spacing ' + gridScale.toFixed(2);
+    }
+    btn.addEventListener('click', function () { mode = (mode === 'per-tensor') ? 'per-channel' : 'per-tensor'; draw(); });
+    host.appendChild(slider('outlier magnitude', 1, 16, 0.5, outlier, function (v) { outlier = v; draw(); }).wrap);
+    draw();
+  };
+
+  // MinHash + LSH bucketing: each document collapses to a short signature; LSH
+  // bands route similar signatures into shared buckets; a full Jaccard check
+  // runs only for the few documents that collide in a bucket, so the cost is
+  // sub-quadratic, not all-pairs. More buckets (more bands) sharpen the
+  // threshold and cut false collisions; near-duplicates still land together.
+  R['minhash-buckets'] = function (host) {
+    var clusters = [0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 8];
+    var B = 6;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 250);
+    function bucketOf(c, i) { return (c < 3) ? (c * 5) % B : ((c * 5 + i * 3) % B); }
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var bins = {}; clusters.forEach(function (c, i) { var b = bucketOf(c, i); (bins[b] = bins[b] || []).push(c); });
+      var bw = (W - 2 * pd) / B, cand = 0;
+      for (var b = 0; b < B; b++) {
+        var x = pd + b * bw, ds = bins[b] || [];
+        if (ds.length > 1) cand += ds.length * (ds.length - 1) / 2;
+        ctx.strokeStyle = ds.length > 1 ? t.accent : t.grid; ctx.lineWidth = (ds.length > 1 ? 1.6 : 1) * cv.dpr;
+        ctx.strokeRect(x + 3 * cv.dpr, pd, bw - 6 * cv.dpr, H - 2 * pd - 16 * cv.dpr);
+        ds.forEach(function (c, j) {
+          var cy = pd + 16 * cv.dpr + j * 17 * cv.dpr;
+          ctx.fillStyle = ds.length > 1 ? t.accent : 'rgba(128,128,128,0.5)';
+          ctx.beginPath(); ctx.arc(x + bw / 2, cy, 5.5 * cv.dpr, 0, 7); ctx.fill();
+        });
+      }
+      var all = clusters.length * (clusters.length - 1) / 2;
+      ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(B + ' buckets', W / 2, H - 4 * cv.dpr);
+      read.textContent = cand + ' candidate pairs vs ' + all + ' all-pairs';
+    }
+    host.appendChild(slider('buckets (bands)', 3, 14, 1, B, function (v) { B = Math.round(v); draw(); }).wrap);
+    draw();
+  };
+
+  // Blast radius of ambient authority: one standing token reaches every resource
+  // its scope covers, so a single injected instruction acts on the union. Widen
+  // the scope and the reachable set fans out; a longer TTL brightens the exposure.
+  // A short-lived capability token, minted per call, collapses the radius to one.
+  R['blast-radius'] = function (host) {
+    var scope = 0.5, ttl = 30, mode = 'standing', N = 18, cols = 6, rows = 3;
+    var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
+    bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 280);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
+      ctx.clearRect(0, 0, W, H);
+      var ax = W * 0.13, ay = H / 2;
+      var reach = (mode === 'capability') ? 1 : Math.max(1, Math.round(N * scope));
+      var linkA = (mode === 'capability') ? 0.5 : (0.12 + 0.4 * (ttl / 240));
+      var gx = W * 0.3, gw = W * 0.62, gy = 26 * cv.dpr, gh = H - 56 * cv.dpr;
+      for (var i = 0; i < N; i++) {
+        var r = Math.floor(i / cols), c = i % cols;
+        var x = gx + (c + 0.5) * gw / cols, y = gy + (r + 0.5) * gh / rows, on = i < reach;
+        if (on) { ctx.strokeStyle = t.accent; ctx.globalAlpha = linkA; ctx.lineWidth = cv.dpr; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(x, y); ctx.stroke(); ctx.globalAlpha = 1; }
+        ctx.fillStyle = on ? t.accent : t.grid;
+        ctx.fillRect(x - 8 * cv.dpr, y - 8 * cv.dpr, 16 * cv.dpr, 16 * cv.dpr);
+      }
+      ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(ax, ay, 11 * cv.dpr, 0, 7); ctx.fill();
+      ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('token', ax, ay - 16 * cv.dpr);
+      btn.textContent = 'token: ' + mode;
+      read.textContent = 'reachable ' + reach + ' of ' + N + ' resources · TTL ' + Math.round(ttl) + ' min';
+    }
+    btn.addEventListener('click', function () { mode = (mode === 'standing') ? 'capability' : 'standing'; draw(); });
+    host.appendChild(slider('scope breadth', 0.05, 1, 0.05, scope, function (v) { scope = v; draw(); }).wrap);
+    host.appendChild(slider('TTL (minutes)', 1, 240, 1, ttl, function (v) { ttl = v; draw(); }).wrap);
+    draw();
+  };
+
   function init(host) {
     var name = host.getAttribute('data-viz');
     // The wrapping <figure class="figure"> is inline-block (Bootstrap), which
