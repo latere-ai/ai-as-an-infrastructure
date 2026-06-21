@@ -116,3 +116,17 @@ test("wave-3 components are used in their chapters, both languages", () => {
     }
   }
 });
+
+// Wave 4: ch09 LoRA low-rank reconstruction + task arithmetic.
+test("the viz runtime registers lora-lowrank and task-arithmetic", () => {
+  expect(rt).toMatch(/R\['lora-lowrank'\]\s*=\s*function/);
+  expect(rt).toMatch(/R\['task-arithmetic'\]\s*=\s*function/);
+});
+
+test("ch09 sft-peft uses lora-lowrank and task-arithmetic in both languages", () => {
+  for (const lang of ["en", "zh"]) {
+    const t = src(`${lang}/p2-adaptation/09-sft-peft.qmd`);
+    expect(t).toContain('data-viz="lora-lowrank"');
+    expect(t).toContain('data-viz="task-arithmetic"');
+  }
+});
