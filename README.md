@@ -16,16 +16,21 @@ The spine is the lifecycle of a capability, read as a stack.
 - **Part 0, Orientation.** The whole stack in one pass, and how to read.
 - **Part I, Foundations and Pretraining.** Scaling, data, tokenization,
   architecture, training at scale.
-- **Part II, Adaptation and Alignment.** Fine-tuning, RLHF, preference
+- **Part II, Generative and Multimodal Architectures.** Diffusion and flow
+  matching, diffusion language models, speech, multimodal fusion.
+- **Part III, Adaptation and Alignment.** Fine-tuning, RLHF, preference
   optimization, self-improvement.
-- **Part III, Reasoning and Test-Time Compute.**
-- **Part IV, Inference and Serving.**
-- **Part V, Orchestration.** Agents, memory, the harness, multi-agent,
-  retrieval, context.
-- **Part VI, Evaluation.**
-- **Part VII, Infrastructure and Systems.**
+- **Part IV, Reasoning and Test-Time Compute.**
+- **Part V, Inference and Serving.**
+- **Part VI, Orchestration.** Training agents to act, memory, the harness,
+  multi-agent, retrieval, context.
+- **Part VII, Evaluation.**
 - **Part VIII, Safety, Interpretability, and Governance.**
-- **Part IX, Ecosystem and Economics.**
+- **Part IX, Infrastructure, Compute, and Frontiers.** Accelerators,
+  networking, data infrastructure, and the compute frontier.
+- **Part X, Ecosystem and Economics.**
+- **Part XI, Practice and Operations.** The hands-on 2026 stack, plus
+  deployment, reliability, and the production data engine.
 
 Two motifs recur: the **three loops** (training, inference, agentic) and the
 **capability, efficiency, trust** lens. Watch the **constraint arrows**,
