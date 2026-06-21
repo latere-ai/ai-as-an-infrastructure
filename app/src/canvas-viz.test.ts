@@ -61,3 +61,18 @@ test("ch41 agents-and-sandboxes uses comparison-explorer, localized per language
   expect(src("en/p10-practical/41-agents-and-sandboxes.qmd")).toContain('data-set="agent-frameworks"');
   expect(src("zh/p10-practical/41-agents-and-sandboxes.qmd")).toContain('data-set="agent-frameworks-zh"');
 });
+
+test("the viz runtime registers nested-loops and bandwidth-tiers", () => {
+  expect(rt).toMatch(/R\['nested-loops'\]\s*=\s*function/);
+  expect(rt).toMatch(/R\['bandwidth-tiers'\]\s*=\s*function/);
+});
+
+test("ch01 whole-stack uses nested-loops in both languages", () => {
+  expect(src("en/p0-orientation/01-whole-stack.qmd")).toContain('data-viz="nested-loops"');
+  expect(src("zh/p0-orientation/01-whole-stack.qmd")).toContain('data-viz="nested-loops"');
+});
+
+test("ch30 accelerators-networking uses bandwidth-tiers in both languages", () => {
+  expect(src("en/p7-infrastructure/30-accelerators-networking.qmd")).toContain('data-viz="bandwidth-tiers"');
+  expect(src("zh/p7-infrastructure/30-accelerators-networking.qmd")).toContain('data-viz="bandwidth-tiers"');
+});
