@@ -130,3 +130,27 @@ test("ch09 sft-peft uses lora-lowrank and task-arithmetic in both languages", ()
     expect(t).toContain('data-viz="task-arithmetic"');
   }
 });
+
+// Wave 5: the deep-catalog tail of bespoke components.
+test("the viz runtime registers the wave-5 components", () => {
+  for (const name of ["grpo-advantage", "ssm-vs-attention", "rl-timeline", "rrf-fusion", "decision-tree", "float-bits", "pipeline-bubble"]) {
+    expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
+  }
+});
+
+test("wave-5 components are used in their chapters, both languages", () => {
+  const uses: [string, string][] = [
+    ["reasoning/02-training-to-reason", "grpo-advantage"],
+    ["foundations/05-moe-ssm-hybrids", "ssm-vs-attention"],
+    ["orchestration/01-training-agents-to-act", "rl-timeline"],
+    ["orchestration/06-rag-retrieval", "rrf-fusion"],
+    ["practice/01-choosing-a-model", "decision-tree"],
+    ["foundations/06-training-at-scale", "float-bits"],
+    ["foundations/06-training-at-scale", "pipeline-bubble"],
+  ];
+  for (const [path, viz] of uses) {
+    for (const lang of ["en", "zh"]) {
+      expect(src(`${lang}/${path}.qmd`)).toContain(`data-viz="${viz}"`);
+    }
+  }
+});
