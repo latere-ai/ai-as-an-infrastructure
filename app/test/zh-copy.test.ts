@@ -169,6 +169,22 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/infrastructure/04-making-the-silicon.qmd",
       ["从晶体管移到了封装和内存堆栈", "硅中介层就能限速整个领域", "内存短缺如今一路波及", "出口管制和主权算力计划"],
     ],
+    [
+      "en/infrastructure/05-powering-it.qmd",
+      ["not generation capacity but time-to-power", "self-generates rather than waits for the grid", "liquid cooling as the default", "grid operator must actively manage"],
+    ],
+    [
+      "zh/infrastructure/05-powering-it.qmd",
+      ["不是发电容量，而是通电时间", "选择自发电，而不再等电网", "新的散热默认值", "电网运营商必须主动管理"],
+    ],
+    [
+      "en/infrastructure/06-the-machine-that-breaks.qmd",
+      ["failing somewhere almost all the time", "preventing failures to amortizing them", "raise no alarm", "latency hierarchy and the decode bandwidth wall", "agent that runs for hours"],
+    ],
+    [
+      "zh/infrastructure/06-the-machine-that-breaks.qmd",
+      ["几乎在任何时刻都有某处在出故障", "预防故障」转向了「摊销故障", "不拉警报", "延迟层级和解码带宽墙", "连跑数小时的智能体"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -205,6 +221,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/infrastructure/02-orchestration-data-infra.qmd",
     "en/infrastructure/03-the-compute-frontier.qmd",
     "en/infrastructure/04-making-the-silicon.qmd",
+    "en/infrastructure/05-powering-it.qmd",
+    "en/infrastructure/06-the-machine-that-breaks.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -229,6 +247,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/infrastructure/02-orchestration-data-infra.qmd",
     "zh/infrastructure/03-the-compute-frontier.qmd",
     "zh/infrastructure/04-making-the-silicon.qmd",
+    "zh/infrastructure/05-powering-it.qmd",
+    "zh/infrastructure/06-the-machine-that-breaks.qmd",
   ];
   const banned = /By the end|This chapter tells one story|读者读完本章|本章把一个故事/;
 
