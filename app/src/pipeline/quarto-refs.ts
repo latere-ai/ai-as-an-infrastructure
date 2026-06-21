@@ -58,7 +58,7 @@ export function quartoRefs(md: MarkdownIt, ctx: RefContext) {
           if (target) push(state, `<a href="${relHref(target, ctx.currentHref, ctx.prefix)}" class="rdr-xref">${target.label}</a>`);
           else push(state, `<span class="rdr-xref rdr-xref-missing">?@${key}</span>`);
         } else {
-          push(state, renderCite(ctx.bib, { keys: [key], bare: true }));
+          push(state, renderCite(ctx.bib, { keys: [key], bare: true }, ctx.prefix));
         }
       }
       state.pos = start + 1 + key.length;

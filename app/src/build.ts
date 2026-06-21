@@ -62,6 +62,10 @@ for (const lang of ["en", "zh"] as Lang[]) {
   const xref = buildCrossref(book);
   const ctx = { bib, xref, graphviz, refsDir: join(repoRoot, "refs") };
   const langOut = join(outRoot, lang);
+  // Clean the per-language tree before regenerating: a renamed or moved chapter
+  // would otherwise leave its old .html behind (stale dead pages, broken-link
+  // noise). og/ lives at the book root, not under langOut, so it is preserved.
+  rmSync(langOut, { recursive: true, force: true });
   mkdirSync(langOut, { recursive: true });
 
   // figures (committed SVGs + covers)

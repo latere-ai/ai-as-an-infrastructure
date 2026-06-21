@@ -43,11 +43,14 @@ function readHeading(qmdPath: string): { title: string; unnumbered: boolean } {
   return { title: qmdPath, unnumbered: true };
 }
 
-// Extensionless, lang-root-relative href (e.g. "p1-foundations/06-x"). The .html
-// file extension is added only when writing to disk (build.ts) and resolved by
-// nginx try_files; every internal link uses the clean form.
+// Extensionless, lang-root-relative href (e.g. "p1-foundations/x"). The leading
+// "NN-" on the filename is an authoring-order aid only and is stripped here, so
+// the URL never encodes a chapter position (which goes stale on every reorder).
+// Chapter numbers shown to the reader come from manifest position, not the URL.
+// The .html extension is added only when writing to disk (build.ts) and resolved
+// by nginx try_files; every internal link uses the clean form.
 function qmdToHref(qmdRel: string): string {
-  return qmdRel.replace(/\.qmd$/, "");
+  return qmdRel.replace(/\.qmd$/, "").replace(/\/\d+-/, "/");
 }
 
 export function loadBook(lang: Lang, repoRoot: string): Book {

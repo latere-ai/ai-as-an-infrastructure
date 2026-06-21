@@ -62,7 +62,7 @@ if (import.meta.main) {
   const snapshot: Record<string, string[]> = { ...existing };
   let captured = 0;
   for (const f of chapterFiles()) {
-    const slug = basename(f, ".qmd");
+    const slug = basename(f, ".qmd").replace(/^\d+-/, ""); // bare slug, matches refs/<slug>.bib
     const src = readFileSync(f, "utf8");
     if (src.includes("{#further-reading}")) continue; // migrated → keep baseline
     // Union of en and zh: a chapter whose two language lists diverge (rare) must

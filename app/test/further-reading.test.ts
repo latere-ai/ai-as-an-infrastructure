@@ -27,7 +27,9 @@ function convertedSlugs(): string[] {
     for (const f of entries) {
       if (!/^\d+-.*\.qmd$/.test(f)) continue;
       const src = readFileSync(join(enRoot, part, f), "utf8");
-      if (src.includes("{#further-reading}")) out.push(basename(f, ".qmd"));
+      // Key by the bare slug (strip the authoring-order "NN-" prefix): that is
+      // how the build derives the refs/<slug>.bib name from the de-numbered href.
+      if (src.includes("{#further-reading}")) out.push(basename(f, ".qmd").replace(/^\d+-/, ""));
     }
   }
   return out.sort();

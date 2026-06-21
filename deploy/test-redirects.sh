@@ -33,16 +33,20 @@ noloop /en/                                           # lang home (was the loop)
 noloop /zh/
 code   /en/ 200
 code   /zh/ 200
-code   /zh/p3-reasoning/15-inference-time-scaling 200 # clean URL serves
+code   /zh/p3-reasoning/inference-time-scaling 200    # number-free clean URL serves
 code   /zh/nope 404
 loc    /en/index.html /en/                            # index.html canonicalizes
-loc    /zh/p3-reasoning/15-inference-time-scaling.html /zh/p3-reasoning/15-inference-time-scaling
-# Relocated chapters (Part XII/XIII split): old paths 301 to the new dirs.
-loc    /en/p11-frontiers/52-diffusion-flow-matching      /en/p12-generative/52-diffusion-flow-matching
-loc    /zh/p11-frontiers/58-multimodal-models            /zh/p12-generative/58-multimodal-models
-loc    /en/p11-frontiers/52-diffusion-flow-matching.html /en/p12-generative/52-diffusion-flow-matching
-loc    /en/p12-operations/54-production-data-engine       /en/p13-operations/54-production-data-engine
-loc    /zh/p12-operations/52-deployment-lifecycle         /zh/p13-operations/52-deployment-lifecycle
+loc    /zh/p3-reasoning/inference-time-scaling.html /zh/p3-reasoning/inference-time-scaling
+# Number-free URLs: the old "NN-" numbered path 301s to its de-numbered form.
+loc    /zh/p3-reasoning/15-inference-time-scaling      /zh/p3-reasoning/inference-time-scaling
+loc    /en/p4-inference/16-serving-problem.html        /en/p4-inference/serving-problem
+noloop /zh/p3-reasoning/15-inference-time-scaling      # old numbered path resolves (200) de-numbered
+# Relocated chapters (Part XII/XIII split): old numbered + de-numbered paths 301 to the new dirs.
+loc    /en/p11-frontiers/52-diffusion-flow-matching      /en/p12-generative/diffusion-flow-matching
+loc    /zh/p11-frontiers/58-multimodal-models            /zh/p12-generative/multimodal-models
+loc    /en/p11-frontiers/diffusion-flow-matching.html    /en/p12-generative/diffusion-flow-matching
+loc    /en/p12-operations/54-production-data-engine       /en/p13-operations/production-data-engine
+loc    /zh/p12-operations/deployment-lifecycle            /zh/p13-operations/deployment-lifecycle
 noloop /en/p11-frontiers/58-multimodal-models            # old path resolves (200) at new location
 
 [ "$fail" = 0 ] && echo "nginx routing: all checks passed" || { echo "nginx routing: FAILURES"; exit 1; }
