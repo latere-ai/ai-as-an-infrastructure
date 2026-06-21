@@ -50,8 +50,11 @@ function bullets(src: string): Bullet[] {
     if (inSection && /^##\s+/.test(line)) break;
     if (!inSection || !line.trim().startsWith("-")) continue;
     out.push({
-      urls: [...line.matchAll(/\]\((https?:\/\/[^)]+)\)/g)].map((m) => normalizeUrl(m[1])),
-      text: line.replace(/\[[^\]]*\]\([^)]*\)/g, ""),
+      urls: [
+        ...[...line.matchAll(/\]\((https?:\/\/[^)]+)\)/g)].map((m) => normalizeUrl(m[1])),
+        ...[...line.matchAll(/<(https?:\/\/[^>]+)>/g)].map((m) => normalizeUrl(m[1])),
+      ],
+      text: line.replace(/\[[^\]]*\]\([^)]*\)/g, "").replace(/<https?:\/\/[^>]+>/g, ""),
     });
   }
   return out;

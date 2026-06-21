@@ -35,7 +35,8 @@ export function extractFurtherReadingUrls(src: string): string[] {
     if (/^##\s+(Further [Rr]eading|延伸阅读)\s*$/.test(line)) { inSection = true; continue; }
     if (inSection && /^##\s+/.test(line)) break; // next section ends it
     if (!inSection) continue;
-    for (const m of line.matchAll(/\]\((https?:\/\/[^)]+)\)/g)) urls.push(normalizeUrl(m[1]));
+    for (const m of line.matchAll(/\]\((https?:\/\/[^)]+)\)/g)) urls.push(normalizeUrl(m[1])); // [text](url)
+    for (const m of line.matchAll(/<(https?:\/\/[^>]+)>/g)) urls.push(normalizeUrl(m[1]));     // <url> autolink
   }
   return [...new Set(urls)];
 }
@@ -64,7 +65,12 @@ if (import.meta.main) {
     const slug = basename(f, ".qmd");
     const src = readFileSync(f, "utf8");
     if (src.includes("{#further-reading}")) continue; // migrated → keep baseline
-    snapshot[slug] = extractFurtherReadingUrls(src);
+    // Union of en and zh: a chapter whose two language lists diverge (rare) must
+    // not silently drop the works that only one side listed.
+    const zhFile = f.replace(`${join(repoRoot, "en")}/`, `${join(repoRoot, "zh")}/`);
+    const urls = new Set(extractFurtherReadingUrls(src));
+    if (existsSync(zhFile)) for (const u of extractFurtherReadingUrls(readFileSync(zhFile, "utf8"))) urls.add(u);
+    snapshot[slug] = [...urls];
     captured++;
   }
   const sorted = Object.fromEntries(Object.keys(snapshot).sort().map((k) => [k, snapshot[k]]));

@@ -45,9 +45,10 @@ for (const slug of slugs) {
     const rendered = new Set(
       furtherReadingEntries(refsDir, slug)
         .filter((e) => e.inFurther)
-        .map((e) => normalizeUrl(e.url ?? "")),
+        .map((e) => normalizeUrl(e.url ?? ""))
+        .filter(Boolean), // a no-URL work (book) can't be URL-tracked
     );
-    const baseline = new Set((snapshot[slug] ?? []).map(normalizeUrl));
+    const baseline = new Set((snapshot[slug] ?? []).map(normalizeUrl).filter(Boolean));
     const missing = [...baseline].filter((u) => !rendered.has(u));
     const extra = [...rendered].filter((u) => !baseline.has(u));
     expect({ slug, missing, extra }).toEqual({ slug, missing: [], extra: [] });
