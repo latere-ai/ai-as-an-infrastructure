@@ -290,6 +290,30 @@ test("polished chapter openings preserve key source theses", () => {
       ["欧盟的风险分级", "发布如今在法律上要求哪些文档", "版权为什么是每一份预训练语料底下尚未夯实的地基", "监管者写下的规则改写"],
     ],
     [
+      "en/ecosystem/01-model-landscape.qmd",
+      ["open-to-closed spectrum", "release can disclose five things", "weight license", "almost every published training practice", "open labs rather than the largest closed"],
+    ],
+    [
+      "zh/ecosystem/01-model-landscape.qmd",
+      ["从开放到封闭的谱系", "一次发布可以披露哪五样东西", "权重许可证", "已公开的训练实践", "开放实验室"],
+    ],
+    [
+      "en/ecosystem/02-tooling-ecosystem.qmd",
+      ["training frameworks, serving engines, agent frameworks", "standards that let them interoperate", "control point", "caller stops being an application and becomes an agent", "move back into the layer itself"],
+    ],
+    [
+      "zh/ecosystem/02-tooling-ecosystem.qmd",
+      ["训练框架、服务引擎、智能体框架", "彼此互通的标准", "控制点", "调用方不再是一个应用、而变成一个智能体", "拉回到该层自身"],
+    ],
+    [
+      "en/ecosystem/03-economics.qmd",
+      ["whole stack is a way to spend money", "where compute is bought", "training and inference are two different kinds of cost", "build a model versus buy one through an API", "inference dominates the lifetime bill"],
+    ],
+    [
+      "zh/ecosystem/03-economics.qmd",
+      ["整个技术栈说到底是一种花钱的方式", "算力在哪里购买", "训练与推理为什么是两种性质不同的成本", "什么时候该自建一个模型、什么时候该通过 API 买一个", "推理主导全生命周期账单"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -457,6 +481,9 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/safety/05-adversarial-robustness.qmd",
     "en/safety/06-privacy-provenance-unlearning.qmd",
     "en/safety/07-law-regulation-policy.qmd",
+    "en/ecosystem/01-model-landscape.qmd",
+    "en/ecosystem/02-tooling-ecosystem.qmd",
+    "en/ecosystem/03-economics.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -513,6 +540,9 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/safety/05-adversarial-robustness.qmd",
     "zh/safety/06-privacy-provenance-unlearning.qmd",
     "zh/safety/07-law-regulation-policy.qmd",
+    "zh/ecosystem/01-model-landscape.qmd",
+    "zh/ecosystem/02-tooling-ecosystem.qmd",
+    "zh/ecosystem/03-economics.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
@@ -528,7 +558,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/infrastructure/07-where-learning-hits-limits.qmd",
     "zh/infrastructure/08-the-capability-horizon.qmd",
   ];
-  const banned = /By the end|reader can explain|reader can say|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一部分|本章来讲这个|本章把一个故事/;
+  const banned = /By the end|reader can explain|reader can say|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一部分|本章来讲这个|本章把一个故事|本章要讲清/;
 
   for (const path of polished) {
     const text = readFileSync(join(repoRoot, path), "utf8");
