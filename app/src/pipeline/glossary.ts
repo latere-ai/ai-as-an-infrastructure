@@ -18,6 +18,15 @@ export interface GlossEntry {
 }
 export type Glossary = Map<string, GlossEntry>;
 
+export interface GlossFirstUse {
+  key: string;
+  href: string;
+  title: string;
+  chapterNum: string;
+  sentence: string;
+}
+export type GlossFirstUseMap = Map<string, GlossFirstUse>;
+
 export function loadGlossary(path: string): Glossary {
   const m: Glossary = new Map();
   if (!existsSync(path)) return m;
@@ -42,26 +51,38 @@ function forms(e: GlossEntry, lang: Lang): { full: string; paren: string | null;
   return { full, paren, short };
 }
 
-// Render an inline @gls reference. `first` = first use of this key in the chapter.
-export function renderGloss(e: GlossEntry, lang: Lang, first: boolean, prefix: string): string {
+export function renderGlossText(e: GlossEntry, lang: Lang, first: boolean): string {
   const { full, paren, short } = forms(e, lang);
   const open = lang === "zh" ? "（" : " (";
   const close = lang === "zh" ? "）" : ")";
-  const text = first ? (paren ? `${full}${open}${paren}${close}` : full) : short;
-  return `<a href="${prefix}glossary#gls-${e.key}" class="rdr-gls">${text}</a>`;
+  return first ? (paren ? `${full}${open}${paren}${close}` : full) : short;
+}
+
+// Render an inline @gls reference. `first` = first use of this key in the chapter.
+export function renderGloss(e: GlossEntry, lang: Lang, first: boolean, prefix: string): string {
+  return `<a href="${prefix}glossary#gls-${e.key}" class="rdr-gls">${renderGlossText(e, lang, first)}</a>`;
 }
 
 // The glossary page body: every used term, sorted, each with a {#gls-key} anchor.
 // On the zh page the Chinese term leads; on en, the English leads.
-export function renderGlossaryPage(gloss: Glossary, used: Set<string>, lang: Lang): string {
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+export function renderGlossaryPage(gloss: Glossary, used: Set<string>, firstUses: GlossFirstUseMap, lang: Lang): string {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escAttr = (s: string) => esc(s).replace(/"/g, "&quot;");
+  const chapterLabel = (u: GlossFirstUse) =>
+    u.chapterNum ? `${lang === "zh" ? `第 ${u.chapterNum} 章` : `Chapter ${u.chapterNum}`} · ${esc(u.title)}` : esc(u.title);
   const entries = [...used].map((k) => gloss.get(k)).filter((e): e is GlossEntry => !!e);
   entries.sort((a, b) => (lang === "zh" ? a.zh.localeCompare(b.zh, "zh") : a.en.localeCompare(b.en)));
   const items = entries.map((e) => {
     const enLabel = e.abbr && e.abbr !== e.en ? `${esc(e.en)} (${esc(e.abbr)})` : esc(e.en);
     const lead = lang === "zh" ? esc(e.zh) : enLabel;
     const trail = lang === "zh" ? enLabel : esc(e.zh);
-    return `<div class="rdr-gls-entry" id="gls-${e.key}"><span class="rdr-gls-term">${lead}</span> <span class="rdr-gls-alt">${trail}</span></div>`;
+    const first = firstUses.get(e.key);
+    const firstHref = first ? (first.href === "index" ? "./" : first.href) : "";
+    const firstMeta = first
+      ? `<div class="rdr-gls-meta">${lang === "zh" ? "首次出现：" : "First occurrence: "}<a href="${escAttr(firstHref)}">${chapterLabel(first)}</a></div>`
+      : "";
+    const sentence = first?.sentence ? `<p class="rdr-gls-explain">${esc(first.sentence)}</p>` : "";
+    return `<li class="rdr-gls-entry" id="gls-${e.key}"><div><span class="rdr-gls-term">${lead}</span> <span class="rdr-gls-alt">${trail}</span></div>${firstMeta}${sentence}</li>`;
   });
-  return `<div class="rdr-gls-list">${items.join("\n")}</div>`;
+  return `<ul class="rdr-gls-list">${items.join("\n")}</ul>`;
 }

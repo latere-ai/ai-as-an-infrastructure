@@ -12,7 +12,7 @@ import { renderBibliography, type Bibliography } from "./citations.ts";
 import { renderFurtherReading } from "./further-reading.ts";
 import type { CrossrefMap } from "./crossref.ts";
 import type { GraphvizInstance } from "./diagrams.ts";
-import { renderGlossaryPage, type Glossary } from "./glossary.ts";
+import { renderGlossaryPage, type Glossary, type GlossFirstUseMap } from "./glossary.ts";
 import type { ChapterData, Lang } from "../types.ts";
 
 export interface CompileContext {
@@ -22,6 +22,7 @@ export interface CompileContext {
   refsDir: string; // path to refs/, the per-chapter literature store
   glossary: Glossary; // term definitions (glossary.yml)
   glossaryUsed: Set<string>; // keys referenced anywhere in the book; feeds the glossary page
+  glossaryFirstUses: GlossFirstUseMap; // first book occurrence for each glossary key
 }
 
 // A chapter href as a clickable link relative to the current page. The index
@@ -85,7 +86,20 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   let src = readFileSync(ch.qmdPath, "utf8");
   if (book.lang === "zh") src = stripCjkSoftBreaks(src);
   const prefix = "../".repeat(ch.href.split("/").length - 1); // page depth → "../"*
-  let { html, headings } = renderMarkdown(src, { bib: ctx.bib, xref: ctx.xref, currentHref: ch.href, prefix, graphviz: ctx.graphviz, lang: book.lang, glossary: ctx.glossary, glossarySeen: new Set(), glossaryUsed: ctx.glossaryUsed });
+  let { html, headings } = renderMarkdown(src, {
+    bib: ctx.bib,
+    xref: ctx.xref,
+    currentHref: ch.href,
+    chapterTitle: ch.title,
+    chapterNum: ch.num,
+    prefix,
+    graphviz: ctx.graphviz,
+    lang: book.lang,
+    glossary: ctx.glossary,
+    glossarySeen: new Set(),
+    glossaryUsed: ctx.glossaryUsed,
+    glossaryFirstUses: ctx.glossaryFirstUses,
+  });
   // References page: fill the ::: {#refs} slot with the cited-only bibliography.
   if (ch.href === "references") {
     html = html.replace(/(<div class="rdr-block"[^>]*id="refs"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderBibliography(ctx.bib)}$3`);
@@ -93,7 +107,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   // Glossary page: fill the ::: {#glossary} slot with every term used in the book.
   // book order ends with the back matter, so glossaryUsed is complete by here.
   if (ch.href === "glossary") {
-    html = html.replace(/(<div class="rdr-block"[^>]*id="glossary"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderGlossaryPage(ctx.glossary, ctx.glossaryUsed, book.lang)}$3`);
+    html = html.replace(/(<div class="rdr-block"[^>]*id="glossary"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderGlossaryPage(ctx.glossary, ctx.glossaryUsed, ctx.glossaryFirstUses, book.lang)}$3`);
   }
   // Chapter "Further reading": fill the ::: {#further-reading} slot from
   // refs/<slug>.bib (the per-chapter literature store).

@@ -61,7 +61,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
   const book = loadBook(lang, repoRoot);
   const bib = loadBibliographyDir(join(repoRoot, "refs"));
   const xref = buildCrossref(book);
-  const ctx = { bib, xref, graphviz, refsDir: join(repoRoot, "refs"), glossary, glossaryUsed: new Set<string>() };
+  const ctx = { bib, xref, graphviz, refsDir: join(repoRoot, "refs"), glossary, glossaryUsed: new Set<string>(), glossaryFirstUses: new Map() };
   const langOut = join(outRoot, lang);
   // Clean the per-language tree before regenerating: a renamed or moved chapter
   // would otherwise leave its old .html behind (stale dead pages, broken-link

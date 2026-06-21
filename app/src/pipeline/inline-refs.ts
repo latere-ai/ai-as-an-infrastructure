@@ -8,21 +8,87 @@ import type MarkdownIt from "markdown-it";
 import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { renderCite, type Bibliography } from "./citations.ts";
 import { relHref, type CrossrefMap } from "./crossref.ts";
-import { renderGloss, type Glossary } from "./glossary.ts";
+import { renderGloss, renderGlossText, type Glossary, type GlossFirstUseMap } from "./glossary.ts";
 import type { Lang } from "../types.ts";
 
 export interface RefContext {
   bib: Bibliography;
   xref: CrossrefMap;
   currentHref: string;
+  chapterTitle: string;
+  chapterNum: string;
   prefix: string;
   lang: Lang;
   glossary: Glossary;
   glossarySeen: Set<string>;
   glossaryUsed: Set<string>;
+  glossaryFirstUses: GlossFirstUseMap;
 }
 
 const KEY = /^[A-Za-z][\w:.-]*/;
+const SENTENCE_END = new Set([".", "!", "?", "。", "！", "？"]);
+
+function isSentenceEnd(src: string, pos: number): boolean {
+  if (!SENTENCE_END.has(src[pos])) return false;
+  if (src[pos] !== ".") return true;
+  if (/\d\.\d/.test(src.slice(Math.max(0, pos - 1), pos + 2))) return false;
+  const before = src.slice(Math.max(0, pos - 16), pos + 1).toLowerCase();
+  if (/(^|\s)(et\s+al|e\.g|i\.e|vs|etc)\.$/.test(before)) return false;
+  return true;
+}
+
+function canStartSentenceAfter(src: string, pos: number): boolean {
+  return /[。！？]/.test(src[pos]) || pos + 1 === src.length || /\s/.test(src[pos + 1]);
+}
+
+function sentenceAround(src: string, markerStart: number, markerLen: number, ctx: RefContext): string {
+  let begin = 0;
+  for (let i = markerStart - 1; i >= 0; i--) {
+    if (isSentenceEnd(src, i) && canStartSentenceAfter(src, i)) {
+      begin = i + 1;
+      break;
+    }
+  }
+
+  let end = src.length;
+  for (let i = markerStart + markerLen; i < src.length; i++) {
+    if (isSentenceEnd(src, i)) {
+      end = i + 1;
+      break;
+    }
+  }
+
+  return src
+    .slice(begin, end)
+    .trim()
+    .replace(/@gls-([A-Za-z][\w:.-]*)/g, (m, rawKey: string) => {
+      const gkey = rawKey.replace(/[.,;:]+$/, "");
+      const trailing = rawKey.slice(gkey.length);
+      const entry = ctx.glossary.get(gkey);
+      return entry ? `${renderGlossText(entry, ctx.lang, true)}${trailing}` : m;
+    })
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/\[@[^\]]+\]/g, "")
+    .replace(/@(sec|fig)-([A-Za-z][\w:.-]*)/g, (m, kind: string, rawKey: string) => {
+      const suffix = rawKey.replace(/[.,;:]+$/, "");
+      const trailing = rawKey.slice(suffix.length);
+      const target = ctx.xref.get(`${kind}-${suffix}`);
+      return target ? `${target.label}${trailing}` : m;
+    })
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/\*([^*]+)\*/g, "$1")
+    .replace(/_([^_]+)_/g, "$1")
+    .replace(/\*\*|__/g, "")
+    .replace(/\\([()[\]{}*_`])/g, "$1")
+    .replace(/\s+([,.;:!?，。！？；：])/g, "$1")
+    .replace(/([（(])\s+/g, "$1")
+    .replace(/\s+([）)])/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export function inlineRefs(md: MarkdownIt, ctx: RefContext) {
   const push = (state: StateInline, html: string) => {
@@ -68,6 +134,15 @@ export function inlineRefs(md: MarkdownIt, ctx: RefContext) {
           const gkey = key.slice(4);
           const entry = ctx.glossary.get(gkey);
           if (entry) {
+            if (!ctx.glossaryFirstUses.has(gkey)) {
+              ctx.glossaryFirstUses.set(gkey, {
+                key: gkey,
+                href: ctx.currentHref,
+                title: ctx.chapterTitle,
+                chapterNum: ctx.chapterNum,
+                sentence: sentenceAround(src, start, 1 + key.length, ctx),
+              });
+            }
             const first = !ctx.glossarySeen.has(gkey);
             ctx.glossarySeen.add(gkey);
             ctx.glossaryUsed.add(gkey);
