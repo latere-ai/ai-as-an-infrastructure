@@ -41,3 +41,23 @@ test("ch13 eliciting-reasoning uses tree-of-thoughts in both languages", () => {
   expect(src("en/p3-reasoning/13-eliciting-reasoning.qmd")).toContain('data-viz="tree-of-thoughts"');
   expect(src("zh/p3-reasoning/13-eliciting-reasoning.qmd")).toContain('data-viz="tree-of-thoughts"');
 });
+
+test("the viz runtime registers the infonce-field component", () => {
+  expect(rt).toMatch(/R\['infonce-field'\]\s*=\s*function/);
+});
+
+test("ch27 embeddings-representation uses infonce-field in both languages", () => {
+  expect(src("en/p5-orchestration/27-embeddings-representation.qmd")).toContain('data-viz="infonce-field"');
+  expect(src("zh/p5-orchestration/27-embeddings-representation.qmd")).toContain('data-viz="infonce-field"');
+});
+
+test("the viz runtime registers the comparison-explorer component with both datasets", () => {
+  expect(rt).toMatch(/R\['comparison-explorer'\]\s*=\s*function/);
+  expect(rt).toContain("'agent-frameworks':");
+  expect(rt).toContain("'agent-frameworks-zh':");
+});
+
+test("ch41 agents-and-sandboxes uses comparison-explorer, localized per language", () => {
+  expect(src("en/p10-practical/41-agents-and-sandboxes.qmd")).toContain('data-set="agent-frameworks"');
+  expect(src("zh/p10-practical/41-agents-and-sandboxes.qmd")).toContain('data-set="agent-frameworks-zh"');
+});
