@@ -13,7 +13,7 @@ import { compileChapter } from "./pipeline/compile.ts";
 import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
-import { buildSearchDoc } from "./pipeline/search.ts";
+import { buildSearchDocs } from "./pipeline/search.ts";
 import { BASE, ogImageUrl } from "./site.ts";
 import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -70,7 +70,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
 
   writeFileSync(join(langOut, "reader.js"), clientJs);
 
-  const searchDocs: ReturnType<typeof buildSearchDoc>[] = [];
+  const searchDocs: ReturnType<typeof buildSearchDocs> = [];
   // book order already ends with references.qmd, so cited[] is complete by then.
   for (const ch of book.chapters) {
     const data = compileChapter(book, ch, ctx);
@@ -88,7 +88,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const outPath = join(langOut, ch.href + ".html");
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, html);
-    searchDocs.push(buildSearchDoc(data, ch.href));
+    searchDocs.push(...buildSearchDocs(data, ch.href));
     pathsByLang[lang].add(ch.href === "index" ? "" : ch.href); // clean path for sitemap
     pageCount++;
   }

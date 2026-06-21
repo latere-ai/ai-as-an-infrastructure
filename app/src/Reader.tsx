@@ -315,7 +315,22 @@ function ChapterOpener({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   );
 }
 
-interface SearchDoc { href: string; num: string; title: string; headings: string[]; text: string }
+interface SearchDoc { href: string; anchor: string; num: string; title: string; heading: string; text: string }
+
+// A snippet of body text centred on the first query hit, split so the match can
+// be wrapped in <mark> as a React node (the body contains literal <, >, & from
+// code/math, so string-injecting HTML is unsafe).
+function snippet(text: string, query: string): { pre: string; hit: string; post: string } {
+  const idx = text.toLowerCase().indexOf(query);
+  if (idx < 0) return { pre: text.slice(0, 140), hit: "", post: "" };
+  const start = Math.max(0, idx - 48);
+  const end = Math.min(text.length, idx + query.length + 96);
+  return {
+    pre: (start > 0 ? "… " : "") + text.slice(start, idx),
+    hit: text.slice(idx, idx + query.length),
+    post: text.slice(idx + query.length, end) + (end < text.length ? " …" : ""),
+  };
+}
 
 function SearchBox({ t, prefix }: { t: Strings; prefix: string }) {
   const [q, setQ] = useState("");
@@ -327,16 +342,33 @@ function SearchBox({ t, prefix }: { t: Strings; prefix: string }) {
   const results = useMemo(() => {
     const query = q.trim().toLowerCase();
     if (!query || !docs) return [];
-    return docs
-      .map((d) => {
-        const hay = `${d.num} ${d.title} ${d.headings.join(" ")} ${d.text}`.toLowerCase();
-        const score = (d.title.toLowerCase().includes(query) ? 3 : 0) + (hay.includes(query) ? 1 : 0);
-        return { d, score };
-      })
-      .filter((r) => r.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
+    const scored = [];
+    for (const d of docs) {
+      const inTitle = d.title.toLowerCase().includes(query);
+      const inHeading = d.heading.toLowerCase().includes(query);
+      const inText = d.text.toLowerCase().includes(query);
+      if (!inTitle && !inHeading && !inText) continue;
+      const score = (inTitle ? 4 : 0) + (inHeading ? 2 : 0) + (inText ? 1 : 0);
+      scored.push({ d, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    // Cap sections per chapter so one long chapter cannot fill the whole list.
+    const perChapter: Record<string, number> = {};
+    const out: typeof scored = [];
+    for (const r of scored) {
+      const n = perChapter[r.d.href] ?? 0;
+      if (n >= 2) continue;
+      perChapter[r.d.href] = n + 1;
+      out.push(r);
+      if (out.length >= 8) break;
+    }
+    return out.map(({ d }) => ({ d, snip: snippet(d.text, query) }));
   }, [q, docs]);
+
+  const hrefFor = (d: SearchDoc) => {
+    const base = d.href === "index" ? (prefix || "./") : `${prefix}${d.href}`;
+    return d.anchor ? `${base}#${d.anchor}` : base;
+  };
 
   return (
     <div style={{ padding: "0 16px 14px", position: "relative" }}>
@@ -345,10 +377,21 @@ function SearchBox({ t, prefix }: { t: Strings; prefix: string }) {
         borderRadius: "var(--radius-md)", color: "var(--fg-1)", fontFamily: "var(--font-ui)", fontSize: 13, outline: "none",
       }} />
       {results.length > 0 && (
-        <div style={{ position: "absolute", left: 16, right: 16, top: 40, zIndex: 20, background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)", overflow: "hidden" }}>
-          {results.map(({ d }) => (
-            <a key={d.href} href={d.href === "index" ? (prefix || "./") : `${prefix}${d.href}`} style={{ display: "block", padding: "8px 12px", textDecoration: "none", borderBottom: "1px solid var(--border)", color: "var(--fg-1)", fontSize: 13 }}>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>{d.title}
+        <div style={{ position: "absolute", left: 16, right: 16, top: 40, zIndex: 20, background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)", overflow: "hidden", maxHeight: "60vh", overflowY: "auto" }}>
+          {results.map(({ d, snip }, i) => (
+            <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} style={{ display: "block", padding: "9px 12px", textDecoration: "none", borderBottom: "1px solid var(--border)", color: "var(--fg-1)" }}>
+              <div style={{ fontSize: 13, fontWeight: 500 }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>
+                {d.title}
+                {d.heading && <span style={{ color: "var(--fg-3)", fontWeight: 400 }}> › {d.heading}</span>}
+              </div>
+              {snip.hit && (
+                <div style={{ fontSize: 12, color: "var(--fg-2)", marginTop: 3, lineHeight: 1.45 }}>
+                  {snip.pre}
+                  <mark style={{ background: "var(--accent-soft, rgba(120,160,255,0.28))", color: "inherit", padding: "0 1px", borderRadius: 2 }}>{snip.hit}</mark>
+                  {snip.post}
+                </div>
+              )}
             </a>
           ))}
         </div>
