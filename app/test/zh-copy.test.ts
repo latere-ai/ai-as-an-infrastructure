@@ -457,6 +457,38 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/practice/04-training-finetuning-practice.qmd",
       ["该用哪些工具改变模型权重", "把它接进剩下的技术栈", "到底该不该训练"],
     ],
+    [
+      "en/practice/05-agents-and-sandboxes.qmd",
+      ["loop archetype", "tool protocol", "sandbox boundary", "secrets and model access", "governed seams"],
+    ],
+    [
+      "zh/practice/05-agents-and-sandboxes.qmd",
+      ["循环原型", "工具协议", "沙箱边界", "密钥和模型访问", "受治理的接缝"],
+    ],
+    [
+      "en/practice/06-retrieval-and-documents.qmd",
+      ["data it was never trained on", "document intelligence", "structured text", "embeddings in a vector store", "reranker orders"],
+    ],
+    [
+      "zh/practice/06-retrieval-and-documents.qmd",
+      ["从未训练过的数据", "文档智能", "结构化文本", "向量库里的嵌入", "重排器"],
+    ],
+    [
+      "en/practice/07-evaluation-and-observability.qmd",
+      ["public leaderboard", "specific prompt", "retrieval context", "agent loop", "running system"],
+    ],
+    [
+      "zh/practice/07-evaluation-and-observability.qmd",
+      ["公开榜单", "特定", "检索上下文", "智能体循环", "正在运行的那个系统"],
+    ],
+    [
+      "en/practice/08-wiring-a-2026-stack.qmd",
+      ["capability has a lifecycle", "end-to-end reference architecture", "seams can be named", "virtual-key custody", "three wire-format contracts"],
+    ],
+    [
+      "zh/practice/08-wiring-a-2026-stack.qmd",
+      ["能力是有生命周期", "端到端的参考架构", "接缝能否说清", "虚拟密钥托管", "三份传输格式契约"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -534,6 +566,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/practice/02-serving-and-compute.qmd",
     "en/practice/03-edge-on-device.qmd",
     "en/practice/04-training-finetuning-practice.qmd",
+    "en/practice/05-agents-and-sandboxes.qmd",
+    "en/practice/06-retrieval-and-documents.qmd",
+    "en/practice/07-evaluation-and-observability.qmd",
+    "en/practice/08-wiring-a-2026-stack.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -597,6 +633,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/practice/02-serving-and-compute.qmd",
     "zh/practice/03-edge-on-device.qmd",
     "zh/practice/04-training-finetuning-practice.qmd",
+    "zh/practice/05-agents-and-sandboxes.qmd",
+    "zh/practice/06-retrieval-and-documents.qmd",
+    "zh/practice/07-evaluation-and-observability.qmd",
+    "zh/practice/08-wiring-a-2026-stack.qmd",
   ];
   const banned = /By the end|reader can explain|reader can say|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一部分|本章来讲这个|本章把一个故事|本章要讲清/;
 
