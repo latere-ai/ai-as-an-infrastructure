@@ -106,6 +106,22 @@ test("polished chapter openings preserve key source theses", () => {
       ["人类比较上训练一个奖励模型", "用 @gls-ppo 针对这个奖励优化策略", "宪法式方法与", "@gls-rlaif 变体", "习得奖励需要 KL 约束"],
     ],
     [
+      "en/adaptation/03-dpo-variants.qmd",
+      ["collapses the", "apparatus into a single classification loss", "language model is an implicit reward model", "none of the variants reliably", "beats the plain loss", "pipeline and data constraints"],
+    ],
+    [
+      "zh/adaptation/03-dpo-variants.qmd",
+      ["化约为一个分类损失", "语言模型隐式地就是一个奖励模型", "没有哪个变体能可靠地胜过", "基础 DPO 损失", "流水线与数据约束"],
+    ],
+    [
+      "en/adaptation/04-synthetic-data-self-improvement.qmd",
+      ["fresh human labels stop scaling", "a stronger model, the model's own", "filtered outputs", "critic, or a verifier", "data flywheel", "bounded by the quality of the judge"],
+    ],
+    [
+      "zh/adaptation/04-synthetic-data-self-improvement.qmd",
+      ["训练信号就必须来自别处", "数据飞轮", "每个回路都有自己的天花板", "受判断者质量所界定"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -245,6 +261,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/generative/05-beyond-text.qmd",
     "en/adaptation/01-sft-peft.qmd",
     "en/adaptation/02-rlhf-reward-modeling.qmd",
+    "en/adaptation/03-dpo-variants.qmd",
+    "en/adaptation/04-synthetic-data-self-improvement.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -275,6 +293,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/generative/05-beyond-text.qmd",
     "zh/adaptation/01-sft-peft.qmd",
     "zh/adaptation/02-rlhf-reward-modeling.qmd",
+    "zh/adaptation/03-dpo-variants.qmd",
+    "zh/adaptation/04-synthetic-data-self-improvement.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
