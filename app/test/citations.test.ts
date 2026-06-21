@@ -40,7 +40,7 @@ function inlineKeys(src: string): string[] {
   for (const m of src.matchAll(/\[([^\]]*@[^\]]+)\]/g)) {
     for (const km of m[1].matchAll(/@([a-zA-Z][a-zA-Z0-9_:.-]+)/g)) {
       const k = km[1];
-      if (!["sec", "fig", "tbl", "eq"].includes(k) && !/^(sec|fig|tbl|eq)[-:]/.test(k)) keys.add(k);
+      if (!["sec", "fig", "tbl", "eq", "gls"].includes(k) && !/^(sec|fig|tbl|eq|gls)[-:]/.test(k)) keys.add(k);
     }
   }
   return [...keys];
