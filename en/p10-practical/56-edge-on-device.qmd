@@ -4,9 +4,12 @@ Most of this book serves models from a datacenter. The other end of the wire is
 the device in a pocket. This chapter covers running models on phones, laptops,
 and the neural accelerators inside them: why you would, what the constraints are,
 and the models and runtimes built for the regime. By the end a reader can explain
-why on-device models are small by design rather than shrunk after the fact, why
-quantization is pushed harder at the edge than in the cloud, and what the
-cloud-versus-edge split actually optimizes.
+why on-device models are architected small rather than shrunk after the fact and
+why inference economics push them to be over-trained, why quantization is driven
+past the server's int4 floor down to two bits and below, how the addition-only
+arithmetic of a ternary weight unlocks the energy budget, why the edge is
+fragmented in a way the CUDA datacenter is not, and what the cloud-versus-edge
+split actually optimizes.
 
 ## Why run on the edge
 
@@ -16,41 +19,141 @@ round-trip, so a response can start immediately. Availability: it works on a
 plane or in a dead zone. And cost: there is no per-token serving bill to anyone.
 Against all four stands one hard wall. A phone has orders of magnitude less
 memory, compute, and power than a datacenter accelerator, no high-bandwidth
-memory, and a thermal budget measured in single-digit watts. That wall shapes
-every choice below.
+memory, and a thermal budget measured in single-digit watts. The shape of that
+wall matters: autoregressive decoding is *memory-bandwidth bound*, because each
+token streams the entire weight set through the compute units, so on a device
+with no high-bandwidth memory the token rate is set by how many bytes must move
+per token, not by arithmetic throughput [@yuan2024llmroofline]. That single fact
+explains both halves of this chapter, why the model is kept small and why its
+weights are squeezed to the fewest possible bits.
 
 ## Small by design, not shrunk
 
 You cannot take a 70-billion-parameter model and shrink it onto a phone; the
-on-device tier is architected for the regime from the start. MobileLLM finds that
-below a billion parameters the usual data-and-scale story yields to architecture:
-deep-and-thin networks beat wide-and-shallow ones at the same size, and embedding
-sharing with grouped-query attention closes much of the gap to far larger models
-on tasks like API calling [@liu2024mobilellm]. OpenELM allocates parameters
-non-uniformly across layers, a layer-wise scaling that squeezes more accuracy
-from a fixed budget, and ships with conversion to Apple's MLX for on-device
-inference [@mehta2024openelm].
+on-device tier is architected for the regime from the start. MobileLLM makes the
+case sharply: below a billion parameters the usual data-and-scale story yields to
+architecture, and depth matters more than width, with thirty-layer models beating
+twelve-layer ones at equal parameter count [@liu2024mobilellm]. It ties the input
+and output embeddings to reclaim the eleven-odd percent of a small model's
+parameters they would otherwise waste, spends grouped-query attention to free
+more, reinvests all of it into depth, and shares weights between adjacent blocks
+so they stay resident in SRAM and are simply computed twice, avoiding the
+SRAM-to-DRAM weight movement that is the real latency cost. The result is a
+350-million-parameter model that matches a LLaMA-2 7B on API-calling intent
+accuracy, a forty-times-smaller model holding its own on a task that suits it.
+OpenELM pushes a complementary idea, allocating parameters non-uniformly across
+layers, narrow near the input and wider with depth, a layer-wise scaling that
+buys a 2.36 percent accuracy gain at a one-billion budget while using half the
+pretraining tokens of a uniform baseline [@mehta2024openelm].
 
-The vendors ship this as a tier. Gemini Nano is the on-device size, 1.8 and 3.25
-billion parameters, distilled from larger Gemini models and 4-bit quantized for
-deployment [@gemini2023]. Apple's on-device foundation model is about three
-billion parameters trained with 2-bit quantization-aware training and KV-cache
-sharing, with small LoRA adapters swapped in per feature, while a larger model
-waits in Private Cloud Compute for the hard requests [@apple2025foundation]. The
-shared pattern is a small local model for the common case and an escape hatch to
-the cloud for the rest.
+Two other levers define the tier. The first is data quality standing in for
+scale: the Phi line trained on filtered and synthetic "textbook-quality" data and
+reached coding and reasoning scores of models several times larger
+[@gunasekar2023textbooks]. The second, and now the dominant production lever, is
+distillation. Gemma 2 trains its 2- and 9-billion models against a larger
+teacher's full soft-target distribution rather than one-hot next-token labels,
+and reports that this beats from-scratch training even at equal or fewer tokens
+[@gemma2024]. MiniCPM adds a training-schedule trick, the warmup-stable-decay
+scheduler whose loss falls only in a short final decay, so cheap decay branches
+fork from one shared trunk and make small-model scaling experiments affordable
+[@hu2024minicpm].
+
+The deepest reason these models are small is economic, and it reaches back into
+how long they are trained. The compute-optimal Chinchilla ratio of roughly twenty
+tokens per parameter minimizes *training* cost, but a deployed model pays
+*inference* cost on every request for its whole life. Amortized over a billion
+requests, total cost is minimized by a smaller model trained far past
+compute-optimal, because the per-request inference cost that scales with
+parameter count dwarfs the one-time training cost [@sardana2024chinchilla]. This
+is why every model in this tier is over-trained: Gemma 2's small models run past
+fifty times their compute-optimal token count, and MiniCPM measures its own
+optimal data-to-model ratio at around 192 to one, an order of magnitude past
+Chinchilla. The constraint arrow from serving cost, which justified over-training
+a frontier model in @sec-scaling-laws, bites hardest here.
+
+The after-the-fact route exists but produces a different artifact. Sheared LLaMA
+prunes a 7B model down to 1.3 and 2.7 billion and continues pretraining on a
+fraction of the tokens [@xia2023sheared], a real and efficient path, but it
+inherits a cloud model's architecture rather than gaining MobileLLM's
+cache-resident block sharing or the quantization-aware training the next section
+needs. The vendors ship the designed-small tier as a product. Gemini Nano is the
+on-device size, 1.8 and 3.25 billion parameters, distilled from larger Gemini
+models and 4-bit quantized [@gemini2023]. Apple's on-device foundation model is
+about three billion parameters trained with 2-bit quantization-aware training and
+KV-cache sharing, with small LoRA adapters swapped in per feature, while a larger
+model waits in Private Cloud Compute for the hard requests [@apple2025foundation].
+The shared pattern is a small local model for the common case and an escape hatch
+to the cloud for the rest.
+
+```{mermaid}
+%%| label: fig-edge-tier
+%%| fig-cap: "The on-device tier and its escape hatch. A small quantized model handles the common request entirely on the device, with per-feature LoRA adapters swapped over one resident base; requests it cannot serve route to a larger cloud model, which on Apple's stack runs in a privacy-preserving Private Cloud Compute enclave. After the Gemini Nano and Apple Intelligence designs."
+flowchart TD
+  req["user request"] --> route{"hard for the<br/>small model?"}
+  route -->|"no (common case)"| dev["on-device model<br/>~2-3B, 2-4 bit<br/>+ per-feature LoRA"]
+  route -->|"yes (the tail)"| cloud["larger cloud model<br/>(Private Cloud Compute)"]
+  dev --> out["response"]
+  cloud --> out
+```
 
 ## Quantization to the bone
 
 Server quantization (@sec-quantization-kernels) trades a little quality for
-throughput; on the edge, memory is the budget, so the pressure is harder. BitNet
-b1.58 takes it to the limit with ternary weights drawn from {-1, 0, 1}, about
-1.58 bits each, reported to match a full-precision transformer of the same size
-and training tokens in perplexity from roughly three billion parameters upward
-while cutting memory and energy sharply, the regime where the matrix multiply
-collapses toward addition [@ma2024bitnet]. Whether one-bit-class training holds
-at frontier scale is unsettled, but the memory and energy case for the edge is
-direct: the device's budget is counted in bits per weight.
+throughput; on an A100 with memory to spare, int8 mostly buys more concurrent
+requests. On the edge the budget inverts: memory is the binding constraint, both
+the static footprint that must fit in a few gigabytes of unified RAM and the
+bandwidth that streams those weights each token. The governing identity is
+blunt, $\text{weight memory} = N_{\text{params}} \times b_{\text{bits}} / 8$, so a
+3B model is 6 GB at 16 bits, 1.5 GB at 4 bits, and 0.6 GB at ternary, and because
+decode is memory-bound, fewer bits is also directly fewer bytes moved per token
+and so lower latency and energy. The same lever fits the model and speeds it up.
+
+The standard floor is weight-only int4 post-training quantization, keeping
+weights at four bits and activations in higher precision, made accurate by methods
+like GPTQ's second-order error minimization [@frantar2022gptq] and AWQ's scaling
+of the salient weight channels that multiply large activations [@lin2023awq]. The
+reason the floor sits at the weights and not the activations is the
+outlier problem: a few emergent activation dimensions carry huge magnitudes that
+naive low-bit quantization destroys, which LLM.int8() handled by keeping those
+dimensions in higher precision [@dettmers2022llmint8] and SmoothQuant by migrating
+the difficulty from activations into weights with a per-channel rescale
+[@xiao2022smoothquant]. Weights quantize gracefully; activations do not, which is
+why the most aggressive edge schemes keep activations wider than weights.
+
+Below four bits, post-training quantization falls off a cliff, because the
+rounding error is no longer a small perturbation the trained weights can absorb.
+The edge therefore reaches for quantization-aware training, which simulates the
+rounding in the forward pass while letting gradients flow through it with a
+straight-through estimator, so the network *learns* weights robust to being
+quantized rather than having them rounded after the fact. Apple's on-device model
+is the production instance, compressed to two bits per weight with
+quantization-aware training plus learnable weight clipping, the embedding table
+to four bits and the KV cache to eight, recovering the lost quality with adapters
+[@apple2025foundation].
+
+The frontier is one bit. BitNet trains binary weights from scratch
+[@wang2023bitnet], and BitNet b1.58 relaxes them to ternary values in
+$\{-1, 0, 1\}$, about 1.58 bits each, reported to match a full-precision
+transformer of the same size and training tokens in both perplexity and end-task
+accuracy from roughly three billion parameters upward [@ma2024bitnet]. The
+mechanism is the payoff. With weights in $\{-1, 0, 1\}$ the dot product
+$\sum_i w_i x_i$ has no multiplies: every term is $+x_i$, $-x_i$, or zero, so the
+matrix multiply collapses into conditional additions, the zeros add free
+structured sparsity, and the kernels become integer-only, which is exactly what a
+CPU or NPU without strong floating-point throughput wants. The reported gains
+follow: at 3B, 3.55 times less memory and 2.71 times faster decode, and on 7nm
+silicon about 71 times less arithmetic energy for the matrix multiply. Follow-ups
+push activations to four bits [@wang2024bitneta48] and ship an integer-kernel CPU
+inference stack [@wang2024bitnetcpp]. Whether one-bit-class training holds at
+frontier scale is unsettled, since the parity evidence tops out near three billion
+parameters and the recipe demands training from scratch with no post-training
+path, but the memory and energy case for the edge is direct: the device's budget
+is counted in bits per weight.
+
+The other edge memory lever is the KV cache, which grows with context and can
+dwarf the weights at long context. Quantizing it to two bits, asymmetrically
+(the key cache per channel, the value cache per token, because their distributions
+differ), cuts peak memory by over half with little quality loss [@liu2024kivi].
 
 :::: {.runnable}
 ```python
@@ -68,13 +171,40 @@ print("memory is the budget: quantization is what makes a model fit on the edge"
 
 The pragmatic substrate is software like llama.cpp, a dependency-light C/C++
 inference engine that runs on plain CPUs and on Apple silicon through Metal and
-NEON, with the single-file GGUF format carrying the quantized weights and their
-metadata [@llamacpp]. The dedicated accelerators, Apple's Neural Engine,
-Qualcomm's Hexagon, and mobile GPUs, are faster per watt, but each has its own
-runtime, operator support, and quantization formats, so the edge is fragmented in
-a way the CUDA-centric datacenter is not. A portable GGUF model on the CPU is
-often the floor you can rely on everywhere, with an NPU path added where the
-hardware and toolchain allow.
+NEON [@llamacpp], with the single-file GGUF format carrying the quantized weights
+and all the metadata needed to load them, architecture, tokenizer, and special
+tokens, so a model loads with no external config [@gguf-spec]. Its quality per bit
+comes from a k-quant scheme that quantizes in super-blocks at two to six bits and
+spends more bits on the tensors that matter most [@ikawrakow2023kquants]. Other
+stacks make different bets. Apple's MLX exploits the unified memory of Apple
+silicon, where arrays live in shared memory and dispatch to CPU or GPU with no
+copy [@mlx2023]. MLC-LLM compiles one model to many backends, including the
+browser through WebGPU, on the TVM compiler [@mlcllm; @chen2018tvm], and
+ExecuTorch lowers a PyTorch model to run from phones down to microcontrollers
+[@executorch].
+
+The dedicated accelerators are faster per watt but fragment the edge. Apple's
+Neural Engine, reached through Core ML, needs a model rewritten to map onto it
+[@apple2022anetransformers]; Qualcomm's Hexagon NPU is reached through a separate
+SDK [@qualcomm-qnn]; mobile GPUs from Arm and Qualcomm go through OpenCL or
+Vulkan; and Google's Tensor SoC carries its own TPU. Each has its own runtime,
+operator coverage, and quantization formats, so the edge is fragmented in a way
+the CUDA-centric datacenter, where one toolchain spans nearly every accelerator,
+is not. A portable GGUF model on the CPU is often the floor you can rely on
+everywhere, with an NPU path added where the hardware and toolchain allow.
+
+Three tricks claw back speed on the device. Speculative decoding lets a tiny
+draft model propose several tokens that the larger model verifies in one parallel
+forward pass, turning a serial memory-bound decode into a partly batched one
+without changing the output distribution [@leviathan2023specdec]. KV-cache sharing
+across layers shrinks the second-largest on-device memory consumer
+[@apple2025foundation]. And LoRA adapter swapping keeps one frozen base resident
+while small low-rank adapters specialize it per feature [@hu2022lora], the trick
+behind Apple's per-feature behavior. When a request does escape to the cloud, the
+privacy gap is closed by architecture: Apple's Private Cloud Compute runs the
+larger model under stateless computation, no privileged runtime access, and a
+verifiable transparency log so the code handling the data can be inspected
+[@apple2024pcc].
 
 ::: {.callout-important}
 ## What's contested
@@ -85,18 +215,26 @@ other holds that the capability gap to frontier models is large and widening
 faster than device budgets grow, so the edge stays a privacy-and-offline niche
 while real work goes to the cloud. Both pulls are real, and the split a product
 draws depends on whether its hardest request, not its median one, has to run
-locally.
+locally. A second, narrower contest sits inside the quantization story: the
+ternary recipe matches full precision up to about three billion parameters, but
+whether one-bit-class training reaches frontier scale, and whether it is worth
+training a model from scratch with no post-training fallback to find out, is an
+open empirical question.
 :::
 
 ::: {.callout-tip}
 ## Constraint arrow
 The device's memory budget reaches all the way back into pretraining. A model
 that does not fit in a phone's memory at a usable token rate cannot be served
-there at all, so the on-device tier is trained small and quantization-aware from
-the start rather than pruned afterward, and Apple's 2-bit quantization-aware
-training is exactly this constraint made into a training objective. The
-hardware's memory dictates not just the model's size but how it is trained, the
-sharpest version of the constraint arrow that runs through the book.
+there at all, so the on-device tier is trained small, over-trained well past
+compute-optimal because inference cost dominates its lifetime bill, and made
+quantization-aware from the start rather than pruned afterward. Apple's 2-bit
+quantization-aware training is exactly this constraint made into a training
+objective, and a ternary weight format reaches one layer deeper still, dictating
+an addition-only, multiply-free kernel. The hardware's memory dictates not just
+the model's size but how long it is trained, how few bits it is trained in, and
+the very arithmetic of its inner loop, the sharpest version of the constraint
+arrow that runs through the book.
 :::
 
 ## Further reading
