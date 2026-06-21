@@ -37,8 +37,11 @@ different-book decision, taken one chapter at a time.
   diffusion, classifier-free guidance, DiT, flow matching / rectified flow,
   consistency models, and the loop back to text via LLaDA). Built; placed before
   `50-beyond-text`, which references flow matching but did not teach it.
-- [ ] **Speech & realtime voice** — ASR, TTS, neural audio codecs, full-duplex
-  voice agents and their latency budget.
+- [x] **Speech & realtime voice** → `p11-frontiers/55-speech-and-voice`
+  (ASR: Conformer/wav2vec 2.0/Whisper; neural codecs and audio-as-tokens;
+  audio LMs and codec-LM TTS with zero-shot voice cloning; full-duplex
+  speech-to-speech and the latency budget). Built; placed after the diffusion
+  chapter in the generative-media cluster.
 - [ ] **Non-autoregressive / diffusion language models** — distinct from
   speculative decoding (which is AR acceleration).
 - [ ] **Edge & on-device** — mobile NPUs, privacy-local inference,
