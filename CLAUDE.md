@@ -37,6 +37,10 @@ reading.
   `git config core.hooksPath .githooks`.
 - `make export` regenerates the vendored PDF + EPUB (on demand; slow — headless
   Chrome + pandoc). Not run by the pre-commit hook.
+- `make og` regenerates the vendored English social-share cards into `_book/og/`
+  (Open Graph / Twitter cards, one 1200x630 PNG per chapter; on demand; slow —
+  headless Chrome). Re-run after adding or retitling a chapter. `make build`
+  warns (does not fail) if a page references a card PNG that is missing.
 - The build is the test: `make build` must compile both books. CI (`render.yml`)
   lints the `.qmd` sources and runs the Bun build; a broken build is a broken
   commit.
