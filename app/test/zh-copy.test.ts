@@ -425,6 +425,38 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/infrastructure/08-the-capability-horizon.qmd",
       ["不再是一个排行榜数字", "移动的地平线", "测量仪器饱和得比新仪器造出来还快", "可持续的进步", "用算力买来的表象"],
     ],
+    [
+      "en/practice/01-choosing-a-model.qmd",
+      ["closed-to-open axis", "license", "three leaderboards", "small eval", "vendor's weekly point release"],
+    ],
+    [
+      "zh/practice/01-choosing-a-model.qmd",
+      ["从闭源到开源的坐标轴", "许可证", "三个排行榜", "小规模评测", "每周一次的小版本更新"],
+    ],
+    [
+      "en/practice/02-serving-and-compute.qmd",
+      ["self-hosted endpoint", "@gls-gateway", "keys and cost control", "serving engine that decodes tokens", "GPUs underneath"],
+    ],
+    [
+      "zh/practice/02-serving-and-compute.qmd",
+      ["自托管端点", "@gls-gateway", "密钥与成本", "解码 token 的服务引擎", "下方的 GPU"],
+    ],
+    [
+      "en/practice/03-edge-on-device.qmd",
+      ["architected small rather than shrunk", "over-trained", "server's int4 floor", "two bits and below", "ternary weights", "cloud-versus-edge split"],
+    ],
+    [
+      "zh/practice/03-edge-on-device.qmd",
+      ["设计得小", "过度训练", "int4 底线", "2 比特乃至更低", "三元权重", "云与边缘的切分"],
+    ],
+    [
+      "en/practice/04-training-finetuning-practice.qmd",
+      ["which tools should change a model's weights", "wire into the rest of the stack", "should the team be training at all"],
+    ],
+    [
+      "zh/practice/04-training-finetuning-practice.qmd",
+      ["该用哪些工具改变模型权重", "把它接进剩下的技术栈", "到底该不该训练"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -498,6 +530,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/infrastructure/06-the-machine-that-breaks.qmd",
     "en/infrastructure/07-where-learning-hits-limits.qmd",
     "en/infrastructure/08-the-capability-horizon.qmd",
+    "en/practice/01-choosing-a-model.qmd",
+    "en/practice/02-serving-and-compute.qmd",
+    "en/practice/03-edge-on-device.qmd",
+    "en/practice/04-training-finetuning-practice.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -557,6 +593,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/infrastructure/06-the-machine-that-breaks.qmd",
     "zh/infrastructure/07-where-learning-hits-limits.qmd",
     "zh/infrastructure/08-the-capability-horizon.qmd",
+    "zh/practice/01-choosing-a-model.qmd",
+    "zh/practice/02-serving-and-compute.qmd",
+    "zh/practice/03-edge-on-device.qmd",
+    "zh/practice/04-training-finetuning-practice.qmd",
   ];
   const banned = /By the end|reader can explain|reader can say|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一部分|本章来讲这个|本章把一个故事|本章要讲清/;
 
