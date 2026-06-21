@@ -1,4 +1,4 @@
-.PHONY: dev build export lint clean
+.PHONY: dev build export og lint clean
 
 # Live dev server for the reader (renders a sample chapter with hot client rebuild).
 dev:
@@ -11,6 +11,11 @@ build:
 # Generate the vendored PDF + EPUB into _book/<lang>/ (on demand; slow).
 export:
 	cd app && bun run export
+
+# Generate the vendored English social-share cards into _book/og/ (on demand;
+# slow, needs headless Chrome). Re-run after adding or retitling chapters.
+og:
+	cd app && bun run og
 
 # Style/diagram lint on the .qmd sources (no em dashes, no plain ```mermaid).
 lint:
