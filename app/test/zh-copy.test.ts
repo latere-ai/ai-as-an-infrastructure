@@ -489,6 +489,30 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/practice/08-wiring-a-2026-stack.qmd",
       ["能力是有生命周期", "端到端的参考架构", "接缝能否说清", "虚拟密钥托管", "三份传输格式契约"],
     ],
+    [
+      "en/practice/09-deployment-lifecycle.qmd",
+      ["deployable artifact is a bundle", "promotion is a statistical pipeline", "rollback has to restore", "model, prompts, retrieval indexes, tools"],
+    ],
+    [
+      "zh/practice/09-deployment-lifecycle.qmd",
+      ["可部署的产物是一个捆绑包", "统计意义上的提升流水线", "回滚必须把模型、提示、检索索引、工具与护栏配置一起恢复"],
+    ],
+    [
+      "en/practice/10-reliability-nondeterministic.qmd",
+      ["@gls-sli for an output that is never twice the same", "measure a distribution", "reliable at every single step", "chase determinism", "embrace sampling and verify"],
+    ],
+    [
+      "zh/practice/10-reliability-nondeterministic.qmd",
+      ["永远不会两次相同的输出", "@gls-sli 必须度量分布", "每一步都可靠的智能体", "追求确定性", "接纳采样并校验"],
+    ],
+    [
+      "en/practice/11-production-data-engine.qmd",
+      ["records of real users", "standing apparatus", "training signal", "scarce labeling budget", "intake of the next one"],
+    ],
+    [
+      "zh/practice/11-production-data-engine.qmd",
+      ["真实用户提出真实问题", "常设装置", "训练信号", "稀缺标注预算", "下一轮循环的入口"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -570,6 +594,9 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/practice/06-retrieval-and-documents.qmd",
     "en/practice/07-evaluation-and-observability.qmd",
     "en/practice/08-wiring-a-2026-stack.qmd",
+    "en/practice/09-deployment-lifecycle.qmd",
+    "en/practice/10-reliability-nondeterministic.qmd",
+    "en/practice/11-production-data-engine.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -637,6 +664,9 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/practice/06-retrieval-and-documents.qmd",
     "zh/practice/07-evaluation-and-observability.qmd",
     "zh/practice/08-wiring-a-2026-stack.qmd",
+    "zh/practice/09-deployment-lifecycle.qmd",
+    "zh/practice/10-reliability-nondeterministic.qmd",
+    "zh/practice/11-production-data-engine.qmd",
   ];
   const banned = /By the end|reader can explain|reader can say|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一部分|本章来讲这个|本章把一个故事|本章要讲清/;
 
