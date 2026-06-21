@@ -46,7 +46,7 @@ ax.scatter([big_C], [big_L], s=70, facecolors="none", edgecolors=DATA,
 # Annotate the affordable region vs the extrapolation.
 ax.axvspan(compute.min(), cheap_C.max(), color=INK, alpha=0.06, zorder=0)
 ax.annotate("extrapolate", xy=(big_C, big_L),
-            xytext=(big_C / 60, big_L * 2.1),
+            xytext=(big_C / 600, big_L * 1.55),
             color=INK, fontsize=9,
             arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 ax.text(cheap_C.max() * 0.18, loss_reducible.min() * 1.05, "affordable",

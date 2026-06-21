@@ -1,6 +1,7 @@
 from pathlib import Path
 import html
 import io
+from functools import partial
 import re
 import sys
 
@@ -9,6 +10,8 @@ import matplotlib
 if "matplotlib.pyplot" not in sys.modules:
     matplotlib.use("svg")
 import matplotlib.pyplot as plt
+from matplotlib.text import Text
+from matplotlib.ticker import FixedFormatter, FuncFormatter
 
 ZH_SVG_PARAMS = {
     "svg.fonttype": "none",
@@ -522,6 +525,26 @@ def _localize_svg(svg):
     return COMMENT_RE.sub(replace_comment, TEXT_RE.sub(replace_text, svg))
 
 
+def _localize_figure_text(fig):
+    for ax in fig.axes:
+        for axis in (ax.xaxis, ax.yaxis):
+            formatter = axis.get_major_formatter()
+            if isinstance(formatter, FixedFormatter):
+                formatter.seq = [ZH_TEXT.get(str(item), item) for item in formatter.seq]
+            elif isinstance(formatter, FuncFormatter) and isinstance(formatter.func, partial):
+                if formatter.func.args and isinstance(formatter.func.args[0], dict):
+                    labels = formatter.func.args[0]
+                    for key, value in list(labels.items()):
+                        localized = ZH_TEXT.get(str(value))
+                        if localized is not None:
+                            labels[key] = localized
+
+    for text in fig.findobj(match=Text):
+        localized = ZH_TEXT.get(text.get_text())
+        if localized is not None:
+            text.set_text(localized)
+
+
 def save_bilingual(fig, name):
     en = ROOT / "en" / "figures" / f"{name}.svg"
     zh = ROOT / "zh" / "figures" / f"{name}.svg"
@@ -529,6 +552,8 @@ def save_bilingual(fig, name):
     zh.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(en, format="svg", bbox_inches="tight", transparent=True)
     with matplotlib.rc_context(ZH_SVG_PARAMS):
+        _localize_figure_text(fig)
+        fig.tight_layout()
         buffer = io.StringIO()
         fig.savefig(buffer, format="svg", bbox_inches="tight", transparent=True)
     zh.write_text(_localize_svg(buffer.getvalue()), encoding="utf-8")
