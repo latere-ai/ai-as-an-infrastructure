@@ -26,6 +26,14 @@ test("zh source uses 下层约束 instead of the calqued old label", () => {
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
+      "en/index.qmd",
+      ["one capability through its lifecycle", "deployed behavior that can be measured, constrained, and operated", "why the mechanism took this shape"],
+    ],
+    [
+      "zh/index.qmd",
+      ["一项能力如何从原始算力和语料构造出发", "可度量、可约束、可运维的部署行为", "为什么长成这个样子"],
+    ],
+    [
       "en/foundations/01-scaling-laws.qmd",
       ["Kaplan-era parameter-heavy", "Chinchilla-style data allocation", "inference-aware"],
     ],
@@ -210,6 +218,14 @@ test("polished chapter openings preserve key source theses", () => {
       ["从提示工程改名为上下文工程", "更长的上下文窗口并不能单凭自身解决问题", "词元预算", "工具协议", "智能体实际能做什么"],
     ],
     [
+      "en/orchestration/index.qmd",
+      ["unit of work becomes a task", "which loop owns the next decision", "what state it can see", "what can stop it"],
+    ],
+    [
+      "zh/orchestration/index.qmd",
+      ["工作单位从 completion 变成 task", "谁拥有下一步决策", "状态存在哪里", "在哪里能被打断"],
+    ],
+    [
       "en/evaluation/01-benchmarks.qmd",
       ["published benchmark score is never a fact about a model alone", "@gls-held-out is a pipeline contract", "@gls-contamination silently inflates numbers", "harness, data contract, and uncertainty"],
     ],
@@ -290,6 +306,14 @@ test("polished chapter openings preserve key source theses", () => {
       ["欧盟的风险分级", "发布如今在法律上要求哪些文档", "版权为什么是每一份预训练语料底下尚未夯实的地基", "监管者写下的规则改写"],
     ],
     [
+      "en/safety/index.qmd",
+      ["Safety is not one layer", "what the model is doing internally", "where evidence is created", "where authority is granted"],
+    ],
+    [
+      "zh/safety/index.qmd",
+      ["安全不是放在栈顶的一层外壳", "模型内部发生了什么", "证据在哪里产生", "权限在哪里授予"],
+    ],
+    [
       "en/ecosystem/01-model-landscape.qmd",
       ["open-to-closed spectrum", "release can disclose five things", "weight license", "almost every published training practice", "open labs rather than the largest closed"],
     ],
@@ -312,6 +336,14 @@ test("polished chapter openings preserve key source theses", () => {
     [
       "zh/ecosystem/03-economics.qmd",
       ["整个技术栈说到底是一种花钱的方式", "算力在哪里购买", "训练与推理为什么是两种性质不同的成本", "什么时候该自建一个模型、什么时候该通过 API 买一个", "推理主导全生命周期账单"],
+    ],
+    [
+      "en/ecosystem/index.qmd",
+      ["who can afford", "prices feed back into design", "terms under which capability is made available"],
+    ],
+    [
+      "zh/ecosystem/index.qmd",
+      ["谁有能力做这些事", "价格怎样反过来改变设计", "能力以什么条件被交付"],
     ],
     [
       "en/inference/01-serving-problem.qmd",
@@ -527,6 +559,7 @@ test("polished chapter openings preserve key source theses", () => {
 
 test("polished chapter openings avoid reader-promise templates", () => {
   const polished = [
+    "en/index.qmd",
     "en/orientation/01-whole-stack.qmd",
     "en/orientation/02-field-map.qmd",
     "en/orientation/03-borrowed-ideas.qmd",
@@ -572,6 +605,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/ecosystem/01-model-landscape.qmd",
     "en/ecosystem/02-tooling-ecosystem.qmd",
     "en/ecosystem/03-economics.qmd",
+    "en/ecosystem/index.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -597,6 +631,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/practice/09-deployment-lifecycle.qmd",
     "en/practice/10-reliability-nondeterministic.qmd",
     "en/practice/11-production-data-engine.qmd",
+    "zh/index.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -642,6 +677,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/ecosystem/01-model-landscape.qmd",
     "zh/ecosystem/02-tooling-ecosystem.qmd",
     "zh/ecosystem/03-economics.qmd",
+    "zh/ecosystem/index.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
@@ -668,7 +704,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/practice/10-reliability-nondeterministic.qmd",
     "zh/practice/11-production-data-engine.qmd",
   ];
-  const banned = /By the end|reader can explain|reader can say|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一部分|本章来讲这个|本章把一个故事|本章要讲清/;
+  const banned = /By the end|reader can explain|reader can say|A reader should finish|The reader should|This chapter owns|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一章|读完这一部分|本章负责|本章来讲这个|本章把一个故事|本章要讲清/;
 
   for (const path of polished) {
     const text = readFileSync(join(repoRoot, path), "utf8");
