@@ -18,3 +18,12 @@ test("ch06 uses the attention-heatmap figure in both languages", () => {
   expect(en).toContain('data-viz="attention-heatmap"');
   expect(zh).toContain('data-viz="attention-heatmap"');
 });
+
+test("the heatmap figcaption uses unicode, not $..$ math (raw HTML blocks bypass KaTeX)", () => {
+  // A <figure> is a verbatim HTML block, so $QK^\\top$ / $\\sqrt{d}$ would render
+  // as literal text. Captions must use unicode (QKᵀ, √d).
+  for (const src of [en, zh]) {
+    const cap = src.match(/data-viz="attention-heatmap"[\s\S]*?<\/figcaption>/)?.[0] ?? "";
+    expect(cap).not.toMatch(/\$[^$]*\\(top|sqrt|frac|text)[^$]*\$/);
+  }
+});
