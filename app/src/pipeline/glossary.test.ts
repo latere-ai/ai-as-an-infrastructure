@@ -3,7 +3,9 @@
 // glosses with the English original; en only when an abbreviation differs.
 
 import { test, expect } from "bun:test";
-import { renderGloss, renderGlossaryPage, type GlossEntry, type GlossFirstUseMap } from "./glossary.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { loadGlossary, renderGloss, renderGlossaryPage, type GlossEntry, type GlossFirstUseMap } from "./glossary.ts";
 import { renderMarkdown } from "./markdown.ts";
 
 const moe: GlossEntry = { key: "moe", en: "mixture-of-experts", zh: "混合专家", abbr: "MoE" };
@@ -108,4 +110,19 @@ test("zh first occurrence sentence starts after full-width punctuation without w
   });
 
   expect(firstUses.get("moe")?.sentence).toBe("这里是混合专家（MoE）。");
+});
+
+test("scaling law is a defined glossary term at the book introduction points", () => {
+  const repoRoot = new URL("../../../", import.meta.url).pathname;
+  const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
+  expect(glossary.get("scaling-law")).toMatchObject({ en: "scaling law", zh: "扩展律" });
+
+  for (const rel of [
+    "en/orientation/02-field-map.qmd",
+    "zh/orientation/02-field-map.qmd",
+    "en/foundations/01-scaling-laws.qmd",
+    "zh/foundations/01-scaling-laws.qmd",
+  ]) {
+    expect(readFileSync(join(repoRoot, rel), "utf8")).toContain("@gls-scaling-law");
+  }
 });
