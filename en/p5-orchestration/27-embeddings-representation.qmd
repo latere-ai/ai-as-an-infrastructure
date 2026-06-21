@@ -1,0 +1,153 @@
+# Embeddings and Representation Learning {#sec-embeddings}
+
+The retrieval of @sec-rag-retrieval leaned on a model that maps a query and a
+chunk into one vector space, a dual-encoder, with a cross-encoder reranker and
+ColBERT's late interaction as the more expressive cousins. That chapter used
+those models. It did not say how they come to place related text near each other.
+This chapter does. By the end a reader can explain why an embedding model is
+trained against a contrastive objective rather than next-token prediction, why
+the choice of negatives is the central design variable, how one model serves many
+tasks and many vector sizes, and how the strongest 2025 embedders are
+bootstrapped from large language models.
+
+## A geometry you can compare
+
+A language model is trained to predict the next token, and nothing in that
+objective asks two texts that mean the same thing to land near each other. Its
+hidden states carry meaning, but the space is not metric: cosine distance in it
+does not track relatedness, so pooling a decoder's states gives a mediocre
+retriever. Retrieval needs the opposite of generation. It needs a space where a
+single distance, computed once and indexed, ranks a million chunks against a
+query. The embedding model exists to learn that space, and it is trained for it
+directly rather than borrowed from a generator.
+
+## The contrastive objective
+
+The principle is to pull a positive pair together and push negatives apart.
+InfoNCE, introduced for contrastive predictive coding [@oord2018cpc], scores a
+query $q$ against its positive $d^{+}$ and a set of negatives $\{d^{-}_j\}$ as a
+softmax over similarities, with a temperature $\tau$:
+
+$$
+\mathcal{L} = -\log
+\frac{\exp(\operatorname{sim}(q, d^{+})/\tau)}
+{\exp(\operatorname{sim}(q, d^{+})/\tau) + \sum_j \exp(\operatorname{sim}(q, d^{-}_j)/\tau)}
+$$
+
+The model learns by discrimination, not reconstruction: it never has to generate
+the document, only to rank the right one above the wrong ones. Sentence-BERT made
+this practical for whole sentences with a siamese dual-encoder whose outputs
+compare by cosine [@reimers2019sbert], against the alternative of a BERT
+cross-encoder that is accurate but must run on every pair and so cannot scan a
+corpus (the same bi-encoder-versus-cross-encoder split @sec-rag-retrieval draws
+at retrieval time, here decided at training time).
+
+## Negatives are the design variable
+
+The positive is given; the skill is in what you push away. Drawing negatives at
+random teaches only coarse distinctions, so two moves dominate the recipes. The
+first is in-batch negatives: Dense Passage Retrieval treats the other positives
+in a training batch as negatives for each query, so a larger batch buys more
+negatives almost for free and a bigger batch directly raises retrieval quality
+[@karpukhin2020dense]. The second is hard negatives, wrong-but-plausible passages
+that force a finer boundary, usually mined with a cheap lexical retriever.
+RocketQA sharpens both, adding cross-batch negatives and denoising the hard
+negatives, because a passage retrieved as a negative is sometimes actually
+relevant, a false negative that punishes the model for being right
+[@qu2021rocketqa].
+
+When labeled pairs are scarce, augmentation manufactures a positive. SimCSE makes
+its positive pair by encoding the same sentence twice under different dropout
+masks, an almost-free perturbation that works surprisingly well, and its
+supervised form draws positives from natural-language-inference entailment pairs
+[@gao2021simcse].
+
+Average the loss over many queries as the negatives are drawn closer to the
+query, and watch it climb.
+
+:::: {.runnable}
+```python
+import numpy as np
+rng = np.random.default_rng(0)
+d = 32
+
+def infonce(q, dpos, dnegs, tau=0.05):
+    sims = np.array([q @ dpos] + [q @ x for x in dnegs]) / tau
+    sims -= sims.max()                        # numerical stability
+    p = np.exp(sims) / np.exp(sims).sum()
+    return -np.log(p[0])                       # loss = -log P(positive)
+
+def unit(v): return v / np.linalg.norm(v)
+
+def mean_loss(hardness, n, trials=300):        # hardness 0=random, ->1 toward query
+    total = 0.0
+    for _ in range(trials):
+        q = unit(rng.normal(size=d))
+        dpos = unit(q + 0.4 * rng.normal(size=d))
+        negs = [unit(hardness * q + (1 - hardness) * rng.normal(size=d)) for _ in range(n)]
+        total += infonce(q, dpos, negs)
+    return total / trials
+
+for h in [0.0, 0.3, 0.6]:
+    print(f"negative hardness {h:.1f}: mean loss = {mean_loss(h, 16):.3f}")
+print("harder negatives (closer to the query) -> larger loss -> stronger signal")
+```
+::::
+
+## One model, many tasks and many sizes
+
+A single embedder is asked to serve search, clustering, classification, and
+deduplication at once, and two ideas stretch one model across that range. The
+first conditions the embedding on a task instruction: Instructor prepends a short
+description of the task so the same weights produce a query embedding tuned for
+retrieval or for similarity without per-task fine-tuning [@su2022instructor]. The
+second makes the vector size itself a dial. Matryoshka representation learning
+trains so that the first $m$ dimensions of the embedding are themselves a usable
+embedding, as accurate as one trained natively at $m$, at no additional training
+cost [@kusupati2022matryoshka]. You store the full vector once and truncate it
+per query, trading accuracy for index cost without retraining.
+
+## Where the training pairs come from
+
+The bottleneck is rarely the loss; it is the supply of query-document pairs. The
+weakly-supervised route mines them at scale: E5 pretrains contrastively on
+hundreds of millions of naturally occurring pairs, posts and comments, titles and
+bodies, before a small supervised fine-tune [@wang2022e5]. The route that now
+leads instead bootstraps from a generator. E5-mistral prompts a large language
+model to synthesize diverse retrieval tasks and their query-document pairs, then
+fine-tunes Mistral-7B itself into the embedder, reaching the top of the
+benchmarks with little human-labeled data [@wang2023e5mistral]. The generative
+model trains the retrieval model, a clean instance of the synthetic-data loop of
+@sec-synthetic-data. A third route distills the cross-encoder of
+@sec-rag-retrieval into a bi-encoder, transferring the accuracy of full
+query-document interaction into the cost of a single dot product.
+
+::: {.callout-important}
+## What's contested
+Whether one general embedder can dominate is unsettled. MTEB, which scores
+embedders across classification, clustering, retrieval, reranking, and semantic
+similarity, found that no single model wins every task, so a leaderboard number
+hides which task it was won on [@muennighoff2022mteb]. One camp reads this as
+temporary, a stronger LLM-bootstrapped embedder will generalize across all of
+them; the other reads it as structural, because the geometry that separates
+topics for clustering is not the geometry that ranks answers for retrieval, which
+is exactly why instruction-conditioning exists. Treat an embedding leaderboard
+score as task-shaped until tested on your own retrieval distribution.
+:::
+
+::: {.callout-tip}
+## Constraint arrow
+The vector index reaches back into how the representation is trained. The serving
+cost of retrieval scales with the embedding dimension times the corpus size
+(@sec-rag-retrieval), and that cost, paid on every query forever, is what
+justifies training for truncatability in the first place: Matryoshka exists
+because a 1024-dimensional vector over a billion chunks is expensive enough that
+being able to drop to 256 dimensions without retraining is worth designing for.
+The retrieval layer's cost dictates the shape of the vector the training run is
+asked to produce.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::
