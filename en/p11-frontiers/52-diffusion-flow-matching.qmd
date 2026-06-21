@@ -1,0 +1,153 @@
+# Diffusion and Flow Matching {#sec-diffusion}
+
+Everything in this book so far generates by predicting the next token. The
+image, audio, and video models that @sec-beyond-text gestures at mostly do not:
+they start from pure noise and remove it. This chapter teaches that family,
+diffusion and its flow-matching generalization, because it is the generative
+principle behind almost all non-text media and is now reaching back into text. By
+the end a reader can explain why generation-by-denoising sidesteps the
+left-to-right constraint of autoregression, how a fixed noising process defines a
+learned reverse one, why training reduces to predicting noise, what made latent
+diffusion affordable, how flow matching reframed the whole thing as learning a
+velocity field, and why the frontier is collapsing a thousand sampling steps
+toward one.
+
+## Why not autoregression
+
+Autoregressive generation is sequential by construction: one token after another,
+left to right, a serial chain whose length is the output. For text that ordering
+is natural. For an image it is not: pixels have no canonical order, and forcing
+one wastes the structure. Diffusion takes a different route. Corrupt data into
+noise by a fixed, known process, then learn to reverse it, denoising the whole
+signal in parallel at each step. There is no left-to-right, the output size is
+fixed up front, and the model can attend to the entire partially-denoised signal
+at once.
+
+## The forward and reverse processes
+
+The forward process gradually adds Gaussian noise to a datum over $T$ steps until
+little but noise remains, a fixed Markov chain with no parameters. Generation
+runs it backwards, learning to undo one noising step at a time. The surprise of
+Denoising Diffusion Probabilistic Models is that this reverse process has a
+simple trainable form: the network is trained to predict the noise
+$\boldsymbol{\epsilon}$ that was added to a sample at a randomly chosen step
+[@ho2020ddpm], an ordinary regression,
+
+$$
+\mathcal{L}_{\text{simple}} = \mathbb{E}_{\,t,\,\mathbf{x}_0,\,\boldsymbol{\epsilon}}
+\left\lVert \boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta\!\left(
+\sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1-\bar{\alpha}_t}\,\boldsymbol{\epsilon},\; t
+\right) \right\rVert^2,
+$$
+
+where $\bar{\alpha}_t$ is the surviving signal fraction at step $t$. Sampling
+starts from pure noise and applies the learned denoiser step by step. The toy
+below makes the loop concrete: for one-dimensional Gaussian data the optimal
+noise-predictor is analytic, so we can sample from noise and watch the
+distribution come back.
+
+:::: {.runnable}
+```python
+import numpy as np
+rng = np.random.default_rng(0)
+
+mu, v0 = 3.0, 1.0                          # data ~ N(mu, v0)
+T = 1000
+beta = np.linspace(1e-4, 0.02, T)         # noise schedule
+alpha = 1 - beta
+abar = np.cumprod(alpha)                   # surviving signal fraction
+
+def eps_star(x, t):                        # optimal epsilon-prediction (analytic)
+    var = abar[t] * v0 + (1 - abar[t])
+    return np.sqrt(1 - abar[t]) * (x - np.sqrt(abar[t]) * mu) / var
+
+x = rng.normal(size=5000)                  # start from pure noise
+for t in range(T - 1, -1, -1):
+    mean = (x - beta[t] / np.sqrt(1 - abar[t]) * eps_star(x, t)) / np.sqrt(alpha[t])
+    x = mean + (np.sqrt(beta[t]) * rng.normal(size=x.shape) if t > 0 else 0.0)
+
+print(f"data N(mu={mu}, var={v0});  samples: mean={x.mean():.2f}, var={x.var():.2f}")
+```
+::::
+
+## One framework: scores and SDEs
+
+A second lineage arrived at the same place from a different direction. Score-based
+models learn the score, the gradient of the log-density, at many noise levels and
+sample by Langevin dynamics [@song2019ncsn]. Song et al. then showed the two are
+one thing: the forward process is a stochastic differential equation that carries
+data to noise, generation is the reverse-time SDE, and both DDPM and
+score-matching are discretizations of it [@song2020sde]. The same work derives an
+equivalent deterministic probability-flow ODE with the same marginals, and that
+ODE is the bridge to fast samplers and to flow matching below.
+
+## Making it cheap and steerable
+
+Three moves turned a slow research method into a deployed one. Fewer steps came
+first: DDIM is a non-Markovian sampler that reaches comparable quality 10 to 50
+times faster, and is deterministic when its noise term is set to zero
+[@song2020ddim]. Affordability came from latent diffusion, which runs the whole
+process in the latent space of a pretrained autoencoder rather than on pixels,
+cutting compute by a large factor, and injects text or layout through
+cross-attention, the recipe behind Stable Diffusion [@rombach2022ldm]. Control
+came from classifier-free guidance: train one model jointly with and without the
+conditioning signal by dropping it part of the time, then at sampling extrapolate
+between the conditional and unconditional predictions by a guidance weight,
+trading diversity for fidelity with no separate classifier [@ho2022cfg]. The
+backbone then caught up with the rest of the book: DiT replaces the U-Net with a
+transformer over latent patches and finds that sample quality falls as compute
+rises, putting diffusion on the same scaling curve as everything else
+[@peebles2022dit].
+
+## Flow matching: learn a velocity, not a denoiser
+
+Flow matching reframes the problem. Instead of a denoiser, learn a vector field
+that transports noise to data along a fixed conditional probability path, trained
+simulation-free by regressing onto that field, with the diffusion paths falling
+out as one special case and straight optimal-transport paths as a more efficient
+other [@lipman2022fm]. Rectified flow pushes the idea to its useful extreme:
+learn straight-line transport between noise and data, which lets an Euler sampler
+take very few steps, even one, and a recursive "rectification" keeps straightening
+the trajectories [@liu2022rectified]. Consistency models collapse the path
+entirely, training a network that maps any point on the probability-flow ODE
+trajectory directly to its origin, so one forward pass generates a sample, either
+distilled from a diffusion teacher or trained standalone [@song2023consistency].
+The arc across this section is a single quantity coming down: the number of
+sequential network evaluations a sample costs.
+
+## The loop back to language
+
+Diffusion is now returning to text. LLaDA trains a language model from scratch
+with a masked-denoising diffusion objective, predicting masked tokens by a
+reverse process rather than left to right, and reports it competitive with an
+autoregressive LLaMA3-8B at in-context learning [@nie2025llada]. The appeal is
+parallel, bidirectional decoding and an escape from strict left-to-right order;
+the open question is whether the approach scales to the frontier.
+
+::: {.callout-important}
+## What's contested
+Whether non-autoregressive diffusion language models can match autoregressive
+LLMs at scale is unsettled. LLaDA shows competitiveness at 8B, but against the
+authors' own controlled baselines rather than external frontier models, and the
+strongest "surpasses" result is narrow, a reversal task GPT-4o handles poorly
+[@nie2025llada]. The case for diffusion text rests on parallel decoding and
+bidirectional context; the case against is that autoregression still owns every
+frontier model and has the more mature scaling and serving story. Treat
+diffusion for language as promising and unproven above small scale.
+:::
+
+::: {.callout-tip}
+## Constraint arrow
+The sampler's step count is a serving-cost lever that reaches back into the
+training objective. A thousand-step DDPM is too slow to serve at scale, so the
+field trains specifically for few-step sampling, rectified flow's straight paths
+and consistency distillation, rather than treating sampling as an afterthought.
+The inference budget per image, paid on every generation, dictates which
+generative objective is worth training, the same constraint @sec-scaling-laws
+draws for tokens, here drawn for denoising steps.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::
