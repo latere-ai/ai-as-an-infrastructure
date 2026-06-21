@@ -18,3 +18,9 @@ test("the document viewport is locked so the app shell cannot scroll", () => {
 test("<main> contains its overscroll so it does not chain to the document", () => {
   expect(reader).toMatch(/overscrollBehavior:\s*"contain"/);
 });
+
+test("the mermaid tooltip is pinned out of flow so it adds no scrollable height", () => {
+  // mermaid.run() appends a <div.mermaidTooltip> to <body>, positioned absolute
+  // inline at the bottom; without this it adds a few px of document overflow.
+  expect(css).toMatch(/\.mermaidTooltip\s*\{[^}]*position:\s*fixed\s*!important/);
+});
