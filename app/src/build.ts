@@ -87,7 +87,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
 
 // Root artifacts (served from _book root): favicon, robots, hreflang sitemap.
 const BASE = "https://aaai.latere.ai";
-cpSync(join(repoRoot, "app", "assets", "favicon.svg"), join(outRoot, "favicon.svg"));
+cpSync(join(repoRoot, "app", "static", "favicon.svg"), join(outRoot, "favicon.svg"));
 writeFileSync(join(outRoot, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${BASE}/sitemap.xml\n`);
 
 const allPaths = [...new Set([...pathsByLang.en, ...pathsByLang.zh])].sort();
