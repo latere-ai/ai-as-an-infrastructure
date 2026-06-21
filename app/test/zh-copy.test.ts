@@ -137,6 +137,22 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/inference/06-serving-multimodal.qmd",
       ["视觉编码器决定视觉 token 数", "分辨率设置就是服务成本决策", "编码器放在哪里也是服务决策", "图像前缀缓存"],
     ],
+    [
+      "en/infrastructure/01-accelerators-networking.qmd",
+      ["bandwidth hierarchy", "tensor-parallel group almost never spills past the NVLink boundary", "model FLOPs utilization"],
+    ],
+    [
+      "zh/infrastructure/01-accelerators-networking.qmd",
+      ["带宽层级", "张量并行组几乎不越过 NVLink 边界", "模型 FLOPs 利用率"],
+    ],
+    [
+      "en/infrastructure/02-orchestration-data-infra.qmd",
+      ["checkpointing, the data plane, and observability", "how often to save", "how data order", "survives a restart"],
+    ],
+    [
+      "zh/infrastructure/02-orchestration-data-infra.qmd",
+      ["检查点、数据层与可观测性", "多久保存一次", "数据顺序如何跨过重启"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -169,6 +185,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/inference/04-quantization-kernels.qmd",
     "en/inference/05-structured-long-context.qmd",
     "en/inference/06-serving-multimodal.qmd",
+    "en/infrastructure/01-accelerators-networking.qmd",
+    "en/infrastructure/02-orchestration-data-infra.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -189,6 +207,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/inference/04-quantization-kernels.qmd",
     "zh/inference/05-structured-long-context.qmd",
     "zh/inference/06-serving-multimodal.qmd",
+    "zh/infrastructure/01-accelerators-networking.qmd",
+    "zh/infrastructure/02-orchestration-data-infra.qmd",
   ];
   const banned = /By the end|This chapter tells one story|读者读完本章|本章把一个故事/;
 
