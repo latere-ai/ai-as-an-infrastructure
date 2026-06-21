@@ -38,11 +38,22 @@ placements fall out of them.
 | 2 | **Attention-heatmap** (matrix + click-row bars) | ch06 attention (the canonical one), LoRA low-rank, attention-sink, judge κ confusion-matrix (~4) | medium |
 | 3 | **2D mechanism canvas** (nodes/grid/vectors animating) | MoE routing, PagedAttention allocator, superposition geometry, InfoNCE field, outlier-quant grid, task arithmetic, MinHash buckets, tree-of-thoughts, bandwidth tiers, blast radius (~10) | medium each |
 | 4 | **Cost-calculator** (two crossing cost lines + sliders) | build-vs-buy, long-context-vs-retrieval, fine-tune break-even, serverless-vs-reserved (~4, same component relabeled) | medium once, then trivial |
-| 5 | **Comparison-explorer** (filter/sort table) | agent frameworks, model landscape, tooling tables (~3) | medium once |
+| 5 | **Comparison-explorer** (filter/sort table) | agent frameworks (ch41). ch35/ch36 dropped: neither has a sortable table in the source (ch35 is a 5×5 disclosure matrix, ch36 is prose around four primitives); a filter table there would mean inventing content | medium once |
 | + | **`curve` extensions** (2-knob, `p^n`, logistic-sequence) | ~9 near-free curve placements | low |
 
 Recommended sequence: **Stepper → Attention-heatmap → Cost-calculator → 2D-canvas
 → Comparison-explorer**, authoring the cheap `curve` reuses opportunistically.
+
+## Status (all five primitives + the curve extensions are built and shipped)
+
+Every reusable primitive in the table above now exists in `viz-runtime.html` and is
+live: `stepper`, `attention-heatmap`, `cost-crossover`, the 2D-canvas family
+(`superposition`, `paged-attention`, `moe-routing`, `tree-of-thoughts`,
+`infonce-field`), `comparison-explorer`, plus the `curve` extensions (`pow-base`,
+`u-shape`, `elo`, `p^n`, logistic-sequence). The Tier-1 signature spots and the
+2D-canvas marquee set are authored in both languages. What remains is the long tail
+of lower-value placements below (extra steppers and `curve` reuses), to be picked up
+opportunistically rather than as a committed batch.
 
 ---
 
