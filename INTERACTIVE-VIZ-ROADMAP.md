@@ -44,16 +44,30 @@ placements fall out of them.
 Recommended sequence: **Stepper → Attention-heatmap → Cost-calculator → 2D-canvas
 → Comparison-explorer**, authoring the cheap `curve` reuses opportunistically.
 
-## Status (all five primitives + the curve extensions are built and shipped)
+## Status (26 components live; all Tier-1, every named item, most of the catalog done)
 
-Every reusable primitive in the table above now exists in `viz-runtime.html` and is
-live: `stepper`, `attention-heatmap`, `cost-crossover`, the 2D-canvas family
-(`superposition`, `paged-attention`, `moe-routing`, `tree-of-thoughts`,
-`infonce-field`), `comparison-explorer`, plus the `curve` extensions (`pow-base`,
-`u-shape`, `elo`, `p^n`, logistic-sequence). The Tier-1 signature spots and the
-2D-canvas marquee set are authored in both languages. What remains is the long tail
-of lower-value placements below (extra steppers and `curve` reuses), to be picked up
-opportunistically rather than as a committed batch.
+`viz-runtime.html` now registers **26 distinct interactive components**, all authored in
+both languages and live on `aaai.latere.ai`:
+
+- Primitives: `curve` (10 families incl. `u-shape`, `pow-base`, `elo`, `power-grow`),
+  `stepper`, `attention-heatmap`, `cost-crossover`, `comparison-explorer`, `embeddings-3d`,
+  `softmax-temperature`, `kv-cache`.
+- 2D-canvas: `superposition`, `paged-attention`, `moe-routing`, `tree-of-thoughts`,
+  `infonce-field`, `nested-loops`, `bandwidth-tiers`, `judge-kappa`, `outlier-quant`,
+  `minhash-buckets`, `blast-radius`, `lora-lowrank`, `task-arithmetic`, `grpo-advantage`,
+  `ssm-vs-attention`, `rl-timeline`, `rrf-fusion`, `pipeline-bubble`, `float-bits`.
+- DOM: `decision-tree`, `float-bits`.
+
+All 10 Tier-1 signature spots, all 6 process steppers (BPE, spec-decode, R1, ReAct,
+control-protocol, privacy, DPO-derivation, RLHF-loop, prefill/decode, swiss-cheese,
+GRPO), and the bulk of the full catalog are done.
+
+**Genuinely remaining (low-value or double-covered; the chapter already carries a
+related interactive):** swap-the-judge (ch12), spec-decode-payoff curve (ch18),
+continuous-batching stepper (ch17, has paged-attention), RAG-interaction explorer
+(ch25, has rrf-fusion), SAE dictionary (ch32, has superposition), time-to-power (ch47),
+cross-datacenter latency (ch48). Pick up opportunistically. `verbosity-bias` (ch28) is
+deliberately skipped: a static figure already covers it.
 
 ---
 
