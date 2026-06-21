@@ -12,7 +12,7 @@ type Strings = {
   palette: string; ink: string; clay: string; rose: string; theme: string; light: string; dark: string;
   body: string; sans: string; kai: string; size: string; layout: string;
   codex: string; manuscript: string; atlas: string; prev: string; next: string; lang: string; resize: string; download: string;
-  author: string; updated: string; readtimeLabel: string;
+  author: string; updated: string; readtimeLabel: string; noResults: string;
 };
 
 const STRINGS: Record<Lang, Strings> = {
@@ -21,14 +21,14 @@ const STRINGS: Record<Lang, Strings> = {
     palette: "配色", ink: "墨纸", clay: "靛蓝", rose: "玫瑰", theme: "主题", light: "浅色", dark: "深色",
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
     codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", lang: "EN", resize: "拖动调整宽度", download: "下载",
-    author: "作者", updated: "更新于", readtimeLabel: "阅读时长",
+    author: "作者", updated: "更新于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
   },
   en: {
     sidebar: "Sidebar", onThisPage: "On this page", settings: "Reading settings", search: "Search chapters…",
     palette: "Palette", ink: "Ink", clay: "Azure", rose: "Rose", theme: "Theme", light: "Light", dark: "Dark",
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
     codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", lang: "中", resize: "Drag to resize", download: "Download",
-    author: "Author", updated: "Updated", readtimeLabel: "Reading time",
+    author: "Author", updated: "Updated", readtimeLabel: "Reading time", noResults: "No matching results",
   },
 } as const;
 
@@ -72,7 +72,22 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const [activeId, setActiveId] = useState<string>(chapter.headings[0]?.id ?? "");
   const [mobile, setMobile] = useState(false);
   const [drawer, setDrawer] = useState(false);
+  const [tocDrawer, setTocDrawer] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
+
+  // Spotlight search: Cmd/Ctrl+K opens it from anywhere (preventDefault so the
+  // browser does not steal the chord for its address bar / search shortcut).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setSearchOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // hydrate persisted settings + viewport class on the client
   useEffect(() => {
@@ -244,8 +259,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
         alignItems: "center", gap: 12, padding: "0 14px", borderBottom: "1px solid var(--border)",
         background: "var(--bg-surface)",
       }}>
-        <button onClick={() => (mobile ? setDrawer((d) => !d) : set({ navCollapsed: !s.navCollapsed }))}
-          title={t.sidebar} aria-label={t.sidebar} style={iconBtn(!s.navCollapsed)}>
+        <button onClick={() => (mobile ? (setTocDrawer(false), setDrawer((d) => !d)) : set({ navCollapsed: !s.navCollapsed }))}
+          title={t.sidebar} aria-label={t.sidebar} style={iconBtn(mobile ? drawer : !s.navCollapsed)}>
           <Icon d={<><rect x="2" y="3" width="12" height="10" rx="1.5" /><line x1="6.5" y1="3" x2="6.5" y2="13" /></>} />
         </button>
 
@@ -270,8 +285,9 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
         <div style={{ flex: 1 }} />
 
-        {!mobile && (
-          <button onClick={() => set({ tocCollapsed: !s.tocCollapsed })} title={t.onThisPage} aria-label={t.onThisPage} style={iconBtn(!s.tocCollapsed)}>
+        {(!mobile || chapter.headings.length > 0) && (
+          <button onClick={() => (mobile ? (setDrawer(false), setTocDrawer((d) => !d)) : set({ tocCollapsed: !s.tocCollapsed }))}
+            title={t.onThisPage} aria-label={t.onThisPage} style={iconBtn(mobile ? tocDrawer : !s.tocCollapsed)}>
             <Icon d={<><rect x="2" y="3" width="12" height="10" rx="1.5" /><line x1="9.5" y1="3" x2="9.5" y2="13" /></>} />
           </button>
         )}
@@ -297,7 +313,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
       {/* ===== BODY (only this row scrolls; header stays put) ===== */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}>
-        {showSidebar && <SidebarTree t={t} chapter={chapter} width={s.navW} />}
+        {showSidebar && <SidebarTree t={t} chapter={chapter} width={s.navW} onOpenSearch={() => setSearchOpen(true)} />}
         {showSidebar && (
           <div onPointerDown={(e) => startDrag("nav", e)} title={t.resize} className="rdr-resize"
             style={{ flex: "none", width: 7, marginLeft: -1, cursor: "col-resize", zIndex: 6 }} />
@@ -326,10 +342,33 @@ export default function Reader({ chapter, initial }: ReaderProps) {
         <>
           <div onClick={() => setDrawer(false)} style={{ position: "fixed", inset: "54px 0 0", background: "rgba(0,0,0,.42)", zIndex: 60 }} />
           <div style={{ position: "fixed", top: 54, bottom: 0, left: 0, width: 300, maxWidth: "84vw", zIndex: 61, background: "var(--bg-surface)", boxShadow: "var(--shadow-lg)", overflowY: "auto" }}>
-            <SidebarTree t={t} chapter={chapter} embedded onNavigate={() => setDrawer(false)} />
+            <SidebarTree t={t} chapter={chapter} embedded onNavigate={() => setDrawer(false)}
+              onOpenSearch={() => { setDrawer(false); setSearchOpen(true); }} />
           </div>
         </>
       )}
+
+      {/* mobile "on this page" drawer */}
+      {mobile && tocDrawer && (
+        <>
+          <div onClick={() => setTocDrawer(false)} style={{ position: "fixed", inset: "54px 0 0", background: "rgba(0,0,0,.42)", zIndex: 60 }} />
+          <div style={{ position: "fixed", top: 54, bottom: 0, right: 0, width: 300, maxWidth: "84vw", zIndex: 61, background: "var(--bg-surface)", boxShadow: "var(--shadow-lg)", overflowY: "auto", padding: "16px 18px 24px" }}>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--fg-3)", marginBottom: 12 }}>{t.onThisPage}</div>
+            <nav style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              {chapter.headings.map((h) => (
+                <a key={h.id} href={`#${h.id}`} onClick={() => setTocDrawer(false)} style={{
+                  display: "block", padding: "7px 0 7px 12px", textDecoration: "none",
+                  borderLeft: `2px solid ${activeId === h.id ? "var(--accent)" : "transparent"}`,
+                  marginLeft: h.level === 3 ? 12 : 0,
+                  fontSize: 13.5, lineHeight: 1.4, color: activeId === h.id ? "var(--accent)" : "var(--fg-2)", fontWeight: activeId === h.id ? 600 : 400,
+                }}>{h.text}</a>
+              ))}
+            </nav>
+          </div>
+        </>
+      )}
+
+      {searchOpen && <SearchModal t={t} prefix={chapter.prefix} onClose={() => setSearchOpen(false)} />}
     </div>
   );
 }
@@ -380,13 +419,43 @@ function snippet(text: string, query: string): { pre: string; hit: string; post:
   };
 }
 
-function SearchBox({ t, prefix }: { t: Strings; prefix: string }) {
+// The sticky search trigger that lives at the top of the sidebar. It looks like
+// an input but only opens the spotlight modal (so the real search field has one
+// home, reachable from the sidebar, the mobile drawer, and Cmd/Ctrl+K).
+function SearchTrigger({ t, onOpen }: { t: Strings; onOpen: () => void }) {
+  return (
+    <div style={{ flex: "none", padding: "0 16px 14px" }}>
+      <button onClick={onOpen} aria-label={t.search} style={{
+        width: "100%", height: 36, padding: "0 10px 0 12px", display: "flex", alignItems: "center", gap: 8,
+        border: "1px solid var(--border-strong)", background: "var(--bg)", borderRadius: "var(--radius-md)",
+        color: "var(--fg-3)", cursor: "pointer", fontFamily: "var(--font-ui)", fontSize: 13, textAlign: "left",
+      }}>
+        <Icon d={<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" strokeLinecap="round" /></>} size={14} />
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.search}</span>
+        <kbd style={{
+          flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, letterSpacing: ".02em",
+          color: "var(--fg-3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "1px 5px",
+        }}>⌘K</kbd>
+      </button>
+    </div>
+  );
+}
+
+// Spotlight-style search overlay: a centred command palette with live results,
+// keyboard navigation (↑/↓ to move, Enter to open, Esc to close).
+function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClose: () => void }) {
   const [q, setQ] = useState("");
   const [docs, setDocs] = useState<SearchDoc[] | null>(null);
-  const load = () => {
-    if (docs) return;
+  const [sel, setSel] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // Load the index once on open, and focus the field.
+  useEffect(() => {
     fetch(`${prefix}search.json`).then((r) => r.json()).then((d: SearchDoc[]) => setDocs(d)).catch(() => setDocs([]));
-  };
+    inputRef.current?.focus();
+  }, [prefix]);
+
   const results = useMemo(() => {
     const query = q.trim().toLowerCase();
     if (!query || !docs) return [];
@@ -408,59 +477,109 @@ function SearchBox({ t, prefix }: { t: Strings; prefix: string }) {
       if (n >= 2) continue;
       perChapter[r.d.href] = n + 1;
       out.push(r);
-      if (out.length >= 8) break;
+      if (out.length >= 12) break;
     }
     return out.map(({ d }) => ({ d, snip: snippet(d.text, query) }));
   }, [q, docs]);
+
+  // Keep the selection in range as results change, and scrolled into view.
+  useEffect(() => { setSel(0); }, [q]);
+  useEffect(() => {
+    const node = listRef.current?.children[sel] as HTMLElement | undefined;
+    node?.scrollIntoView({ block: "nearest" });
+  }, [sel]);
 
   const hrefFor = (d: SearchDoc) => {
     const base = d.href === "index" ? (prefix || "./") : `${prefix}${d.href}`;
     return d.anchor ? `${base}#${d.anchor}` : base;
   };
 
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") { e.preventDefault(); onClose(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setSel((i) => Math.min(results.length - 1, i + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setSel((i) => Math.max(0, i - 1)); }
+    else if (e.key === "Enter") {
+      const r = results[sel];
+      if (r) { e.preventDefault(); location.href = hrefFor(r.d); }
+    }
+  };
+
   return (
-    <div style={{ padding: "0 16px 14px", position: "relative" }}>
-      <input value={q} onFocus={load} onChange={(e) => setQ(e.target.value)} placeholder={t.search} style={{
-        width: "100%", height: 36, padding: "0 12px", border: "1px solid var(--border-strong)", background: "var(--bg)",
-        borderRadius: "var(--radius-md)", color: "var(--fg-1)", fontFamily: "var(--font-ui)", fontSize: 13, outline: "none",
-      }} />
-      {results.length > 0 && (
-        <div style={{ position: "absolute", left: 16, right: 16, top: 40, zIndex: 20, background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)", overflow: "hidden", maxHeight: "60vh", overflowY: "auto" }}>
-          {results.map(({ d, snip }, i) => (
-            <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} style={{ display: "block", padding: "9px 12px", textDecoration: "none", borderBottom: "1px solid var(--border)", color: "var(--fg-1)" }}>
-              <div style={{ fontSize: 13, fontWeight: 500 }}>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>
-                {d.title}
-                {d.heading && <span style={{ color: "var(--fg-3)", fontWeight: 400 }}> › {d.heading}</span>}
-              </div>
-              {snip.hit && (
-                <div style={{ fontSize: 12, color: "var(--fg-2)", marginTop: 3, lineHeight: 1.45 }}>
-                  {snip.pre}
-                  <mark style={{ background: "var(--accent-soft, rgba(120,160,255,0.28))", color: "inherit", padding: "0 1px", borderRadius: 2 }}>{snip.hit}</mark>
-                  {snip.post}
-                </div>
-              )}
-            </a>
-          ))}
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 80, display: "flex", justifyContent: "center", alignItems: "flex-start",
+      padding: "12vh 16px 16px", background: "rgba(0,0,0,.42)", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)",
+    }}>
+      <div onClick={(e) => e.stopPropagation()} onKeyDown={onKey} className="rd-rev" role="dialog" aria-modal="true" aria-label={t.search} style={{
+        width: "100%", maxWidth: 600, maxHeight: "76vh", display: "flex", flexDirection: "column", overflow: "hidden",
+        background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-xl)", boxShadow: "var(--shadow-lg)",
+      }}>
+        <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--border)" }}>
+          <span style={{ flex: "none", color: "var(--fg-3)" }}>
+            <Icon d={<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" strokeLinecap="round" /></>} size={17} />
+          </span>
+          <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t.search} style={{
+            flex: 1, height: 52, border: "none", background: "transparent", color: "var(--fg-1)",
+            fontFamily: "var(--font-ui)", fontSize: 16, outline: "none",
+          }} />
+          <kbd style={{
+            flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, color: "var(--fg-3)",
+            border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "2px 6px",
+          }}>ESC</kbd>
         </div>
-      )}
+        {results.length > 0 && (
+          <div ref={listRef} style={{ overflowY: "auto", padding: 6 }}>
+            {results.map(({ d, snip }, i) => (
+              <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} style={{
+                display: "block", padding: "9px 12px", textDecoration: "none", borderRadius: "var(--radius-md)",
+                color: "var(--fg-1)", background: i === sel ? "var(--accent-subtle)" : "transparent",
+              }}>
+                <div style={{ fontSize: 13.5, fontWeight: 500 }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>
+                  {d.title}
+                  {d.heading && <span style={{ color: "var(--fg-3)", fontWeight: 400 }}> › {d.heading}</span>}
+                </div>
+                {snip.hit && (
+                  <div style={{ fontSize: 12, color: "var(--fg-2)", marginTop: 3, lineHeight: 1.45 }}>
+                    {snip.pre}
+                    <mark style={{ background: "var(--accent-glow)", color: "inherit", padding: "0 1px", borderRadius: 2 }}>{snip.hit}</mark>
+                    {snip.post}
+                  </div>
+                )}
+              </a>
+            ))}
+          </div>
+        )}
+        {q.trim() && results.length === 0 && docs && (
+          <div style={{ padding: "22px 16px", color: "var(--fg-3)", fontSize: 13 }}>{t.noResults}</div>
+        )}
+      </div>
     </div>
   );
 }
 
-function SidebarTree({ t, chapter, embedded, onNavigate, width = 264 }: { t: Strings; chapter: ChapterData; embedded?: boolean; onNavigate?: () => void; width?: number }) {
+function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 264 }: { t: Strings; chapter: ChapterData; embedded?: boolean; onNavigate?: () => void; onOpenSearch: () => void; width?: number }) {
   // Parts collapse; the part holding the active chapter starts open.
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const isOpen = (part: { id: string; chapters: { active?: boolean }[] }) =>
     closed[part.id] === undefined ? true : !closed[part.id];
+  // On load, scroll the nav so the part holding the active chapter sits at the
+  // top of the list. Setting scrollTop past the max clamps to the bottom, so a
+  // part near the end lands as far up as it can: visible either way.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const activeRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sc = scrollRef.current, el = activeRef.current;
+    if (sc && el) sc.scrollTop = el.offsetTop;
+  }, []);
   return (
-    <aside style={{ flex: "none", width: embedded ? "100%" : width, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: "var(--bg-surface)", overflowY: "auto", padding: "18px 0 60px", alignSelf: "stretch" }}>
-      <SearchBox t={t} prefix={chapter.prefix} />
-      <nav>
+    <aside style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: "var(--bg-surface)", display: "flex", flexDirection: "column", paddingTop: 18, alignSelf: "stretch", minHeight: 0 }}>
+      <SearchTrigger t={t} onOpen={onOpenSearch} />
+      <nav ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", paddingBottom: 60 }}>
         {chapter.toc.map((part) => {
+          const active = part.chapters.some((ch) => ch.active);
           if (part.single) {
             return (
-              <div key={part.id} style={{ marginBottom: 2 }}>
+              <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
                 {part.chapters.map((ch) => (
                   <a key={ch.href} href={ch.href} onClick={onNavigate} style={{ display: "block", padding: "7px 18px", fontSize: 13.5, fontWeight: 500, color: ch.active ? "var(--accent)" : "var(--fg-2)", textDecoration: "none", borderLeft: `2px solid ${ch.active ? "var(--accent)" : "transparent"}` }}>{ch.label}</a>
                 ))}
@@ -469,7 +588,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, width = 264 }: { t: Str
           }
           const open = isOpen(part);
           return (
-            <div key={part.id} style={{ marginBottom: 2 }}>
+            <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
               <button onClick={() => setClosed((c) => ({ ...c, [part.id]: open }))} style={{
                 width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
                 padding: "9px 16px 6px", background: "none", border: "none", cursor: "pointer", textAlign: "left",
