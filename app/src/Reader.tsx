@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterData, Lang, Layout, Palette, ReaderSettings } from "./types.ts";
 import { DEFAULT_SETTINGS } from "./types.ts";
+import { runSearch, type SearchDoc } from "./search-match.ts";
 
 type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
@@ -402,23 +403,6 @@ function ChapterOpener({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   );
 }
 
-interface SearchDoc { href: string; anchor: string; num: string; title: string; heading: string; text: string }
-
-// A snippet of body text centred on the first query hit, split so the match can
-// be wrapped in <mark> as a React node (the body contains literal <, >, & from
-// code/math, so string-injecting HTML is unsafe).
-function snippet(text: string, query: string): { pre: string; hit: string; post: string } {
-  const idx = text.toLowerCase().indexOf(query);
-  if (idx < 0) return { pre: text.slice(0, 140), hit: "", post: "" };
-  const start = Math.max(0, idx - 48);
-  const end = Math.min(text.length, idx + query.length + 96);
-  return {
-    pre: (start > 0 ? "… " : "") + text.slice(start, idx),
-    hit: text.slice(idx, idx + query.length),
-    post: text.slice(idx + query.length, end) + (end < text.length ? " …" : ""),
-  };
-}
-
 // The sticky search trigger that lives at the top of the sidebar. It looks like
 // an input but only opens the spotlight modal (so the real search field has one
 // home, reachable from the sidebar, the mobile drawer, and Cmd/Ctrl+K).
@@ -456,31 +440,7 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
     inputRef.current?.focus();
   }, [prefix]);
 
-  const results = useMemo(() => {
-    const query = q.trim().toLowerCase();
-    if (!query || !docs) return [];
-    const scored = [];
-    for (const d of docs) {
-      const inTitle = d.title.toLowerCase().includes(query);
-      const inHeading = d.heading.toLowerCase().includes(query);
-      const inText = d.text.toLowerCase().includes(query);
-      if (!inTitle && !inHeading && !inText) continue;
-      const score = (inTitle ? 4 : 0) + (inHeading ? 2 : 0) + (inText ? 1 : 0);
-      scored.push({ d, score });
-    }
-    scored.sort((a, b) => b.score - a.score);
-    // Cap sections per chapter so one long chapter cannot fill the whole list.
-    const perChapter: Record<string, number> = {};
-    const out: typeof scored = [];
-    for (const r of scored) {
-      const n = perChapter[r.d.href] ?? 0;
-      if (n >= 2) continue;
-      perChapter[r.d.href] = n + 1;
-      out.push(r);
-      if (out.length >= 12) break;
-    }
-    return out.map(({ d }) => ({ d, snip: snippet(d.text, query) }));
-  }, [q, docs]);
+  const results = useMemo(() => (docs ? runSearch(docs, q) : []), [q, docs]);
 
   // Keep the selection in range as results change, and scrolled into view.
   useEffect(() => { setSel(0); }, [q]);
@@ -500,7 +460,7 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
     else if (e.key === "ArrowUp") { e.preventDefault(); setSel((i) => Math.max(0, i - 1)); }
     else if (e.key === "Enter") {
       const r = results[sel];
-      if (r) { e.preventDefault(); location.href = hrefFor(r.d); }
+      if (r) { e.preventDefault(); location.href = hrefFor(r.doc); }
     }
   };
 
@@ -528,7 +488,7 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
         </div>
         {results.length > 0 && (
           <div ref={listRef} style={{ overflowY: "auto", padding: 6 }}>
-            {results.map(({ d, snip }, i) => (
+            {results.map(({ doc: d, snip }, i) => (
               <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} style={{
                 display: "block", padding: "9px 12px", textDecoration: "none", borderRadius: "var(--radius-md)",
                 color: "var(--fg-1)", background: i === sel ? "var(--accent-subtle)" : "transparent",
