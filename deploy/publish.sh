@@ -15,6 +15,8 @@ BASE_URL="${BASE_URL:-https://aaai.latere.ai}"
 PUBLISH_TIMEOUT="${PUBLISH_TIMEOUT:-1200}"
 PUBLISH_POLL_INTERVAL="${PUBLISH_POLL_INTERVAL:-10}"
 ROLLOUT_TIMEOUT="${ROLLOUT_TIMEOUT:-180s}"
+SMOKE_ATTEMPTS="${SMOKE_ATTEMPTS:-6}"
+SMOKE_INTERVAL="${SMOKE_INTERVAL:-5}"
 
 log() {
   printf '%s\n' "$*"
@@ -119,6 +121,20 @@ validate_image() {
   die "could not inspect $image; check GHCR auth and local docker/podman availability"
 }
 
+run_smoke() {
+  attempt=1
+  while [ "$attempt" -le "$SMOKE_ATTEMPTS" ]; do
+    log "Running smoke test against $BASE_URL (attempt $attempt/$SMOKE_ATTEMPTS)"
+    if sh deploy/smoke.sh "$BASE_URL"; then
+      return 0
+    fi
+
+    [ "$attempt" -lt "$SMOKE_ATTEMPTS" ] || die "smoke test failed after $SMOKE_ATTEMPTS attempts"
+    attempt=$((attempt + 1))
+    sleep "$SMOKE_INTERVAL"
+  done
+}
+
 wait_for_workflow render
 wait_for_workflow docker
 
@@ -136,7 +152,6 @@ log "Restarting deployment/$DEPLOYMENT so Kubernetes pulls $main_image"
 kubectl -n "$NAMESPACE" rollout restart "deployment/$DEPLOYMENT"
 kubectl -n "$NAMESPACE" rollout status "deployment/$DEPLOYMENT" --timeout="$ROLLOUT_TIMEOUT"
 
-log "Running smoke test against $BASE_URL"
-sh deploy/smoke.sh "$BASE_URL"
+run_smoke
 
 log "Published $short_sha to $BASE_URL"
