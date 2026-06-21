@@ -112,17 +112,82 @@ test("zh first occurrence sentence starts after full-width punctuation without w
   expect(firstUses.get("moe")?.sentence).toBe("这里是混合专家（MoE）。");
 });
 
-test("scaling law is a defined glossary term at the book introduction points", () => {
+const both = (en: string, zh: string) => [en, zh];
+
+const auditedGlossaryTerms = [
+  {
+    key: "scaling-law",
+    en: "scaling law",
+    zh: "扩展律",
+    files: [
+      "en/orientation/02-field-map.qmd",
+      "zh/orientation/02-field-map.qmd",
+      "en/foundations/01-scaling-laws.qmd",
+      "zh/foundations/01-scaling-laws.qmd",
+    ],
+  },
+  { key: "next-token-prediction", en: "next-token prediction", zh: "下一词元预测", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "cross-entropy", en: "cross-entropy", zh: "交叉熵", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "perplexity", en: "perplexity", zh: "困惑度", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "compute-optimal", en: "compute-optimal", zh: "计算最优", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "adamw", en: "AdamW", zh: "AdamW 优化器", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "warmup-stable-decay", en: "warmup-stable-decay", zh: "预热-稳定-衰减调度", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "z-loss", en: "z-loss", zh: "z-loss 正则", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "qk-norm", en: "query-key normalization", zh: "查询-键归一化", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "gradient-clipping", en: "gradient clipping", zh: "梯度裁剪", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "minhash", en: "MinHash", zh: "最小哈希", files: both("en/foundations/02-data-curation.qmd", "zh/foundations/02-data-curation.qmd") },
+  { key: "decontamination", en: "decontamination", zh: "去污染", files: both("en/foundations/02-data-curation.qmd", "zh/foundations/02-data-curation.qmd") },
+  { key: "tokenizer", en: "tokenizer", zh: "分词器", files: both("en/foundations/03-tokenization.qmd", "zh/foundations/03-tokenization.qmd") },
+  { key: "sentencepiece", en: "SentencePiece", zh: "SentencePiece 分词器", files: both("en/foundations/03-tokenization.qmd", "zh/foundations/03-tokenization.qmd") },
+  { key: "tokenizer-free", en: "tokenizer-free", zh: "无分词器方案", files: both("en/foundations/03-tokenization.qmd", "zh/foundations/03-tokenization.qmd") },
+  { key: "residual-stream", en: "residual stream", zh: "残差流", files: both("en/foundations/04-transformer-architecture.qmd", "zh/foundations/04-transformer-architecture.qmd") },
+  { key: "rmsnorm", en: "root mean square layer normalization", zh: "均方根层归一化", files: both("en/foundations/04-transformer-architecture.qmd", "zh/foundations/04-transformer-architecture.qmd") },
+  { key: "rope", en: "rotary position embedding", zh: "旋转位置嵌入", files: both("en/foundations/04-transformer-architecture.qmd", "zh/foundations/04-transformer-architecture.qmd") },
+  { key: "swiglu", en: "Swish-gated linear unit", zh: "Swish 门控线性单元", files: both("en/foundations/04-transformer-architecture.qmd", "zh/foundations/04-transformer-architecture.qmd") },
+  { key: "flashattention", en: "FlashAttention", zh: "FlashAttention 注意力内核", files: both("en/foundations/04-transformer-architecture.qmd", "zh/foundations/04-transformer-architecture.qmd") },
+  { key: "zero", en: "Zero Redundancy Optimizer", zh: "零冗余优化器", files: both("en/foundations/06-training-at-scale.qmd", "zh/foundations/06-training-at-scale.qmd") },
+  { key: "fsdp", en: "fully sharded data parallel", zh: "全分片数据并行", files: both("en/foundations/06-training-at-scale.qmd", "zh/foundations/06-training-at-scale.qmd") },
+  { key: "prefill", en: "prefill", zh: "预填充", files: both("en/inference/01-serving-problem.qmd", "zh/inference/01-serving-problem.qmd") },
+  { key: "decode", en: "decode", zh: "解码", files: both("en/inference/01-serving-problem.qmd", "zh/inference/01-serving-problem.qmd") },
+  { key: "goodput", en: "goodput", zh: "有效吞吐量", files: both("en/inference/01-serving-problem.qmd", "zh/inference/01-serving-problem.qmd") },
+  { key: "continuous-batching", en: "continuous batching", zh: "连续批处理", files: both("en/inference/01-serving-problem.qmd", "zh/inference/01-serving-problem.qmd") },
+  { key: "pagedattention", en: "PagedAttention", zh: "PagedAttention 分页注意力", files: both("en/inference/01-serving-problem.qmd", "zh/inference/01-serving-problem.qmd") },
+  { key: "prefix-caching", en: "prefix caching", zh: "前缀缓存", files: both("en/inference/02-memory-scheduling.qmd", "zh/inference/02-memory-scheduling.qmd") },
+  { key: "dram", en: "dynamic random-access memory", zh: "动态随机存取存储器", files: both("en/inference/02-memory-scheduling.qmd", "zh/inference/02-memory-scheduling.qmd") },
+  { key: "speculative-decoding", en: "speculative decoding", zh: "推测解码", files: both("en/inference/03-faster-decoding.qmd", "zh/inference/03-faster-decoding.qmd") },
+  { key: "sram", en: "static random-access memory", zh: "静态随机存取存储器", files: both("en/inference/04-quantization-kernels.qmd", "zh/inference/04-quantization-kernels.qmd") },
+  { key: "constrained-decoding", en: "constrained decoding", zh: "约束解码", files: both("en/inference/05-structured-long-context.qmd", "zh/inference/05-structured-long-context.qmd") },
+  { key: "fsm", en: "finite-state machine", zh: "有限状态机", files: both("en/inference/05-structured-long-context.qmd", "zh/inference/05-structured-long-context.qmd") },
+  { key: "attention-sink", en: "attention sink", zh: "注意力汇", files: both("en/inference/05-structured-long-context.qmd", "zh/inference/05-structured-long-context.qmd") },
+  { key: "sde", en: "stochastic differential equation", zh: "随机微分方程", files: both("en/generative/01-diffusion-flow-matching.qmd", "zh/generative/01-diffusion-flow-matching.qmd") },
+  { key: "ode", en: "ordinary differential equation", zh: "常微分方程", files: both("en/generative/01-diffusion-flow-matching.qmd", "zh/generative/01-diffusion-flow-matching.qmd") },
+  { key: "autoregression", en: "autoregression", zh: "自回归", files: both("en/generative/02-nar-diffusion-lms.qmd", "zh/generative/02-nar-diffusion-lms.qmd") },
+  { key: "non-autoregressive", en: "non-autoregressive generation", zh: "非自回归生成", files: both("en/generative/02-nar-diffusion-lms.qmd", "zh/generative/02-nar-diffusion-lms.qmd") },
+  { key: "dual-encoder", en: "dual-encoder", zh: "双编码器", files: both("en/orchestration/06-rag-retrieval.qmd", "zh/orchestration/06-rag-retrieval.qmd") },
+  { key: "bm25", en: "BM25", zh: "BM25 稀疏检索", files: both("en/orchestration/06-rag-retrieval.qmd", "zh/orchestration/06-rag-retrieval.qmd") },
+  { key: "hnsw", en: "hierarchical navigable small-world", zh: "分层可导航小世界图", files: both("en/orchestration/06-rag-retrieval.qmd", "zh/orchestration/06-rag-retrieval.qmd") },
+  { key: "hybrid-search", en: "hybrid search", zh: "混合搜索", files: both("en/orchestration/06-rag-retrieval.qmd", "zh/orchestration/06-rag-retrieval.qmd") },
+  { key: "cross-encoder", en: "cross-encoder", zh: "交叉编码器", files: both("en/orchestration/06-rag-retrieval.qmd", "zh/orchestration/06-rag-retrieval.qmd") },
+  { key: "private-test-set", en: "private test set", zh: "私有测试集", files: both("en/evaluation/02-judging-holistic.qmd", "zh/evaluation/02-judging-holistic.qmd") },
+  { key: "pairwise-comparison", en: "pairwise comparison", zh: "成对比较", files: both("en/evaluation/02-judging-holistic.qmd", "zh/evaluation/02-judging-holistic.qmd") },
+  { key: "pass-at-k", en: "pass@k", zh: "至少一次成功率", files: both("en/evaluation/03-evaluating-agents.qmd", "zh/evaluation/03-evaluating-agents.qmd") },
+  { key: "over-refusal", en: "over-refusal", zh: "过度拒绝", files: both("en/adaptation/01-sft-peft.qmd", "zh/adaptation/01-sft-peft.qmd") },
+  { key: "adversarial-robustness", en: "adversarial robustness", zh: "对抗鲁棒性", files: both("en/safety/05-adversarial-robustness.qmd", "zh/safety/05-adversarial-robustness.qmd") },
+  { key: "gpu", en: "graphics processing unit", zh: "图形处理器", files: both("en/infrastructure/01-accelerators-networking.qmd", "zh/infrastructure/01-accelerators-networking.qmd") },
+  { key: "tpu", en: "tensor processing unit", zh: "张量处理器", files: both("en/infrastructure/01-accelerators-networking.qmd", "zh/infrastructure/01-accelerators-networking.qmd") },
+  { key: "rdma", en: "remote direct memory access", zh: "远程直接内存访问", files: both("en/infrastructure/01-accelerators-networking.qmd", "zh/infrastructure/01-accelerators-networking.qmd") },
+  { key: "ocr", en: "optical character recognition", zh: "光学字符识别", files: both("en/practice/06-retrieval-and-documents.qmd", "zh/practice/06-retrieval-and-documents.qmd") },
+  { key: "virtual-key", en: "virtual key", zh: "虚拟密钥", files: both("en/practice/05-agents-and-sandboxes.qmd", "zh/practice/05-agents-and-sandboxes.qmd") },
+];
+
+test("book-level glossary audit terms are defined and introduced", () => {
   const repoRoot = new URL("../../../", import.meta.url).pathname;
   const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
-  expect(glossary.get("scaling-law")).toMatchObject({ en: "scaling law", zh: "扩展律" });
 
-  for (const rel of [
-    "en/orientation/02-field-map.qmd",
-    "zh/orientation/02-field-map.qmd",
-    "en/foundations/01-scaling-laws.qmd",
-    "zh/foundations/01-scaling-laws.qmd",
-  ]) {
-    expect(readFileSync(join(repoRoot, rel), "utf8")).toContain("@gls-scaling-law");
+  for (const term of auditedGlossaryTerms) {
+    expect(glossary.get(term.key)).toMatchObject({ en: term.en, zh: term.zh });
+    for (const rel of term.files) {
+      expect(readFileSync(join(repoRoot, rel), "utf8")).toContain(`@gls-${term.key}`);
+    }
   }
 });
