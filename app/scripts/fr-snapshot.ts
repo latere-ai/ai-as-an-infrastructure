@@ -9,7 +9,7 @@
 //
 //   bun run app/scripts/fr-snapshot.ts
 
-import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 
 const repoRoot = join(import.meta.dir, "..", "..");
@@ -52,13 +52,23 @@ function chapterFiles(): string[] {
 }
 
 if (import.meta.main) {
-  const snapshot: Record<string, string[]> = {};
+  const outPath = join(import.meta.dir, "..", "test", "fr-snapshot.json");
+  // Merge-preserve: a chapter already converted to the ::: {#further-reading}
+  // marker has no bullets left to read, so keep its committed baseline. Only
+  // (re)capture chapters whose Further reading is still hand-written prose. This
+  // lets new chapters be added to the baseline without clobbering migrated ones.
+  const existing: Record<string, string[]> = existsSync(outPath) ? JSON.parse(readFileSync(outPath, "utf8")) : {};
+  const snapshot: Record<string, string[]> = { ...existing };
+  let captured = 0;
   for (const f of chapterFiles()) {
     const slug = basename(f, ".qmd");
-    snapshot[slug] = extractFurtherReadingUrls(readFileSync(f, "utf8"));
+    const src = readFileSync(f, "utf8");
+    if (src.includes("{#further-reading}")) continue; // migrated → keep baseline
+    snapshot[slug] = extractFurtherReadingUrls(src);
+    captured++;
   }
-  const outPath = join(import.meta.dir, "..", "test", "fr-snapshot.json");
-  writeFileSync(outPath, JSON.stringify(snapshot, null, 2) + "\n");
-  const total = Object.values(snapshot).reduce((n, a) => n + a.length, 0);
-  console.log(`wrote ${outPath}: ${Object.keys(snapshot).length} chapters, ${total} works`);
+  const sorted = Object.fromEntries(Object.keys(snapshot).sort().map((k) => [k, snapshot[k]]));
+  writeFileSync(outPath, JSON.stringify(sorted, null, 2) + "\n");
+  const total = Object.values(sorted).reduce((n, a) => n + a.length, 0);
+  console.log(`wrote ${outPath}: ${Object.keys(sorted).length} chapters (${captured} (re)captured), ${total} works`);
 }
