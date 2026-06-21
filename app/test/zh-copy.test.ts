@@ -210,6 +210,30 @@ test("polished chapter openings preserve key source theses", () => {
       ["从提示工程改名为上下文工程", "更长的上下文窗口并不能单凭自身解决问题", "词元预算", "工具协议", "智能体实际能做什么"],
     ],
     [
+      "en/evaluation/01-benchmarks.qmd",
+      ["published benchmark score is never a fact about a model alone", "@gls-held-out is a pipeline contract", "@gls-contamination silently inflates numbers", "harness, data contract, and uncertainty"],
+    ],
+    [
+      "zh/evaluation/01-benchmarks.qmd",
+      ["基准分数，从来不是关于模型本身的事实", "@gls-held-out 是一份流水线契约", "@gls-contamination会不声不响地抬高数字", "框架、数据契约与不确定性"],
+    ],
+    [
+      "en/evaluation/02-judging-holistic.qmd",
+      ["@gls-llm-as-judge is biased", "arena-style preference ranking", "@gls-pairwise-comparison votes into a single number", "private test set is worth more"],
+    ],
+    [
+      "zh/evaluation/02-judging-holistic.qmd",
+      ["@gls-llm-as-judge会带偏", "竞技场式的偏好排名", "@gls-pairwise-comparison汇成单一数字", "私有测试集也因此比任何公开排行榜都更值钱"],
+    ],
+    [
+      "en/evaluation/03-evaluating-agents.qmd",
+      ["agent score is a property of model-plus-harness", "graded on its outcome rather than its path", "built to disagree with the agent", "independent, checkable signal beats a self-report"],
+    ],
+    [
+      "zh/evaluation/03-evaluating-agents.qmd",
+      ["智能体分数衡量的是「模型加运行框架」", "按结果而非路径来评分", "与智能体保持对抗", "独立、可核查的信号，胜过一份自我报告"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -365,6 +389,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/orchestration/06-rag-retrieval.qmd",
     "en/orchestration/07-embeddings-representation.qmd",
     "en/orchestration/08-context-engineering.qmd",
+    "en/evaluation/index.qmd",
+    "en/evaluation/01-benchmarks.qmd",
+    "en/evaluation/02-judging-holistic.qmd",
+    "en/evaluation/03-evaluating-agents.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -409,6 +437,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/orchestration/06-rag-retrieval.qmd",
     "zh/orchestration/07-embeddings-representation.qmd",
     "zh/orchestration/08-context-engineering.qmd",
+    "zh/evaluation/index.qmd",
+    "zh/evaluation/01-benchmarks.qmd",
+    "zh/evaluation/02-judging-holistic.qmd",
+    "zh/evaluation/03-evaluating-agents.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
@@ -424,11 +456,12 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/infrastructure/07-where-learning-hits-limits.qmd",
     "zh/infrastructure/08-the-capability-horizon.qmd",
   ];
-  const banned = /By the end|reader can explain|This chapter is about|This chapter tells one story|读者读完|读完本章|读完这一部分|本章来讲这个|本章把一个故事/;
+  const banned = /By the end|reader can explain|reader can say|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一部分|本章来讲这个|本章把一个故事/;
 
   for (const path of polished) {
     const text = readFileSync(join(repoRoot, path), "utf8");
     const opening = text.split(/\n## /)[0] ?? text;
-    expect(opening, `${path} should not use a reader-promise opener`).not.toMatch(banned);
+    const normalizedOpening = opening.replace(/\s+/g, " ");
+    expect(normalizedOpening, `${path} should not use a reader-promise opener`).not.toMatch(banned);
   }
 });
