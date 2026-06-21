@@ -153,6 +153,22 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/infrastructure/02-orchestration-data-infra.qmd",
       ["检查点、数据层与可观测性", "多久保存一次", "数据顺序如何跨过重启"],
     ],
+    [
+      "en/infrastructure/03-the-compute-frontier.qmd",
+      ["scarce resource is bytes rather than arithmetic", "accelerators have become chiplet packages", "NVLink boundary has moved from", "rising arithmetic-intensity floor"],
+    ],
+    [
+      "zh/infrastructure/03-the-compute-frontier.qmd",
+      ["稀缺的资源是字节，而不是算术", "小芯片封装", "NVLink 边界从机箱移到机架", "不断抬高的算术强度地板"],
+    ],
+    [
+      "en/infrastructure/04-making-the-silicon.qmd",
+      ["moved down the stack from the", "transistor to the package and the memory stack", "silicon interposer can rate-limit", "memory shortage now", "reaches all the way out", "export controls and", "sovereign-compute programs"],
+    ],
+    [
+      "zh/infrastructure/04-making-the-silicon.qmd",
+      ["从晶体管移到了封装和内存堆栈", "硅中介层就能限速整个领域", "内存短缺如今一路波及", "出口管制和主权算力计划"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -187,6 +203,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/inference/06-serving-multimodal.qmd",
     "en/infrastructure/01-accelerators-networking.qmd",
     "en/infrastructure/02-orchestration-data-infra.qmd",
+    "en/infrastructure/03-the-compute-frontier.qmd",
+    "en/infrastructure/04-making-the-silicon.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -209,6 +227,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/inference/06-serving-multimodal.qmd",
     "zh/infrastructure/01-accelerators-networking.qmd",
     "zh/infrastructure/02-orchestration-data-infra.qmd",
+    "zh/infrastructure/03-the-compute-frontier.qmd",
+    "zh/infrastructure/04-making-the-silicon.qmd",
   ];
   const banned = /By the end|This chapter tells one story|读者读完本章|本章把一个故事/;
 
