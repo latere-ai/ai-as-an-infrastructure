@@ -3,68 +3,172 @@
 Every text model in this book so far generates left to right, one token
 conditioned on all the tokens before it. @sec-diffusion showed that images
 generate the opposite way, denoising the whole field in parallel. This chapter
-asks whether text can too, and surveys the non-autoregressive lineage that
-tries. By the end a reader can explain why parallel text generation is
-attractive, why it historically lost quality to autoregression, how discrete
-diffusion revived it, and why the frontier stays autoregressive despite a 2025
-wave of fast diffusion language models.
+asks whether text can too, and follows the non-autoregressive lineage that tries.
+By the end a reader can explain why parallel text generation is attractive and why
+it historically lost quality, why a non-autoregressive model is trained on a
+teacher's output rather than the real data, how discrete diffusion revived the
+idea, why a masked diffusion language model turns out to be a masked language model
+trained over every masking ratio at once, and why the frontier stays
+autoregressive despite a 2025 wave of fast diffusion language models.
 
 ## The appeal and its cost
 
 Autoregression is serial: generating $n$ tokens takes $n$ sequential forward
 passes, each waiting on the last. Non-autoregressive generation produces the
-tokens in parallel instead. Gu et al. first did this for translation, reporting
-an order-of-magnitude lower latency at a cost of as little as two BLEU points
-against the autoregressive teacher it distilled from [@gu2017nar]. The cost has a
-cause: emitting tokens independently throws away the dependencies between them,
-so the model cannot tell which of several valid outputs it is committing to, the
-"multimodality" problem. Iterative refinement buys much of the quality back.
-Mask-Predict decodes in parallel, then over a constant number of rounds masks out
-and re-predicts the tokens it is least confident about, reaching within about one
-BLEU of a left-to-right transformer while decoding faster
-[@ghazvininejad2019maskpredict]. Predict-in-parallel, then refine: that pattern
-is the bridge to diffusion.
+tokens in parallel instead. Gu et al. first did this for translation, reporting an
+order-of-magnitude lower latency at a cost of around two BLEU against the
+autoregressive teacher it distilled from [@gu2017nar]. The cost has a precise
+cause, the *multimodality problem*: a parallel decoder factorizes the output as
+$\prod_t p(y_t \mid x)$, so each position hedges across the several valid outputs
+independently, and the joint sample mixes them, committing to no single coherent
+sentence and producing repeated or dropped words. Gu's fix was a fertility latent,
+an integer per source token saying how many target tokens it spawns, which both
+picks a single mode and answers the length question that autoregression gets for
+free by emitting an end-of-sequence token. Length is the structural problem a
+parallel decoder cannot avoid, and the designs below are in part four different
+answers to it.
+
+The deeper reason a non-autoregressive model works at all is that it is almost
+never trained on real data. It is trained on the output of an autoregressive
+teacher, through sequence-level knowledge distillation [@kim2016seqkd], and the
+reason this is essential, not merely helpful, is mechanical. Zhou et al. measured
+the *complexity* of a dataset as the conditional entropy of the target given the
+source and showed that a teacher's decoded outputs have far lower complexity than
+the gold data: distillation removes modes, making the target more nearly
+deterministic and so learnable by a one-shot decoder [@zhou2020understandingkd].
+They also found a capacity match, that a weak non-autoregressive student does best
+on data distilled from a small teacher while a stronger student can exploit the
+higher-complexity data a larger teacher leaves, so the teacher is to be matched to
+the student, not maximized.
+
+## Predict in parallel, then refine
+
+Pure one-shot decoding leaves quality on the table, and the productive line buys
+it back by refining a parallel draft over a few rounds. Mask-Predict trains a
+conditional masked language model and decodes in a constant number of rounds, each
+round re-masking the lowest-confidence tokens and re-predicting them with full
+bidirectional context, reaching within about one BLEU of an autoregressive
+transformer [@ghazvininejad2019maskpredict]. Other designs answer the length
+problem differently: the Levenshtein Transformer makes insertion and deletion its
+atomic operations, so the sequence grows and shrinks dynamically rather than
+having its length predicted up front [@gu2019levenshtein]; CTC-based decoders emit
+an over-length sequence with blank tokens and collapse repeats under a monotonic
+alignment, marginalizing length and alignment jointly [@libovicky2018ctcnat;
+@chan2020imputer]; and the Glancing Transformer keeps a single pass but trains with
+a curriculum that reveals some ground-truth tokens early and fewer as the model
+improves, teaching word interdependence without iterative decoding, within a BLEU
+of the transformer at eight to fifteen times the speed [@qian2021glat]. Step-
+unrolled denoising starts from random tokens and applies a denoiser to convergence,
+a further step toward the diffusion framing [@savinov2022sundae].
+
+That framing is the bridge. "Predict in parallel, then re-mask and re-predict the
+uncertain tokens" is, read carefully, a fixed-step absorbing-state diffusion: the
+masking is the forward corruption and the re-prediction is the learned reverse
+step. Mask-Predict is a discrete diffusion sampler that did not yet call itself
+one, and the rest of this chapter is what happened when the field made the
+connection explicit.
 
 ## Diffusion for discrete text
 
-D3PM generalized diffusion to discrete data, replacing Gaussian noise with
-categorical corruption matrices, and its absorbing-state (masking) variant draws
-an explicit line from diffusion to masked language models, the foundation later
-text diffusion builds on [@austin2021d3pm]. Two flavors diverge from there.
-Continuous diffusion runs in embedding space: Diffusion-LM denoises sequences of
-Gaussian vectors into word vectors, and the continuous latents make gradient-based
-controllable generation easy, though raw perplexity trails autoregression
-[@li2022diffusionlm]. The discrete line proved more competitive. SEDD introduces
-a score-entropy loss that extends score matching to discrete spaces, cutting
-perplexity 25 to 75 percent over prior diffusion language models, matching or
-beating GPT-2 at that scale, and trading quality for as much as 32 times fewer
-network evaluations [@lou2023sedd]. All these numbers are at small scale and
-author-reported.
+D3PM generalized diffusion to discrete data, replacing Gaussian noise with a
+categorical corruption matrix $Q_t$ acting on one-hot tokens, and its
+absorbing-state variant is the one that matters here [@austin2021d3pm]. In
+cumulative form each token survives unchanged with a keep-probability $\alpha_t$
+that falls monotonically from one to zero, and is otherwise sent to an absorbing
+`[MASK]`,
+
+$$
+q(x_t \mid x_0) = \alpha_t\,\delta(x_t, x_0) +
+(1 - \alpha_t)\,\delta(x_t, [\text{MASK}]).
+$$
+
+This is BERT-style masking with a continuum of mask rates rather than a fixed
+fraction, and crucially the denoiser only ever sees clean or masked tokens, never
+an off-distribution noisy one. Two flavors then diverge. Continuous diffusion runs
+in embedding space: Diffusion-LM denoises Gaussian vectors into word vectors,
+which makes gradient-based controllable generation easy but trails autoregression
+in raw perplexity [@li2022diffusionlm], and the likelihood-based Plaid line scales
+the same idea but still lags [@gulrajani2023plaid]. The discrete line proved more
+competitive, because it avoids the embedding-rounding bottleneck and keeps the
+denoiser on in-distribution inputs. SEDD is its sharpest form, learning the
+*concrete score*, the ratio $p_t(y)/p_t(x)$ between marginals of states that
+differ by one token, through a score-entropy loss that extends score matching to
+discrete spaces; it cuts perplexity 25 to 75 percent over prior diffusion language
+models, matches or beats GPT-2 at that scale, and trades quality for as much as 32
+times fewer network evaluations [@lou2023sedd]. These numbers are at small scale
+and author-reported.
+
+## A masked diffusion language model is a masked language model
+
+The deepest result in this area is that the absorbing-state construction is not a
+new objective at all. Two independent derivations showed that the continuous-time
+training bound of a masked diffusion language model collapses to a weighted average
+of ordinary masked-language-modeling cross-entropies [@sahoo2024mdlm; @shi2024md4],
+
+$$
+\mathcal{L} = \int_0^1 \frac{\alpha_t'}{1 - \alpha_t}\;
+\mathbb{E}_{q(x_t \mid x_0)}
+\Big[ \sum_{n:\,x_t^{(n)} = [\text{MASK}]}
+-\log p_\theta\big(x_0^{(n)} \mid x_t\big) \Big]\, dt.
+$$
+
+Read the pieces: the inner sum is the cross-entropy of predicting the masked
+tokens from context, exactly the BERT objective, taken only over the positions
+currently masked. Because $\alpha_t$ is the keep-probability sweeping from one to
+zero, the integration variable $t$ is in one-to-one correspondence with the mask
+ratio $1 - \alpha_t$, so integrating over $t$ is averaging the masked-LM loss over
+*every* masking ratio, with a fixed weight. A masked diffusion language model is a
+masked language model trained over the whole continuum of mask rates, and
+generation is any-order iterative unmasking. That two derivations land on the same
+weight $\alpha_t'/(1-\alpha_t)$ is strong evidence this is the canonical form. RADD
+sharpens it from the score side, showing the absorbing-diffusion score factorizes
+into the conditional distribution of clean data times an analytic scalar in $t$,
+so the denoiser can drop its time input entirely and its output can be cached
+across a sampling interval, and proving absorbing diffusion equivalent to an
+any-order autoregressive model [@ou2024radd]. The non-autoregressive model is, in
+the end, autoregression set free of a fixed order, which is both why it can
+infill and reverse and why it inherits a serving cost autoregression had solved.
 
 ## Scaling up, and meeting autoregression halfway
 
-LLaDA, the masked-diffusion model @sec-diffusion introduced, is the scale data
-point: an 8B diffusion language model competitive with LLaMA3-8B at in-context
-learning, and ahead of GPT-4o on a narrow reversal-completion task where
-bidirectional context helps [@nie2025llada]. Rather than replace autoregression,
-the most practical line meets it halfway. Block diffusion is autoregressive
-across blocks of tokens, which restores arbitrary-length generation and the
-KV-caching of @sec-memory-scheduling, while denoising in parallel within each
-block [@arriola2025blockdiffusion]. The commercial edge is already shipping:
-Inception Labs' Mercury, a diffusion language model, reports throughputs above a
-thousand tokens per second on an H100 and up to ten times the speed of
-speed-optimized autoregressive models at comparable quality, though as an
-unaudited vendor report those numbers should be read with care [@khanna2025mercury].
+LLaDA is the scale data point, an 8B masked-diffusion model trained from scratch,
+competitive with LLaMA3-8B at in-context learning and ahead of GPT-4o on a narrow
+reversal-completion task where bidirectional context helps [@nie2025llada]. Dream
+reaches similar 7B-scale quality by initializing from autoregressive Qwen2.5
+weights rather than training from scratch, a sign that the masked-diffusion and
+autoregressive objectives are close enough to transfer [@ye2025dream]. But the
+decoding reality is the catch. Parallel generation is real, yet it needs several
+denoising steps, and full bidirectional attention forfeits the key-value cache of
+@sec-memory-scheduling, recomputing the whole sequence each step, so the speedup
+partly erodes. The most practical line meets autoregression halfway: block
+diffusion is autoregressive across blocks of tokens, which restores arbitrary-
+length generation and KV-caching, while denoising in parallel within each block
+[@arriola2025blockdiffusion]. The commercial edge is already shipping. Inception
+Labs' Mercury reports throughput above a thousand tokens per second on an H100 and
+up to ten times the speed of speed-optimized autoregressive models at comparable
+quality, and Google's experimental Gemini Diffusion reports similar speeds, though
+as unaudited vendor numbers both should be read with care [@khanna2025mercury;
+@geminidiffusion2025].
+
+```{mermaid}
+%%| label: fig-nar-spectrum
+%%| fig-cap: "The spectrum from autoregressive to fully parallel generation. Pure autoregression emits one token per step and keeps a key-value cache; block diffusion is autoregressive across blocks (so it keeps the cache and arbitrary length) but denoises in parallel within a block; a full masked diffusion model decodes every position in parallel over a few denoising rounds, forfeiting the cache for parallelism. After Arriola et al. (2025)."
+flowchart LR
+  ar["Autoregressive<br/>1 token/step<br/>KV cache, serial"] --> bd["Block diffusion<br/>AR across blocks<br/>diffuse within block<br/>(keeps KV cache)"]
+  bd --> md["Masked diffusion<br/>all positions parallel<br/>few denoising steps<br/>(no KV cache)"]
+```
 
 ::: {.callout-important}
 ## What's contested
 Whether diffusion and non-autoregressive models will overtake autoregression for
 text is unsettled. The case for them is parallel decoding for latency,
 bidirectional context for infilling and reversal, and a quality gap that keeps
-shrinking. The case against is that every frontier model is still
-autoregressive, that autoregression has mature KV-caching, serving, and scaling
-laws behind it, and that the parallel speedup partly erodes once you add the
-refinement rounds quality needs. Most 2025 evidence is at small-to-mid scale or
+shrinking, now backed by the clean result that a masked diffusion model is just a
+masked LM over all mask ratios, so it inherits a well-understood objective. The
+case against is that every frontier model is still autoregressive, that
+autoregression has mature KV-caching, serving, and scaling laws behind it, and that
+the parallel speedup partly erodes once the refinement rounds quality needs are
+added and the cache is forfeited. Most 2025 evidence is at small-to-mid scale or
 self-reported vendor throughput, so treat diffusion text as a fast-moving
 challenger, not a settled successor.
 :::
@@ -73,11 +177,12 @@ challenger, not a settled successor.
 ## Constraint arrow
 The serving substrate reaches back into the generation paradigm. Part of
 autoregression's dominance is that the KV cache of @sec-memory-scheduling makes
-each next token cheap, an efficiency a naive non-autoregressive decoder forfeits
-by recomputing the sequence each round. Block diffusion exists precisely to win
-KV-caching back. Which generative paradigm is viable is shaped by what the
-serving layer can cache, the same constraint that runs through the rest of the
-book.
+each next token cheap, an efficiency a bidirectional non-autoregressive decoder
+forfeits by recomputing the sequence each round. Block diffusion exists precisely
+to win KV-caching back, restoring the across-block autoregression that lets the
+cache work while keeping parallel denoising inside a block. Which generative
+paradigm is viable is shaped by what the serving layer can cache, the same
+constraint that runs through the rest of the book.
 :::
 
 ## Further reading
