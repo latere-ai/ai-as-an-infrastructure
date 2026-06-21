@@ -234,6 +234,30 @@ test("polished chapter openings preserve key source theses", () => {
       ["智能体分数衡量的是「模型加运行框架」", "按结果而非路径来评分", "与智能体保持对抗", "独立、可核查的信号，胜过一份自我报告"],
     ],
     [
+      "en/safety/01-mechanistic-interpretability.qmd",
+      ["trained transformer is a few hundred billion numbers", "single neuron rarely means one thing", "sparse dictionaries", "pulling features apart", "whether that tool is the right one is still open"],
+    ],
+    [
+      "zh/safety/01-mechanistic-interpretability.qmd",
+      ["几千亿个数字", "单个神经元很少只意味一件事", "稀疏字典", "拆开特征", "工具是否正确"],
+    ],
+    [
+      "en/safety/02-scalable-oversight-control.qmd",
+      ["human judgment has an expiry date", "weaker teacher", "strong model", "bounding the damage", "capability gap"],
+    ],
+    [
+      "zh/safety/02-scalable-oversight-control.qmd",
+      ["人类判断之上的对齐有一个保质期", "弱教师", "强模型", "危害设定上界", "能力差距"],
+    ],
+    [
+      "en/safety/03-security-authorization.qmd",
+      ["agent acts in the world with someone's authority", "standing broad token plus a @gls-prompt-injection equals a breach", "Identity and governance split", "downstream of a verified principal"],
+    ],
+    [
+      "zh/safety/03-security-authorization.qmd",
+      ["带着某人的授权在世界里行动", "长期存在的宽泛令牌，加上一次@gls-prompt-injection，就等于一次入侵", "身份与治理", "经过验证的主体的下游"],
+    ],
+    [
       "en/inference/01-serving-problem.qmd",
       ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
     ],
@@ -393,6 +417,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/evaluation/01-benchmarks.qmd",
     "en/evaluation/02-judging-holistic.qmd",
     "en/evaluation/03-evaluating-agents.qmd",
+    "en/safety/index.qmd",
+    "en/safety/01-mechanistic-interpretability.qmd",
+    "en/safety/02-scalable-oversight-control.qmd",
+    "en/safety/03-security-authorization.qmd",
     "en/inference/01-serving-problem.qmd",
     "en/inference/02-memory-scheduling.qmd",
     "en/inference/03-faster-decoding.qmd",
@@ -441,6 +469,10 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/evaluation/01-benchmarks.qmd",
     "zh/evaluation/02-judging-holistic.qmd",
     "zh/evaluation/03-evaluating-agents.qmd",
+    "zh/safety/index.qmd",
+    "zh/safety/01-mechanistic-interpretability.qmd",
+    "zh/safety/02-scalable-oversight-control.qmd",
+    "zh/safety/03-security-authorization.qmd",
     "zh/inference/01-serving-problem.qmd",
     "zh/inference/02-memory-scheduling.qmd",
     "zh/inference/03-faster-decoding.qmd",
