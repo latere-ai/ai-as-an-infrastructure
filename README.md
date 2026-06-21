@@ -44,11 +44,10 @@ where a lower layer dictates an upper layer's choice.
 
 ## Philosophy
 
-Design-first, after [golang.design/under-the-hood](https://golang.design/under-the-hood):
-every section moves through Problem, Design, Evolution, Trade-offs, and
-Implementation, so a reader finishes able to answer "why is it built this
-way?". Live debates get a "what's contested" box rather than being papered
-over. See [`CONVENTIONS.md`](CONVENTIONS.md).
+Design-first: every section moves through Problem, Design, Evolution,
+Trade-offs, and Implementation, so a reader finishes able to answer "why is it
+built this way?". Live debates get a "what's contested" box rather than being
+papered over. See [`CONVENTIONS.md`](CONVENTIONS.md).
 
 ## Build
 

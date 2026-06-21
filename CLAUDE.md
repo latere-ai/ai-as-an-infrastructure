@@ -63,5 +63,4 @@ link lives in `../latere-ai`.
 
 ## Related
 
-Other latere projects are in `../`. The style reference is
-`../../golang.design/under-the-hood`.
+Other latere projects are in `../`.
