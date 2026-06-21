@@ -3,7 +3,17 @@
 // hydration data, then the client bundle and after-body runtime scripts.
 
 import type { ChapterData } from "./types.ts";
+import { DEFAULT_SETTINGS } from "./types.ts";
 import { BASE, SITE_NAME, AUTHOR, OG_W, OG_H, ogImageUrl } from "./site.ts";
+
+// Applied before first paint so a returning reader's saved theme/palette (the
+// CSS keys off data-theme/data-palette on <html>) is set before the body paints,
+// killing the light->dark flash on reload. Inlined and blocking on purpose.
+const THEME_SCRIPT =
+  `<script>(function(){try{var s=JSON.parse(localStorage.getItem("aaai-reader-settings"));` +
+  `if(s){var d=document.documentElement;` +
+  `if(s.theme)d.setAttribute("data-theme",s.theme);` +
+  `if(s.palette)d.setAttribute("data-palette",s.palette);}}catch(e){}})()</script>`;
 
 const FONT_LINKS = `
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -64,10 +74,11 @@ export function page(opts: {
   ].filter(Boolean).join("\n");
 
   return `<!DOCTYPE html>
-<html lang="${htmlLang}">
+<html lang="${htmlLang}" data-theme="${DEFAULT_SETTINGS.theme}" data-palette="${DEFAULT_SETTINGS.palette}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+${THEME_SCRIPT}
 <title>${title}</title>${desc}
 <meta name="author" content="${attr(AUTHOR)}">
 <link rel="canonical" href="${url(chapter.lang)}">

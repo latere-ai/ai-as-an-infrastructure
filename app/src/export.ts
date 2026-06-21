@@ -55,12 +55,12 @@ function nsChapter(html: string, n: number): string {
 }
 
 function buildCombined(lang: Lang, bookTitle: string, chaptersHtml: string): string {
-  return `<!DOCTYPE html><html lang="${lang}"><head><meta charset="utf-8">
+  return `<!DOCTYPE html><html lang="${lang}" data-palette="ink" data-theme="light"><head><meta charset="utf-8">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-tc-webfont@1.0.0/style.css">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <style>${css}\n${PRINT_CSS}</style></head>
-<body><div class="reader" data-palette="ink" data-theme="light"><div class="rdr-article-root">
+<body><div class="reader"><div class="rdr-article-root">
 <div class="pcover"><h1>${bookTitle}</h1><div>Changkun Ou · latere.ai</div></div>
 ${chaptersHtml}
 </div></div>${MERMAID}</body></html>`;

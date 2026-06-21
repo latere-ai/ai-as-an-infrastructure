@@ -78,7 +78,15 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   useEffect(() => {
     try {
       const raw = localStorage.getItem(LS_KEY);
-      if (raw) setS((prev) => ({ ...prev, ...JSON.parse(raw) }));
+      if (raw) {
+        const saved = JSON.parse(raw);
+        setS((prev) => ({ ...prev, ...saved }));
+        // theme/palette live on <html> (a blocking head script already applied
+        // them before paint to avoid a flash). Re-assert here so the dev server,
+        // which omits that script, still tracks the persisted choice.
+        if (saved.theme) document.documentElement.dataset.theme = saved.theme;
+        if (saved.palette) document.documentElement.dataset.palette = saved.palette;
+      }
     } catch {}
     const mq = window.matchMedia("(max-width: 991px)");
     const onMq = () => setMobile(mq.matches);
@@ -199,7 +207,15 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     [chapter.contentHtml],
   );
 
-  const set = (patch: Partial<ReaderSettings>) => setS((p) => ({ ...p, ...patch }));
+  const set = (patch: Partial<ReaderSettings>) => {
+    // theme/palette are read off <html> by the CSS (so a head script can set them
+    // pre-paint); mirror a user toggle there immediately, the rest is React state.
+    if (typeof document !== "undefined") {
+      if (patch.theme) document.documentElement.dataset.theme = patch.theme;
+      if (patch.palette) document.documentElement.dataset.palette = patch.palette;
+    }
+    setS((p) => ({ ...p, ...patch }));
+  };
   const fontScale = Math.min(1.4, Math.max(0.8, s.fontScale));
 
   const showSidebar = !mobile && !s.navCollapsed;
@@ -215,8 +231,6 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   return (
     <div
       className="reader"
-      data-palette={s.palette}
-      data-theme={s.theme}
       data-layout="codex"
       style={{
         height: "100%", overflow: "hidden", display: "flex", flexDirection: "column",

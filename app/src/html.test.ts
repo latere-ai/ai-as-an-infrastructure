@@ -43,10 +43,27 @@ test("a zh page unfurls the English card text, not its own", () => {
   expect(html).toContain('<meta property="og:description" content="First paragraph snippet.">');
   expect(html).toContain('<meta property="og:locale" content="en_US">');
   // the page's own <title>/lang stay Chinese for the browser + SEO
-  expect(html).toContain('<html lang="zh-Hans">');
+  expect(html).toContain('<html lang="zh-Hans" data-theme="light" data-palette="ink">');
   expect(html).toContain("<title>缩放定律 · AI as an Infrastructure</title>");
   // but the card never shows the Chinese title
   expect(html).not.toContain('property="og:title" content="缩放定律"');
+});
+
+test("applies the saved theme on <html> via a blocking head script before the body, so a reloaded dark reader does not flash light", () => {
+  const html = render(base);
+  // the no-flash script reads the persisted settings key and sets the attributes
+  // the CSS now keys off (<html data-theme/data-palette>), not React state.
+  expect(html).toContain('localStorage.getItem("aaai-reader-settings")');
+  expect(html).toContain('d.setAttribute("data-theme",s.theme)');
+  expect(html).toContain('d.setAttribute("data-palette",s.palette)');
+  // it must run before the body paints: the <script> sits inside <head>, ahead of
+  // the <div id="root"> shell the browser would otherwise paint in the default theme.
+  const scriptAt = html.indexOf("aaai-reader-settings");
+  const headEnd = html.indexOf("</head>");
+  const rootAt = html.indexOf('<div id="root">');
+  expect(scriptAt).toBeGreaterThan(-1);
+  expect(scriptAt).toBeLessThan(headEnd);
+  expect(headEnd).toBeLessThan(rootAt);
 });
 
 test("the home page is og:type website and points at /og/index.png", () => {
