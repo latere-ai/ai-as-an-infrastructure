@@ -1,9 +1,10 @@
-// Citation engine: parse references.bib once, resolve [@key] / [@a; @b] / bare
+// Citation engine: parse the merged refs/*.bib once, resolve [@key] / [@a; @b] / bare
 // @key to author-year links, and render a cited-only bibliography (the content
 // for references.qmd's ::: {#refs} slot). Author-date style, Chicago-ish.
 
 import { parse as parseBib } from "@retorquere/bibtex-parser";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 export interface BibEntry {
   key: string;
@@ -26,9 +27,8 @@ function surname(name: { lastName?: string; firstName?: string; name?: string })
   return "?";
 }
 
-export function loadBibliography(bibPath: string): Bibliography {
-  const lib = parseBib(readFileSync(bibPath, "utf8"), { errorHandler: () => {} });
-  const entries = new Map<string, BibEntry>();
+function addEntries(entries: Map<string, BibEntry>, content: string): void {
+  const lib = parseBib(content, { errorHandler: () => {} });
   for (const e of lib.entries) {
     const f = e.fields as Record<string, any>;
     const authors: string[] = Array.isArray(f.author)
@@ -45,6 +45,22 @@ export function loadBibliography(bibPath: string): Bibliography {
       url: f.url ? String(f.url) : f.eprint ? `https://arxiv.org/abs/${f.eprint}` : undefined,
       raw: Object.fromEntries(Object.entries(f).map(([k, v]) => [k, flat(v)])),
     });
+  }
+}
+
+export function loadBibliography(bibPath: string): Bibliography {
+  const entries = new Map<string, BibEntry>();
+  addEntries(entries, readFileSync(bibPath, "utf8"));
+  return { entries, cited: new Set() };
+}
+
+// Merge every refs/<chapter>.bib into one bibliography (refs/ is the source of
+// truth). Keys repeated across chapters collapse to one entry (sorted filename
+// order, last wins); duplicates are the same work, so this is the dedup.
+export function loadBibliographyDir(dir: string): Bibliography {
+  const entries = new Map<string, BibEntry>();
+  for (const f of readdirSync(dir).filter((n) => n.endsWith(".bib")).sort()) {
+    addEntries(entries, readFileSync(join(dir, f), "utf8"));
   }
   return { entries, cited: new Set() };
 }

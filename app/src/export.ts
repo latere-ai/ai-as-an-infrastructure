@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { loadBook } from "./pipeline/book.ts";
 import { compileChapter } from "./pipeline/compile.ts";
-import { loadBibliography } from "./pipeline/citations.ts";
+import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import ChapterOpenerExport from "./ChapterOpenerExport.tsx";
@@ -73,7 +73,7 @@ function run(cmd: string, args: string[]): boolean {
 
 for (const lang of ["en", "zh"] as Lang[]) {
   const book = loadBook(lang, repoRoot);
-  const bib = loadBibliography(join(repoRoot, "references.bib"));
+  const bib = loadBibliographyDir(join(repoRoot, "refs"));
   const xref = buildCrossref(book);
   const graphviz = await loadGraphviz();
   const langOut = join(outRoot, lang);

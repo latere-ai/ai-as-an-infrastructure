@@ -7,7 +7,7 @@ import Reader from "./Reader.tsx";
 import { page } from "./html.ts";
 import { loadBook } from "./pipeline/book.ts";
 import { compileChapter } from "./pipeline/compile.ts";
-import { loadBibliography } from "./pipeline/citations.ts";
+import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { join } from "node:path";
@@ -15,7 +15,7 @@ import { join } from "node:path";
 const css = await Bun.file(new URL("./theme.css", import.meta.url)).text();
 const repoRoot = new URL("../../", import.meta.url).pathname;
 const book = loadBook("en", repoRoot);
-const ctx = { bib: loadBibliography(join(repoRoot, "references.bib")), xref: buildCrossref(book), graphviz: await loadGraphviz(), refsDir: join(repoRoot, "refs") };
+const ctx = { bib: loadBibliographyDir(join(repoRoot, "refs")), xref: buildCrossref(book), graphviz: await loadGraphviz(), refsDir: join(repoRoot, "refs") };
 const devChapter = compileChapter(book, book.chapters.find((c) => c.href.includes("03-scaling-laws"))!, ctx);
 
 async function buildClient(): Promise<string> {

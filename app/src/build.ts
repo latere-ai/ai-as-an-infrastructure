@@ -10,7 +10,7 @@ import Reader from "./Reader.tsx";
 import { page } from "./html.ts";
 import { loadBook } from "./pipeline/book.ts";
 import { compileChapter } from "./pipeline/compile.ts";
-import { loadBibliography } from "./pipeline/citations.ts";
+import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDoc } from "./pipeline/search.ts";
@@ -51,7 +51,7 @@ const graphviz = await loadGraphviz();
 let pageCount = 0;
 for (const lang of ["en", "zh"] as Lang[]) {
   const book = loadBook(lang, repoRoot);
-  const bib = loadBibliography(join(repoRoot, "references.bib"));
+  const bib = loadBibliographyDir(join(repoRoot, "refs"));
   const xref = buildCrossref(book);
   const ctx = { bib, xref, graphviz, refsDir: join(repoRoot, "refs") };
   const langOut = join(outRoot, lang);
