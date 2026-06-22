@@ -622,6 +622,26 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/practice/index.qmd",
       ["期限、预算、许可证", "生产 AI 系统看成一组契约", "可以运营的系统"],
     ],
+    [
+      "en/summary.qmd",
+      [
+        "artificial intelligence is now best understood as infrastructure",
+        "The book followed one capability through that stack",
+        "capability alone does not make infrastructure",
+        "Infrastructure is not merely machinery",
+        "what we are willing to remain responsible for",
+      ],
+    ],
+    [
+      "zh/summary.qmd",
+      [
+        "人工智能，最好把它看作基础设施",
+        "本书沿着一项能力走过了这套栈",
+        "能力本身还不足以成为基础设施",
+        "基础设施不只是机器",
+        "我们仍愿意为哪些东西负责",
+      ],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -637,6 +657,7 @@ test("polished chapter openings preserve key source theses", () => {
 test("polished chapter openings avoid reader-promise templates", () => {
   const polished = [
     "en/index.qmd",
+    "en/summary.qmd",
     "en/orientation/index.qmd",
     "en/orientation/01-whole-stack.qmd",
     "en/orientation/02-field-map.qmd",
@@ -716,6 +737,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/practice/11-production-data-engine.qmd",
     "en/practice/index.qmd",
     "zh/index.qmd",
+    "zh/summary.qmd",
     "zh/orientation/index.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
