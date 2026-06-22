@@ -9,7 +9,8 @@ import { createElement } from "react";
 import Reader from "./Reader.tsx";
 import { page } from "./html.ts";
 import { loadBook, type Book } from "./pipeline/book.ts";
-import { compilePage } from "./pipeline/compile.ts";
+import { compileChapter, compilePage } from "./pipeline/compile.ts";
+import { buildSearchDocs } from "./pipeline/search.ts";
 import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
@@ -62,6 +63,16 @@ function renderPage(lang: Lang, href: string): Response {
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 
+// The search index, built on demand to mirror build.ts's _book/{lang}/search.json.
+// Recomputed each request (cheap relative to a full book pass) so edits show up
+// without a restart, matching the hot client rebuild.
+function renderSearch(lang: Lang): Response {
+  const book = books[lang];
+  const ctx = ctxFor(lang);
+  const docs = book.chapters.flatMap((ch) => buildSearchDocs(compileChapter(book, ch, ctx), ch.href, lang));
+  return new Response(JSON.stringify(docs), { headers: { "content-type": "application/json; charset=utf-8" } });
+}
+
 const port = Number(process.env.PORT ?? 4321);
 Bun.serve({
   port,
@@ -79,6 +90,8 @@ Bun.serve({
         const f = Bun.file(join(repoRoot, "app", "static", route.file));
         return (await f.exists()) ? new Response(f) : new Response("not found", { status: 404 });
       }
+      case "search":
+        return renderSearch(route.lang);
       case "redirect":
         return Response.redirect(route.to, 302);
       case "page":

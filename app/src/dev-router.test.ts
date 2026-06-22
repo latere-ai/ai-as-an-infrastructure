@@ -27,6 +27,13 @@ test("resolveDevRoute maps language, chapter, figure, and apex routes", () => {
   // Regression: /favicon.svg fell through to the apex redirect and served HTML,
   // so the browser got no icon in dev. Root static assets must serve directly.
   expect(resolveDevRoute("/favicon.svg")).toEqual({ kind: "static", file: "favicon.svg" });
+
+  // Regression: the search modal fetches "<prefix>search.json" -> /{lang}/search.json.
+  // The static build writes that file, but the dev server lacked a route, so it
+  // fell through to "page" (compilePage returns null -> 404), the fetch's .json()
+  // threw, and search silently returned nothing under `make dev`.
+  expect(resolveDevRoute("/en/search.json")).toEqual({ kind: "search", lang: "en" });
+  expect(resolveDevRoute("/zh/search.json")).toEqual({ kind: "search", lang: "zh" });
 });
 
 // The language switch links to the same chapter under the other language

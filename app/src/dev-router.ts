@@ -9,6 +9,7 @@ export type DevRoute =
   | { kind: "client" } // the hydration bundle (/client.js)
   | { kind: "figure"; lang: Lang; file: string } // a figure under <lang>/figures/
   | { kind: "static"; file: string } // a root asset from app/static/ (e.g. favicon.svg)
+  | { kind: "search"; lang: Lang } // the per-language search index (/{lang}/search.json)
   | { kind: "redirect"; to: string } // apex / unknown -> a language home
   | { kind: "page"; lang: Lang; href: string }; // a chapter ("index" = lang home)
 
@@ -34,6 +35,11 @@ export function resolveDevRoute(pathname: string): DevRoute {
 
   const lang = m[1] as Lang;
   const rest = m[2] ?? "";
+
+  // The search modal fetches "<prefix>search.json", which resolves to
+  // /{lang}/search.json. The static build writes this file; the dev server has
+  // to generate it on demand or search silently returns nothing.
+  if (rest === "search.json") return { kind: "search", lang };
 
   // A chapter-relative "../figures/x" resolves to /{lang}/figures/x (or deeper),
   // so match "figures/" anywhere in the remainder.
