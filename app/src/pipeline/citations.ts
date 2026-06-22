@@ -14,7 +14,7 @@ export interface BibEntry {
   title: string;
   publisher?: string;
   url?: string;
-  tldr?: string; // one-sentence "what this paper is about", en (grounded in refs/papers/<key>.md)
+  tldr?: string; // one-sentence "what this paper is about", en
   tldrZh?: string; // the zh twin
   raw: Record<string, string>;
 }
@@ -44,6 +44,11 @@ function addEntries(entries: Map<string, BibEntry>, content: string): void {
     const authors: string[] = people.map((a: any) => surname(a));
     const year = String(f.year ?? f.date ?? "").match(/\d{4}/)?.[0] ?? "n.d.";
     const flat = (v: any): string => Array.isArray(v) ? v.map(flat).join(", ") : (v?.lastName ? `${v.lastName}` : String(v ?? ""));
+    // The same work recurs across chapter bibs; bibliographic fields are
+    // last-wins (later files may carry corrected metadata), but the tldr is
+    // carried forward from whichever copy defines it, so a tldr written in any
+    // one chapter's bib survives the merge regardless of filename sort order.
+    const prev = entries.get(e.key);
     entries.set(e.key, {
       key: e.key,
       authors,
@@ -51,8 +56,8 @@ function addEntries(entries: Map<string, BibEntry>, content: string): void {
       title: String(f.title ?? "").replace(/[{}]/g, ""),
       publisher: f.publisher ? String(f.publisher) : f.journal ? String(f.journal) : undefined,
       url: f.url ? String(f.url) : f.eprint ? `https://arxiv.org/abs/${f.eprint}` : undefined,
-      tldr: f.tldr ? String(f.tldr) : undefined,
-      tldrZh: f["tldr-zh"] ? String(f["tldr-zh"]) : undefined,
+      tldr: (f.tldr ? String(f.tldr) : undefined) ?? prev?.tldr,
+      tldrZh: (f["tldr-zh"] ? String(f["tldr-zh"]) : undefined) ?? prev?.tldrZh,
       raw: Object.fromEntries(Object.entries(f).map(([k, v]) => [k, flat(v)])),
     });
   }
@@ -117,7 +122,7 @@ export function renderBibliography(bib: Bibliography, lang: Lang = "en"): string
     const url = e.url ? ` <a href="${e.url}" rel="noopener">${esc(e.url)}</a>` : "";
     const pub = e.publisher ? ` ${esc(e.publisher)}.` : "";
     const meta = authors ? `<span class="rdr-ref-meta">${authors}.</span> ` : "";
-    // One-sentence "what this paper is about", grounded in refs/papers/<key>.md.
+    // One-sentence "what this paper is about", a TL;DR before clicking through.
     const tldrText = lang === "zh" ? e.tldrZh ?? e.tldr : e.tldr;
     const tldr = tldrText ? `<div class="rdr-ref-tldr">${esc(tldrText)}</div>` : "";
     return `<div class="rdr-ref" id="ref-${e.key}"><span class="rdr-ref-key">${label}</span> ${meta}<span class="rdr-ref-title">${esc(e.title)}.</span>${pub}${url}${tldr}</div>`;

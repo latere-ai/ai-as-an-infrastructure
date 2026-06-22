@@ -7,7 +7,8 @@ import { test, expect } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadBibliography, renderBibliography, renderCite, type Bibliography, type BibEntry } from "./citations.ts";
+import { mkdtempSync } from "node:fs";
+import { loadBibliography, loadBibliographyDir, renderBibliography, renderCite, type Bibliography, type BibEntry } from "./citations.ts";
 
 const entry = (e: Partial<BibEntry> & { key: string }): BibEntry => ({
   authors: [],
@@ -94,6 +95,23 @@ test("renders the tldr sentence, language-picked with zh→en fallback", () => {
   const zh = renderBibliography(bib, "zh");
   expect(zh).toContain("确立了损失随算力的幂律扩展。"); // zh tldr
   expect(zh).toContain("Shows ~20 tokens per parameter is compute-optimal."); // falls back to en
+});
+
+test("a tldr survives the merge when the same key recurs without one later", () => {
+  // Regression: the same work is defined in several chapter bibs; loadBibliographyDir
+  // merges them "last wins" by filename, which used to drop a tldr when a
+  // later-sorting bib lacked it. The tldr must carry forward across files.
+  const dir = mkdtempSync(join(tmpdir(), "cite-merge-"));
+  writeFileSync(join(dir, "a-has-tldr.bib"), `@article{dup2020,
+  title = {Dup}, author = {A, B}, year = {2020},
+  tldr  = {The summary that must survive.},
+}\n`);
+  writeFileSync(join(dir, "z-no-tldr.bib"), `@article{dup2020,
+  title = {Dup}, author = {A, B}, year = {2020},
+}\n`); // sorts AFTER a-has-tldr.bib, so it wins the bibliographic fields
+  const bib = loadBibliographyDir(dir);
+  bib.cited.add("dup2020");
+  expect(renderBibliography(bib, "en")).toContain("The summary that must survive.");
 });
 
 test("an entry without a tldr renders no tldr block", () => {
