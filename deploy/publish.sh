@@ -31,6 +31,10 @@ need() {
   command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
 }
 
+fetch_branch() {
+  git fetch --no-tags "$REMOTE" "+refs/heads/$BRANCH:refs/remotes/$REMOTE/$BRANCH"
+}
+
 need git
 need gh
 need kubectl
@@ -43,7 +47,7 @@ current_branch=$(git branch --show-current)
 
 [ -z "$(git status --porcelain)" ] || die "working tree is dirty; commit or stash changes before publishing"
 
-git fetch "$REMOTE" "$BRANCH" --tags
+fetch_branch
 counts=$(git rev-list --left-right --count "$REMOTE/$BRANCH...HEAD")
 set -- $counts
 behind="$1"
@@ -138,7 +142,7 @@ run_smoke() {
 wait_for_workflow render
 wait_for_workflow docker
 
-git fetch "$REMOTE" "$BRANCH" --tags
+fetch_branch
 remote_sha=$(git rev-parse "$REMOTE/$BRANCH")
 [ "$remote_sha" = "$sha" ] || die "$REMOTE/$BRANCH advanced while publishing; refusing to deploy stale $short_sha"
 
