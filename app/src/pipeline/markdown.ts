@@ -119,7 +119,7 @@ function postProcess(html: string, ctx: RenderContext): string {
   const prefix = figPrefix(ctx.currentHref);
   html = html.replace(/src="\/?figures\//g, `src="${prefix}`);
   // <p>…<img … id="fig-x" … alt="cap" …>…</p>  →  <figure>…<figcaption>
-  return html.replace(/<p>\s*(<img\b[^>]*\bid="(fig-[^"]+)"[^>]*>)\s*<\/p>/g, (_m, img: string, id: string) => {
+  html = html.replace(/<p>\s*(<img\b[^>]*\bid="(fig-[^"]+)"[^>]*>)\s*<\/p>/g, (_m, img: string, id: string) => {
     const alt = img.match(/\balt="([^"]*)"/)?.[1] ?? "";
     const num = ctx.xref.get(id)?.label ?? "";
     const numPart = num ? `<span class="rdr-fig-num">${num}.</span> ` : "";
@@ -127,6 +127,23 @@ function postProcess(html: string, ctx: RenderContext): string {
     const caption = alt || num ? `<figcaption>${numPart}${altHtml}</figcaption>` : "";
     return `<figure class="rdr-figure" id="${id}">${img}${caption}</figure>`;
   });
+  // Raw {=html} viz figures: <figure id="fig-x">…<figcaption>…  →  add the
+  // rdr-figure class and prepend the "Figure C.N." number, so interactive viz
+  // read as numbered, cross-referenceable figures like images and diagrams.
+  html = html.replace(/<figure(?![^>]*\brdr-figure\b)([^>]*\bid="(fig-[^"]+)"[^>]*)>([\s\S]*?)<\/figure>/g,
+    (_m, attrs: string, id: string, inner: string) => {
+      const num = ctx.xref.get(id)?.label ?? "";
+      const cls = attrs.match(/\bclass="([^"]*)"/);
+      const newAttrs = cls
+        ? attrs.replace(/\bclass="([^"]*)"/, `class="rdr-figure $1"`)
+        : `${attrs} class="rdr-figure"`;
+      if (num) {
+        const numPart = `<span class="rdr-fig-num">${num}.</span> `;
+        inner = inner.replace(/<figcaption>/, `<figcaption>${numPart}`);
+      }
+      return `<figure${newAttrs}>${inner}</figure>`;
+    });
+  return html;
 }
 
 export function renderMarkdown(src: string, ctx: RenderContext): RenderedChapter {

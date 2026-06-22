@@ -33,13 +33,14 @@ export function buildCrossref(book: Book): CrossrefMap {
       });
     }
 
-    // Figures: images ![..](..){#fig-x} and diagram blocks //| or %%| label: fig-x
-    // numbered by order of appearance within the chapter.
+    // Figures: images ![..](..){#fig-x}, diagram blocks //| or %%| label: fig-x,
+    // and raw {=html} viz figures <figure id="fig-x">, numbered by order of
+    // appearance within the chapter.
     let figN = 0;
-    const figRe = /\{#(fig-[a-z0-9-]+)|(?:\/\/\||%%\|)\s*label:\s*(fig-[a-z0-9-]+)/g;
+    const figRe = /\{#(fig-[a-z0-9-]+)|(?:\/\/\||%%\|)\s*label:\s*(fig-[a-z0-9-]+)|id="(fig-[a-z0-9-]+)"/g;
     let m: RegExpExecArray | null;
     while ((m = figRe.exec(text))) {
-      const figId = m[1] ?? m[2];
+      const figId = m[1] ?? m[2] ?? m[3];
       if (!figId || map.has(figId)) continue;
       figN++;
       const numLabel = ch.num ? `${ch.num}.${figN}` : String(figN);

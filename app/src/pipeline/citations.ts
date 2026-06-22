@@ -23,7 +23,10 @@ export interface Bibliography {
 
 function surname(name: { lastName?: string; firstName?: string; name?: string }): string {
   if (name.lastName) return name.lastName;
-  if (name.name) return name.name.split(/\s+/).slice(-1)[0];
+  // A literal/corporate author (bibtex `{{Google DeepMind}}`) parses as a whole
+  // `name` with no first/last split; use it verbatim. Taking the last token here
+  // would mangle it ("DeepMind", "Face", "AI", "Biases").
+  if (name.name) return name.name;
   return "?";
 }
 

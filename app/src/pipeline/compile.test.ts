@@ -55,6 +55,18 @@ test("compilePage fills the references page from a whole-book pass", () => {
   expect(page!.contentHtml).toContain('id="ref-');
 });
 
+test("a '$'-bearing title survives slot filling (no replacement-pattern splicing)", () => {
+  // Bug: the ::: {#refs} slot was filled with a string replacement, so a "$1" in
+  // a reference title (e.g. NucNet's "secures $1 billion") was read as a regex
+  // backreference, splicing the slot's own <div> into the title text.
+  const book = loadBook("en", repoRoot);
+  const page = compilePage(book, "references", ctxFor());
+  expect(page).not.toBeNull();
+  expect(page!.contentHtml).toContain("$1 billion");
+  // the slot wrapper must appear exactly once, not duplicated inside an entry
+  expect(page!.contentHtml.match(/id="refs"/g)?.length ?? 0).toBe(1);
+});
+
 test("compilePage returns null for an unknown href", () => {
   const book = loadBook("en", repoRoot);
   expect(compilePage(book, "no-such-page", ctxFor())).toBeNull();

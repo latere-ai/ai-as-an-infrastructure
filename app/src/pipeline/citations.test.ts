@@ -62,6 +62,19 @@ test("an edited volume (editor, no author) cites by editor name, not the bibtex 
   expect(cite).not.toContain(">beyer2016sre"); // the key must not leak into the text
 });
 
+test("a multi-word corporate author keeps its whole name, not the last token", () => {
+  // Regression: bibtex `{{Google DeepMind}}` parses as a literal name; surname()
+  // used to take the last token, citing it as "DeepMind" (and "Face", "AI", …).
+  const path = join(tmpdir(), `cite-corp-${process.pid}.bib`);
+  writeFileSync(path, `@misc{gdm2024, author = {{Google DeepMind}}, title = {Gemini}, year = {2024}}
+@misc{wandb2024, author = {{Weights & Biases}}, title = {W&B}, year = {2024}}\n`);
+  const bib = loadBibliography(path);
+  expect(renderCite(bib, { keys: ["gdm2024"], bare: true })).toContain(">Google DeepMind (2024)<");
+  const refs = renderBibliography({ entries: bib.entries, cited: new Set(["gdm2024", "wandb2024"]) });
+  expect(refs).toContain("[Google DeepMind 2024]");
+  expect(refs).toContain("[Weights &amp; Biases 2024]");
+});
+
 test("only cited works appear", () => {
   const a = entry({ key: "a2020", authors: ["A"], year: "2020", title: "A" });
   const b = entry({ key: "b2021", authors: ["B"], year: "2021", title: "B" });

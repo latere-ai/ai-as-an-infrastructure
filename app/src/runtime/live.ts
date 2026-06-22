@@ -14,6 +14,14 @@
   var PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v0.27.2/full/';
   var BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
   var pyPromise = null;
+  // Matplotlib's bundled fonts (DejaVu Sans) have no CJK glyphs, so Chinese
+  // labels in zh runnable cells render as tofu boxes. Fetch a CJK font on
+  // demand (only when the code contains CJK) and register it with matplotlib.
+  var CJK_FONT_URL = 'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@main/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf';
+  var CJK_FONT_PATH = '/fonts/NotoSansSC-Regular.otf';
+  var CJK_FONT_NAME = 'Noto Sans SC';
+  var CJK_RE = /[⺀-⿟　-〿㐀-䶿一-鿿豈-﫿＀-￯]/;
+  var cjkFontPromise = null;
 
   // Minimal, dependency-free Python highlighter for the editor overlay. Strings
   // and comments are matched before identifiers so keywords inside them stay
@@ -61,6 +69,28 @@
     return pyPromise;
   }
 
+  // Fetch the CJK font once and register it with matplotlib's font manager so
+  // Chinese labels in zh cells render instead of tofu boxes. Cached per page;
+  // failures degrade to tofu rather than breaking execution.
+  function ensureCjkFont(py, status) {
+    if (!cjkFontPromise) {
+      cjkFontPromise = (async function () {
+        status('Loading CJK font, first run only...');
+        var buf = await fetch(CJK_FONT_URL).then(function (r) {
+          if (!r.ok) throw new Error('font ' + r.status);
+          return r.arrayBuffer();
+        });
+        py.FS.mkdirTree('/fonts');
+        py.FS.writeFile(CJK_FONT_PATH, new Uint8Array(buf));
+        py.runPython([
+          'import matplotlib.font_manager as __fm',
+          '__fm.fontManager.addfont(' + JSON.stringify(CJK_FONT_PATH) + ')'
+        ].join('\n'));
+      })().catch(function (e) { cjkFontPromise = null; throw e; });
+    }
+    return cjkFontPromise;
+  }
+
   // Style matplotlib to match the reader: paper-colored canvas (so it blends
   // into the cell instead of a white rectangle), themed text/grid, despined
   // axes, thicker lines, a calmer color cycle. Colors come from the live CSS
@@ -88,6 +118,13 @@
     '        "axes.prop_cycle": mpl.cycler(color=cyc),',
     '        "lines.linewidth": 2.1, "font.size": 11, "legend.frameon": False,',
     '    })',
+    // When the cell contains CJK, prefer the registered CJK font (it also
+    // carries Latin glyphs) and disable the Unicode-minus glyph, which the
+    // CJK font lacks, so axis numbers keep their hyphen-minus.
+    '    if __t.get("cjk"):',
+    '        mpl.rcParams["font.family"] = "sans-serif"',
+    '        mpl.rcParams["font.sans-serif"] = ["' + CJK_FONT_NAME + '", "DejaVu Sans"]',
+    '        mpl.rcParams["axes.unicode_minus"] = False',
     'def __run_user_code(__src, __theme_json):',
     '    __out = io.StringIO()',
     '    __old = sys.stdout',
@@ -146,11 +183,19 @@
     try {
       // Load common packages on demand if the code imports them.
       var pkgs = [];
+      var usesMpl = /matplotlib|pyplot|plt/.test(code);
       if (/\b(numpy|np)\b/.test(code)) pkgs.push('numpy');
-      if (/matplotlib|pyplot|plt/.test(code)) pkgs.push('matplotlib');
+      if (usesMpl) pkgs.push('matplotlib');
       if (pkgs.length) { status('Loading ' + pkgs.join(', ') + '...'); await py.loadPackage(pkgs); }
+      var theme = readTheme();
+      // CJK labels only matter once matplotlib is loaded; fetch the font lazily.
+      if (usesMpl && CJK_RE.test(code)) {
+        try { await ensureCjkFont(py, status); theme.cjk = true; }
+        catch (e) { /* fall back to tofu rather than failing the run */ }
+      }
+      status('Running...');
       py.runPython(HARNESS);
-      var res = py.globals.get('__run_user_code')(code, JSON.stringify(readTheme()));
+      var res = py.globals.get('__run_user_code')(code, JSON.stringify(theme));
       var data = JSON.parse(res);
       outEl.textContent = data.out || '';
       if (data.img) { imgEl.src = 'data:image/svg+xml;base64,' + data.img; imgEl.style.display = 'block'; }

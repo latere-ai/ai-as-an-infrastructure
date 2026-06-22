@@ -10,6 +10,16 @@ test("the viz runtime registers the superposition component", () => {
   expect(rt).toMatch(/R\['superposition'\]\s*=\s*function/);
 });
 
+test("viz theme reads palette vars from .reader, not body's default-black color", () => {
+  // getComputedStyle(document.body).color defaults to black, invisible on the
+  // dark canvas. The theme must read --fg-1/--bg-surface off .reader instead.
+  const theme = rt.slice(rt.indexOf("function theme()"), rt.indexOf("function el("));
+  expect(theme).toContain("querySelector('.reader')");
+  expect(theme).toContain("getPropertyValue('--fg-1')");
+  expect(theme).toContain("getPropertyValue('--bg-surface')");
+  expect(theme).not.toContain("getComputedStyle(document.body)");
+});
+
 test("ch32 mechanistic-interpretability uses superposition in both languages", () => {
   expect(src("en/safety/01-mechanistic-interpretability.qmd")).toContain('data-viz="superposition"');
   expect(src("zh/safety/01-mechanistic-interpretability.qmd")).toContain('data-viz="superposition"');

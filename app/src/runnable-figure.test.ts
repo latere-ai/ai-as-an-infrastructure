@@ -18,6 +18,20 @@ test("SVG text is flattened to paths so it renders identically inside the <img>"
   expect(rt).toMatch(/"svg\.fonttype":\s*"path"/);
 });
 
+test("CJK code triggers loading and registering a CJK font (no tofu boxes)", () => {
+  // DejaVu Sans (matplotlib's default) has no CJK glyphs, so zh labels render
+  // as tofu. The runtime must detect CJK, fetch a CJK font, register it with
+  // the font manager, and select it in rcParams.
+  expect(rt).toMatch(/CJK_RE\s*=\s*\/\[/);
+  expect(rt).toMatch(/CJK_RE\.test\(code\)/);
+  expect(rt).toContain("fontManager.addfont");
+  expect(rt).toMatch(/"font\.sans-serif"\]\s*=\s*\["' \+ CJK_FONT_NAME/);
+  // The CJK font lacks the Unicode minus glyph, so it must be disabled.
+  expect(rt).toContain('"axes.unicode_minus"] = False');
+  // The font is only fetched when matplotlib is actually used.
+  expect(rt).toMatch(/usesMpl && CJK_RE\.test\(code\)/);
+});
+
 test("the figure canvas is transparent (no baked-in background color)", () => {
   expect(rt).toMatch(/"figure\.facecolor":\s*"none",\s*"axes\.facecolor":\s*"none"/);
 });

@@ -32,7 +32,9 @@ export interface FurtherReadingEntry {
 
 function surname(name: { lastName?: string; firstName?: string; name?: string }): string {
   if (name.lastName) return name.lastName;
-  if (name.name) return name.name.split(/\s+/).slice(-1)[0];
+  // Literal/corporate author ("{{Google DeepMind}}"): use the whole name, not
+  // the last token, so it reads "Google DeepMind" not "DeepMind".
+  if (name.name) return name.name;
   return "?";
 }
 

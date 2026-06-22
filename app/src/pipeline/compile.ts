@@ -100,20 +100,26 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     glossaryUsed: ctx.glossaryUsed,
     glossaryFirstUses: ctx.glossaryFirstUses,
   });
+  // Fill an aggregate ::: slot's body with generated HTML. Uses a replacement
+  // FUNCTION, not a string: the generated content can contain "$" sequences (a
+  // "$1 billion" in a title, a "$&" in a URL) that String.replace would
+  // otherwise interpret as backreferences and splice the wrong text in.
+  const fillSlot = (id: string, body: () => string) =>
+    html.replace(new RegExp(`(<div class="rdr-block"[^>]*id="${id}"[^>]*>)([\\s\\S]*?)(</div>)`), (_m, open: string, _cur: string, close: string) => open + body() + close);
   // References page: fill the ::: {#refs} slot with the cited-only bibliography.
   if (ch.href === "references") {
-    html = html.replace(/(<div class="rdr-block"[^>]*id="refs"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderBibliography(ctx.bib)}$3`);
+    html = fillSlot("refs", () => renderBibliography(ctx.bib));
   }
   // Glossary page: fill the ::: {#glossary} slot with every term used in the book.
   // book order ends with the back matter, so glossaryUsed is complete by here.
   if (ch.href === "glossary") {
-    html = html.replace(/(<div class="rdr-block"[^>]*id="glossary"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderGlossaryPage(ctx.glossary, ctx.glossaryUsed, ctx.glossaryFirstUses, book.lang)}$3`);
+    html = fillSlot("glossary", () => renderGlossaryPage(ctx.glossary, ctx.glossaryUsed, ctx.glossaryFirstUses, book.lang));
   }
   // Chapter "Further reading": fill the ::: {#further-reading} slot from
   // refs/<slug>.bib (the per-chapter literature store).
   if (html.includes('id="further-reading"')) {
     const slug = ch.href.split("/").pop()!.replace(/\.html$/, "");
-    html = html.replace(/(<div class="rdr-block"[^>]*id="further-reading"[^>]*>)([\s\S]*?)(<\/div>)/, `$1${renderFurtherReading(ctx.refsDir, slug, book.lang, ctx.xref, ch.href, prefix)}$3`);
+    html = fillSlot("further-reading", () => renderFurtherReading(ctx.refsDir, slug, book.lang, ctx.xref, ch.href, prefix));
   }
   const { prev, next } = prevNext(book, ch.href);
   const isPartIntro = ch.role === "part";

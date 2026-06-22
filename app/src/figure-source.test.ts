@@ -29,6 +29,41 @@ test("figure source scripts use stable number-free names and output paths", () =
   }
 });
 
+test("scatter labels sit top-right by default and only flip left on overflow", () => {
+  // Every label should read the same way relative to its dot (top-right), so a
+  // short label near the right edge like 'policy' must NOT be pushed to the
+  // left; it stays left-anchored (text-anchor: start) like the others.
+  const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
+  expect(catalog).toContain("FigureCanvasAgg");
+  expect(catalog).toMatch(/right_data > xmax/);
+  const fieldMap = readFileSync(join(repoRoot, "zh", "figures", "field-map-1.svg"), "utf8");
+  expect(fieldMap).toMatch(/text-anchor: start;[^>]*>政策/);
+  // A label that would overflow the right edge (closed frontier, x=0.86) flips
+  // to the left and is right-anchored so it stays inside the plot box.
+  const landscape = readFileSync(join(repoRoot, "zh", "figures", "model-landscape-1.svg"), "utf8");
+  expect(landscape).toMatch(/text-anchor: end;[^>]*>闭源前沿/);
+});
+
+test("figure 2.2 (field-map-stack) is a graphviz figure with all 11 substantive parts", () => {
+  for (const lang of ["en", "zh"]) {
+    const qmd = readFileSync(join(repoRoot, lang, "orientation", "02-field-map.qmd"), "utf8");
+    // Migrated to a {dot} block (auto-laid-out, selectable text), not a static
+    // SVG image and not mermaid.
+    expect(qmd).toMatch(/```\{dot\}\n\/\/\| label: fig-field-map-stack/);
+    expect(qmd).not.toContain("/figures/field-map-stack.svg");
+    // Part XI must be present (it was missing from the old mermaid diagram).
+    expect(qmd).toContain("PXI");
+    expect(qmd).toMatch(/PVI -> PXI/);
+  }
+  // The matplotlib renderer/spec for this figure was fully removed.
+  const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
+  expect(catalog).not.toContain("field-map-stack");
+  expect(catalog).not.toContain("_layered");
+  // Heading reflects the real part count (was "ten parts").
+  expect(readFileSync(join(repoRoot, "en", "orientation", "02-field-map.qmd"), "utf8")).toContain("eleven parts");
+  expect(readFileSync(join(repoRoot, "zh", "orientation", "02-field-map.qmd"), "utf8")).toContain("十一个部分");
+});
+
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();

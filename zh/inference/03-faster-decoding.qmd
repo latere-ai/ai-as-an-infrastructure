@@ -23,12 +23,12 @@ rng = np.random.default_rng(0)
 alpha, gamma, trials = 0.7, 4, 50000
 
 def simulate():
-    emitted = np.ones(trials)            # the corrected/bonus token
-    alive = np.ones(trials, dtype=bool)  # runs not yet rejected
+    emitted = np.ones(trials)            # 修正／奖励词元
+    alive = np.ones(trials, dtype=bool)  # 尚未被拒绝的运行
     for _ in range(gamma):
         accept = (rng.random(trials) < alpha) & alive
-        emitted += accept                # count each accepted draft token
-        alive &= accept                  # stop at first rejection
+        emitted += accept                # 计入每个被接受的草稿词元
+        alive &= accept                  # 在首次拒绝处停止
     return emitted.mean()
 
 closed_form = (1 - alpha**(gamma + 1)) / (1 - alpha)
@@ -41,7 +41,7 @@ print(f"closed-form  tokens/pass:   {closed_form:.4f}")
 
 决定性的设计抉择，是验证如何保住正确性，而让该方法可以放心部署的答案是：它能被做成精确的。@gls-speculative-decoding由 Leviathan 等 [@leviathan2023fast] 与 Chen 等 [@chen2023accelerating] 独立提出，正保证了这一点。一个小的草稿模型提出一段 $\gamma$ 个词元的续写。目标模型在一次并行传播中给所有 $\gamma$ 个位置打分，在每个位置同时给出它自己的分布 $p$ 与草稿的分布 $q$。这里 $p$ 是最终必须保持不变的目标分布，$q$ 是便宜草稿分布。一条修正过的拒绝采样规则随后从左到右逐个接受或拒绝草稿词元：从 $q$ 提出的词元 $x$ 以概率 $\min(1, p(x)/q(x))$ 被接受，而在第一次拒绝处，从残差分布 $\max(0, p - q)$ 归一化后重采样出一个修正词元。这个残差只保留目标分布比草稿分布多出来的概率质量，用来补回被拒绝处的缺口。这条规则背后的定理是：被接受的词元流，其分布恰如它逐词元地从 $p$ 采样而来 [@leviathan2023fast]。加速是真实的，而输出分布丝毫未动。该方法不是对模型的近似，它就是同一个模型，只是以不同的顺序被采样。
 
-<figure>
+<figure id="fig-faster-decoding-stepper">
 <div class="viz" data-viz="stepper">
 <div data-chip="草稿" data-title="1 · 草稿提出">廉价的草稿模型猜出一段 γ 个词元，每个都从它自己的分布 q 采样而来。</div>
 <div data-chip="打分" data-title="2 · 目标打分">一次目标传播同时给所有 γ 个位置打分，在每个位置给出真实分布 p 与草稿分布 q。</div>
@@ -88,7 +88,7 @@ Hydra [@ankner2024hydra] 修正了这个独立性的局限。它的草稿头是�
 
 ### 把猜测训练进去
 
-最后一步把猜测折进了训练。多词元预测 [@gloeckle2024multi] 用若干共享主干的输出头训练基座模型，使每个位置一次预测后续 $n$ 个词元。作者发现这作为辅助目标能提升样本效率，而关键在于，那些额外的头在推理时兼作内建的草稿器。DeepSeek-V3 [@deepseek2024deepseekv3] 把这带进了一个前沿系统：它的 MTP 模块与主模型一同训练，随后被复用于投机解码，据报告它的第二个预测词元有 80% 到 90% 的时间被接受，并把生成吞吐量提高约 1.8 倍。
+最后一步把猜测折进了训练。多词元预测 [@gloeckle2024multi] 用若干共享主干的输出头训练基座模型，使每个位置一次预测后续 $n$ 个词元。作者发现这作为辅助目标能提升样本效率，而关键在于，那些额外的头在推断时兼作内建的草稿器。DeepSeek-V3 [@deepseek2024deepseekv3] 把这带进了一个前沿系统：它的 MTP 模块与主模型一同训练，随后被复用于投机解码，据报告它的第二个预测词元有 80% 到 90% 的时间被接受，并把生成吞吐量提高约 1.8 倍。
 
 ```{mermaid}
 %%| label: fig-faster-decoding-lineage
@@ -154,11 +154,11 @@ flowchart TB
 for i in range(gamma):
     r = uniform(0, 1)
     if r < min(1, p[i][x[i]] / q[i][x[i]]):
-        emit(x[i])              # accepted, no extra target step
+        emit(x[i])              # 被接受，无需额外的目标步
     else:
-        emit(sample(normalize(relu(p[i] - q[i]))))  # corrected token
-        break                   # stop at first rejection
-# if all gamma accepted, sample one bonus token from p[gamma]
+        emit(sample(normalize(relu(p[i] - q[i]))))  # 修正词元
+        break                   # 在首次拒绝处停止
+# 若全部 gamma 个都被接受，从 p[gamma] 采样一个奖励词元
 ```
 
 让它精确的两个细节是：拒绝时从残差 $\max(0, p - q)$ 重采样，以及在一段全接受之后的奖励词元；残差项表示目标分布相对草稿分布尚未覆盖的概率质量，两者合起来正是分布保持定理所要求的。对于自草稿与基于树的方法，同样的接受逻辑跑在一棵树而非一条线上：一个树注意力掩码让单次目标传播给每个分支打分，而穿过那棵树的最长被接受路径被发出。@fig-faster-decoding-tree 展示了这为何胜过线性草稿。一条线性草稿只押注一种续写，于是一次早早的拒绝就浪费掉它之后的一切。一棵树则在每个位置上对若干续写做对冲，树注意力掩码几乎以一次的代价在同一次目标传播里给它们全部打分。目标随后发出每个词元都被接受的那条最长路径。

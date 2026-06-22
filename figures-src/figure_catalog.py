@@ -90,14 +90,37 @@ def _stacked(name, spec):
 
 
 def _scatter(name, spec):
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
     fig, ax = new_fig(spec.get("width", 5.0), spec.get("height", 3.0))
-    for point in spec["points"]:
-        ax.scatter(point["x"], point["y"], s=point.get("s", 42), color=point.get("color", DATA), zorder=3)
-        ax.text(point["x"] + point.get("dx", 0.025), point["y"] + point.get("dy", 0.02), point["label"], color=INK, fontsize=8)
-    ax.set_xlabel(spec["xlabel"], color=INK)
-    ax.set_ylabel(spec["ylabel"], color=INK)
     ax.set_xlim(*spec.get("xlim", (0, 1)))
     ax.set_ylim(*spec.get("ylim", (0, 1)))
+    gap = 0.025
+    pending = []
+    for point in spec["points"]:
+        dy = point.get("dy", 0.02)
+        ax.scatter(point["x"], point["y"], s=point.get("s", 42), color=point.get("color", DATA), zorder=3)
+        if "dx" in point or "ha" in point:
+            # Explicit manual placement (escape hatch for special cases).
+            dx = point.get("dx", gap)
+            ha = point.get("ha", "right" if dx < 0 else "left")
+            ax.text(point["x"] + dx, point["y"] + dy, point["label"], color=INK, fontsize=8, ha=ha)
+        else:
+            # Default: top-right, left-aligned, so every label reads the same
+            # way relative to its dot. Flip to the left only if it would spill
+            # past the right edge (measured below), keeping it inside the plot.
+            txt = ax.text(point["x"] + gap, point["y"] + dy, point["label"], color=INK, fontsize=8, ha="left")
+            pending.append((txt, point["x"]))
+    xmax = ax.get_xlim()[1]
+    renderer = FigureCanvasAgg(fig).get_renderer()
+    inv = ax.transData.inverted()
+    for txt, px in pending:
+        right_data = inv.transform((txt.get_window_extent(renderer).x1, 0.0))[0]
+        if right_data > xmax:
+            txt.set_x(px - gap)
+            txt.set_ha("right")
+    ax.set_xlabel(spec["xlabel"], color=INK)
+    ax.set_ylabel(spec["ylabel"], color=INK)
     finish(fig, ax, name, grid=spec.get("grid", True))
 
 
@@ -114,6 +137,7 @@ def _funnel(name, spec):
     ax.set_xlabel(spec["xlabel"], color=INK)
     ax.set_xlim(0, spec.get("xmax", max(values) * 1.1))
     finish(fig, ax, name, grid=spec.get("grid", False))
+
 
 
 SPECS = {
@@ -134,7 +158,7 @@ SPECS = {
             {"label": "scaling", "x": 0.24, "y": 0.78, "color": DATA},
             {"label": "serving", "x": 0.52, "y": 0.62, "color": ACCENT},
             {"label": "agents", "x": 0.75, "y": 0.38, "color": WARN},
-            {"label": "policy", "x": 0.86, "y": 0.22, "color": MUTED, "dx": -0.16},
+            {"label": "policy", "x": 0.86, "y": 0.22, "color": MUTED},
         ],
         "xlabel": "system coupling",
         "ylabel": "measurement maturity",
@@ -203,7 +227,7 @@ SPECS = {
             {"label": "text", "x": 0.20, "y": 0.84, "color": DATA},
             {"label": "vision", "x": 0.38, "y": 0.62, "color": ACCENT},
             {"label": "world model", "x": 0.64, "y": 0.42, "color": WARN},
-            {"label": "robot", "x": 0.84, "y": 0.20, "color": MUTED, "dx": -0.10},
+            {"label": "robot", "x": 0.84, "y": 0.20, "color": MUTED},
         ],
         "xlabel": "action horizon",
         "ylabel": "supervision density",
@@ -214,7 +238,7 @@ SPECS = {
             {"label": "prompt", "x": 0.08, "y": 0.40, "color": MUTED},
             {"label": "LoRA", "x": 0.20, "y": 0.70, "color": DATA},
             {"label": "adapter", "x": 0.36, "y": 0.75, "color": ACCENT},
-            {"label": "full SFT", "x": 0.86, "y": 0.88, "color": WARN, "dx": -0.16},
+            {"label": "full SFT", "x": 0.86, "y": 0.88, "color": WARN},
         ],
         "xlabel": "trainable parameters",
         "ylabel": "task adaptation",
@@ -283,7 +307,7 @@ SPECS = {
             {"label": "chat", "x": 0.12, "y": 0.18, "color": MUTED},
             {"label": "tool use", "x": 0.36, "y": 0.38, "color": DATA},
             {"label": "planner", "x": 0.58, "y": 0.58, "color": ACCENT},
-            {"label": "autonomous", "x": 0.82, "y": 0.82, "color": WARN, "dx": -0.20},
+            {"label": "autonomous", "x": 0.82, "y": 0.82, "color": WARN},
         ],
         "xlabel": "autonomy",
         "ylabel": "blast radius",
@@ -307,7 +331,7 @@ SPECS = {
             {"label": "dry run", "x": 0.18, "y": 0.25, "color": MUTED},
             {"label": "container", "x": 0.42, "y": 0.55, "color": DATA},
             {"label": "VM", "x": 0.66, "y": 0.74, "color": ACCENT},
-            {"label": "remote sandbox", "x": 0.84, "y": 0.88, "color": WARN, "dx": -0.24},
+            {"label": "remote sandbox", "x": 0.84, "y": 0.88, "color": WARN},
         ],
         "xlabel": "runtime cost",
         "ylabel": "isolation strength",
@@ -336,8 +360,8 @@ SPECS = {
         "points": [
             {"label": "cat", "x": 0.22, "y": 0.72, "color": DATA},
             {"label": "kitten", "x": 0.30, "y": 0.78, "color": DATA},
-            {"label": "invoice", "x": 0.72, "y": 0.28, "color": ACCENT, "dx": -0.15},
-            {"label": "receipt", "x": 0.80, "y": 0.34, "color": ACCENT, "dx": -0.16},
+            {"label": "invoice", "x": 0.72, "y": 0.28, "color": ACCENT},
+            {"label": "receipt", "x": 0.80, "y": 0.34, "color": ACCENT},
             {"label": "hard negative", "x": 0.52, "y": 0.56, "color": WARN},
         ],
         "xlabel": "embedding dimension 1",
@@ -516,8 +540,8 @@ SPECS = {
     "model-landscape-1": {
         "type": "scatter",
         "points": [
-            {"label": "closed frontier", "x": 0.86, "y": 0.30, "color": DATA, "dx": -0.24},
-            {"label": "open weights", "x": 0.62, "y": 0.72, "color": ACCENT, "dx": -0.18},
+            {"label": "closed frontier", "x": 0.86, "y": 0.30, "color": DATA},
+            {"label": "open weights", "x": 0.62, "y": 0.72, "color": ACCENT},
             {"label": "specialized", "x": 0.45, "y": 0.60, "color": WARN},
             {"label": "local small", "x": 0.25, "y": 0.84, "color": MUTED},
         ],
@@ -550,8 +574,8 @@ SPECS = {
         "points": [
             {"label": "small", "x": 0.20, "y": 0.42, "color": MUTED},
             {"label": "cheap frontier", "x": 0.48, "y": 0.68, "color": ACCENT},
-            {"label": "frontier", "x": 0.82, "y": 0.88, "color": DATA, "dx": -0.14},
-            {"label": "overkill", "x": 0.92, "y": 0.72, "color": WARN, "dx": -0.14},
+            {"label": "frontier", "x": 0.82, "y": 0.88, "color": DATA},
+            {"label": "overkill", "x": 0.92, "y": 0.72, "color": WARN},
         ],
         "xlabel": "serving cost",
         "ylabel": "task quality",
@@ -595,8 +619,8 @@ SPECS = {
         "points": [
             {"label": "browser only", "x": 0.18, "y": 0.22, "color": MUTED},
             {"label": "container", "x": 0.42, "y": 0.54, "color": DATA},
-            {"label": "ephemeral VM", "x": 0.68, "y": 0.76, "color": ACCENT, "dx": -0.18},
-            {"label": "privileged host", "x": 0.88, "y": 0.34, "color": WARN, "dx": -0.22},
+            {"label": "ephemeral VM", "x": 0.68, "y": 0.76, "color": ACCENT},
+            {"label": "privileged host", "x": 0.88, "y": 0.34, "color": WARN},
         ],
         "xlabel": "task freedom",
         "ylabel": "containment",
@@ -657,8 +681,8 @@ SPECS = {
         "points": [
             {"label": "batch", "x": 0.24, "y": 0.78, "color": DATA},
             {"label": "stream", "x": 0.72, "y": 0.46, "color": WARN},
-            {"label": "curated stream", "x": 0.60, "y": 0.70, "color": ACCENT, "dx": -0.22},
-            {"label": "raw firehose", "x": 0.88, "y": 0.22, "color": MUTED, "dx": -0.22},
+            {"label": "curated stream", "x": 0.60, "y": 0.70, "color": ACCENT},
+            {"label": "raw firehose", "x": 0.88, "y": 0.22, "color": MUTED},
         ],
         "xlabel": "freshness",
         "ylabel": "quality control",
