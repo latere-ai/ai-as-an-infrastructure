@@ -14,12 +14,14 @@ serve: build
 test: build
 	go test ./...
 
-# Build the static site into _book/{en,zh} (what the pre-commit hook runs).
+# Build the static site into _book/{en,zh}. Generated output, not committed;
+# the Go server embeds it (see `make serve`) and the Docker build compiles it.
 build:
 	cd app && bun install --frozen-lockfile && bun run build
 
-# Generate the vendored English social-share cards into _book/og/ (on demand;
-# slow, needs headless Chrome). Re-run after adding or retitling chapters.
+# Generate the English social-share cards into app/static/og (on demand; slow,
+# needs headless Chrome). These are committed source; `make build` copies them
+# into _book/og. Re-run and commit after adding or retitling chapters.
 og:
 	cd app && bun run og
 
