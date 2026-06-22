@@ -64,6 +64,20 @@ test("a curated def wins over the first-use sentence, per language", () => {
   expect(zh).toContain('<p class="rdr-gls-explain">一次读完整个提示词的算力受限阶段。</p>');
 });
 
+test("the page is ordered by first occurrence, not alphabetically", () => {
+  const zee: GlossEntry = { key: "zee", en: "zebra", zh: "斑马" };
+  const ay: GlossEntry = { key: "ay", en: "apple", zh: "苹果" };
+  const g = new Map([["zee", zee], ["ay", ay]]);
+  // zebra is met first (Chapter 1), apple later (Chapter 9); alphabetical would
+  // flip them, occurrence order must keep zebra first.
+  const firstUses: GlossFirstUseMap = new Map([
+    ["zee", { key: "zee", href: "a", title: "T", chapterNum: "1", sentence: "" }],
+    ["ay", { key: "ay", href: "b", title: "T", chapterNum: "9", sentence: "" }],
+  ]);
+  const html = renderGlossaryPage(g, new Set(["zee", "ay"]), firstUses, "en");
+  expect(html.indexOf("gls-zee")).toBeLessThan(html.indexOf("gls-ay"));
+});
+
 test("a degenerate first-use sentence is suppressed when there is no def", () => {
   const e: GlossEntry = { key: "prefill", en: "prefill", zh: "预填充" };
   const g = new Map([["prefill", e]]);

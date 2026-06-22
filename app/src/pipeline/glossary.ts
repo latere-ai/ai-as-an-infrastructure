@@ -89,7 +89,14 @@ export function renderGlossaryPage(gloss: Glossary, used: Set<string>, firstUses
   const chapterLabel = (u: GlossFirstUse) =>
     u.chapterNum ? `${lang === "zh" ? `第 ${u.chapterNum} 章` : `Chapter ${u.chapterNum}`} · ${esc(u.title)}` : esc(u.title);
   const entries = [...used].map((k) => gloss.get(k)).filter((e): e is GlossEntry => !!e);
-  entries.sort((a, b) => (lang === "zh" ? a.zh.localeCompare(b.zh, "zh") : a.en.localeCompare(b.en)));
+  // Order the page by where a reader meets each term, not alphabetically: the
+  // book compiles in order and firstUses records each term at first sighting, so
+  // its insertion order is exactly chapter-then-occurrence. Terms with no
+  // recorded first use sort last, alphabetically, as a stable fallback.
+  const occurrence = new Map<string, number>();
+  for (const k of firstUses.keys()) occurrence.set(k, occurrence.size);
+  const rank = (k: string) => (occurrence.has(k) ? occurrence.get(k)! : Number.MAX_SAFE_INTEGER);
+  entries.sort((a, b) => rank(a.key) - rank(b.key) || (lang === "zh" ? a.zh.localeCompare(b.zh, "zh") : a.en.localeCompare(b.en)));
   const items = entries.map((e) => {
     const enLabel = e.abbr && e.abbr !== e.en ? `${esc(e.en)} (${esc(e.abbr)})` : esc(e.en);
     const lead = lang === "zh" ? esc(e.zh) : enLabel;
