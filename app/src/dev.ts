@@ -11,6 +11,7 @@ import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
+import { DEV_CHAPTER_HREF } from "./dev-chapter.ts";
 import { join } from "node:path";
 
 const css = await Bun.file(new URL("./theme.css", import.meta.url)).text();
@@ -18,7 +19,11 @@ const repoRoot = new URL("../../", import.meta.url).pathname;
 const book = loadBook("en", repoRoot);
 const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
 const ctx = { bib: loadBibliographyDir(join(repoRoot, "refs")), xref: buildCrossref(book), graphviz: await loadGraphviz(), refsDir: join(repoRoot, "refs"), glossary, glossaryUsed: new Set<string>(), glossaryFirstUses: new Map() };
-const devChapter = compileChapter(book, book.chapters.find((c) => c.href.includes("03-scaling-laws"))!, ctx);
+const sampleChapter = book.chapters.find((c) => c.href === DEV_CHAPTER_HREF);
+if (!sampleChapter) {
+  throw new Error(`dev server: sample chapter "${DEV_CHAPTER_HREF}" not found in en book.yml (see dev-chapter.ts)`);
+}
+const devChapter = compileChapter(book, sampleChapter, ctx);
 
 async function buildClient(): Promise<string> {
   const out = await Bun.build({
