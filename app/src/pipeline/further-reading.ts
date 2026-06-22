@@ -111,14 +111,14 @@ function renderEntry(e: FurtherReadingEntry, lang: Lang, xref: CrossrefMap, curr
   if (e.type === "book") {
     const authors = e.authorsFull.length ? `${esc(e.authorsFull.join("; "))}. ` : "";
     const pub = e.publisher ? `${esc(e.publisher)}, ` : "";
-    return `<li>${authors}<em>${esc(e.title)}</em>${glossPart}. ${pub}${e.year}.${link}${tldr}</li>`;
+    return `<li>${authors}<em class="rdr-fr-title">${esc(e.title)}</em>${glossPart}. ${pub}${e.year}.${link}${tldr}</li>`;
   }
 
   // Papers and everything else: 'Surname et al., "Title" (gloss), year. [link]'.
   const authors = e.authors.length ? `${esc(authorsLabel(e.authors))}, ` : "";
   const titlePart = gloss
-    ? `&ldquo;${esc(e.title)}&rdquo;${glossPart},`
-    : `&ldquo;${esc(e.title)},&rdquo;`;
+    ? `<span class="rdr-fr-title">&ldquo;${esc(e.title)}&rdquo;</span>${glossPart},`
+    : `<span class="rdr-fr-title">&ldquo;${esc(e.title)},&rdquo;</span>`;
   return `<li>${authors}${titlePart} ${e.year}.${link}${tldr}</li>`;
 }
 
