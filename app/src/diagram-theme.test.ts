@@ -9,6 +9,16 @@ test("mermaid diagrams inherit the reader theme instead of Mermaid's light fills
   expect(css).toMatch(/\.mermaid svg \.edgePath \.path,[\s\S]*stroke:\s*var\(--fg-3\)\s*!important/);
 });
 
+test("dark mode keeps classDef-highlighted mermaid labels dark on their pastel fill", () => {
+  // Mermaid writes classDef fills inline with !important, so a highlighted node
+  // keeps its light pastel fill in dark mode; its label must not inherit the
+  // light --fg-1 (which would vanish against the pastel). The fix targets such
+  // nodes by the inline fill on their rect and forces the label dark.
+  expect(css).toMatch(
+    /:root\[data-theme="dark"\] \.mermaid svg \.node:has\(rect\[style\*="fill"\]\)[\s\S]*?color:\s*#1f2937\s*!important/,
+  );
+});
+
 test("diagram labels are transparent-backed, never a solid box", () => {
   // A label foreignObject painted with var(--bg) drew a darker box that did not
   // match the content surface, on both node labels (inside the lighter node
