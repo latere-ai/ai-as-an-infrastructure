@@ -35,6 +35,11 @@ const STRINGS: Record<Lang, Strings> = {
 
 const LS_KEY = "aaai-reader-settings";
 
+const SIDEBAR_EXTERNAL_LINKS = [
+  { label: "About Author", href: "https://changkun.de" },
+  { label: "About Latere AI", href: "https://latere.ai" },
+] as const;
+
 // latere brand mark (from ../latere-ai LatereLogoMark.vue).
 function LatereLogo() {
   return (
@@ -535,6 +540,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
     <aside style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: "var(--bg-surface)", display: "flex", flexDirection: "column", paddingTop: 18, alignSelf: "stretch", minHeight: 0 }}>
       <SearchTrigger t={t} onOpen={onOpenSearch} />
       <nav ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", paddingBottom: 60 }}>
+        <SidebarExternalLinks />
         {chapter.toc.map((part) => {
           const active = !!part.active || part.chapters.some((ch) => ch.active);
           if (part.single) {
@@ -605,6 +611,24 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
         })}
       </nav>
     </aside>
+  );
+}
+
+function SidebarExternalLinks() {
+  return (
+    <div style={{ margin: "0 0 10px", padding: "0 0 10px", borderBottom: "1px solid var(--border)" }}>
+      {SIDEBAR_EXTERNAL_LINKS.map((link) => (
+        <a key={link.href} href={link.href} target="_blank" rel="noreferrer" style={{
+          display: "block",
+          padding: "7px 18px",
+          fontSize: 13.5,
+          fontWeight: 500,
+          color: "var(--fg-2)",
+          textDecoration: "none",
+          borderLeft: "2px solid transparent",
+        }}>{link.label}</a>
+      ))}
+    </div>
   );
 }
 
