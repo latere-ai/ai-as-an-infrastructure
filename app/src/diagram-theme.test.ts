@@ -40,11 +40,15 @@ test("bare <figure> viz blocks get the same framing and muted caption as numbere
 
 test("part-opening blockquotes render as pinned quote panels", () => {
   const blockquoteRule = css.match(/\.rdr-article blockquote \{[\s\S]*?\}/)?.[0] ?? "";
+  const quoteTextRule = css.match(/\.rdr-article blockquote p:first-child \{[\s\S]*?\}/)?.[0] ?? "";
+  const quoteAttributionRule = css.match(/\.rdr-article blockquote p:last-child \{[\s\S]*?\}/)?.[0] ?? "";
   expect(blockquoteRule).toContain("position: relative");
   expect(blockquoteRule).toContain("border-left: 4px solid");
   expect(blockquoteRule).toContain("background: color-mix");
   expect(css).toMatch(/\.rdr-article blockquote::after \{[\s\S]*?-webkit-mask:\s*url/);
-  expect(css).toMatch(/\.rdr-article blockquote p:first-child \{[\s\S]*?font-family:\s*var\(--font-serif\)/);
+  expect(quoteTextRule).toContain("font-family: var(--font-serif)");
+  expect(quoteTextRule).toContain("font-size: 1.55rem");
+  expect(quoteAttributionRule).toContain("font-size: 1.2rem");
   expect(css).toMatch(/\.rdr-article blockquote p:last-child::before \{ content:\s*"-- "\s*; \}/);
 });
 

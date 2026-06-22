@@ -402,11 +402,11 @@ function MetaRow({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   ].filter((i) => i.v);
   if (!items.length) return null;
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 24, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+    <div className="rdr-meta-row" style={{ display: "flex", flexWrap: "wrap", gap: "10px 28px", paddingTop: 14, borderTop: "1px solid var(--border)" }}>
       {items.map((i) => (
-        <div key={i.l}>
-          <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 3 }}>{i.l}</div>
-          <div style={{ fontSize: 14, color: "var(--fg-1)" }}>{i.v}</div>
+        <div key={i.l} className="rdr-meta-item" style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+          <span className="rdr-meta-label" style={{ flex: "none", fontSize: 11, color: "var(--fg-3)" }}>{i.l}</span>
+          <span className="rdr-meta-value" style={{ minWidth: 0, fontSize: 14, color: "var(--fg-1)" }}>{i.v}</span>
         </div>
       ))}
     </div>
