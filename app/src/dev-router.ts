@@ -8,11 +8,20 @@ import type { Lang } from "./types.ts";
 export type DevRoute =
   | { kind: "client" } // the hydration bundle (/client.js)
   | { kind: "figure"; lang: Lang; file: string } // a figure under <lang>/figures/
+  | { kind: "static"; file: string } // a root asset from app/static/ (e.g. favicon.svg)
   | { kind: "redirect"; to: string } // apex / unknown -> a language home
   | { kind: "page"; lang: Lang; href: string }; // a chapter ("index" = lang home)
 
+// Root assets the static build copies to _book/ (build.ts). The dev server must
+// serve these directly so the favicon resolves as on the deployed site, instead
+// of falling through to the apex redirect and returning HTML.
+const STATIC_ROOT_ASSETS = new Set(["favicon.svg"]);
+
 export function resolveDevRoute(pathname: string): DevRoute {
   if (pathname === "/client.js") return { kind: "client" };
+
+  const asset = pathname.slice(1);
+  if (STATIC_ROOT_ASSETS.has(asset)) return { kind: "static", file: asset };
 
   const m = pathname.match(/^\/(en|zh)(?:\/(.*))?$/);
   if (!m) {

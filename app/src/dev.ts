@@ -75,6 +75,10 @@ Bun.serve({
         const f = Bun.file(join(repoRoot, route.lang, "figures", route.file));
         return (await f.exists()) ? new Response(f) : new Response("not found", { status: 404 });
       }
+      case "static": {
+        const f = Bun.file(join(repoRoot, "app", "static", route.file));
+        return (await f.exists()) ? new Response(f) : new Response("not found", { status: 404 });
+      }
       case "redirect":
         return Response.redirect(route.to, 302);
       case "page":

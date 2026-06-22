@@ -23,6 +23,10 @@ test("resolveDevRoute maps language, chapter, figure, and apex routes", () => {
   expect(resolveDevRoute("/en/figures/scaling-laws-2.svg")).toEqual({ kind: "figure", lang: "en", file: "scaling-laws-2.svg" });
   expect(resolveDevRoute("/zh/figures/scaling-laws-2.svg")).toEqual({ kind: "figure", lang: "zh", file: "scaling-laws-2.svg" });
   expect(resolveDevRoute("/figures/scaling-laws-2.svg")).toEqual({ kind: "figure", lang: "en", file: "scaling-laws-2.svg" });
+
+  // Regression: /favicon.svg fell through to the apex redirect and served HTML,
+  // so the browser got no icon in dev. Root static assets must serve directly.
+  expect(resolveDevRoute("/favicon.svg")).toEqual({ kind: "static", file: "favicon.svg" });
 });
 
 // The language switch links to the same chapter under the other language
