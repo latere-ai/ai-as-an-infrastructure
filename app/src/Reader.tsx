@@ -12,7 +12,7 @@ type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
   palette: string; ink: string; clay: string; rose: string; theme: string; light: string; dark: string;
   body: string; sans: string; kai: string; size: string; layout: string;
-  codex: string; manuscript: string; atlas: string; prev: string; next: string; lang: string; resize: string;
+  codex: string; manuscript: string; atlas: string; prev: string; next: string; language: string; resize: string;
   author: string; updated: string; readtimeLabel: string; noResults: string;
 };
 
@@ -21,14 +21,14 @@ const STRINGS: Record<Lang, Strings> = {
     sidebar: "目录侧栏", onThisPage: "本页目录", settings: "阅读设置", search: "搜索章节…",
     palette: "配色", ink: "墨纸", clay: "靛蓝", rose: "玫瑰", theme: "主题", light: "浅色", dark: "深色",
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
-    codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", lang: "EN", resize: "拖动调整宽度",
+    codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", language: "语言", resize: "拖动调整宽度",
     author: "作者", updated: "更新于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
   },
   en: {
     sidebar: "Sidebar", onThisPage: "On this page", settings: "Reading settings", search: "Search chapters…",
     palette: "Palette", ink: "Ink", clay: "Azure", rose: "Rose", theme: "Theme", light: "Light", dark: "Dark",
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
-    codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", lang: "中", resize: "Drag to resize",
+    codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", language: "Language", resize: "Drag to resize",
     author: "Author", updated: "Updated", readtimeLabel: "Reading time", noResults: "No matching results",
   },
 } as const;
@@ -81,6 +81,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const [tocDrawer, setTocDrawer] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
 
   // Spotlight search: Cmd/Ctrl+K opens it from anywhere (preventDefault so the
   // browser does not steal the chord for its address bar / search shortcut).
@@ -119,6 +120,16 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   useEffect(() => {
     try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch {}
   }, [s]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const el = settingsRef.current;
+      if (el && !el.contains(e.target as Node)) setSettingsOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [settingsOpen]);
 
   // The <main> column is the scroll container (the design model: a fixed-height
   // shell with a non-moving header). Progress + active heading track it.
@@ -298,13 +309,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           </button>
         )}
 
-        <a href={chapter.langHref} style={{
-          flex: "none", height: 34, padding: "0 12px", display: "inline-flex", alignItems: "center", gap: 6,
-          border: "1px solid var(--border-strong)", background: "var(--bg)", borderRadius: "var(--radius-md)",
-          color: "var(--fg-1)", textDecoration: "none", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600,
-        }}>{t.lang}</a>
-
-        <div style={{ position: "relative" }}>
+        <div ref={settingsRef} style={{ position: "relative" }}>
           <button onClick={() => setSettingsOpen((o) => !o)} title={t.settings} aria-label={t.settings} style={iconBtn(settingsOpen)}>
             <Icon d={<><path d="M2 4.5h7M11 4.5h3M2 11.5h3M7 11.5h7" strokeLinecap="round" /><circle cx="10" cy="4.5" r="2" /><circle cx="5.5" cy="11.5" r="2" /></>} />
           </button>
@@ -694,6 +699,12 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
     border: "none", cursor: "pointer", minWidth: 30, fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 500,
     padding: "4px 11px", borderRadius: "var(--radius-sm)", color: active ? "var(--bg-surface)" : "var(--fg-2)", background: active ? "var(--accent)" : "transparent",
   });
+  const langChoice = (value: Lang, text: string) => {
+    const active = chapter.lang === value;
+    const style: React.CSSProperties = { ...segBtn(active), flex: 1, cursor: active ? "default" : "pointer", textAlign: "center", textDecoration: "none" };
+    if (active) return <span key={value} aria-current="page" style={style}>{text}</span>;
+    return <a key={value} href={chapter.langHref} style={style}>{text}</a>;
+  };
   const Seg = <T extends string>(cur: T, opts: { v: T; l: string }[], on: (v: T) => void) => (
     <div style={seg}>{opts.map((o) => <button key={o.v} style={segBtn(cur === o.v)} onClick={() => on(o.v)}>{o.l}</button>)}</div>
   );
@@ -702,7 +713,8 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
       position: "absolute", top: 42, right: 0, zIndex: 60, width: 264, padding: "14px 16px 16px",
       background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-lg)",
     }}>
-      <div style={{ ...row, marginTop: 0, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
+      <div style={{ ...row, marginTop: 0 }}><span style={label}>{t.language}</span><div style={seg}>{langChoice("en", "English")}{langChoice("zh", "中文")}</div></div>
+      <div style={{ ...row, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
         <span style={label}>{t.palette}</span>
         <div style={{ ...seg, width: "100%" }}>
           {([{ v: "ink", l: t.ink }, { v: "clay", l: t.clay }, { v: "rose", l: t.rose }] as { v: Palette; l: string }[]).map((o) => (
