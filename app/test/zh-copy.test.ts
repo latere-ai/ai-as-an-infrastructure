@@ -886,3 +886,19 @@ test("polished prose avoids canned lesson connectors", () => {
   expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
   expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
 });
+
+test("polished prose avoids read-as-analysis scaffolds", () => {
+  const enBanned = /best read by|field read by|To see why, we have to ask/;
+  const zhBanned =
+    /按各自在押注哪种带宽解法来读|按各家在优化什么来读|按各家针对带宽墙在优化什么、而非按峰值 FLOPs 来读|按「少浪费一点缓存」来读/;
+
+  const enOffenders = qmdFiles(enRoot).filter((path) =>
+    enBanned.test(readFileSync(path, "utf8")),
+  );
+  const zhOffenders = qmdFiles(zhRoot).filter((path) =>
+    zhBanned.test(readFileSync(path, "utf8")),
+  );
+
+  expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
+  expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
+});
