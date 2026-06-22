@@ -108,7 +108,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     html.replace(new RegExp(`(<div class="rdr-block"[^>]*id="${id}"[^>]*>)([\\s\\S]*?)(</div>)`), (_m, open: string, _cur: string, close: string) => open + body() + close);
   // References page: fill the ::: {#refs} slot with the cited-only bibliography.
   if (ch.href === "references") {
-    html = fillSlot("refs", () => renderBibliography(ctx.bib));
+    html = fillSlot("refs", () => renderBibliography(ctx.bib, book.lang));
   }
   // Glossary page: fill the ::: {#glossary} slot with every term used in the book.
   // book order ends with the back matter, so glossaryUsed is complete by here.

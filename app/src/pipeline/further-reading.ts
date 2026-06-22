@@ -27,6 +27,8 @@ export interface FurtherReadingEntry {
   eprint?: string;
   note?: string; // en gloss
   noteZh?: string; // zh gloss
+  tldr?: string; // one-sentence "what this paper is about", en
+  tldrZh?: string; // the zh twin
   inFurther: boolean; // false → cited inline but kept out of Further reading
 }
 
@@ -69,6 +71,8 @@ export function furtherReadingEntries(refsDir: string, slug: string): FurtherRea
       eprint,
       note: f.note ? String(f.note) : undefined,
       noteZh: f["note-zh"] ? String(f["note-zh"]) : undefined,
+      tldr: f.tldr ? String(f.tldr) : undefined,
+      tldrZh: f["tldr-zh"] ? String(f["tldr-zh"]) : undefined,
       // An entry that exists only to back an inline [@key] is marked
       // `further = {no}` so it resolves citations but stays out of the list.
       inFurther: !["no", "false", "0"].includes(String(f.further ?? "").toLowerCase()),
@@ -98,12 +102,16 @@ function renderEntry(e: FurtherReadingEntry, lang: Lang, xref: CrossrefMap, curr
   // Resolve @sec-/@fig- cross-refs that a gloss may carry, on the escaped text.
   const glossPart = gloss ? ` (${resolveXrefsInText(esc(gloss), xref, currentHref, prefix)})` : "";
   const link = e.url ? ` <a href="${esc(e.url)}" rel="noopener">${esc(linkText(e))}</a>` : "";
+  // One-sentence "what this paper is about", a TL;DR before the reader clicks
+  // through. zh falls back to the en sentence until translated.
+  const tldrText = lang === "zh" ? e.tldrZh ?? e.tldr : e.tldr;
+  const tldr = tldrText ? `<div class="rdr-fr-tldr">${resolveXrefsInText(esc(tldrText), xref, currentHref, prefix)}</div>` : "";
 
   // Books: Chicago-ish "Surname, First. *Title.* Publisher, year. [host]".
   if (e.type === "book") {
     const authors = e.authorsFull.length ? `${esc(e.authorsFull.join("; "))}. ` : "";
     const pub = e.publisher ? `${esc(e.publisher)}, ` : "";
-    return `<li>${authors}<em>${esc(e.title)}</em>${glossPart}. ${pub}${e.year}.${link}</li>`;
+    return `<li>${authors}<em>${esc(e.title)}</em>${glossPart}. ${pub}${e.year}.${link}${tldr}</li>`;
   }
 
   // Papers and everything else: 'Surname et al., "Title" (gloss), year. [link]'.
@@ -111,7 +119,7 @@ function renderEntry(e: FurtherReadingEntry, lang: Lang, xref: CrossrefMap, curr
   const titlePart = gloss
     ? `&ldquo;${esc(e.title)}&rdquo;${glossPart},`
     : `&ldquo;${esc(e.title)},&rdquo;`;
-  return `<li>${authors}${titlePart} ${e.year}.${link}</li>`;
+  return `<li>${authors}${titlePart} ${e.year}.${link}${tldr}</li>`;
 }
 
 // HTML <ul> that fills the ::: {#further-reading} slot for a chapter.

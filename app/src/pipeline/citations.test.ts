@@ -75,6 +75,32 @@ test("a multi-word corporate author keeps its whole name, not the last token", (
   expect(refs).toContain("[Weights &amp; Biases 2024]");
 });
 
+test("renders the tldr sentence, language-picked with zh→en fallback", () => {
+  const withZh = entry({
+    key: "kaplan2020", authors: ["Kaplan"], year: "2020", title: "Scaling",
+    tldr: "Establishes power-law scaling of loss in compute.",
+    tldrZh: "确立了损失随算力的幂律扩展。",
+  });
+  const enOnly = entry({
+    key: "hoffmann2022", authors: ["Hoffmann"], year: "2022", title: "Chinchilla",
+    tldr: "Shows ~20 tokens per parameter is compute-optimal.",
+  });
+  const bib = bibOf([withZh, enOnly], ["kaplan2020", "hoffmann2022"]);
+
+  const en = renderBibliography(bib, "en");
+  expect(en).toContain('<div class="rdr-ref-tldr">Establishes power-law scaling of loss in compute.</div>');
+  expect(en).toContain("Shows ~20 tokens per parameter is compute-optimal.");
+
+  const zh = renderBibliography(bib, "zh");
+  expect(zh).toContain("确立了损失随算力的幂律扩展。"); // zh tldr
+  expect(zh).toContain("Shows ~20 tokens per parameter is compute-optimal."); // falls back to en
+});
+
+test("an entry without a tldr renders no tldr block", () => {
+  const e = entry({ key: "x2020", authors: ["X"], year: "2020", title: "X" });
+  expect(renderBibliography(bibOf([e], ["x2020"]))).not.toContain("rdr-ref-tldr");
+});
+
 test("only cited works appear", () => {
   const a = entry({ key: "a2020", authors: ["A"], year: "2020", title: "A" });
   const b = entry({ key: "b2021", authors: ["B"], year: "2021", title: "B" });

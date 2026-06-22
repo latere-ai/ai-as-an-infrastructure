@@ -5,6 +5,7 @@
 import { parse as parseBib } from "@retorquere/bibtex-parser";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import type { Lang } from "../types.ts";
 
 export interface BibEntry {
   key: string;
@@ -13,6 +14,8 @@ export interface BibEntry {
   title: string;
   publisher?: string;
   url?: string;
+  tldr?: string; // one-sentence "what this paper is about", en (grounded in refs/papers/<key>.md)
+  tldrZh?: string; // the zh twin
   raw: Record<string, string>;
 }
 
@@ -48,6 +51,8 @@ function addEntries(entries: Map<string, BibEntry>, content: string): void {
       title: String(f.title ?? "").replace(/[{}]/g, ""),
       publisher: f.publisher ? String(f.publisher) : f.journal ? String(f.journal) : undefined,
       url: f.url ? String(f.url) : f.eprint ? `https://arxiv.org/abs/${f.eprint}` : undefined,
+      tldr: f.tldr ? String(f.tldr) : undefined,
+      tldrZh: f["tldr-zh"] ? String(f["tldr-zh"]) : undefined,
       raw: Object.fromEntries(Object.entries(f).map(([k, v]) => [k, flat(v)])),
     });
   }
@@ -98,8 +103,9 @@ export function renderCite(bib: Bibliography, tok: CiteToken, prefix = ""): stri
   return `(${parts.join("; ")})`;
 }
 
-// Full bibliography list, cited-only, sorted by first author then year.
-export function renderBibliography(bib: Bibliography): string {
+// Full bibliography list, cited-only, sorted by first author then year. `lang`
+// picks the TL;DR language (zh falls back to the en tldr until translated).
+export function renderBibliography(bib: Bibliography, lang: Lang = "en"): string {
   const cited = [...bib.cited].map((k) => bib.entries.get(k)).filter((e): e is BibEntry => !!e);
   cited.sort((a, b) => (a.authors[0] ?? "").localeCompare(b.authors[0] ?? "") || a.year.localeCompare(b.year));
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -111,7 +117,10 @@ export function renderBibliography(bib: Bibliography): string {
     const url = e.url ? ` <a href="${e.url}" rel="noopener">${esc(e.url)}</a>` : "";
     const pub = e.publisher ? ` ${esc(e.publisher)}.` : "";
     const meta = authors ? `<span class="rdr-ref-meta">${authors}.</span> ` : "";
-    return `<div class="rdr-ref" id="ref-${e.key}"><span class="rdr-ref-key">${label}</span> ${meta}<span class="rdr-ref-title">${esc(e.title)}.</span>${pub}${url}</div>`;
+    // One-sentence "what this paper is about", grounded in refs/papers/<key>.md.
+    const tldrText = lang === "zh" ? e.tldrZh ?? e.tldr : e.tldr;
+    const tldr = tldrText ? `<div class="rdr-ref-tldr">${esc(tldrText)}</div>` : "";
+    return `<div class="rdr-ref" id="ref-${e.key}"><span class="rdr-ref-key">${label}</span> ${meta}<span class="rdr-ref-title">${esc(e.title)}.</span>${pub}${url}${tldr}</div>`;
   });
   return `<div class="rdr-refs">${items.join("\n")}</div>`;
 }
