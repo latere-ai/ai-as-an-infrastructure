@@ -903,3 +903,14 @@ test("polished prose avoids read-as-analysis scaffolds", () => {
   expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
   expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
 });
+
+test("public prose avoids internal draft markers", () => {
+  const banned = /marked as `TODO`|标为 `TODO`|FIXME|TBD|待补|待写/;
+  const offenders = [...qmdFiles(enRoot), ...qmdFiles(zhRoot)].filter((path) =>
+    banned.test(readFileSync(path, "utf8")),
+  );
+
+  expect(
+    offenders.map((path) => path.replace(repoRoot + "/", "")),
+  ).toEqual([]);
+});
