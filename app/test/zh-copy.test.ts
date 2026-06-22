@@ -164,7 +164,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/adaptation/04-synthetic-data-self-improvement.qmd",
-      ["训练信号就必须来自别处", "数据飞轮", "每个回路都有自己的天花板", "受判断者质量所界定"],
+      ["训练信号就必须来自别处", "数据飞轮", "每个回路都有自己的上限", "受判断者质量所界定"],
     ],
     [
       "en/adaptation/index.qmd",
