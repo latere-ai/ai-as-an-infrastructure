@@ -29,17 +29,20 @@ reading.
 ## Build and verify
 
 - `make dev` runs the reader dev server (`app/`, hot client rebuild).
-- `make build` builds both languages into `_book/{en,zh}` (Bun SSG). This is
-  also what `.githooks/pre-commit` runs on every commit, so `_book` is vendored
-  (committed); enable the hook once per clone with
-  `git config core.hooksPath .githooks`.
-- `make og` regenerates the vendored English social-share cards into `_book/og/`
+- `make build` builds both languages into `_book/{en,zh}` (Bun SSG). `_book` is
+  generated output, NOT committed (gitignored): it is compiled inside the Docker
+  build and embedded into the Go server binary, so there is no vendored HTML.
+- `make serve` builds `_book` then runs the production Go server (`main.go`),
+  which embeds `_book` (`//go:embed`) and serves it on :8080. `make test` runs
+  the server's routing-contract tests (redirects, canonicalization, caching).
+- `make og` regenerates the English social-share cards into `app/static/og/`
   (Open Graph / Twitter cards, one 1200x630 PNG per chapter; on demand; slow —
-  headless Chrome). Re-run after adding or retitling a chapter. `make build`
-  warns (does not fail) if a page references a card PNG that is missing.
+  headless Chrome). These ARE committed (source assets); `make build` copies
+  them into `_book/og/` and warns (does not fail) if a referenced card is
+  missing. Re-run and commit after adding or retitling a chapter.
 - The build is the test: `make build` must compile both books. CI (`render.yml`)
-  lints the `.qmd` sources and runs the Bun build; a broken build is a broken
-  commit.
+  lints the `.qmd` sources, runs the Bun build, and runs `go test`; a broken
+  build is a broken commit.
 
 ## Writing conventions
 
@@ -49,9 +52,10 @@ reading.
 
 ## Deploy
 
-The book deploys to `aaai.latere.ai` as a static-serving nginx container behind
-the shared K8s ingress. `_book` is vendored, so `docker.yml` just packs the
-committed HTML into the image (no render in CI). Deploy = push `main` → image →
+The book deploys to `aaai.latere.ai` as a single self-contained Go binary
+(scratch image, the whole book embedded) behind the shared K8s ingress. The
+multi-stage `Dockerfile` compiles `_book` from source and embeds it into the
+binary (`docker.yml` builds it; no vendored HTML). Deploy = push `main` → image →
 `kubectl rollout restart deployment/aaai-web -n latere`. See `deploy/prod/` and
 `.github/workflows/`. DNS is one A record in `../terraform/dns.tf`; the header
 link lives in `../latere-ai`.

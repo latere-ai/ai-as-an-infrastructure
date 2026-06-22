@@ -53,16 +53,20 @@ papered over. See [`CONVENTIONS.md`](CONVENTIONS.md).
 
 A custom React + Bun reader (`app/`) compiles the bilingual `.qmd` sources to
 static HTML in `_book/{en,zh}`. The book is web-only: its runnable cells, viz
-components, and interactive diagrams do not survive a static PDF or EPUB.
+components, and interactive diagrams do not survive a static PDF or EPUB. In
+production a single Go binary (`main.go`) embeds `_book` and serves it; `_book`
+itself is generated output and is not committed.
 
 ```sh
 make dev     # live reader dev server (hot client rebuild)
-make build   # build both languages into _book/{en,zh} (what the pre-commit hook and CI run)
-make og      # regenerate the vendored social-share cards (on demand)
+make build   # build both languages into _book/{en,zh}
+make serve   # build _book, then run the production Go server (:8080)
+make test    # routing-contract tests for the Go server
+make og      # regenerate the social-share cards in app/static/og (on demand)
 make lint    # style/diagram lint on the .qmd sources
 ```
 
-CI builds both `en` and `zh` on every push and pull request.
+CI builds both `en` and `zh` and runs the server tests on every push and pull request.
 
 ## License
 
