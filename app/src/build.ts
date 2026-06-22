@@ -14,6 +14,7 @@ import { loadGlossary } from "./pipeline/glossary.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDocs } from "./pipeline/search.ts";
+import { buildAfterBody } from "./runtime.ts";
 import { BASE, ogImageUrl } from "./site.ts";
 import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -36,16 +37,8 @@ const clientJs = await built.outputs[0].text();
 // browser fetches the new bundle instead of a stale cached one on every deploy.
 const clientHash = Bun.hash(clientJs).toString(36).slice(0, 10);
 
-// Reuse the proven runtime scripts (verbatim, framework-free IIFEs) + mermaid.
-const runtime = (f: string) => existsSync(join(repoRoot, f)) ? readFileSync(join(repoRoot, f), "utf8") : "";
-const mermaidInit = `<script type="module">
-import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
-mermaid.initialize({ startOnLoad: false, theme: "neutral", securityLevel: "loose" });
-// The reader calls this after hydration (it owns the article DOM).
-window.__rdrMermaid = () => mermaid.run({ querySelector: ".mermaid:not([data-processed='true'])" }).catch(() => {});
-if (window.__rdrRuntimesReady) window.__rdrRuntimesReady();
-</script>`;
-const afterBody = runtime("live-runtime.html") + runtime("viz-runtime.html") + mermaidInit;
+// Runnable-cell + viz runtime IIFEs + mermaid init (shared with the dev server).
+const afterBody = buildAfterBody(repoRoot);
 
 const graphviz = await loadGraphviz();
 const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
