@@ -6,7 +6,7 @@
 
 import { test, expect } from "bun:test";
 import { page } from "./html.ts";
-import { OG_W, OG_H } from "./site.ts";
+import { OG_W, OG_H, SITE_DESCRIPTION, SITE_NAME } from "./site.ts";
 import type { ChapterData } from "./types.ts";
 
 const base: ChapterData = {
@@ -71,4 +71,13 @@ test("the home page is og:type website and points at /og/index.png", () => {
   const html = render(home); // no share → falls back to derived index image
   expect(html).toContain('<meta property="og:type" content="website">');
   expect(html).toContain('<meta property="og:image" content="https://aaai.latere.ai/og/index.png">');
+});
+
+test("the home page shares as the book, not as Preface", () => {
+  const home: ChapterData = { ...base, title: "Preface", path: "", chapterNum: "" };
+  const html = render(home, { title: "Preface", description: "Preface excerpt.", imageUrl: "https://aaai.latere.ai/og/index.png" });
+  expect(html).toContain(`<title>${SITE_NAME}</title>`);
+  expect(html).toContain(`<meta property="og:title" content="${SITE_NAME}">`);
+  expect(html).toContain(`<meta property="og:description" content="${SITE_DESCRIPTION}">`);
+  expect(html).not.toContain('property="og:title" content="Preface"');
 });

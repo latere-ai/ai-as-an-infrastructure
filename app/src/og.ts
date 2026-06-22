@@ -13,7 +13,7 @@ import { loadBook } from "./pipeline/book.ts";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
-import { SITE_NAME, AUTHOR, OG_W, OG_H } from "./site.ts";
+import { SITE_NAME, AUTHOR, OG_W, OG_H, SITE_CARD_EYEBROW, SITE_DESCRIPTION } from "./site.ts";
 
 const repoRoot = new URL("../../", import.meta.url).pathname;
 const ogRoot = join(repoRoot, "app", "static", "og");
@@ -55,7 +55,6 @@ function cardHtml(eyebrow: string, title: string, tagline: string): string {
   .tagline { margin-top: 26px; font-size: 26px; line-height: 1.4; color: #5c5851; max-width: 30ch; }
   .bottom { display: flex; align-items: flex-end; justify-content: space-between; }
   .author { font-weight: 600; font-size: 25px; color: #1f1d1a; }
-  .kind { font-size: 21px; color: #5c5851; margin-top: 4px; }
   .domain { font-weight: 500; font-size: 23px; color: #5c5851; }
   .rule { height: 5px; width: 96px; background: #2d63a8; border-radius: 3px; margin-bottom: 30px; }
 </style></head>
@@ -68,7 +67,7 @@ function cardHtml(eyebrow: string, title: string, tagline: string): string {
     ${tagline ? `<div class="tagline">${esc(tagline)}</div>` : ""}
   </div>
   <div class="bottom">
-    <div><div class="author">${esc(AUTHOR)}</div><div class="kind">A design-first technical book</div></div>
+    <div class="author">${esc(AUTHOR)}</div>
     <div class="domain">aaai.latere.ai</div>
   </div>
 </body></html>`;
@@ -78,8 +77,7 @@ function cardHtml(eyebrow: string, title: string, tagline: string): string {
 // with the book itself; front/back matter (Preface, References) have no part.
 function cardFor(href: string, partLabel: string, num: string, title: string) {
   if (href === "index") {
-    return { eyebrow: "A bilingual technical book", title: SITE_NAME,
-      tagline: "The lifecycle of a capability, from compute to a deployed, governed behavior." };
+    return { eyebrow: SITE_CARD_EYEBROW, title: SITE_NAME, tagline: SITE_DESCRIPTION };
   }
   const eyebrow = num ? `${shortPart(partLabel)} · Chapter ${num}` : (partLabel ? shortPart(partLabel) : "");
   return { eyebrow, title, tagline: "" };
@@ -90,8 +88,13 @@ function screenshot(htmlPath: string, outPath: string): boolean {
     "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
     `--window-size=${OG_W},${OG_H}`, "--virtual-time-budget=8000",
     `--screenshot=${outPath}`, `file://${htmlPath}`,
-  ], { stdio: "ignore" });
-  return r.status === 0 && existsSync(outPath);
+  ], { encoding: "utf8" });
+  const ok = r.status === 0 && existsSync(outPath);
+  if (!ok && process.env.OG_DEBUG) {
+    const detail = [r.stderr, r.stdout].filter(Boolean).join("\n").trim();
+    console.error(`chrome failed for ${htmlPath}: status=${r.status} signal=${r.signal}${detail ? `\n${detail}` : ""}`);
+  }
+  return ok;
 }
 
 rmSync(tmpDir, { recursive: true, force: true });

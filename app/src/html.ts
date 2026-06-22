@@ -4,7 +4,7 @@
 
 import type { ChapterData } from "./types.ts";
 import { DEFAULT_SETTINGS } from "./types.ts";
-import { BASE, SITE_NAME, AUTHOR, OG_W, OG_H, ogImageUrl } from "./site.ts";
+import { BASE, SITE_NAME, AUTHOR, OG_W, OG_H, SITE_DESCRIPTION, ogImageUrl } from "./site.ts";
 
 // Applied before first paint so a returning reader's saved theme/palette (the
 // CSS keys off data-theme/data-palette on <html>) is set before the body paints,
@@ -34,7 +34,8 @@ export function page(opts: {
   share?: { title: string; description: string; imageUrl: string };
 }): string {
   const { chapter, bodyHtml, css, clientHref, afterBody = "" } = opts;
-  const title = `${chapter.title} · ${SITE_NAME}`;
+  const isHome = chapter.path === "";
+  const title = isHome ? SITE_NAME : `${chapter.title} · ${SITE_NAME}`;
   const data = JSON.stringify(chapter).replace(/</g, "\\u003c");
   // Per-language canonical URLs + hreflang so both languages are independently
   // indexable and Google serves the right one. en/zh share the chapter path.
@@ -46,13 +47,13 @@ export function page(opts: {
   // Social share card. Always English (the user-facing requirement): the card
   // title/description come from the English twin via `share`; the home page is a
   // "website", inner pages "article". The PNG is generated on demand by `make og`.
-  const ogHref = chapter.path === "" ? "index" : chapter.path;
+  const ogHref = isHome ? "index" : chapter.path;
   const card = {
-    title: opts.share?.title ?? chapter.title,
-    description: opts.share?.description ?? chapter.description,
+    title: isHome ? SITE_NAME : (opts.share?.title ?? chapter.title),
+    description: isHome ? SITE_DESCRIPTION : (opts.share?.description ?? chapter.description),
     imageUrl: opts.share?.imageUrl ?? ogImageUrl(ogHref),
   };
-  const ogType = chapter.path === "" ? "website" : "article";
+  const ogType = isHome ? "website" : "article";
   const social = [
     `<meta property="og:type" content="${ogType}">`,
     `<meta property="og:site_name" content="${attr(SITE_NAME)}">`,
