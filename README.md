@@ -24,7 +24,9 @@ The spine is the lifecycle of a capability, read as a stack.
 - **Part V, Inference and Serving.**
 - **Part VI, Orchestration.** Training agents to act, memory, the harness,
   multi-agent, retrieval, context.
-- **Part VII, Evaluation.**
+- **Part VII, Evaluation.** Benchmarks, statistical reliability, human
+  rubrics, model judges, factuality and grounding, agents, and operational
+  governance.
 - **Part VIII, Safety, Interpretability, and Governance.**
 - **Part IX, Infrastructure, Compute, and Frontiers.** Accelerators,
   networking, data infrastructure, and the compute frontier.

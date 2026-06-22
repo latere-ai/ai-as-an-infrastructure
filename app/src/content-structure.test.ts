@@ -59,9 +59,50 @@ test("ecosystem and economics is a full six-chapter part in both languages", () 
   }
 });
 
+test("evaluation is a full seven-chapter measurement part in both languages", () => {
+  const expected = [
+    "evaluation/01-benchmarks.qmd",
+    "evaluation/02-statistical-reliability.qmd",
+    "evaluation/03-human-evaluation-rubrics.qmd",
+    "evaluation/04-judging-holistic.qmd",
+    "evaluation/05-factuality-grounding.qmd",
+    "evaluation/06-evaluating-agents.qmd",
+    "evaluation/07-operational-evaluation.qmd",
+  ];
+
+  for (const lang of ["en", "zh"]) {
+    const yml = src(`${lang}/book.yml`);
+    let last = -1;
+    for (const chapter of expected) {
+      const next = yml.indexOf(chapter);
+      expect(next, `${lang}/${chapter} missing from book.yml`).toBeGreaterThan(last);
+      last = next;
+    }
+
+    const intro = src(`${lang}/evaluation/index.qmd`);
+    for (const section of [
+      "@sec-benchmarks",
+      "@sec-statistical-reliability",
+      "@sec-human-evaluation-rubrics",
+      "@sec-judging-holistic",
+      "@sec-factuality-grounding",
+      "@sec-evaluating-agents",
+      "@sec-operational-evaluation",
+    ]) {
+      expect(intro).toContain(section);
+    }
+  }
+});
+
 test("the expanded ecosystem part is reflected in top-level book surfaces", () => {
   expect(src("README.md")).toContain("market structure");
   expect(src("README.md")).toContain("adoption and productivity");
   expect(src("README.md")).toContain("data rights");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Ecosystem and economics depth**");
+});
+
+test("the expanded evaluation part is tracked in top-level book surfaces", () => {
+  expect(src("README.md")).toContain("statistical reliability");
+  expect(src("README.md").replace(/\s+/g, " ")).toContain("operational governance");
+  expect(src("CONTENT-GAPS.md")).toContain("- [ ] **Evaluation depth and governance**");
 });

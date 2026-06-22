@@ -2,6 +2,16 @@
 
 ## Open goals
 
+- [ ] **Evaluation depth and governance**
+
+  Expand Part VII from a three-chapter treatment of benchmarks, judges, and
+  agents into the book's full measurement layer: statistical reliability,
+  human evaluation and rubrics, model judges, factuality and grounding, agent
+  and multimodal evaluation, and operational governance. The part should add
+  source-backed references, static figures, interactive visualizations, updated
+  social cards, and cross-links to adaptation, reasoning, orchestration, safety,
+  infrastructure, economics, and operations.
+
 - [x] **Ecosystem and economics depth**
 
   Expanded Part X from a three-chapter sketch into a full ecosystem treatment:
