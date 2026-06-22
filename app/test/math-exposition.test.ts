@@ -42,8 +42,32 @@ function isTableOrFigure(text: string): boolean {
   return trimmed.startsWith("|") || trimmed.startsWith("![") || trimmed.startsWith(":::");
 }
 
+function inlineMath(text: string): string[] {
+  const out: string[] = [];
+  const re = /(?<!\\)\$([^$\n]+?)(?<!\\)\$/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text))) out.push(match[1].trim());
+  return out;
+}
+
+function isPriceOrPlainNumber(math: string): boolean {
+  return /^[\d.,]+(?:\s*(?:K|M|B|T|%|percent|GB|MB|ms|s|x))?$/i.test(math);
+}
+
+function isFormulaLike(math: string): boolean {
+  if (isPriceOrPlainNumber(math)) return false;
+  return (
+    /[=<>]/.test(math) ||
+    /\\(?:sum|prod|frac|arg|max|min|operatorname|mathrm|mathbb|mathcal|text|Pr|log|exp)/.test(math) ||
+    /[_^]/.test(math) ||
+    /\\[a-zA-Z]+/.test(math)
+  );
+}
+
 function needsExposition(text: string): boolean {
-  return /\$\$[\s\S]+?\$\$/.test(text);
+  if (/\$\$[\s\S]+?\$\$/.test(text)) return true;
+  const spans = inlineMath(text).filter(isFormulaLike);
+  return spans.length >= 2 || spans.some((span) => /[=<>]|\\(?:sum|prod|frac|arg)/.test(span));
 }
 
 const expositionMarkers: Record<Lang, RegExp> = {
@@ -77,6 +101,6 @@ function unexplainedMathParagraphs(lang: Lang): string[] {
   return offenders;
 }
 
-test("display equations explain symbols and intuition near the math", () => {
+test("formula-bearing prose explains symbols and intuition near the math", () => {
   expect([...unexplainedMathParagraphs("en"), ...unexplainedMathParagraphs("zh")]).toEqual([]);
 });
