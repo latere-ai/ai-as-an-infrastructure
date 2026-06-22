@@ -47,12 +47,28 @@ test("polished chapter openings preserve key source theses", () => {
       ["一项能力如何从原始算力和语料构造出发", "可度量、可约束、可运维的部署行为", "为什么长成这个样子"],
     ],
     [
+      "en/orientation/index.qmd",
+      ["route through the stack is visible", "live claims are separated from settled ground", "borrowed vocabulary"],
+    ],
+    [
+      "zh/orientation/index.qmd",
+      ["请求穿过全栈的路线", "区分定论和争议的地图", "处理借来词汇的分寸"],
+    ],
+    [
       "en/foundations/01-scaling-laws.qmd",
       ["Kaplan-era parameter-heavy", "Chinchilla-style data allocation", "inference-aware"],
     ],
     [
       "zh/foundations/01-scaling-laws.qmd",
       ["Kaplan 时代偏向参数", "Chinchilla 式的数据分配", "推理感知的过度训练"],
+    ],
+    [
+      "en/foundations/index.qmd",
+      ["later freedoms are bought", "later constraints are locked in", "Serving, adaptation, evaluation, and safety all inherit"],
+    ],
+    [
+      "zh/foundations/index.qmd",
+      ["训练预算有多大", "语料从哪里来", "以后还能改", "已经长进模型身体里"],
     ],
     [
       "en/foundations/03-tokenization.qmd",
@@ -111,6 +127,14 @@ test("polished chapter openings preserve key source theses", () => {
       ["早期证据更支持后一种读法", "更多是由现成数据支撑起来的"],
     ],
     [
+      "en/generative/index.qmd",
+      ["not naturally a left-to-right string", "world models, robotics, and embodiment", "invented order is the architecture"],
+    ],
+    [
+      "zh/generative/index.qmd",
+      ["并不天然是一条从左到右的字符串", "世界模型、机器人和具身系统", "系统发明了怎样的顺序"],
+    ],
+    [
       "en/adaptation/01-sft-peft.qmd",
       ["small, low-rank, additive, composable", "rank-16 adapter approximates", "QLoRA", "two fine-tunes can be added together"],
     ],
@@ -143,6 +167,14 @@ test("polished chapter openings preserve key source theses", () => {
       ["训练信号就必须来自别处", "数据飞轮", "每个回路都有自己的天花板", "受判断者质量所界定"],
     ],
     [
+      "en/adaptation/index.qmd",
+      ["capability by itself is not a usable interface", "choosing a training signal", "trust in the signal"],
+    ],
+    [
+      "zh/adaptation/index.qmd",
+      ["能力还需要被指向、约束和排序", "示范、偏好、奖励、检查器、过滤器", "信号是否可靠"],
+    ],
+    [
       "en/reasoning/01-eliciting-reasoning.qmd",
       ["@gls-cot helps because", "sampling many chains and voting helps", "useful branches", "verifier is the component that turns best-of-N"],
     ],
@@ -165,6 +197,14 @@ test("polished chapter openings preserve key source theses", () => {
     [
       "zh/reasoning/03-inference-time-scaling.qmd",
       ["重复采样买到的是覆盖率，而不是答案", "串行修订与并行搜索", "计算最优分配按问题难度调度预算", "选择器并不完美"],
+    ],
+    [
+      "en/reasoning/index.qmd",
+      ["spending computation before the answer is fixed", "where is the extra work paid for", "who checks it"],
+    ],
+    [
+      "zh/reasoning/index.qmd",
+      ["答案落定之前额外花掉的计算", "多出来的计算花在哪里", "谁在检查它"],
     ],
     [
       "en/orchestration/01-training-agents-to-act.qmd",
@@ -407,6 +447,14 @@ test("polished chapter openings preserve key source theses", () => {
       ["视觉编码器决定视觉 token 数", "分辨率设置就是服务成本决策", "编码器放在哪里也是服务决策", "图像前缀缓存"],
     ],
     [
+      "en/inference/index.qmd",
+      ["not a smaller version of training", "prefill and decode", "turns capability into something repeatable"],
+    ],
+    [
+      "zh/inference/index.qmd",
+      ["不是训练的缩小版", "预填充和解码有不同胃口", "能力变成可重复交付"],
+    ],
+    [
       "en/infrastructure/01-accelerators-networking.qmd",
       ["bandwidth hierarchy", "tensor-parallel group almost never spills past the NVLink boundary", "model FLOPs utilization"],
     ],
@@ -469,6 +517,14 @@ test("polished chapter openings preserve key source theses", () => {
     [
       "zh/infrastructure/08-the-capability-horizon.qmd",
       ["不再是一个排行榜数字", "移动的地平线", "测量仪器饱和得比新仪器造出来还快", "可持续的进步", "用算力买来的表象"],
+    ],
+    [
+      "en/infrastructure/index.qmd",
+      ["lower layers are stubbornly physical", "what the machine makes possible", "constraints become visible"],
+    ],
+    [
+      "zh/infrastructure/index.qmd",
+      ["最底下始终是物理机器", "机器已经替我们决定了什么", "约束终于显形"],
     ],
     [
       "en/practice/01-choosing-a-model.qmd",
@@ -558,6 +614,14 @@ test("polished chapter openings preserve key source theses", () => {
       "zh/practice/11-production-data-engine.qmd",
       ["真实用户提出真实问题", "常设装置", "训练信号", "稀缺标注预算", "下一轮循环的入口"],
     ],
+    [
+      "en/practice/index.qmd",
+      ["deadlines, budgets, licenses", "production AI system as a set of contracts", "something a team can operate"],
+    ],
+    [
+      "zh/practice/index.qmd",
+      ["期限、预算、许可证", "生产 AI 系统看成一组契约", "可以运营的系统"],
+    ],
   ];
 
   for (const [path, snippets] of checks) {
@@ -573,6 +637,7 @@ test("polished chapter openings preserve key source theses", () => {
 test("polished chapter openings avoid reader-promise templates", () => {
   const polished = [
     "en/index.qmd",
+    "en/orientation/index.qmd",
     "en/orientation/01-whole-stack.qmd",
     "en/orientation/02-field-map.qmd",
     "en/orientation/03-borrowed-ideas.qmd",
@@ -582,6 +647,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/foundations/04-transformer-architecture.qmd",
     "en/foundations/05-moe-ssm-hybrids.qmd",
     "en/foundations/06-training-at-scale.qmd",
+    "en/foundations/index.qmd",
+    "en/generative/index.qmd",
     "en/generative/01-diffusion-flow-matching.qmd",
     "en/generative/02-nar-diffusion-lms.qmd",
     "en/generative/03-speech-and-voice.qmd",
@@ -591,6 +658,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/adaptation/02-rlhf-reward-modeling.qmd",
     "en/adaptation/03-dpo-variants.qmd",
     "en/adaptation/04-synthetic-data-self-improvement.qmd",
+    "en/adaptation/index.qmd",
     "en/reasoning/index.qmd",
     "en/reasoning/01-eliciting-reasoning.qmd",
     "en/reasoning/02-training-to-reason.qmd",
@@ -625,6 +693,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/inference/04-quantization-kernels.qmd",
     "en/inference/05-structured-long-context.qmd",
     "en/inference/06-serving-multimodal.qmd",
+    "en/inference/index.qmd",
     "en/infrastructure/01-accelerators-networking.qmd",
     "en/infrastructure/02-orchestration-data-infra.qmd",
     "en/infrastructure/03-the-compute-frontier.qmd",
@@ -633,6 +702,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/infrastructure/06-the-machine-that-breaks.qmd",
     "en/infrastructure/07-where-learning-hits-limits.qmd",
     "en/infrastructure/08-the-capability-horizon.qmd",
+    "en/infrastructure/index.qmd",
     "en/practice/01-choosing-a-model.qmd",
     "en/practice/02-serving-and-compute.qmd",
     "en/practice/03-edge-on-device.qmd",
@@ -644,7 +714,9 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/practice/09-deployment-lifecycle.qmd",
     "en/practice/10-reliability-nondeterministic.qmd",
     "en/practice/11-production-data-engine.qmd",
+    "en/practice/index.qmd",
     "zh/index.qmd",
+    "zh/orientation/index.qmd",
     "zh/orientation/01-whole-stack.qmd",
     "zh/orientation/02-field-map.qmd",
     "zh/orientation/03-borrowed-ideas.qmd",
@@ -654,6 +726,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/foundations/04-transformer-architecture.qmd",
     "zh/foundations/05-moe-ssm-hybrids.qmd",
     "zh/foundations/06-training-at-scale.qmd",
+    "zh/foundations/index.qmd",
+    "zh/generative/index.qmd",
     "zh/generative/01-diffusion-flow-matching.qmd",
     "zh/generative/02-nar-diffusion-lms.qmd",
     "zh/generative/03-speech-and-voice.qmd",
@@ -663,6 +737,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/adaptation/02-rlhf-reward-modeling.qmd",
     "zh/adaptation/03-dpo-variants.qmd",
     "zh/adaptation/04-synthetic-data-self-improvement.qmd",
+    "zh/adaptation/index.qmd",
     "zh/reasoning/index.qmd",
     "zh/reasoning/01-eliciting-reasoning.qmd",
     "zh/reasoning/02-training-to-reason.qmd",
@@ -697,6 +772,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/inference/04-quantization-kernels.qmd",
     "zh/inference/05-structured-long-context.qmd",
     "zh/inference/06-serving-multimodal.qmd",
+    "zh/inference/index.qmd",
     "zh/infrastructure/01-accelerators-networking.qmd",
     "zh/infrastructure/02-orchestration-data-infra.qmd",
     "zh/infrastructure/03-the-compute-frontier.qmd",
@@ -705,6 +781,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/infrastructure/06-the-machine-that-breaks.qmd",
     "zh/infrastructure/07-where-learning-hits-limits.qmd",
     "zh/infrastructure/08-the-capability-horizon.qmd",
+    "zh/infrastructure/index.qmd",
     "zh/practice/01-choosing-a-model.qmd",
     "zh/practice/02-serving-and-compute.qmd",
     "zh/practice/03-edge-on-device.qmd",
@@ -716,8 +793,9 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/practice/09-deployment-lifecycle.qmd",
     "zh/practice/10-reliability-nondeterministic.qmd",
     "zh/practice/11-production-data-engine.qmd",
+    "zh/practice/index.qmd",
   ];
-  const banned = /By the end|reader can explain|reader can say|A reader should finish|The reader should|This chapter owns|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一章|读完这一部分|本章负责|本章来讲这个|本章把一个故事|本章要讲清/;
+  const banned = /By the end|reader can explain|reader can say|A reader should finish|The reader should|the book asks the reader|the reader has|The reader is no longer|This chapter owns|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一章|读完这一部分|读完它|读者已经|读者面对|本书和读者|本章负责|本章来讲这个|本章把一个故事|本章要讲清/;
 
   for (const path of polished) {
     const text = readFileSync(join(repoRoot, path), "utf8");
