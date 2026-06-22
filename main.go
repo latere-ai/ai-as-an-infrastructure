@@ -1,0 +1,286 @@
+// Command aaai-web serves the compiled book. The whole _book/ tree is embedded
+// into the binary at build time (`bun run build` produces it), so deployment is
+// one self-contained static binary: no vendored HTML in git, no separate web
+// server. It reproduces the routing contract the old nginx config provided:
+//
+//   - cookie-based apex language redirect (/ -> /en/ or /zh/, 302 + Vary: Cookie)
+//   - the 2026 URL-reorg 301s (number-free, 11-part restructure), first-match-wins
+//   - .html and /index.html canonicalization to clean URLs
+//   - extensionless serving (clean URL -> the on-disk .html)
+//   - immutable caching for content-addressed assets, no-cache + ETag for HTML
+//   - gzip for text assets (the ~1.2MB search.json especially)
+//   - /healthz and /readyz for the Kubernetes probes
+//   - unknown content URLs fall back to the site entrypoint (302 /)
+//
+// Behind the TLS-terminating ingress the server speaks http on :8080; all
+// redirects use relative (absolute-path) Locations so the browser keeps https.
+package main
+
+import (
+	"compress/gzip"
+	"crypto/sha256"
+	"embed"
+	"encoding/hex"
+	"io"
+	"io/fs"
+	"log"
+	"net/http"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+//go:embed all:_book
+var embedded embed.FS
+
+// book is the embedded _book/ tree, rooted so lookups read like "en/index.html".
+var book fs.FS
+
+// etags maps an embedded file path to its content ETag. Precomputed once so a
+// conditional request for the 1.2MB search.json is a cheap map lookup, not a
+// re-hash. Only the no-cache responses (HTML, JSON) use it.
+var etags = map[string]string{}
+
+func init() {
+	sub, err := fs.Sub(embedded, "_book")
+	if err != nil {
+		panic(err)
+	}
+	book = sub
+	fs.WalkDir(book, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if b, e := fs.ReadFile(book, p); e == nil {
+			sum := sha256.Sum256(b)
+			etags[p] = `"` + hex.EncodeToString(sum[:16]) + `"`
+		}
+		return nil
+	})
+}
+
+// redirect is one reorg rule: an anchored pattern and a $-template target.
+type redirect struct {
+	re   *regexp.Regexp
+	repl string
+}
+
+// redirects are evaluated in order, first match wins. The two cross-part
+// exceptions sit above their old part's bulk rule. "(?:\d+-)?" absorbs the old
+// chapter number; "(?:\.html)?" and "/?" absorb the legacy .html and trailing
+// slash. Mirrors the location blocks in the retired deploy/nginx.conf.
+var redirects = []redirect{
+	// Exception: "Training Agents to Act" moved Reasoning -> Orchestration.
+	{regexp.MustCompile(`^/(en|zh)/p3-reasoning/(?:\d+-)?training-agents-to-act(?:\.html)?/?$`),
+		`/${1}/orchestration/training-agents-to-act`},
+	// Exception: the generative/multimodal chapters (once in p11-frontiers) -> generative.
+	{regexp.MustCompile(`^/(en|zh)/p11-frontiers/(?:\d+-)?(beyond-text|diffusion-flow-matching|speech-and-voice|nar-diffusion-lms|multimodal-models)(?:\.html)?/?$`),
+		`/${1}/generative/${2}`},
+	// Bulk per-old-part-dir renames (strip optional NN-, remap the part slug).
+	{regexp.MustCompile(`^/(en|zh)/p0-orientation/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/orientation/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p1-foundations/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/foundations/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p2-adaptation/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/adaptation/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p3-reasoning/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/reasoning/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p4-inference/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/inference/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p5-orchestration/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/orchestration/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p6-evaluation/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/evaluation/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p7-infrastructure/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/infrastructure/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p8-safety/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/safety/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p9-ecosystem/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/ecosystem/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p10-practical/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/practice/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p11-frontiers/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/infrastructure/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p12-generative/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/generative/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p12-operations/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/practice/${2}`},
+	{regexp.MustCompile(`^/(en|zh)/p13-operations/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/practice/${2}`},
+}
+
+// assetRe matches content-addressed assets: hashed reader.js and content-stable
+// figures/fonts/icons. These cache hard and never fall back on a miss.
+var assetRe = regexp.MustCompile(`(?i)\.(js|svg|png|jpe?g|webp|woff2?|ico)$`)
+
+func serve(w http.ResponseWriter, r *http.Request) {
+	p := r.URL.Path
+
+	switch p {
+	case "/healthz", "/readyz":
+		w.Header().Set("Cache-Control", "no-store")
+		io.WriteString(w, "ok\n")
+		return
+	case "/":
+		// Apex -> reader's saved language, else English. 302 (not 301) + Vary:
+		// Cookie so the per-language choice is never frozen in a cache.
+		w.Header().Set("Vary", "Cookie")
+		http.Redirect(w, r, apexTarget(r), http.StatusFound)
+		return
+	}
+
+	// Reorg 301s (first match wins).
+	for _, rd := range redirects {
+		if rd.re.MatchString(p) {
+			http.Redirect(w, r, rd.re.ReplaceAllString(p, rd.repl), http.StatusMovedPermanently)
+			return
+		}
+	}
+
+	// Canonicalize the legacy .html and redundant /index.html forms to the clean
+	// URL. index.html first so "/x/index.html" -> "/x/" (not "/x/index").
+	if before, ok := strings.CutSuffix(p, "/index.html"); ok {
+		http.Redirect(w, r, before+"/", http.StatusMovedPermanently)
+		return
+	}
+	if before, ok := strings.CutSuffix(p, ".html"); ok {
+		http.Redirect(w, r, before, http.StatusMovedPermanently)
+		return
+	}
+
+	serveStatic(w, r, p)
+}
+
+func apexTarget(r *http.Request) string {
+	if c, err := r.Cookie("lang"); err == nil && c.Value == "zh" {
+		return "/zh/"
+	}
+	return "/en/"
+}
+
+func serveStatic(w http.ResponseWriter, r *http.Request, p string) {
+	name := strings.TrimPrefix(p, "/")
+
+	// Content-addressed assets: serve the exact file or 404. A missing asset must
+	// fail as an asset, never fall back to the site entrypoint.
+	if assetRe.MatchString(p) {
+		if !writeFile(w, r, name, true) {
+			http.NotFound(w, r)
+		}
+		return
+	}
+
+	// Content router: resolve the clean URL to the on-disk file, mirroring
+	// nginx's `try_files $uri $uri.html $uri/`.
+	var candidates []string
+	if name == "" || strings.HasSuffix(name, "/") {
+		candidates = []string{name + "index.html"}
+	} else {
+		candidates = []string{name, name + ".html", name + "/index.html"}
+	}
+	for _, c := range candidates {
+		if writeFile(w, r, c, false) {
+			return
+		}
+	}
+
+	// Unknown content URL -> back to the site entrypoint (which 302s to a
+	// language home) instead of exposing a bare 404 page.
+	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// writeFile serves the embedded file at name, returning false (without writing)
+// if it is absent or a directory. immutable assets cache for a year; everything
+// else is no-cache with an ETag so revalidation is a cheap 304.
+func writeFile(w http.ResponseWriter, r *http.Request, name string, immutable bool) bool {
+	info, err := fs.Stat(book, name)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	body, err := fs.ReadFile(book, name)
+	if err != nil {
+		return false
+	}
+
+	h := w.Header()
+	ctype := contentType(name)
+	if ctype != "" {
+		h.Set("Content-Type", ctype)
+	}
+	if immutable {
+		h.Set("Cache-Control", "public, max-age=31536000")
+	} else {
+		h.Set("Cache-Control", "no-cache")
+		if tag := etags[name]; tag != "" {
+			h.Set("ETag", tag)
+			if r.Header.Get("If-None-Match") == tag {
+				w.WriteHeader(http.StatusNotModified)
+				return true
+			}
+		}
+	}
+
+	if compressible(ctype) && len(body) >= 1024 && acceptsGzip(r) {
+		h.Set("Content-Encoding", "gzip")
+		h.Add("Vary", "Accept-Encoding")
+		w.WriteHeader(http.StatusOK)
+		gw := gzip.NewWriter(w)
+		gw.Write(body)
+		gw.Close()
+		return true
+	}
+	h.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(body)
+	return true
+}
+
+func contentType(name string) string {
+	switch {
+	case strings.HasSuffix(name, ".html"):
+		return "text/html; charset=utf-8"
+	case strings.HasSuffix(name, ".css"):
+		return "text/css; charset=utf-8"
+	case strings.HasSuffix(name, ".js"):
+		return "text/javascript; charset=utf-8"
+	case strings.HasSuffix(name, ".json"):
+		return "application/json; charset=utf-8"
+	case strings.HasSuffix(name, ".svg"):
+		return "image/svg+xml"
+	case strings.HasSuffix(name, ".png"):
+		return "image/png"
+	case strings.HasSuffix(name, ".jpg"), strings.HasSuffix(name, ".jpeg"):
+		return "image/jpeg"
+	case strings.HasSuffix(name, ".webp"):
+		return "image/webp"
+	case strings.HasSuffix(name, ".woff2"):
+		return "font/woff2"
+	case strings.HasSuffix(name, ".woff"):
+		return "font/woff"
+	case strings.HasSuffix(name, ".ico"):
+		return "image/x-icon"
+	case strings.HasSuffix(name, ".xml"):
+		return "application/xml"
+	case strings.HasSuffix(name, ".txt"):
+		return "text/plain; charset=utf-8"
+	}
+	return ""
+}
+
+// compressible mirrors the nginx gzip_types: text and the search-index JSON.
+func compressible(ctype string) bool {
+	for _, prefix := range []string{
+		"text/html", "text/css", "text/javascript", "application/javascript",
+		"application/json", "image/svg+xml", "text/plain", "application/xml",
+	} {
+		if strings.HasPrefix(ctype, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func acceptsGzip(r *http.Request) bool {
+	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
+}
+
+func main() {
+	addr := ":" + getenv("PORT", "8080")
+	log.Printf("aaai-web serving embedded _book on %s", addr)
+	if err := http.ListenAndServe(addr, http.HandlerFunc(serve)); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func getenv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
