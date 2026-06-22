@@ -9,8 +9,8 @@ dev:
 serve: build
 	go run .
 
-# Routing-contract tests for the Go server (ports deploy/test-redirects.sh).
-# Needs _book present to embed, so build it first.
+# Routing-contract tests for the Go server (redirects, canonicalization, cache
+# headers). Needs _book present to embed, so build it first.
 test: build
 	go test ./...
 

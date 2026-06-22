@@ -64,8 +64,9 @@ func noloop(t *testing.T, c *http.Client, base, path string) {
 	}
 }
 
-// TestRouting ports deploy/test-redirects.sh in-process: the redirect/serve
-// contract the retired nginx config guaranteed.
+// TestRouting exercises the redirect/serve contract the retired nginx config
+// guaranteed: apex language redirect, the 2026 reorg 301s, canonicalization,
+// extensionless serving, and the missing-page fallback.
 func TestRouting(t *testing.T) {
 	base, nf, follow := newServer(t)
 
