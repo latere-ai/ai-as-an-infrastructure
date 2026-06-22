@@ -1,60 +1,8 @@
-<style>
-/* The block already carries .rdr-runnable's box; drop it so .live-cell is the
-   only frame (no double border). */
-.rdr-runnable.live-ready { border: 0; border-radius: 0; overflow: visible; background: transparent; }
-.live-cell { margin: 0; border: 1px solid var(--border-strong, rgba(128,128,128,0.28)); border-radius: 8px; overflow: hidden; background: var(--bg-code, transparent); }
-/* Code on the left, result on the right; stacks on narrow screens. */
-.live-grid { display: flex; flex-wrap: wrap; align-items: stretch; }
-.live-code { display: flex; flex-direction: column; flex: 1 1 50%; min-width: 0; }
-/* Inherit the cell's --bg-code (do NOT use --bg-surface, which is near-white in
-   light mode and made the result side a white block). Both halves share one
-   themed surface; the border-left is the separator. The figure is transparent,
-   so it blends into this same surface in light and dark. */
-.live-result { display: none; flex: 1 1 48%; min-width: 280px; flex-direction: column; border-left: 1px solid var(--border-strong, rgba(128,128,128,0.4)); background: transparent; }
-.live-cell.ran .live-result { display: flex; }
-/* The editor: a syntax-highlighted layer behind a transparent textarea. Both
-   share identical metrics so the caret lands on the right glyph. */
-.live-edit { position: relative; flex: 1; }
-/* The highlight layer is a <pre><code>, so the article's `.rdr-article pre` and
-   `.rdr-article pre code` rules (padding 16/18, font-size .9em, line-height 1.7)
-   out-specify a bare `.live-hl` and desync it from the textarea, drifting the
-   caret one fraction of a line lower per row. Scope these under .rdr-article so
-   the overlay and the textarea share identical metrics. */
-.rdr-article pre.live-hl, .rdr-article .live-editor {
-  margin: 0; box-sizing: border-box; padding: 0.85em 1em;
-  font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; font-size: 0.84em;
-  line-height: 1.6; tab-size: 4; white-space: pre; word-wrap: normal;
-  background: none; border: 0; border-radius: 0;
-}
-.rdr-article pre.live-hl { position: absolute; inset: 0; overflow: auto; pointer-events: none; color: var(--fg-1, inherit); }
-.rdr-article pre.live-hl code { font: inherit; font-size: inherit; line-height: inherit; background: none; padding: 0; color: inherit; }
-.rdr-article .live-editor { position: relative; display: block; width: 100%; min-height: 100%; outline: none; resize: none; overflow: auto; color: transparent; caret-color: var(--fg-1, currentColor); }
-.live-editor::selection { background: var(--accent-glow, rgba(128,128,128,0.3)); }
-.live-bar { display: flex; align-items: center; gap: 0.6em; padding: 0.45em 0.8em; border-top: 1px solid var(--border, rgba(128,128,128,0.22)); }
-.live-run, .live-reset { font: inherit; font-size: 0.8em; padding: 2px 13px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border-strong, rgba(128,128,128,0.4)); background: var(--bg-raised, rgba(128,128,128,0.08)); color: inherit; }
-.live-run { background: var(--accent, #3b82f6); color: var(--bg-surface, #fff); border-color: var(--accent, #3b82f6); }
-.live-run:hover { background: var(--accent-hover, #2f6fe0); border-color: var(--accent-hover, #2f6fe0); }
-.live-status { font-size: 0.78em; opacity: 0.7; }
-.live-out { margin: 0; padding: 0.6em 1em; font-size: 0.82em; white-space: pre-wrap; word-break: break-word; background: transparent; flex: none; }
-.live-out:empty { display: none; }
-.live-img { display: block; box-sizing: border-box; width: 100%; height: auto; margin: 0; padding: 0 0.7em 0.7em; }
-/* Code token colors (.lt-*) live in theme.css now (shared with static blocks). */
-@media (max-width: 720px) {
-  .live-result { flex-basis: 100%; border-left: 0; border-top: 1px solid var(--border-strong, rgba(128,128,128,0.4)); }
-}
-/* Mobile overflow guards (wide tables, long links/code, wide math). */
-.table-scroll { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
-mjx-container[display="true"], .math.display, .katex-display { overflow-x: auto; overflow-y: hidden; max-width: 100%; }
-@media (max-width: 575.98px) {
-  .table-scroll table { display: table; width: auto; max-width: none; }
-  a, .math, span.math { overflow-wrap: anywhere; word-break: break-word; }
-  /* Inline code (not a code block) must wrap; its white-space:pre otherwise
-     paints outside a narrow list item and widens the page. */
-  :not(pre) > code { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
-  span.math.inline, mjx-container:not([display="true"]) { display: inline-block; max-width: 100%; overflow-x: auto; vertical-align: middle; }
-}
-</style>
-<script>
+// @ts-nocheck
+// Runnable Python cells, client-side via Pyodide. Relocated verbatim from the
+// old live-runtime.html into the client bundle (registered on window by
+// hydrate.tsx, run by the reader after hydration). @ts-nocheck preserves the
+// original framework-free JS; it can be incrementally typed later.
 // Runnable Python, client-side via Pyodide. Mark a code block in Markdown with
 //   ::: {.runnable}
 //   ```python
@@ -63,7 +11,6 @@ mjx-container[display="true"], .math.display, .katex-display { overflow-x: auto;
 //   :::
 // and it becomes an editable, runnable cell (no server). Pyodide loads lazily
 // on the first Run, once per page.
-(function () {
   var PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v0.27.2/full/';
   var BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
   var pyPromise = null;
@@ -284,23 +231,4 @@ mjx-container[display="true"], .math.display, .katex-display { overflow-x: auto;
       if (!blocks[i].classList.contains('live-ready')) enhance(blocks[i]);
     }
   }
-  // Driven by the React reader after hydration (owns the article DOM).
-  window.__rdrLive = init;
-})();
-</script>
-<script>
-// Wrap content tables in a horizontal-scroll box so a wide table scrolls
-// inside its column instead of widening the page on mobile.
-(function () {
-  function wrapTables() {
-    var tables = document.querySelectorAll('main table, .cell table');
-    for (var i = 0; i < tables.length; i++) {
-      var t = tables[i], par = t.parentNode;
-      if (!par || (par.classList && par.classList.contains('table-scroll'))) continue;
-      var w = document.createElement('div'); w.className = 'table-scroll';
-      par.insertBefore(w, t); w.appendChild(t);
-    }
-  }
-  window.__rdrTables = wrapTables;
-})();
-</script>
+export { init as mountRunnable };

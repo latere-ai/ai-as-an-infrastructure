@@ -1,8 +1,8 @@
 // After-body runtime scripts shared by the static build (build.ts) and the dev
-// server (dev.ts): the runnable-cell runtime (live-runtime.html), the viz
-// runtime (viz-runtime.html), and mermaid init. Centralized here so the two
-// renderers can't drift, dev.ts once omitted these, which silently disabled
-// code execution, viz components, and mermaid diagrams under `make dev`.
+// server (dev.ts): the viz runtime (viz-runtime.html) and mermaid init.
+// Centralized here so the two renderers can't drift, dev.ts once omitted these,
+// which silently disabled viz components and mermaid diagrams under `make dev`.
+// (The runnable-cell + table runtimes now ship in the client bundle, src/runtime/.)
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -14,9 +14,11 @@ window.__rdrMermaid = () => mermaid.run({ querySelector: ".mermaid:not([data-pro
 if (window.__rdrRuntimesReady) window.__rdrRuntimesReady();
 </script>`;
 
-// Runnable-cell + viz IIFEs (verbatim, framework-free) followed by mermaid init.
-// Returns the raw <script> blocks to inject after <body>.
+// Viz IIFE (verbatim, framework-free) followed by mermaid init. The runnable-cell
+// and table runtimes now ship in the client bundle (src/runtime/), so only viz
+// and mermaid remain as injected scripts. Returns the raw <script> blocks to
+// inject after <body>.
 export function buildAfterBody(repoRoot: string): string {
   const runtime = (f: string) => (existsSync(join(repoRoot, f)) ? readFileSync(join(repoRoot, f), "utf8") : "");
-  return runtime("live-runtime.html") + runtime("viz-runtime.html") + MERMAID_INIT;
+  return runtime("viz-runtime.html") + MERMAID_INIT;
 }
