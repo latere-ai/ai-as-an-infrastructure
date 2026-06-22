@@ -33,8 +33,9 @@ ax.plot(gap, ipo, color=INK, lw=1.8, linestyle="--",
 # Mark the IPO target: the gap the bounded loss settles on.
 ax.axvline(tau, color=INK, lw=0.9, alpha=0.4)
 ax.annotate("IPO optimum\nstays finite", xy=(tau, 0.0),
-            xytext=(3.4, 3.4), color=INK, fontsize=8,
-            ha="left", arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
+            xytext=(tau, 2.4), color=INK, fontsize=8,
+            ha="center", va="center",
+            arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 ax.annotate("DPO keeps\npushing the gap", xy=(7.0, dpo[np.argmin(np.abs(gap - 7.0))]),
             xytext=(5.2, 1.3), color=INK, fontsize=8,
             ha="left", arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))

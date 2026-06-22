@@ -47,7 +47,7 @@ ax.annotate("knee", xy=(knee, true_peak),
             xytext=(knee - 1.9, true_peak + 0.16),
             color=INK, fontsize=9,
             arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
-ax.text(knee + 0.25, 0.06, "over-optimized", color=INK, fontsize=9, ha="left")
+ax.text(knee + 0.7, 1.0, "over-optimized", color=INK, fontsize=9, ha="center")
 
 ax.set_xlabel("KL drift from SFT reference", color=INK)
 ax.set_ylabel("score (arbitrary units)", color=INK)
