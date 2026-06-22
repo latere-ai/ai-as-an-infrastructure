@@ -31,9 +31,11 @@ function addEntries(entries: Map<string, BibEntry>, content: string): void {
   const lib = parseBib(content, { errorHandler: () => {} });
   for (const e of lib.entries) {
     const f = e.fields as Record<string, any>;
-    const authors: string[] = Array.isArray(f.author)
-      ? f.author.map((a: any) => surname(a))
-      : [];
+    // Edited volumes (e.g. an @book with `editor` and no `author`) still need a
+    // name for the citation label; fall back to the editors so the inline cite
+    // reads "Beyer et al. 2016" rather than the bare bibtex key.
+    const people: any[] = Array.isArray(f.author) ? f.author : Array.isArray(f.editor) ? f.editor : [];
+    const authors: string[] = people.map((a: any) => surname(a));
     const year = String(f.year ?? f.date ?? "").match(/\d{4}/)?.[0] ?? "n.d.";
     const flat = (v: any): string => Array.isArray(v) ? v.map(flat).join(", ") : (v?.lastName ? `${v.lastName}` : String(v ?? ""));
     entries.set(e.key, {
@@ -99,10 +101,14 @@ export function renderBibliography(bib: Bibliography): string {
   cited.sort((a, b) => (a.authors[0] ?? "").localeCompare(b.authors[0] ?? "") || a.year.localeCompare(b.year));
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
   const items = cited.map((e) => {
+    // Lead each entry with the same "[Author et al. Year]" label the inline
+    // @cite renders, so a reader can match an in-text citation to its entry.
+    const label = `[${esc(authorShort(e))} ${e.year}]`;
     const authors = e.authors.length ? esc(e.authors.join(", ")) : "";
     const url = e.url ? ` <a href="${e.url}" rel="noopener">${esc(e.url)}</a>` : "";
     const pub = e.publisher ? ` ${esc(e.publisher)}.` : "";
-    return `<div class="rdr-ref" id="ref-${e.key}"><span class="rdr-ref-meta">${authors}${authors ? ". " : ""}${e.year}.</span> <span class="rdr-ref-title">${esc(e.title)}.</span>${pub}${url}</div>`;
+    const meta = authors ? `<span class="rdr-ref-meta">${authors}.</span> ` : "";
+    return `<div class="rdr-ref" id="ref-${e.key}"><span class="rdr-ref-key">${label}</span> ${meta}<span class="rdr-ref-title">${esc(e.title)}.</span>${pub}${url}</div>`;
   });
   return `<div class="rdr-refs">${items.join("\n")}</div>`;
 }

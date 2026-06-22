@@ -51,7 +51,9 @@ export function furtherReadingEntries(refsDir: string, slug: string): FurtherRea
   const lib = parseBib(readFileSync(path, "utf8"), { errorHandler: () => {}, sentenceCase: false });
   return lib.entries.map((e: { key: string; type?: string; fields: Record<string, any> }) => {
     const f = e.fields as Record<string, any>;
-    const authorList: any[] = Array.isArray(f.author) ? f.author : [];
+    // Edited volumes carry names under `editor`, not `author`; fall back so the
+    // entry still leads with people rather than just a title.
+    const authorList: any[] = Array.isArray(f.author) ? f.author : Array.isArray(f.editor) ? f.editor : [];
     const eprint = f.eprint ? String(f.eprint) : undefined;
     return {
       key: e.key,
