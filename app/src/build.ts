@@ -57,6 +57,13 @@ const pathsByLang: Record<Lang, Set<string>> = { en: new Set(), zh: new Set() };
 // Relies on en rendering before zh below; the zh lookup falls back gracefully.
 const enShare: Record<string, { title: string; description: string }> = {};
 const missingCards: string[] = [];
+
+// Social-share cards: vendored as source under app/static/og (generated on
+// demand by `make og`), copied into _book/og before the page loop so the
+// missing-card check below sees them and the build output is complete.
+const ogSrc = join(repoRoot, "app", "static", "og");
+if (existsSync(ogSrc)) cpSync(ogSrc, join(outRoot, "og"), { recursive: true });
+
 for (const lang of ["en", "zh"] as Lang[]) {
   const book = loadBook(lang, repoRoot);
   const bib = loadBibliographyDir(join(repoRoot, "refs"));

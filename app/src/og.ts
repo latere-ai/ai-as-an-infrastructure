@@ -1,11 +1,13 @@
 // On-demand generator for English social-share cards (Open Graph / Twitter
 // "summary_large_image"). One 1200x630 PNG per chapter, English-only: a shared
 // zh link unfurls the same English card, so en and zh at one path share an image.
-// Output is vendored under _book/og/<href>.png and referenced absolutely from
-// every page head (see html.ts / site.ts). Cards render an on-brand HTML template
-// via headless Chrome (real Instrument Serif + Inter from Google Fonts), so this
-// is slow and Chrome-dependent: it runs on demand, NOT in the per-commit
-// build. Re-run `make og` after adding or retitling chapters.
+// Output is vendored as source under app/static/og/<href>.png (build.ts copies
+// it into _book/og/ on every build) and referenced absolutely from every page
+// head (see html.ts / site.ts). These are the one genuinely expensive artifact:
+// cards render an on-brand HTML template via headless Chrome (real Instrument
+// Serif + Inter from Google Fonts), so this is slow and Chrome-dependent. It
+// runs on demand, NOT in the per-commit or container build. Re-run `make og`
+// after adding or retitling chapters; commit the regenerated PNGs.
 
 import { loadBook } from "./pipeline/book.ts";
 import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
@@ -14,9 +16,8 @@ import { spawnSync } from "node:child_process";
 import { SITE_NAME, AUTHOR, OG_W, OG_H } from "./site.ts";
 
 const repoRoot = new URL("../../", import.meta.url).pathname;
-const outRoot = join(repoRoot, "_book");
-const ogRoot = join(outRoot, "og");
-const tmpDir = join(outRoot, ".og-tmp");
+const ogRoot = join(repoRoot, "app", "static", "og");
+const tmpDir = join(repoRoot, "app", "static", ".og-tmp");
 const CHROME = process.env.CHROME ||
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
