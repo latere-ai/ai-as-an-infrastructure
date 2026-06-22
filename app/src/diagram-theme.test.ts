@@ -38,6 +38,16 @@ test("bare <figure> viz blocks get the same framing and muted caption as numbere
   expect(css).toMatch(/\.rdr-article figure figcaption \{[^}]*color:\s*var\(--fg-3\)/);
 });
 
+test("part-opening blockquotes render as pinned quote panels", () => {
+  const blockquoteRule = css.match(/\.rdr-article blockquote \{[\s\S]*?\}/)?.[0] ?? "";
+  expect(blockquoteRule).toContain("position: relative");
+  expect(blockquoteRule).toContain("border-left: 4px solid");
+  expect(blockquoteRule).toContain("background: color-mix");
+  expect(css).toMatch(/\.rdr-article blockquote::after \{[\s\S]*?-webkit-mask:\s*url/);
+  expect(css).toMatch(/\.rdr-article blockquote p:first-child \{[\s\S]*?font-family:\s*var\(--font-serif\)/);
+  expect(css).toMatch(/\.rdr-article blockquote p:last-child::before \{ content:\s*"-- "\s*; \}/);
+});
+
 test("graphviz diagram text uses the UI font so cluster labels are not serif", () => {
   // Graphviz renders cluster/graph labels in its Times default; force the UI
   // font on all diagram text so labels match the surrounding prose.
