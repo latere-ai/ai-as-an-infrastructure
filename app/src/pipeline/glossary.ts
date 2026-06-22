@@ -15,6 +15,8 @@ export interface GlossEntry {
   en: string; // full English term, e.g. "mixture-of-experts"
   zh: string; // full Chinese term, e.g. "混合专家"
   abbr?: string; // language-neutral abbreviation, e.g. "MoE"
+  defEn?: string; // one-line definition, English
+  defZh?: string; // one-line definition, Chinese
 }
 export type Glossary = Map<string, GlossEntry>;
 
@@ -33,7 +35,15 @@ export function loadGlossary(path: string): Glossary {
   const raw = (parseYaml(readFileSync(path, "utf8")) ?? {}) as Record<string, any>;
   for (const [key, v] of Object.entries(raw)) {
     if (!v || typeof v !== "object") continue;
-    m.set(key, { key, en: String(v.en ?? ""), zh: String(v.zh ?? ""), abbr: v.abbr != null ? String(v.abbr) : undefined });
+    const def = v.def && typeof v.def === "object" ? v.def : null;
+    m.set(key, {
+      key,
+      en: String(v.en ?? ""),
+      zh: String(v.zh ?? ""),
+      abbr: v.abbr != null ? String(v.abbr) : undefined,
+      defEn: def?.en != null ? String(def.en) : undefined,
+      defZh: def?.zh != null ? String(def.zh) : undefined,
+    });
   }
   return m;
 }
@@ -63,6 +73,14 @@ export function renderGloss(e: GlossEntry, lang: Lang, first: boolean, prefix: s
   return `<a href="${prefix}glossary#gls-${e.key}" class="rdr-gls">${renderGlossText(e, lang, first)}</a>`;
 }
 
+// A first-use sentence earns its place on the glossary page only if it actually
+// explains the term. The prose pattern "... This is **@gls-prefill**." extracts
+// to "This is prefill.", which is a dead end; require a sentence with real
+// content (en: at least six words; zh: at least fourteen characters).
+function isSubstantive(sentence: string, lang: Lang): boolean {
+  return lang === "zh" ? sentence.length >= 14 : sentence.trim().split(/\s+/).length >= 6;
+}
+
 // The glossary page body: every used term, sorted, each with a {#gls-key} anchor.
 // On the zh page the Chinese term leads; on en, the English leads.
 export function renderGlossaryPage(gloss: Glossary, used: Set<string>, firstUses: GlossFirstUseMap, lang: Lang): string {
@@ -81,7 +99,12 @@ export function renderGlossaryPage(gloss: Glossary, used: Set<string>, firstUses
     const firstMeta = first
       ? `<div class="rdr-gls-meta">${lang === "zh" ? "首次出现：" : "First occurrence: "}<a href="${escAttr(firstHref)}">${chapterLabel(first)}</a></div>`
       : "";
-    const sentence = first?.sentence ? `<p class="rdr-gls-explain">${esc(first.sentence)}</p>` : "";
+    // A curated one-line definition wins. Otherwise fall back to the first-use
+    // sentence, but only when it is substantive: a sentence like "This is
+    // prefill." teaches nothing, so suppress the degenerate short ones.
+    const def = lang === "zh" ? e.defZh : e.defEn;
+    const explain = def || (first?.sentence && isSubstantive(first.sentence, lang) ? first.sentence : "");
+    const sentence = explain ? `<p class="rdr-gls-explain">${esc(explain)}</p>` : "";
     return `<li class="rdr-gls-entry" id="gls-${e.key}"><div><span class="rdr-gls-term">${lead}</span> <span class="rdr-gls-alt">${trail}</span></div>${firstMeta}${sentence}</li>`;
   });
   return `<ul class="rdr-gls-list">${items.join("\n")}</ul>`;

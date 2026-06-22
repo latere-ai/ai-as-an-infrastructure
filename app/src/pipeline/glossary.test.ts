@@ -51,6 +51,28 @@ test("glossary page lists only used terms, anchored by key", () => {
   expect(html).not.toContain("奖励欺骗"); // not in the used set
 });
 
+test("a curated def wins over the first-use sentence, per language", () => {
+  const e: GlossEntry = { key: "prefill", en: "prefill", zh: "预填充", defEn: "Reads the whole prompt in one compute-bound pass.", defZh: "一次读完整个提示词的算力受限阶段。" };
+  const g = new Map([["prefill", e]]);
+  const firstUses: GlossFirstUseMap = new Map([["prefill", {
+    key: "prefill", href: "foundations/transformer-architecture", title: "T", chapterNum: "7", sentence: "This is prefill.",
+  }]]);
+  const en = renderGlossaryPage(g, new Set(["prefill"]), firstUses, "en");
+  expect(en).toContain('<p class="rdr-gls-explain">Reads the whole prompt in one compute-bound pass.</p>');
+  expect(en).not.toContain("This is prefill."); // def replaces the degenerate sentence
+  const zh = renderGlossaryPage(g, new Set(["prefill"]), firstUses, "zh");
+  expect(zh).toContain('<p class="rdr-gls-explain">一次读完整个提示词的算力受限阶段。</p>');
+});
+
+test("a degenerate first-use sentence is suppressed when there is no def", () => {
+  const e: GlossEntry = { key: "prefill", en: "prefill", zh: "预填充" };
+  const g = new Map([["prefill", e]]);
+  const firstUses: GlossFirstUseMap = new Map([["prefill", {
+    key: "prefill", href: "x", title: "T", chapterNum: "7", sentence: "This is prefill.",
+  }]]);
+  expect(renderGlossaryPage(g, new Set(["prefill"]), firstUses, "en")).not.toContain("rdr-gls-explain");
+});
+
 test("rendering records the first book occurrence sentence and does not overwrite it", () => {
   const glossary = new Map([["moe", moe]]);
   const used = new Set<string>();
