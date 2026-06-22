@@ -888,7 +888,8 @@ test("polished prose avoids canned lesson connectors", () => {
 });
 
 test("polished prose avoids read-as-analysis scaffolds", () => {
-  const enBanned = /best read by|field read by|To see why, we have to ask/;
+  const enBanned =
+    /best read by|field read by|To see why, we have to ask|best read as|best read in|are best read|is best read/;
   const zhBanned =
     /按各自在押注哪种带宽解法来读|按各家在优化什么来读|按各家针对带宽墙在优化什么、而非按峰值 FLOPs 来读|按「少浪费一点缓存」来读/;
 
