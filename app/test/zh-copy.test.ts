@@ -870,3 +870,19 @@ test("polished zh prose avoids reader-instruction filler connectors", () => {
 
   expect(offenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
 });
+
+test("polished prose avoids canned lesson connectors", () => {
+  const enBanned =
+    /\bThe lesson is (?:that|not)\b|It is worth tracing\b|worth reading as|They are worth reading\b/;
+  const zhBanned = /这给出一个教训|这里的教训不是|值得一读|值得当作两个变体来读/;
+
+  const enOffenders = qmdFiles(enRoot).filter((path) =>
+    enBanned.test(readFileSync(path, "utf8")),
+  );
+  const zhOffenders = qmdFiles(zhRoot).filter((path) =>
+    zhBanned.test(readFileSync(path, "utf8")),
+  );
+
+  expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
+  expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
+});
