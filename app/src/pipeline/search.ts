@@ -15,19 +15,26 @@ export interface SearchDoc {
   text: string; // de-tagged section body
   py?: string; // zh only: full pinyin of title+heading, e.g. "jiangliqipian"
   pyi?: string; // zh only: pinyin initials of title+heading, e.g. "jlqp"
+  bpy?: string; // zh only: full pinyin of the section body, e.g. "...zhengliu..."
 }
 
+// Pinyin options: drop tones, keep a syllable array, and keep non-Chinese runs
+// consecutive so Latin words/digits stay intact instead of being split per char.
+const PY_OPT = { toneType: "none", type: "array", nonZh: "consecutive" } as const;
+
+const hasHan = (s: string) => /[㐀-鿿]/.test(s);
+
+// Full pinyin of a string, e.g. 蒸馏 -> "zhengliu". Latin/digits/punctuation
+// pass through unchanged.
+const fullPinyin = (s: string) => pinyin(s, PY_OPT).join("").toLowerCase();
+
 // Build the pinyin index for a zh title/heading so a Latin query can find Han
-// content (e.g. "jiangli" or "jl" -> 奖励). Latin/digits/punctuation pass
-// through unchanged; non-Chinese runs are kept consecutive so words stay intact.
-// Only title+heading are indexed (short, high-value); body pinyin would bloat
-// search.json. Returns undefined when there is nothing Han to transliterate.
+// content (e.g. "jiangli" or "jl" -> 奖励). Returns undefined when there is
+// nothing Han to transliterate.
 function pinyinFields(s: string): { py: string; pyi: string } | undefined {
-  if (!s || !/[㐀-鿿]/.test(s)) return undefined;
-  const opt = { toneType: "none", type: "array", nonZh: "consecutive" } as const;
-  const py = pinyin(s, opt).join("").toLowerCase();
-  const pyi = pinyin(s, { ...opt, pattern: "first" }).join("").toLowerCase();
-  return { py, pyi };
+  if (!s || !hasHan(s)) return undefined;
+  const pyi = pinyin(s, { ...PY_OPT, pattern: "first" }).join("").toLowerCase();
+  return { py: fullPinyin(s), pyi };
 }
 
 function stripTags(html: string): string {
@@ -90,6 +97,10 @@ export function buildSearchDocs(ch: ChapterData, href: string, lang: Lang): Sear
     if (lang === "zh") {
       const p = pinyinFields(`${ch.title} ${s.heading}`);
       if (p) { doc.py = p.py; doc.pyi = p.pyi; }
+      // Body pinyin too, so a Latin query reaches a term that only appears in
+      // prose (e.g. "zhengliu" -> 蒸馏, which is in no title/heading). Roughly
+      // doubles search.json; full pinyin (not initials) keeps collisions rare.
+      if (hasHan(s.text)) doc.bpy = fullPinyin(s.text);
     }
     return doc;
   });

@@ -16,6 +16,7 @@ export interface SearchDoc {
   text: string;
   py?: string; // zh only: full pinyin of title+heading (built in pipeline/search.ts)
   pyi?: string; // zh only: pinyin initials of title+heading
+  bpy?: string; // zh only: full pinyin of the section body
 }
 
 export interface Snip { pre: string; hit: string; post: string }
@@ -93,6 +94,10 @@ export function runSearch(docs: SearchDoc[], rawQuery: string, limit = 12): Scor
       // (Latin query -> Han content, e.g. "jiangli" -> 奖励); count it as exact.
       // Guard >= 2 chars: a single letter is a substring of almost every index.
       if (tok.length >= 2 && d.py && d.py.includes(tok)) { exact += 1; total += 3; continue; }
+      // Body-text pinyin: weaker than a title/heading hit but still confident
+      // (e.g. "zhengliu" -> a section that mentions 蒸馏 only in prose). Counts
+      // as exact so the AND across tokens holds; scored at the body weight.
+      if (tok.length >= 2 && d.bpy && d.bpy.includes(tok)) { exact += 1; total += W_TEXT; continue; }
       // Fuzzy subsequence on the short literal fields (typo tolerance).
       const fuzzy = Math.max(fuzzyScore(tok, title) * W_TITLE, fuzzyScore(tok, heading) * W_HEADING);
       if (fuzzy > 0) { total += fuzzy * 0.25; continue; } // tie-break; `exact` is primary rank

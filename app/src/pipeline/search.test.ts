@@ -69,4 +69,15 @@ test("zh docs carry a pinyin index over title+heading; en docs do not", () => {
   // the same chapter built as en gets no pinyin fields
   const en = buildSearchDocs(chapter("Reward modeling", '<h2 id="a">Reward hacking</h2><p>body</p>'), "ch", "en");
   expect(en.find((d) => d.anchor === "a")!.py).toBeUndefined();
+  expect(en.find((d) => d.anchor === "a")!.bpy).toBeUndefined();
+});
+
+test("zh docs carry body pinyin so a Latin query reaches a prose-only term", () => {
+  // 蒸馏 appears only in the body, in no title/heading. Without body pinyin the
+  // term is unreachable by a Latin query (regression: "zhengliu" found nothing).
+  const html = '<h2 id="a">模型压缩</h2><p>知识蒸馏可以缩小模型。</p>';
+  const zh = buildSearchDocs(chapter("效率", html), "ch", "zh");
+  const sec = zh.find((d) => d.anchor === "a")!;
+  expect(sec.bpy).toContain("zhengliu"); // 蒸馏 -> zhengliu, from the body
+  expect(sec.py).not.toContain("zhengliu"); // title/heading pinyin does not have it
 });

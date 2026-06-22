@@ -92,6 +92,22 @@ test("pinyin: a Latin query matches Han content via the full-pinyin index", () =
   expect(runSearch(docs, "widget").length).toBe(0); // unrelated
 });
 
+test("pinyin: a Latin query reaches a term that only appears in body prose", () => {
+  // 蒸馏 lives only in the body, so it is in bpy but not py/pyi.
+  const docs = [doc({ href: "z", title: "模型压缩", heading: "", text: "知识蒸馏缩小模型", py: "moxingyasuo", pyi: "mys", bpy: "zhishizhengliusuoxiaomoxing" })];
+  expect(runSearch(docs, "zhengliu").length).toBe(1); // body pinyin substring
+  expect(runSearch(docs, "z").length).toBe(0); // single char too short
+  // a body-pinyin hit still satisfies AND alongside a title hit
+  expect(runSearch(docs, "moxing zhengliu").length).toBe(1);
+});
+
+test("pinyin: a title-pinyin hit outranks a body-pinyin-only hit", () => {
+  const inTitle = doc({ href: "t", title: "蒸馏", py: "zhengliu", pyi: "zl" });
+  const inBody = doc({ href: "b", title: "其他", text: "讲到蒸馏", py: "qita", pyi: "qt", bpy: "jiangdaozhengliu" });
+  const ranked = runSearch([inBody, inTitle], "zhengliu").map((r) => r.doc.href);
+  expect(ranked[0]).toBe("t");
+});
+
 test("pinyin: a literal Latin title hit outranks a pinyin-only match", () => {
   // contrived: a doc whose title literally contains the Latin token...
   const literal = doc({ href: "lit", title: "jiangli notes" });
