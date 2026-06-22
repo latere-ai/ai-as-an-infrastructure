@@ -24,21 +24,27 @@ So the problem has two halves that this chapter treats together: pack the key-va
 
 The first move is to schedule at the granularity of an iteration rather than a request. An iteration is one forward pass that advances every active request by a single token. After each iteration the scheduler is free to remove requests that just emitted their stop token and admit waiting requests into the next iteration's batch. This is **@gls-continuous-batching**, also called iteration-level scheduling, introduced by Orca [@yu2022orca]. The batch is no longer a fixed cohort that lives and dies together; it is a sliding window over the active set, refilled every step. A request that finishes at token twenty leaves immediately and its slot is reused, instead of padding out the batch until the longest member finishes. @fig-memory-scheduling-continuous shows the loop: every iteration retires whatever just emitted its stop token and admits waiting requests, so the batch composition changes each step.
 
-```{mermaid}
-%%| label: fig-memory-scheduling-continuous
-%%| fig-cap: "The continuous-batching loop. The scheduler forms a batch, runs one forward pass that advances every active request by one token, retires those that emitted a stop token, and admits waiting requests before the next iteration, so the batch is a sliding window refilled every step. After Yu et al., 2022."
-flowchart TB
-  waiting["Waiting queue"]
-  form["Form batch from active set"]
-  fwd["One forward pass, advance each request by one token"]
-  sample["Sample one token per request"]
-  done{"Emitted stop token?"}
-  retire["Retire request, free its blocks"]
-  waiting -->|admit| form
-  form --> fwd --> sample --> done
-  done -->|yes| retire
-  done -->|no, keep in active set| form
-  retire -.->|slot reused| form
+```{dot}
+//| label: fig-memory-scheduling-continuous
+//| fig-cap: "The continuous-batching loop. The scheduler forms a batch, runs one forward pass that advances every active request by one token, retires those that emitted a stop token, and admits waiting requests before the next iteration, so the batch is a sliding window refilled every step. After Yu et al., 2022."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  waiting [label="Waiting queue"];
+  form [label="Form batch from active set"];
+  fwd [label="One forward pass, advance each request by one token"];
+  sample [label="Sample one token per request"];
+  done [label="Emitted stop token?", shape=diamond];
+  retire [label="Retire request, free its blocks"];
+  waiting -> form [label="admit"];
+  form -> fwd -> sample -> done;
+  done -> retire [label="yes"];
+  done -> form [label="no, keep in active set"];
+  retire -> form [style=dashed, label="slot reused"];
+}
 ```
 
 Before Orca, serving systems batched at request granularity: form a batch, run it to completion, return the results. This is request-level scheduling, and it inherits the static-batch pathology of any padded-cohort design. Orca's contribution was to schedule at iteration granularity and to make the batch a living set, refilled every step, which is the single change that lets a serving engine keep accelerators busy under heterogeneous request lengths [@yu2022orca]. Orca also introduced selective batching, batching the parts of the computation that can be batched across requests of different lengths while running attention per request.
@@ -49,26 +55,41 @@ Continuous batching solves the scheduling fact and immediately exposes the memor
 
 The second move removes that waste by borrowing virtual memory from operating systems. The insight is that the key-value cache is exactly the kind of object virtual memory was invented for: a per-process allocation that grows unpredictably and must share a fixed physical pool without fragmentation. **@gls-pagedattention** [@kwon2023pagedattention] stores the key-value cache in fixed-size blocks, each holding the keys and values for a fixed number of tokens, and lets a request's logical sequence of blocks map to physically non-contiguous blocks through a block table. The attention kernel is rewritten to gather keys and values through that table instead of assuming contiguity. Now allocation is per block, not per request: a request grows by appending a block when its current block fills, memory is shared at block granularity across all requests, and the only internal waste is the partial final block. The analogy is precise. The block is a page, the block table is a page table, and the engine is a memory manager that hands out and reclaims pages as sequences grow and finish. @fig-memory-scheduling-paging shows the indirection: a request's logical sequence of token blocks maps through a block table to physically scattered blocks in a shared pool.
 
-```{mermaid}
-%%| label: fig-memory-scheduling-paging
-%%| fig-cap: "PagedAttention indirection. A request's logical token blocks map through a block table to non-contiguous physical blocks in a shared pool, so allocation is per block and the only waste is the partial final block. After Kwon et al., 2023."
-flowchart LR
-  subgraph logical["Logical KV (per request)"]
-    t0["tokens 0-15"] --> t1["tokens 16-31"] --> t2["tokens 32-47"]
-  end
-  subgraph table["Block table"]
-    e0["slot 0"]
-    e1["slot 1"]
-    e2["slot 2"]
-  end
-  subgraph phys["Physical blocks (shared pool)"]
-    b2["block 2"]
-    b7["block 7"]
-    b9["block 9"]
-  end
-  t0 -.-> e0 -.-> b7
-  t1 -.-> e1 -.-> b2
-  t2 -.-> e2 -.-> b9
+```{dot}
+//| label: fig-memory-scheduling-paging
+//| fig-cap: "PagedAttention indirection. A request's logical token blocks map through a block table to non-contiguous physical blocks in a shared pool, so allocation is per block and the only waste is the partial final block. After Kwon et al., 2023."
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  subgraph cluster_logical {
+    label="Logical KV (per request)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    t0 [label="tokens 0-15"];
+    t1 [label="tokens 16-31"];
+    t2 [label="tokens 32-47"];
+    t0 -> t1 -> t2;
+  }
+  subgraph cluster_table {
+    label="Block table"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    e0 [label="slot 0"];
+    e1 [label="slot 1"];
+    e2 [label="slot 2"];
+  }
+  subgraph cluster_phys {
+    label="Physical blocks (shared pool)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    b2 [label="block 2"];
+    b7 [label="block 7"];
+    b9 [label="block 9"];
+  }
+  t0 -> e0 [style=dashed];
+  e0 -> b7 [style=dashed];
+  t1 -> e1 [style=dashed];
+  e1 -> b2 [style=dashed];
+  t2 -> e2 [style=dashed];
+  e2 -> b9 [style=dashed];
+}
 ```
 
 <figure id="fig-memory-scheduling-paged-attention">
@@ -108,26 +129,36 @@ Paging and prefix sharing both assume prefill and decode share a device and a ba
 
 The fourth move separates the two phases onto different hardware. Prefill is compute-bound and bursty; decode is memory-bandwidth-bound and steady. **Prefill/decode disaggregation** runs prefill on one pool of machines and decode on another, transferring the key-value cache between them over the network. Each pool is provisioned and parallelized for its own phase, and neither interferes with the other's latency. DistServe [@zhong2024distserve] optimizes the placement for @gls-goodput, the rate of requests that meet both a time-to-first-token target for prefill and a time-per-output-token target for decode. Mooncake [@qin2024mooncake] centers the whole architecture on the key-value cache, pooling CPU @gls-dram and SSD across the cluster into a disaggregated cache that prefill writes and decode reads. @fig-memory-scheduling-disagg sketches the split: the prompt enters a prefill pool, the resulting key-value cache crosses the network, and the decode pool reads it to emit tokens, each pool sized and parallelized for its own phase.
 
-```{mermaid}
-%%| label: fig-memory-scheduling-disagg
-%%| fig-cap: "Prefill/decode disaggregation. A compute-bound prefill pool produces the first token and the key-value cache, which transfers over the network to a memory-bandwidth-bound decode pool that streams the remaining tokens. Each pool is provisioned and parallelized for its own phase. After Zhong et al., 2024 and Qin et al., 2024."
-flowchart LR
-  prompt["Prompt"] --> pp
-  subgraph prefillpool["Prefill pool (compute-bound)"]
-    pp["Read full prompt, one pass"]
-    ft["First token"]
-    kv["Build KV cache"]
-    pp --> ft
-    pp --> kv
-  end
-  kv -->|"KV cache transfer over network"| dp
-  subgraph decodepool["Decode pool (bandwidth-bound)"]
-    dp["Read KV cache"]
-    step["Emit one token per pass"]
-    dp --> step
-    step -->|append to KV| dp
-  end
-  step --> out["Output stream"]
+```{dot}
+//| label: fig-memory-scheduling-disagg
+//| fig-cap: "Prefill/decode disaggregation. A compute-bound prefill pool produces the first token and the key-value cache, which transfers over the network to a memory-bandwidth-bound decode pool that streams the remaining tokens. Each pool is provisioned and parallelized for its own phase. After Zhong et al., 2024 and Qin et al., 2024."
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  prompt [label="Prompt"];
+  prompt -> pp;
+  subgraph cluster_prefillpool {
+    label="Prefill pool (compute-bound)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    pp [label="Read full prompt, one pass"];
+    ft [label="First token"];
+    kv [label="Build KV cache"];
+    pp -> ft;
+    pp -> kv;
+  }
+  kv -> dp [label="KV cache transfer over network"];
+  subgraph cluster_decodepool {
+    label="Decode pool (bandwidth-bound)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    dp [label="Read KV cache"];
+    step [label="Emit one token per pass"];
+    dp -> step;
+    step -> dp [label="append to KV"];
+  }
+  out [label="Output stream"];
+  step -> out;
+}
 ```
 
 This is the most recent move, and it inverts the assumption the first three shared. Both lines are live. The within-device line, exemplified by chunked-prefill scheduling [@agrawal2024sarathi], keeps one resource pool and schedules carefully; the disaggregated line [@zhong2024distserve; @qin2024mooncake] accepts a network transfer of the key-value cache to remove interference entirely. Which one wins is genuinely unsettled.

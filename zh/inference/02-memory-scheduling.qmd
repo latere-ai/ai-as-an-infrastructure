@@ -16,21 +16,27 @@
 
 第一步，是把调度的粒度从请求换成迭代。一次迭代就是一次前向传播，把每个活跃请求都向前推进一个词元。每次迭代之后，调度器都可以随手移除刚发出停止词元的请求，再把等待中的请求放进下一次迭代的批里。这就是**@gls-continuous-batching**，也叫迭代级调度，由 Orca 提出 [@yu2022orca]。批不再是一个同生共死的固定队列，而成了一个在活跃集合上滑动的窗口，每一步都重新填满。一个在第二十个词元结束的请求会立刻离开，它的槽位随即被复用，而不必把整批填充到最长成员结束。@fig-memory-scheduling-continuous 画出了这个循环：每次迭代都退役刚发出停止词元的请求，并放入等待中的请求，于是批的构成每一步都在变。
 
-```{mermaid}
-%%| label: fig-memory-scheduling-continuous
-%%| fig-cap: "连续批处理循环。调度器组成一批，跑一次把每个活跃请求向前推进一个词元的前向传播，退役发出停止词元的请求，并在下一次迭代前放入等待中的请求，于是批是一个每步重新填满的滑动窗口。改编自 Yu 等，2022。"
-flowchart TB
-  waiting["等待队列"]
-  form["从活跃集合组成批"]
-  fwd["一次前向传播，每个请求推进一个词元"]
-  sample["每个请求采样一个词元"]
-  done{"发出停止词元？"}
-  retire["退役请求，释放其块"]
-  waiting -->|准入| form
-  form --> fwd --> sample --> done
-  done -->|是| retire
-  done -->|否，留在活跃集合| form
-  retire -.->|槽位被复用| form
+```{dot}
+//| label: fig-memory-scheduling-continuous
+//| fig-cap: "连续批处理循环。调度器组成一批，跑一次把每个活跃请求向前推进一个词元的前向传播，退役发出停止词元的请求，并在下一次迭代前放入等待中的请求，于是批是一个每步重新填满的滑动窗口。改编自 Yu 等，2022。"
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  waiting [label="等待队列"];
+  form [label="从活跃集合组成批"];
+  fwd [label="一次前向传播，每个请求推进一个词元"];
+  sample [label="每个请求采样一个词元"];
+  done [label="发出停止词元？", shape=diamond];
+  retire [label="退役请求，释放其块"];
+  waiting -> form [label="准入"];
+  form -> fwd -> sample -> done;
+  done -> retire [label="是"];
+  done -> form [label="否，留在活跃集合"];
+  retire -> form [style=dashed, label="槽位被复用"];
+}
 ```
 
 在 Orca 之前，服务系统是以请求为粒度做批处理的：组成一批，跑到完成，返回结果。这是请求级调度，凡是填充队列式的设计都逃不掉那种静态批处理的毛病，它也一样。Orca 的贡献，是把调度换成迭代粒度，并把批做成一个活的集合，每一步重新填满，正是这一处改动，让服务引擎能在请求长度参差不齐时仍保持高利用率 [@yu2022orca]。Orca 还引入了选择性批处理，即把计算中那些能跨不同长度请求批处理的部分批起来，而注意力则按请求各自运行。
@@ -41,26 +47,41 @@ flowchart TB
 
 第二步从操作系统借来虚拟内存，消掉这份浪费。其洞见是：KV 缓存恰好就是虚拟内存当年为之而生的那类对象，一种按进程的分配，增长不可预测，又必须在不碎片化的前提下共享一个固定的物理池。**@gls-pagedattention** [@kwon2023pagedattention] 把 KV 缓存存进固定大小的块，每块装固定数量词元的键与值，并让一个请求的逻辑块序列经由一张块表，映射到物理上并不连续的块。注意力核被改写成通过这张表去搜集键与值，而不再假定连续。如今分配是按块的，不是按请求的：一个请求在当前块填满时追加一块来增长，显存以块为粒度在所有请求间共享，唯一的内部浪费只剩那个不满的末块。这个类比很直接。块就是页，块表就是页表，引擎就是一个内存管理器，随着序列增长与结束分发并回收页。@fig-memory-scheduling-paging 画出了这层间接：一个请求的逻辑词元块序列，经由一张块表，映射到共享池中物理上分散的块。
 
-```{mermaid}
-%%| label: fig-memory-scheduling-paging
-%%| fig-cap: "PagedAttention 的间接映射。一个请求的逻辑词元块通过块表映射到共享池中物理上不连续的块，于是分配以块为粒度，唯一的浪费是不满的末块。改编自 Kwon 等，2023。"
-flowchart LR
-  subgraph logical["逻辑 KV（每请求）"]
-    t0["词元 0-15"] --> t1["词元 16-31"] --> t2["词元 32-47"]
-  end
-  subgraph table["块表"]
-    e0["槽 0"]
-    e1["槽 1"]
-    e2["槽 2"]
-  end
-  subgraph phys["物理块（共享池）"]
-    b2["块 2"]
-    b7["块 7"]
-    b9["块 9"]
-  end
-  t0 -.-> e0 -.-> b7
-  t1 -.-> e1 -.-> b2
-  t2 -.-> e2 -.-> b9
+```{dot}
+//| label: fig-memory-scheduling-paging
+//| fig-cap: "PagedAttention 的间接映射。一个请求的逻辑词元块通过块表映射到共享池中物理上不连续的块，于是分配以块为粒度，唯一的浪费是不满的末块。改编自 Kwon 等，2023。"
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  subgraph cluster_logical {
+    label="逻辑 KV（每请求）"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    t0 [label="词元 0-15"];
+    t1 [label="词元 16-31"];
+    t2 [label="词元 32-47"];
+    t0 -> t1 -> t2;
+  }
+  subgraph cluster_table {
+    label="块表"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    e0 [label="槽 0"];
+    e1 [label="槽 1"];
+    e2 [label="槽 2"];
+  }
+  subgraph cluster_phys {
+    label="物理块（共享池）"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    b2 [label="块 2"];
+    b7 [label="块 7"];
+    b9 [label="块 9"];
+  }
+  t0 -> e0 [style=dashed];
+  e0 -> b7 [style=dashed];
+  t1 -> e1 [style=dashed];
+  e1 -> b2 [style=dashed];
+  t2 -> e2 [style=dashed];
+  e2 -> b9 [style=dashed];
+}
 ```
 
 <figure id="fig-memory-scheduling-paged-attention">
@@ -100,26 +121,36 @@ digraph radix {
 
 第四步把两个阶段分到不同的硬件上。预填充是计算受限的、突发的；解码是显存带宽受限的、平稳的。**预填充／解码分离**把预填充跑在一组机器上，把解码跑在另一组上，两者之间用网络传输 KV 缓存。每一组都按自己那个阶段来配置和并行，谁也不干扰对方的延迟。DistServe [@zhong2024distserve] 为@gls-goodput优化放置，所谓有效吞吐量，是指同时满足预填充的@gls-ttft目标和解码的每词元时间（TPOT）目标的请求速率。Mooncake [@qin2024mooncake] 则把整个架构都围着 KV 缓存来搭，把集群里的 CPU @gls-dram 与 SSD 汇成一个分离的缓存，由预填充写、由解码读。@fig-memory-scheduling-disagg 勾出这一拆分：提示词进入预填充池，产出的 KV 缓存跨过网络，解码池读它来发出词元，每一组都按自己那个阶段来配置和并行。
 
-```{mermaid}
-%%| label: fig-memory-scheduling-disagg
-%%| fig-cap: "预填充／解码分离。一个计算受限的预填充池产出第一个词元与 KV 缓存，后者经网络传输到一个显存带宽受限的解码池，由它流式发出其余词元。每一组都按自己的阶段来配置与并行。改编自 Zhong 等，2024 与 Qin 等，2024。"
-flowchart LR
-  prompt["提示词"] --> pp
-  subgraph prefillpool["预填充池（计算受限）"]
-    pp["读入整段提示词，一次传播"]
-    ft["第一个词元"]
-    kv["构建 KV 缓存"]
-    pp --> ft
-    pp --> kv
-  end
-  kv -->|"KV 缓存经网络传输"| dp
-  subgraph decodepool["解码池（带宽受限）"]
-    dp["读取 KV 缓存"]
-    step["每次传播发出一个词元"]
-    dp --> step
-    step -->|追加到 KV| dp
-  end
-  step --> out["输出流"]
+```{dot}
+//| label: fig-memory-scheduling-disagg
+//| fig-cap: "预填充／解码分离。一个计算受限的预填充池产出第一个词元与 KV 缓存，后者经网络传输到一个显存带宽受限的解码池，由它流式发出其余词元。每一组都按自己的阶段来配置与并行。改编自 Zhong 等，2024 与 Qin 等，2024。"
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  prompt [label="提示词"];
+  prompt -> pp;
+  subgraph cluster_prefillpool {
+    label="预填充池（计算受限）"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    pp [label="读入整段提示词，一次传播"];
+    ft [label="第一个词元"];
+    kv [label="构建 KV 缓存"];
+    pp -> ft;
+    pp -> kv;
+  }
+  kv -> dp [label="KV 缓存经网络传输"];
+  subgraph cluster_decodepool {
+    label="解码池（带宽受限）"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    dp [label="读取 KV 缓存"];
+    step [label="每次传播发出一个词元"];
+    dp -> step;
+    step -> dp [label="追加到 KV"];
+  }
+  out [label="输出流"];
+  step -> out;
+}
 ```
 
 这是最近的一步，它把前三步共享的那个默认翻了过来。两条线都还活跃。设备内这条线，以分块预填充调度为代表 [@agrawal2024sarathi]，保留一个资源池，靠精细调度取胜；分离那条线 [@zhong2024distserve; @qin2024mooncake] 则接受一次 KV 缓存的网络传输，换来干扰被彻底消除。哪一条胜出，至今没有定论。

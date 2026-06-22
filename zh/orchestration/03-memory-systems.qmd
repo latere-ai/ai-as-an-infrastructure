@@ -8,29 +8,41 @@
 
 先从故障讲起，因为它点出了这里的主题。一个运行框架向模型发出 prompt，模型请求运行 `git commit`，沙箱执行、提交落地，紧接着运行框架就在副作用触发与其记录抵达持久存储之间的那个窗口里崩溃了。恢复时读到的是最后一个持久状态，也就是提交之前的状态，于是智能体重放：它又发出同一条 `git commit`。
 
-```{mermaid}
-%%| label: fig-memory-crash-replay
-%%| fig-cap: "在副作用与持久化之间崩溃，会使重放重新发出一次非幂等的提交，这是意图与结果之缝隙最纯粹的形式。"
-sequenceDiagram
-    participant LLM
-    participant R as 运行框架
-    participant SB as 沙箱
-    participant SS as 会话存储
+```{dot}
+//| label: fig-memory-crash-replay
+//| fig-cap: "在副作用与持久化之间崩溃，会使重放重新发出一次非幂等的提交，这是意图与结果之缝隙最纯粹的形式。"
+digraph {
+    bgcolor="transparent";
+    rankdir=TB;
+    nodesep=0.4; ranksep=0.5;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+    edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-    R->>LLM: prompt
-    LLM-->>R: tool_use: sandbox_exec("git commit -m 'feat'")
-    R->>SB: gRPC Exec("git commit ...")
-    SB-->>R: OK（提交已创建）
-    Note over R: ✕ 运行框架在此崩溃
-    Note over SS: 事件未被持久化
+    prompt [label="运行框架向 LLM 发出 prompt"];
+    tooluse [label="tool_use: sandbox_exec(\"git commit -m 'feat'\")"];
+    exec [label="gRPC Exec(\"git commit ...\")"];
+    ok [label="OK（提交已创建）"];
+    crash [label="✕ 运行框架在此崩溃", fillcolor="#f2c2c2"];
+    notpersist [label="事件未被持久化"];
 
-    Note over R,SS: 恢复
-    R->>SS: GetSession
-    SS-->>R: 最后已知状态（提交前）
-    R->>LLM: 从最后检查点重放
-    LLM-->>R: tool_use: sandbox_exec("git commit -m 'feat'")
-    R->>SB: gRPC Exec("git commit ...")
-    Note over SB: ✕ 重复提交或报错：<br/>nothing to commit, working tree clean
+    prompt -> tooluse -> exec -> ok -> crash -> notpersist;
+
+    subgraph cluster_recovery {
+        label="恢复";
+        style=rounded;
+        color="#6b7280";
+        fontcolor="#6b7280";
+        fontsize=10;
+        getsession [label="GetSession"];
+        laststate [label="最后已知状态（提交前）"];
+        replay [label="从最后检查点重放"];
+        reissue [label="重新发出同一条提交"];
+        dup [label="✕ 重复提交或报错：\nnothing to commit, working tree clean", fillcolor="#f2c2c2"];
+        getsession -> laststate -> replay -> reissue -> dup;
+    }
+
+    notpersist -> getsession [label="恢复"];
+}
 ```
 
 这不是什么稀奇的边缘情况。一个运行框架必须能挺过四种常规事件中的任意一种：运行框架崩溃、副本重新调度、沙箱丢失，或者用户在数天后恢复一次会话。对一个长时间运行的智能体来说，这些全是正常运转区间，而已有报告称智能体的重试率在 15% 到 30% 之间，这让上面那种重放成了一个必须专门设计的常态，而非偶发意外 [@fast2025reliability]。它暴露出的核心困难，在于一个副作用和它的提交之间的缝隙。一份持久日志先记录**意图**（「调用 `git commit`」），再分开记录**结果**（「提交成功」）。一旦运行框架在这两次写入之间崩溃，恢复就会重新发出该操作。对幂等操作来说，这无害。可对非幂等操作，比如第二次提交、一张重复的工单、一笔重复的付款，存储和外部世界就会无声地分叉，而日志里没有任何东西能表明这件事发生过。
@@ -139,23 +151,31 @@ fig.legend(loc="upper center"); plt.show()
 
 **分支在对话上分得便宜，在工作区上分得昂贵。** 给对话状态分支是一次指针操作：日志是一棵事件 ID 的树，fork 一棵树很便宜。给**工作区**分支就不是了，因为工作区是一个真实的文件系统，两条分支不可能都拥有它。
 
-```{mermaid}
-%%| label: fig-memory-branching
-%%| fig-cap: "给对话状态分支是一次廉价的指针操作，而共享工作区则逼出一个二选一：要么分支相互干扰，要么每次 fork 都付克隆代价。"
-graph LR
-    classDef easy fill:#d5f5e3,stroke:#27ae60,color:#234
-    classDef hard fill:#f9d6d6,stroke:#c0392b,color:#234
+```{dot}
+//| label: fig-memory-branching
+//| fig-cap: "给对话状态分支是一次廉价的指针操作，而共享工作区则逼出一个二选一：要么分支相互干扰，要么每次 fork 都付克隆代价。"
+digraph {
+    bgcolor="transparent";
+    rankdir=LR;
+    nodesep=0.4; ranksep=0.5;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+    edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-    CK["检查点"]
-    CK --> B1["分支 A：对话"]
-    CK --> B2["分支 B：对话"]
-    CK --> W["工作区 / 沙箱状态"]
-    W --> C{"共享还是克隆？"}
-    C -->|"共享"| RACE["分支相互干扰"]
-    C -->|"克隆"| COST["每次 fork 的克隆代价"]
+    CK [label="检查点"];
+    B1 [label="分支 A：对话", fillcolor="#bfe3c0"];
+    B2 [label="分支 B：对话", fillcolor="#bfe3c0"];
+    W [label="工作区 / 沙箱状态"];
+    C [label="共享还是克隆？", shape=diamond];
+    RACE [label="分支相互干扰", fillcolor="#f2c2c2"];
+    COST [label="每次 fork 的克隆代价", fillcolor="#f2c2c2"];
 
-    class B1,B2 easy
-    class RACE,COST hard
+    CK -> B1;
+    CK -> B2;
+    CK -> W;
+    W -> C;
+    C -> RACE [label="共享"];
+    C -> COST [label="克隆"];
+}
 ```
 
 如 @fig-memory-branching 所示，这个选择坍缩成一道两难：**共享**工作区的 fork 会在它上面竞态，分支 A 的写入对分支 B 可见；而**克隆**工作区的 fork 要付克隆代价。由此引出三种故障模式。一条分支无法 fork 它所触及的外部系统，git 远端、问题追踪器、MCP 游标都不行，于是可分支的状态和不可分支的状态会渐行渐远。合并回去则是结构性未解的：文件在检查点处有一个共同祖先，所以三方合并适用，但两段分叉的对话没有合并基点，因为其内容是一条推理轨迹，不是可编辑的行，这正是为什么文件合并必须由**智能体**而非运行框架来解决。而孤儿分支会把工作区和会话日志资源钉住，直到某个 TTL 把它们回收，所以一旦没有 TTL，这种泄漏就会无声地累积。单凭回退就足以应付交互式编码；可 fork 的树，则在用户并行探索多个备选方案、或一条评估流水线用改过的 prompt 重放一次会话时才划算。
@@ -173,32 +193,46 @@ graph LR
 
 记忆有一种值得点名的结构。短期记忆是单次对话内的会话上下文。长期记忆分为情景记忆（过去的交互）、语义记忆（关于用户或领域的事实）和程序记忆（学到的工作流）。外部知识，即检索增强生成（@sec-rag-retrieval）背后的语料和知识图谱，与之并列，却是另一回事：记忆是按用户的、经整理的、可写的，而 RAG 是从一个智能体并不拥有的共享语料里检索。
 
-```{mermaid}
-%%| label: fig-memory-taxonomy
-%%| fig-cap: "记忆分为短期与长期（情景、语义、程序），不同于 RAG 所检索的那种共享的外部知识。"
-graph TB
-    classDef short fill:#d6eaf8,stroke:#2980b9,color:#234
-    classDef long fill:#fdebd0,stroke:#e67e22,color:#234
-    classDef external fill:#d5f5e3,stroke:#27ae60,color:#234
+```{dot}
+//| label: fig-memory-taxonomy
+//| fig-cap: "记忆分为短期与长期（情景、语义、程序），不同于 RAG 所检索的那种共享的外部知识。"
+digraph {
+    bgcolor="transparent";
+    rankdir=TB;
+    nodesep=0.4; ranksep=0.5;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+    edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-    subgraph "短期"
-        ST["会话上下文<br/>单次对话内"]
-    end
+    subgraph cluster_short {
+        label="短期";
+        style=rounded;
+        color="#6b7280";
+        fontcolor="#6b7280";
+        fontsize=10;
+        ST [label="会话上下文\n单次对话内", fillcolor="#dbeafe"];
+    }
 
-    subgraph "长期"
-        EM["情景记忆<br/>过去的交互"]
-        SM["语义记忆<br/>关于用户或领域的事实"]
-        PM["程序记忆<br/>学到的工作流"]
-    end
+    subgraph cluster_long {
+        label="长期";
+        style=rounded;
+        color="#6b7280";
+        fontcolor="#6b7280";
+        fontsize=10;
+        EM [label="情景记忆\n过去的交互", fillcolor="#ffe9b3"];
+        SM [label="语义记忆\n关于用户或领域的事实", fillcolor="#ffe9b3"];
+        PM [label="程序记忆\n学到的工作流", fillcolor="#ffe9b3"];
+    }
 
-    subgraph "外部知识"
-        RAG["RAG 索引<br/>文档、工单、代码"]
-        KG["知识图谱<br/>实体、关系"]
-    end
-
-    class ST short
-    class EM,SM,PM long
-    class RAG,KG external
+    subgraph cluster_external {
+        label="外部知识";
+        style=rounded;
+        color="#6b7280";
+        fontcolor="#6b7280";
+        fontsize=10;
+        RAG [label="RAG 索引\n文档、工单、代码", fillcolor="#bfe3c0"];
+        KG [label="知识图谱\n实体、关系", fillcolor="#bfe3c0"];
+    }
+}
 ```
 
 最底层是向量存储加嵌入检索：文本被嵌入、被存储，并按相似度被召回。Pinecone [@pinecone2025managed]、pgvector [@pgvector2025vector] 和 Chroma [@chroma2025embedding] 是有代表性的基底。在它们之上是有主张的记忆框架，Letta [@letta2025stateful]（MemGPT [@packer2023memgpt] 的继任者）、Zep [@zep2025temporal] 和 Mem0 [@mem02025memory]，由它们来决定写什么、何时写、怎么压缩。知识图谱显式地建模实体与关系，适合组合式查询，但更难自动填充；而时序知识图谱加上了时间维度，使一个事实可以在一段时间内有效、然后被取代。

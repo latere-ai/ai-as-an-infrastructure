@@ -87,8 +87,8 @@ test("scaling-law extrapolation annotations do not overlap the legend", () => {
 
 test("hand-authored zh diagrams do not keep English explanatory labels", () => {
   const multimodalServing = read("zh/inference/06-serving-multimodal.qmd");
-  expect(multimodalServing).toContain('IMG["原始像素"]');
-  expect(multimodalServing).not.toContain('IMG["raw pixels"]');
+  expect(multimodalServing).toContain('IMG [label="原始像素"]');
+  expect(multimodalServing).not.toContain('label="raw pixels"');
 
   const security = read("zh/safety/03-security-authorization.qmd");
   expect(security).toContain("被注入的指令");

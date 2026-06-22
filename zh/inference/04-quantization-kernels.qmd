@@ -82,42 +82,72 @@ $$
 
 其中 $m_i$ 是处理到第 $i$ 个块为止的全局最大 logit，$\tilde{m}_i$ 是当前块的最大值，$\ell_i$ 是随这个最大值重新标定后的归一化因子。第二个递推式做的事，是在最大值变大时把旧的指数和按比例缩小，再把当前块的指数和加进来。这样一来，softmax 的数值稳定性和完整矩阵计算完全一致，但输出在成为最终结果之前从不离开 SRAM，$n \times n$ 矩阵从不触及高带宽内存，反向传播则即时重算各块，而不是把它们存下来。这就是该算子做的核心取舍：花额外的算术来避免内存流量。这恰好是对的取舍，因为注意力本就受内存约束。@fig-quantization-kernels-flashattention 对比了两条数据路径：朴素算子把完整的分数矩阵停在高带宽内存里，而融合算子把每一个中间结果都留在片上 SRAM 内，只让最终输出返回。
 
-```{mermaid}
-%%| label: fig-quantization-kernels-flashattention
-%%| fig-cap: "朴素注意力把完整的分数矩阵经 HBM 写出再读回，而 FlashAttention 让 Q、K、V 块流经 SRAM，维护一个运行中的最大值与归一化因子，使该矩阵从不落入 HBM。据 Dao et al. (2022)。"
-flowchart LR
-  subgraph HBM_naive["HBM 中的朴素注意力"]
-    direction TB
-    QN["Q, K, V"] --> SC["完整的 n 乘 n 分数矩阵"]
-    SC --> SM["对完整矩阵做 softmax"]
-    SM --> ON["加权输出"]
-  end
-  subgraph SRAM["SRAM 片上的 FlashAttention"]
-    direction TB
-    TILE["载入 Q, K, V 块"] --> ONLINE["在线 softmax: 运行中的最大值 m, 归一化因子 l"]
-    ONLINE --> RESCALE["按每个键块重新缩放部分输出"]
-    RESCALE --> TILE
-    RESCALE --> OUT["最终输出写回 HBM"]
-  end
-  HBM_naive -. "结果完全相同, 流量远少" .-> SRAM
+```{dot}
+//| label: fig-quantization-kernels-flashattention
+//| fig-cap: "朴素注意力把完整的分数矩阵经 HBM 写出再读回，而 FlashAttention 让 Q、K、V 块流经 SRAM，维护一个运行中的最大值与归一化因子，使该矩阵从不落入 HBM。据 Dao et al. (2022)。"
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  subgraph cluster_HBM_naive {
+    label="HBM 中的朴素注意力";
+    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    QN [label="Q, K, V"];
+    SC [label="完整的 n 乘 n 分数矩阵"];
+    SM [label="对完整矩阵做 softmax"];
+    ON [label="加权输出"];
+    QN -> SC;
+    SC -> SM;
+    SM -> ON;
+  }
+  subgraph cluster_SRAM {
+    label="SRAM 片上的 FlashAttention";
+    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    TILE [label="载入 Q, K, V 块"];
+    ONLINE [label="在线 softmax: 运行中的最大值 m, 归一化因子 l"];
+    RESCALE [label="按每个键块重新缩放部分输出"];
+    OUT [label="最终输出写回 HBM"];
+    TILE -> ONLINE;
+    ONLINE -> RESCALE;
+    RESCALE -> TILE;
+    RESCALE -> OUT;
+  }
+  QN -> TILE [style=dashed, label="结果完全相同, 流量远少"];
+}
 ```
 
 ## 路由决策
 
 两个杠杆合成一个单一的路由决策。引擎正在对抗的瓶颈挑出量化方案，融合注意力算子随后位于所选路径之下，如 @fig-quantization-kernels-routing 所示。
 
-```{mermaid}
-%%| label: fig-quantization-kernels-routing
-%%| fig-cap: "服务情形为量化选择做路由，一个融合注意力算子位于两条路径之下，然后才抵达引擎。"
-flowchart TD
-  A["FP16 权重与激活"] --> B{"瓶颈是什么?"}
-  B -->|"解码: 带宽"| C["只量化权重: GPTQ, AWQ"]
-  B -->|"预填充: 计算"| D["权重 + 激活: SmoothQuant, FP8"]
-  C --> E["占用更小, 读取字节更少"]
-  D --> F["小格式矩阵乘"]
-  E --> G["融合注意力算子: FlashAttention"]
-  F --> G
-  G --> H["服务引擎: vLLM, SGLang, TensorRT-LLM"]
+```{dot}
+//| label: fig-quantization-kernels-routing
+//| fig-cap: "服务情形为量化选择做路由，一个融合注意力算子位于两条路径之下，然后才抵达引擎。"
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  A [label="FP16 权重与激活"];
+  B [label="瓶颈是什么?", shape=diamond];
+  C [label="只量化权重: GPTQ, AWQ"];
+  D [label="权重 + 激活: SmoothQuant, FP8"];
+  E [label="占用更小, 读取字节更少"];
+  F [label="小格式矩阵乘"];
+  G [label="融合注意力算子: FlashAttention"];
+  H [label="服务引擎: vLLM, SGLang, TensorRT-LLM"];
+  A -> B;
+  B -> C [label="解码: 带宽"];
+  B -> D [label="预填充: 计算"];
+  C -> E;
+  D -> F;
+  E -> G;
+  F -> G;
+  G -> H;
+}
 ```
 
 从瓶颈读出情形，是本章的实践核心。带宽受限的解码偏向只量化权重的 GPTQ 或 AWQ；计算受限的预填充、或吞吐优先的部署，偏向 FP8 或 SmoothQuant，好让矩阵乘在小格式下跑；CPU 和 Apple silicon 目标偏向 GGUF k-quant 以求可移植；NVIDIA 生产栈则通常选择 TensorRT-LLM，把算子融合并编译到硬件上。

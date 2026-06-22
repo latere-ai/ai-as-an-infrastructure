@@ -56,22 +56,41 @@ plt.legend(); plt.grid(alpha=0.3); plt.show()
 
 @fig-orchestration-recovery 里的这道分叉正是设计要点：一次干净的崩溃走的是检测、隔离、在预热备用容量上恢复的快路径；而那些根本不触发崩溃检测器的故障，只能靠可观测性来抓，要么干脆无从恢复。
 
-```{mermaid}
-%%| label: fig-orchestration-recovery
-%%| fig-cap: "一次干净的崩溃被捕获并路由到在备用容量上的弹性重启。那些不会干净崩溃的故障逃出这条路径，必须由可观测性捕获，而对静默损坏而言，则无法从任何检查点恢复。"
-flowchart TD
-  H["健康训练步循环"] --> F{"故障类型"}
-  F -->|节点崩溃| D["检测死节点"]
-  D --> N["从集合通信中隔离"]
-  N --> R["幸存进程从最近检查点恢复"]
-  R --> W["放到预热备用容量"]
-  W --> H
-  F -->|掉队节点| SL["慢 rank 拖住每次集合通信"]
-  SL --> O["由逐步遥测捕获"]
-  O --> H
-  F -->|静默数据损坏| SC["数字错误，但没有崩溃"]
-  SC --> X["检查点记录了损坏"]
-  X --> U["没有外部检查则无法恢复"]
+```{dot}
+//| label: fig-orchestration-recovery
+//| fig-cap: "一次干净的崩溃被捕获并路由到在备用容量上的弹性重启。那些不会干净崩溃的故障逃出这条路径，必须由可观测性捕获，而对静默损坏而言，则无法从任何检查点恢复。"
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  H [label="健康训练步循环"];
+  F [label="故障类型", shape=diamond];
+  D [label="检测死节点"];
+  N [label="从集合通信中隔离"];
+  R [label="幸存进程从最近检查点恢复"];
+  W [label="放到预热备用容量"];
+  SL [label="慢 rank 拖住每次集合通信"];
+  O [label="由逐步遥测捕获"];
+  SC [label="数字错误，但没有崩溃"];
+  X [label="检查点记录了损坏"];
+  U [label="没有外部检查则无法恢复"];
+
+  H -> F;
+  F -> D [label="节点崩溃"];
+  D -> N;
+  N -> R;
+  R -> W;
+  W -> H;
+  F -> SL [label="掉队节点"];
+  SL -> O;
+  O -> H;
+  F -> SC [label="静默数据损坏"];
+  SC -> X;
+  X -> U;
+}
 ```
 
 ### 检查点放在哪里，以及哪些仍有争议
@@ -132,16 +151,29 @@ digraph {
 
 把数据层系回检查点的那条性质，是可复现性。一次恢复必须续上运行在没出故障时本会走的那条数据顺序，分毫不差。这就意味着采样器与打乱的状态，即排列中的位置、轮次、各数据源的抽取计数器，都要进检查点，而不是在重启时重新生成，如 @fig-orchestration-dataplane 所示。少了这一步，一次恢复就会重喂或跳过数据，悄悄破坏配比契约。
 
-```{mermaid}
-%%| label: fig-orchestration-dataplane
-%%| fig-cap: "数据层通过本地缓存从分片存储为每个 rank 供给数据，而检查点捕获采样器状态，使一次恢复续上完全相同的数据顺序。"
-flowchart LR
-  S["存储底座上的分片语料"] --> C["本地 NVMe 缓存"]
-  C --> P["每个 rank 的预取与流水线"]
-  P --> T["训练步"]
-  T -->|每 N 步| K["检查点：<br/>参数、优化器、<br/>调度、采样器状态"]
-  K -.恢复.-> P
-  K -.恢复.-> T
+```{dot}
+//| label: fig-orchestration-dataplane
+//| fig-cap: "数据层通过本地缓存从分片存储为每个 rank 供给数据，而检查点捕获采样器状态，使一次恢复续上完全相同的数据顺序。"
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  S [label="存储底座上的分片语料"];
+  C [label="本地 NVMe 缓存"];
+  P [label="每个 rank 的预取与流水线"];
+  T [label="训练步"];
+  K [label="检查点：\n参数、优化器、\n调度、采样器状态"];
+
+  S -> C;
+  C -> P;
+  P -> T;
+  T -> K [label="每 N 步"];
+  K -> P [style=dashed, label="恢复"];
+  K -> T [style=dashed, label="恢复"];
+}
 ```
 
 可复现性这条要求是随规模一起来的。小规模上，一次非确定的恢复只是个小麻烦；可到了前沿规模，恢复频繁、配比契约又是承重的，把采样器状态写进检查点就成了没得商量的事。它并非免费：要做到数据顺序的精确可复现，就得付出确定性的开销，因为采样器状态必须进检查点、打乱也必须可重放，这就限制了为 I/O 效率重排序时能有多激进。放弃它能换来一些吞吐，却也丢掉了干净恢复的能力，以及把一段损失不连续追溯到成因的能力。
