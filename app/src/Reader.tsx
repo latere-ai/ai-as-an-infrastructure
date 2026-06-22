@@ -253,6 +253,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const showSidebar = !mobile && !s.navCollapsed;
   const showMiniToc = !mobile && !s.tocCollapsed;
   const bodyFont = s.serifBody ? "var(--font-cjk)" : "var(--font-ui)";
+  const showBreadcrumbTitle = !chapter.isPartIntro && !!chapter.chapterNum && chapter.title !== chapter.crumbChapter;
 
   const iconBtn = (active: boolean): React.CSSProperties => ({
     flex: "none", width: 34, height: 34, display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -290,17 +291,23 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
         {!mobile && (
           <nav aria-label="breadcrumb" style={{
-            display: "flex", alignItems: "center", gap: 9, flex: "none", paddingLeft: 13, marginLeft: 2,
+            display: "flex", alignItems: "center", gap: 9, flex: "1 1 auto", minWidth: 0, paddingLeft: 13, marginLeft: 2,
             borderLeft: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: 11,
             letterSpacing: ".02em", color: "var(--fg-3)", whiteSpace: "nowrap", overflow: "hidden",
           }}>
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{chapter.partShort}</span>
+            <span style={{ flex: "none", overflow: "hidden", textOverflow: "ellipsis" }}>{chapter.partShort}</span>
             <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ color: "var(--fg-1)", whiteSpace: "nowrap" }}>{chapter.crumbChapter}</span>
+            <span style={{ flex: "none", color: "var(--fg-1)", whiteSpace: "nowrap" }}>{chapter.crumbChapter}</span>
+            {showBreadcrumbTitle && (
+              <>
+                <span style={{ opacity: 0.5 }}>·</span>
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: "var(--fg-1)", whiteSpace: "nowrap" }}>{chapter.title}</span>
+              </>
+            )}
           </nav>
         )}
 
-        <div style={{ flex: 1 }} />
+        <div style={{ flex: "0 1 18px" }} />
 
         {(!mobile || chapter.headings.length > 0) && (
           <button onClick={() => (mobile ? (setDrawer(false), setTocDrawer((d) => !d)) : set({ tocCollapsed: !s.tocCollapsed }))}
