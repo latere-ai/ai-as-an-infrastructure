@@ -60,7 +60,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/foundations/01-scaling-laws.qmd",
-      ["Kaplan 时代偏向参数", "Chinchilla 式的数据分配", "推理感知的过度训练"],
+      ["Kaplan 时代偏向参数", "Chinchilla 式的数据分配", "推断感知的过度训练"],
     ],
     [
       "en/foundations/index.qmd",
