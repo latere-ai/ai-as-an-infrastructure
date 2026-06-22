@@ -100,7 +100,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/generative/02-nar-diffusion-lms.qmd",
-      ["自回归教师", "离散扩散", "2025 年那波"],
+      ["自回归教师", "离散扩散", "2025 年出现的一批"],
     ],
     [
       "en/generative/03-speech-and-voice.qmd",
@@ -132,7 +132,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/generative/index.qmd",
-      ["并不天然是一条从左到右的字符串", "世界模型、机器人和具身系统", "系统发明了怎样的顺序"],
+      ["并不天然是一条从左到右的字符串", "世界模型、机器人和具身系统", "系统为训练和采样构造了怎样的顺序"],
     ],
     [
       "en/adaptation/01-sft-peft.qmd",
