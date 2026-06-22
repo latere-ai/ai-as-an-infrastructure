@@ -14,6 +14,7 @@ type Strings = {
   body: string; sans: string; kai: string; size: string; layout: string;
   codex: string; manuscript: string; atlas: string; prev: string; next: string; language: string; resize: string;
   author: string; updated: string; readtimeLabel: string; noResults: string;
+  aboutAuthor: string; aboutLatere: string;
 };
 
 const STRINGS: Record<Lang, Strings> = {
@@ -23,6 +24,7 @@ const STRINGS: Record<Lang, Strings> = {
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
     codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", language: "语言", resize: "拖动调整宽度",
     author: "作者", updated: "更新于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
+    aboutAuthor: "关于作者", aboutLatere: "关于 Latere AI",
   },
   en: {
     sidebar: "Sidebar", onThisPage: "On this page", settings: "Reading settings", search: "Search chapters…",
@@ -30,14 +32,15 @@ const STRINGS: Record<Lang, Strings> = {
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
     codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", language: "Language", resize: "Drag to resize",
     author: "Author", updated: "Updated", readtimeLabel: "Reading time", noResults: "No matching results",
+    aboutAuthor: "About Author", aboutLatere: "About Latere AI",
   },
 } as const;
 
 const LS_KEY = "aaai-reader-settings";
 
 const SIDEBAR_EXTERNAL_LINKS = [
-  { label: "About Author", href: "https://changkun.de" },
-  { label: "About Latere AI", href: "https://latere.ai" },
+  { labelKey: "aboutAuthor", href: "https://changkun.de" },
+  { labelKey: "aboutLatere", href: "https://latere.ai" },
 ] as const;
 
 // latere brand mark (from ../latere-ai LatereLogoMark.vue).
@@ -552,7 +555,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
     <aside style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: "var(--bg-surface)", display: "flex", flexDirection: "column", paddingTop: 18, alignSelf: "stretch", minHeight: 0 }}>
       <SearchTrigger t={t} onOpen={onOpenSearch} />
       <nav ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", paddingBottom: 60 }}>
-        <SidebarExternalLinks />
+        <SidebarExternalLinks t={t} />
         {chapter.toc.map((part) => {
           const active = !!part.active || part.chapters.some((ch) => ch.active);
           if (part.single) {
@@ -626,7 +629,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
   );
 }
 
-function SidebarExternalLinks() {
+function SidebarExternalLinks({ t }: { t: Strings }) {
   return (
     <div style={{ margin: "0 0 10px", padding: "0 0 10px", borderBottom: "1px solid var(--border)" }}>
       {SIDEBAR_EXTERNAL_LINKS.map((link) => (
@@ -638,7 +641,7 @@ function SidebarExternalLinks() {
           color: "var(--fg-2)",
           textDecoration: "none",
           borderLeft: "2px solid transparent",
-        }}>{link.label}</a>
+        }}>{t[link.labelKey]}</a>
       ))}
     </div>
   );
@@ -702,13 +705,14 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
   const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12 };
   const label: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--fg-3)", flex: "none" };
   const seg: React.CSSProperties = { display: "flex", gap: 2, padding: 3, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)" };
+  const langSeg: React.CSSProperties = { ...seg, width: 150, flex: "none" };
   const segBtn = (active: boolean): React.CSSProperties => ({
     border: "none", cursor: "pointer", minWidth: 30, fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 500,
     padding: "4px 11px", borderRadius: "var(--radius-sm)", color: active ? "var(--bg-surface)" : "var(--fg-2)", background: active ? "var(--accent)" : "transparent",
   });
   const langChoice = (value: Lang, text: string) => {
     const active = chapter.lang === value;
-    const style: React.CSSProperties = { ...segBtn(active), flex: 1, cursor: active ? "default" : "pointer", textAlign: "center", textDecoration: "none" };
+    const style: React.CSSProperties = { ...segBtn(active), flex: "1 1 0", minWidth: 0, cursor: active ? "default" : "pointer", textAlign: "center", textDecoration: "none" };
     if (active) return <span key={value} aria-current="page" style={style}>{text}</span>;
     return <a key={value} href={chapter.langHref} style={style}>{text}</a>;
   };
@@ -720,7 +724,7 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
       position: "absolute", top: 42, right: 0, zIndex: 60, width: 264, padding: "14px 16px 16px",
       background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-lg)",
     }}>
-      <div style={{ ...row, marginTop: 0 }}><span style={label}>{t.language}</span><div style={seg}>{langChoice("en", "English")}{langChoice("zh", "中文")}</div></div>
+      <div style={{ ...row, marginTop: 0 }}><span style={label}>{t.language}</span><div style={langSeg}>{langChoice("en", "English")}{langChoice("zh", "中文")}</div></div>
       <div style={{ ...row, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
         <span style={label}>{t.palette}</span>
         <div style={{ ...seg, width: "100%" }}>

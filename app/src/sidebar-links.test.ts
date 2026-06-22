@@ -49,3 +49,28 @@ test("sidebar shows external about links above preface", () => {
   expect(latere).toBeGreaterThan(author);
   expect(preface).toBeGreaterThan(latere);
 });
+
+test("sidebar external about links are localized on zh pages", () => {
+  const html = renderToString(createElement(Reader, {
+    chapter: {
+      ...chapter,
+      lang: "zh",
+      langHref: "../en/",
+      crumbChapter: "前言",
+      title: "前言",
+      toc: [
+        {
+          id: "p0",
+          label: "",
+          single: true,
+          chapters: [{ n: "", label: "前言", href: "", active: true }],
+        },
+      ],
+    },
+  }));
+
+  expect(html).toContain(">关于作者</a>");
+  expect(html).toContain(">关于 Latere AI</a>");
+  expect(html).not.toContain(">About Author</a>");
+  expect(html).not.toContain(">About Latere AI</a>");
+});

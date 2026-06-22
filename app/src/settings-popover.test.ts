@@ -21,3 +21,11 @@ test("language selection lives in the settings popover, not a top-bar text butto
   expect(reader).not.toContain('lang: "中"');
   expect(reader).not.toContain('lang: "EN"');
 });
+
+test("language segmented control uses equal-width choices", () => {
+  expect(reader).toContain("const langSeg: React.CSSProperties");
+  expect(reader).toContain("width: 150");
+  expect(reader).toContain('flex: "1 1 0"');
+  expect(reader).toContain("minWidth: 0");
+  expect(reader).toContain("style={langSeg}");
+});
