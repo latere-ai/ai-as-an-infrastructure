@@ -2,6 +2,14 @@
 
 ## Open goals
 
+- [x] **Ecosystem and economics depth**
+
+  Expanded Part X from a three-chapter sketch into a full ecosystem treatment:
+  model openness, tooling standards, compute markets, market structure, adoption
+  and productivity, and data rights. The part now includes source-backed
+  references, static figures, an interactive ROI visualization, and updated
+  top-level book structure.
+
 - [x] **Product / UX / human-interface layer**
 
   Add the missing human-in-the-loop perspective: how AI infrastructure reaches

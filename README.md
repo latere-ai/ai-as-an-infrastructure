@@ -28,7 +28,8 @@ The spine is the lifecycle of a capability, read as a stack.
 - **Part VIII, Safety, Interpretability, and Governance.**
 - **Part IX, Infrastructure, Compute, and Frontiers.** Accelerators,
   networking, data infrastructure, and the compute frontier.
-- **Part X, Ecosystem and Economics.**
+- **Part X, Ecosystem and Economics.** Model openness, tooling standards,
+  compute markets, market structure, adoption and productivity, and data rights.
 - **Part XI, Practice and Operations.** The hands-on 2026 stack, plus
   deployment, reliability, human oversight surfaces, and the production data
   engine.

@@ -171,3 +171,13 @@ test("wave-5 components are used in their chapters, both languages", () => {
     }
   }
 });
+
+test("the viz runtime registers the ROI balance component", () => {
+  expect(rt).toMatch(/R\['roi-balance'\]\s*=\s*function/);
+});
+
+test("adoption-productivity uses ROI balance in both languages", () => {
+  expect(src("en/ecosystem/05-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
+  expect(src("zh/ecosystem/05-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
+  expect(src("zh/ecosystem/05-adoption-productivity.qmd")).toContain('data-lang="zh"');
+});

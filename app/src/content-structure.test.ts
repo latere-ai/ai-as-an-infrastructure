@@ -25,3 +25,43 @@ test("the human-interface chapter closes the recorded content gap", () => {
   }
   expect(src("README.md")).toContain("human oversight surfaces");
 });
+
+test("ecosystem and economics is a full six-chapter part in both languages", () => {
+  const expected = [
+    "ecosystem/01-model-landscape.qmd",
+    "ecosystem/02-tooling-ecosystem.qmd",
+    "ecosystem/03-economics.qmd",
+    "ecosystem/04-market-structure.qmd",
+    "ecosystem/05-adoption-productivity.qmd",
+    "ecosystem/06-data-rights-economics.qmd",
+  ];
+
+  for (const lang of ["en", "zh"]) {
+    const yml = src(`${lang}/book.yml`);
+    let last = -1;
+    for (const chapter of expected) {
+      const next = yml.indexOf(chapter);
+      expect(next, `${lang}/${chapter} missing from book.yml`).toBeGreaterThan(last);
+      last = next;
+    }
+
+    const intro = src(`${lang}/ecosystem/index.qmd`);
+    for (const section of [
+      "@sec-model-landscape",
+      "@sec-tooling-ecosystem",
+      "@sec-economics",
+      "@sec-market-structure",
+      "@sec-adoption-productivity",
+      "@sec-data-rights-economics",
+    ]) {
+      expect(intro).toContain(section);
+    }
+  }
+});
+
+test("the expanded ecosystem part is reflected in top-level book surfaces", () => {
+  expect(src("README.md")).toContain("market structure");
+  expect(src("README.md")).toContain("adoption and productivity");
+  expect(src("README.md")).toContain("data rights");
+  expect(src("CONTENT-GAPS.md")).toContain("- [x] **Ecosystem and economics depth**");
+});

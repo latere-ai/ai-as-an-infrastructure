@@ -699,6 +699,79 @@ SPECS = {
         "xlabel": "freshness",
         "ylabel": "quality control",
     },
+    "model-landscape-2": {
+        "type": "bars",
+        "categories": ["open source AI", "open weights", "API only"],
+        "series": [
+            {"label": "use / modify / share", "values": [0.95, 0.78, 0.28], "color": DATA},
+            {"label": "study / reproduce", "values": [0.90, 0.42, 0.12], "color": ACCENT},
+            {"label": "audit data path", "values": [0.82, 0.18, 0.06], "color": WARN},
+        ],
+        "ylabel": "practical openness",
+        "ylim": (0, 1.08),
+        "rotation": 10,
+        "ha": "right",
+    },
+    "tooling-ecosystem-2": {
+        "type": "scatter",
+        "points": [
+            {"label": "model gateway", "x": 0.22, "y": 0.72, "color": DATA},
+            {"label": "MCP server", "x": 0.47, "y": 0.58, "color": ACCENT},
+            {"label": "A2A agent", "x": 0.69, "y": 0.44, "color": WARN},
+            {"label": "sandbox runtime", "x": 0.54, "y": 0.80, "color": DATA},
+            {"label": "workflow registry", "x": 0.82, "y": 0.28, "color": MUTED},
+        ],
+        "xlabel": "interop boundary crossed",
+        "ylabel": "local control retained",
+    },
+    "economics-2": {
+        "type": "line",
+        "x": [0, 1, 2, 3, 4, 5, 6],
+        "series": [
+            {"label": "frontier training cost", "y": [1.0, 2.4, 5.8, 13.8, 33.2, 79.6, 191.1], "color": WARN},
+            {"label": "economy token price", "y": [1.0, 0.53, 0.28, 0.15, 0.08, 0.04, 0.02], "color": DATA},
+        ],
+        "xlabel": "years",
+        "ylabel": "relative index",
+        "logy": True,
+        "legend": "center left",
+        "ylim": (0.015, 260),
+    },
+    "market-structure-1": {
+        "type": "stacked",
+        "categories": ["silicon", "cloud", "frontier labs", "API", "apps", "data"],
+        "segments": [
+            {"label": "capital intensity", "values": [0.85, 0.72, 0.78, 0.38, 0.18, 0.20], "color": DATA},
+            {"label": "switching cost", "values": [0.28, 0.55, 0.42, 0.48, 0.62, 0.50], "color": ACCENT},
+            {"label": "differentiation", "values": [0.32, 0.26, 0.58, 0.34, 0.68, 0.72], "color": WARN},
+        ],
+        "ylabel": "control pressure",
+        "ylim": (0, 2.15),
+        "legend": "upper right",
+    },
+    "adoption-productivity-1": {
+        "type": "line",
+        "x": [0, 1, 2, 3, 4, 5, 6],
+        "series": [
+            {"label": "AI-assisted lift", "y": [0.10, 0.28, 0.42, 0.34, 0.10, -0.08, -0.18], "color": DATA, "marker": "o"},
+            {"label": "review burden", "y": [0.03, 0.08, 0.15, 0.24, 0.34, 0.46, 0.58], "color": WARN, "style": "--"},
+        ],
+        "xlabel": "task distance from the frontier",
+        "ylabel": "net productivity effect",
+        "ylim": (-0.25, 0.65),
+        "grid": True,
+        "annotations": [
+            {"text": "jagged edge", "xy": (4.0, 0.10), "xytext": (3.2, 0.42)}
+        ],
+    },
+    "data-rights-economics-1": {
+        "type": "funnel",
+        "stages": ["raw web", "policy-usable", "licensed / consented", "documented", "production-ready"],
+        "values": [100, 72, 46, 31, 24],
+        "xlabel": "relative corpus available",
+        "xmax": 110,
+        "colors": [DATA, ACCENT, WARN, MUTED, "#6b7280"],
+    },
 }
 
 

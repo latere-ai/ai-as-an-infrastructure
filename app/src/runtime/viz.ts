@@ -402,6 +402,79 @@
     draw();
   };
 
+  // ROI balance: adoption value is not model capability. It is the value of
+  // saved time and quality lift minus model spend, review/integration overhead,
+  // and expected error cost. The sliders make the hidden adoption costs visible.
+  R['roi-balance'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh';
+    var time = 18, quality = 8, model = 12, review = 18, error = 10;
+    var base = 100;
+    var labels = zh ? {
+      value: '产出收益',
+      model: '模型成本',
+      review: '审查与集成',
+      error: '错误返工',
+      net: '净值',
+      time: '节省时间 (%)',
+      quality: '质量提升 (%)',
+      modelCost: '模型成本',
+      reviewCost: '审查 / 集成成本',
+      errorCost: '预期错误成本',
+      read: '净值 '
+    } : {
+      value: 'output value',
+      model: 'model cost',
+      review: 'review + integration',
+      error: 'error rework',
+      net: 'net value',
+      time: 'time saved (%)',
+      quality: 'quality lift (%)',
+      modelCost: 'model cost',
+      reviewCost: 'review / integration cost',
+      errorCost: 'expected error cost',
+      read: 'net value '
+    };
+    var bar = el('div', 'viz-pa-bar');
+    var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 290);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var value = base * (time / 100 + quality / 100);
+      var rows = [
+        { label: labels.value, v: value, color: t.accent },
+        { label: labels.model, v: -model, color: t.accent2 },
+        { label: labels.review, v: -review, color: t.accent2 },
+        { label: labels.error, v: -error, color: t.accent2 },
+        { label: labels.net, v: value - model - review - error, color: (value - model - review - error) >= 0 ? t.accent : t.accent2 }
+      ];
+      var maxAbs = Math.max.apply(null, rows.map(function (r) { return Math.abs(r.v); }));
+      maxAbs = Math.max(20, maxAbs * 1.2);
+      var zero = pd + (W - 2 * pd) * 0.55;
+      var scale = (W - 2 * pd) * 0.42 / maxAbs;
+      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
+      ctx.beginPath(); ctx.moveTo(zero, pd * 0.75); ctx.lineTo(zero, H - pd * 0.65); ctx.stroke();
+      rows.forEach(function (r, i) {
+        var y = pd + i * 39 * cv.dpr;
+        var w = r.v * scale;
+        ctx.fillStyle = r.color;
+        ctx.fillRect(w >= 0 ? zero : zero + w, y, Math.abs(w), 22 * cv.dpr);
+        ctx.fillStyle = t.ink; ctx.font = (11.5 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right';
+        ctx.fillText(r.label, zero - 8 * cv.dpr, y + 15 * cv.dpr);
+        ctx.textAlign = w >= 0 ? 'left' : 'right';
+        ctx.fillText((r.v >= 0 ? '+' : '') + r.v.toFixed(0), zero + w + (w >= 0 ? 6 : -6) * cv.dpr, y + 15 * cv.dpr);
+      });
+      var net = rows[4].v;
+      read.textContent = labels.read + (net >= 0 ? '+' : '') + net.toFixed(0) + ' / 100';
+    }
+    host.appendChild(slider(labels.time, 0, 40, 1, time, function (v) { time = v; draw(); }).wrap);
+    host.appendChild(slider(labels.quality, 0, 30, 1, quality, function (v) { quality = v; draw(); }).wrap);
+    host.appendChild(slider(labels.modelCost, 0, 60, 1, model, function (v) { model = v; draw(); }).wrap);
+    host.appendChild(slider(labels.reviewCost, 0, 60, 1, review, function (v) { review = v; draw(); }).wrap);
+    host.appendChild(slider(labels.errorCost, 0, 60, 1, error, function (v) { error = v; draw(); }).wrap);
+    draw();
+  };
+
   // Superposition geometry (Toy Models): how many features a 2-D space packs in
   // as sparsity rises. Low sparsity -> a few near-orthogonal directions; high
   // sparsity -> more features sharing the plane as a regular polygon, paying
