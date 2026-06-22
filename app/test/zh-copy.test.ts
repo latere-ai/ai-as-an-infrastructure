@@ -826,3 +826,19 @@ test("polished chapter openings avoid reader-promise templates", () => {
     expect(normalizedOpening, `${path} should not use a reader-promise opener`).not.toMatch(banned);
   }
 });
+
+test("polished synthesis headings avoid generic reading-frame templates", () => {
+  const enHeadingTemplate = /^## (?:Reading (?!instructions\b)|Read (?:the|this)\b)/m;
+  const zhHeadingTemplate =
+    /^## (?:读这|读懂|读隐私|把.*读|用.*读|解读生产数据引擎|先读|读排行榜)/m;
+
+  const enOffenders = qmdFiles(enRoot).filter((path) =>
+    enHeadingTemplate.test(readFileSync(path, "utf8")),
+  );
+  const zhOffenders = qmdFiles(zhRoot).filter((path) =>
+    zhHeadingTemplate.test(readFileSync(path, "utf8")),
+  );
+
+  expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
+  expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
+});
