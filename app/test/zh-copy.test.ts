@@ -828,15 +828,33 @@ test("polished chapter openings avoid reader-promise templates", () => {
 });
 
 test("polished synthesis headings avoid generic reading-frame templates", () => {
-  const enHeadingTemplate = /^## (?:Reading (?!instructions\b)|Read (?:the|this)\b)/m;
+  const enHeadingTemplate =
+    /^## (?:(?:Reading (?!instructions\b)|Read (?:the|this)\b)|(?:The )?Capability, efficiency, trust\b|(?:The )?capability, efficiency, trust lens\b|Closing: capability, efficiency, trust\b|Operating a deployment: capability, efficiency, trust\b|Trade-offs: capability, efficiency, trust\b)/im;
   const zhHeadingTemplate =
-    /^## (?:读这|读懂|读隐私|把.*读|用.*读|解读生产数据引擎|先读|读排行榜)/m;
+    /^## (?:读这|读懂|读隐私|把.*读|用.*读|解读生产数据引擎|先读|读排行榜|能力、效率、信任(?:之镜|三个视角)?|收束：能力、效率、信任|运维一次部署：能力、效率、信任|权衡：能力、效率、信任)/m;
 
   const enOffenders = qmdFiles(enRoot).filter((path) =>
     enHeadingTemplate.test(readFileSync(path, "utf8")),
   );
   const zhOffenders = qmdFiles(zhRoot).filter((path) =>
     zhHeadingTemplate.test(readFileSync(path, "utf8")),
+  );
+
+  expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
+  expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
+});
+
+test("polished prose avoids canned lens closers", () => {
+  const enLensCloser =
+    /\b(?:Read through|Through) the book's closing lens\b|\bThe closing lens is capability, efficiency, and trust\b|\bThe capability, efficiency, (?:and )?trust lens (?:closes|ties)\b|\bRead through the capability, efficiency, and trust lens\b/;
+  const zhLensCloser =
+    /透过本书(?:一直携带|收束|收束全章)的那面[^\n，。]*[透棱]镜|收束的透镜是能力、效率与信任|能力、效率、信任(?:这个|的)?透镜|能力、效率、信任[^。]*之镜/;
+
+  const enOffenders = qmdFiles(enRoot).filter((path) =>
+    enLensCloser.test(readFileSync(path, "utf8")),
+  );
+  const zhOffenders = qmdFiles(zhRoot).filter((path) =>
+    zhLensCloser.test(readFileSync(path, "utf8")),
   );
 
   expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
