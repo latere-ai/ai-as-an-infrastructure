@@ -860,3 +860,13 @@ test("polished prose avoids canned lens closers", () => {
   expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
   expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
 });
+
+test("polished zh prose avoids reader-instruction filler connectors", () => {
+  const banned =
+    /事实上有四个答案|显然的起点|按摄取顺序来读|按顺序读下来|接下来读这三个存储|读这些来学方法|值得留意的是|读懂上面那场审判|读懂这个信号/;
+  const offenders = qmdFiles(zhRoot).filter((path) =>
+    banned.test(readFileSync(path, "utf8")),
+  );
+
+  expect(offenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
+});
