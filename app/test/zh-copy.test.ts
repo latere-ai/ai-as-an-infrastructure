@@ -68,7 +68,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/foundations/index.qmd",
-      ["训练预算有多大", "语料从哪里来", "以后还能改", "已经长进模型身体里"],
+      ["训练预算有多大", "语料从哪里来", "以后还能改", "已经成为模型的一部分"],
     ],
     [
       "en/foundations/03-tokenization.qmd",
@@ -84,7 +84,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/foundations/05-moe-ssm-hybrids.qmd",
-      ["路由器", "几乎免费地增长", "专家不能饿死"],
+      ["路由器", "几乎免费地增长", "专家不能长期拿不到训练信号"],
     ],
     [
       "en/generative/01-diffusion-flow-matching.qmd",
