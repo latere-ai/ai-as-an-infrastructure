@@ -42,8 +42,8 @@ ax.scatter(channels[outlier_idx], bulk[outlier_idx], color=DATA, s=16, zorder=3)
 # The per-tensor INT8 scale must reach the largest outlier.
 top = bulk.max()
 ax.axhline(top, color=INK, lw=1.2, ls="--")
-ax.text(4, top - 3.5, "per-tensor scale must reach the top outlier",
-        color=INK, fontsize=8.5, va="top")
+ax.text(4, top + 1.5, "per-tensor scale must reach the top outlier",
+        color=INK, fontsize=8.5, va="bottom")
 
 # The bulk band that gets crushed onto a few quantization levels.
 bulk_top = np.percentile(bulk[mask], 99)

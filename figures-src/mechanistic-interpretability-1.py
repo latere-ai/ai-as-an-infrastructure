@@ -41,9 +41,9 @@ for (label, floor, scale, alpha), shade in zip(curves, shades):
 # Shade and label the two failure regimes at the ends of the sparsity axis.
 ax.axvspan(L0.min(), 20, color=INK, alpha=0.06, zorder=0)
 ax.axvspan(180, L0.max(), color=INK, alpha=0.06, zorder=0)
-ax.text(12, 1.32, "too sparse:\nfeatures split,\nabsorb",
+ax.text(16, 1.18, "too sparse:\nfeatures split,\nabsorb",
         color=INK, fontsize=8, ha="center", va="top")
-ax.text(218, 1.32, "too dense:\nback toward\npolysemanticity",
+ax.text(218, 1.18, "too dense:\nback toward\npolysemanticity",
         color=INK, fontsize=8, ha="center", va="top")
 
 # Arrow marking that a bigger dictionary moves the frontier down.
