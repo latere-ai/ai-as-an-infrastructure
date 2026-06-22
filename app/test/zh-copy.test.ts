@@ -607,11 +607,19 @@ test("polished chapter openings preserve key source theses", () => {
       ["永远不会两次相同的输出", "@gls-sli 必须度量分布", "每一步都可靠的智能体", "追求确定性", "接纳采样并校验"],
     ],
     [
-      "en/practice/11-production-data-engine.qmd",
+      "en/practice/11-human-interface-oversight.qmd",
+      ["surface is not just user experience", "calibrated reliance", "approval gate", "Correction loops", "@gls-automation-bias"],
+    ],
+    [
+      "zh/practice/11-human-interface-oversight.qmd",
+      ["它是一块控制面板", "校准后的依赖", "批准门", "修正回路", "@gls-automation-bias"],
+    ],
+    [
+      "en/practice/12-production-data-engine.qmd",
       ["records of real users", "standing apparatus", "training signal", "scarce labeling budget", "intake of the next one"],
     ],
     [
-      "zh/practice/11-production-data-engine.qmd",
+      "zh/practice/12-production-data-engine.qmd",
       ["真实用户提出真实问题", "常设装置", "训练信号", "稀缺标注预算", "下一轮循环的入口"],
     ],
     [
@@ -734,7 +742,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/practice/08-wiring-a-2026-stack.qmd",
     "en/practice/09-deployment-lifecycle.qmd",
     "en/practice/10-reliability-nondeterministic.qmd",
-    "en/practice/11-production-data-engine.qmd",
+    "en/practice/11-human-interface-oversight.qmd",
+    "en/practice/12-production-data-engine.qmd",
     "en/practice/index.qmd",
     "zh/index.qmd",
     "zh/summary.qmd",
@@ -814,7 +823,8 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/practice/08-wiring-a-2026-stack.qmd",
     "zh/practice/09-deployment-lifecycle.qmd",
     "zh/practice/10-reliability-nondeterministic.qmd",
-    "zh/practice/11-production-data-engine.qmd",
+    "zh/practice/11-human-interface-oversight.qmd",
+    "zh/practice/12-production-data-engine.qmd",
     "zh/practice/index.qmd",
   ];
   const banned = /By the end|reader can explain|reader can say|A reader should finish|The reader should|the book asks the reader|the reader has|The reader is no longer|This chapter owns|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一章|读完这一部分|读完它|读者已经|读者面对|本书和读者|本章负责|本章来讲这个|本章把一个故事|本章要讲清/;

@@ -103,6 +103,7 @@ ZH_TEXT = {
     "accuracy with a verifier": "带验证器的准确率",
     "accuracy with majority / reward model": "多数投票 / 奖励模型准确率",
     "action horizon": "行动跨度",
+    "action autonomy": "行动自主性",
     "activation channel": "激活通道",
     "active latents per token (L0 sparsity)": "每词元活跃潜变量（L0 稀疏度）",
     "adapt": "适配",
@@ -199,6 +200,7 @@ ZH_TEXT = {
     "diffusion denoise": "扩散去噪",
     "direct": "直接回答",
     "distilled": "蒸馏后",
+    "draft + edit": "草稿 + 编辑",
     "draft cost ratio c = 0.02": "草稿成本比 c = 0.02",
     "draft cost ratio c = 0.05": "草稿成本比 c = 0.05",
     "draft cost ratio c = 0.1": "草稿成本比 c = 0.1",
@@ -257,6 +259,7 @@ ZH_TEXT = {
     "high-quality stock": "高质量存量",
     "Hindi": "印地语",
     "human review": "人工审查",
+    "human-interface-oversight-1": "human-interface-oversight-1",
     "image edge (pixels)": "图像边长（像素）",
     "imitation": "模仿",
     "imperfect verifier": "不完美验证器",
@@ -321,6 +324,7 @@ ZH_TEXT = {
     "over-optimization": "过度优化",
     "overkill": "过度配置",
     "oversight cost": "监督成本",
+    "oversight burden": "监督负担",
     "p = 0.95": "p = 0.95",
     "p = 0.99": "p = 0.99",
     "paged (block by block)": "分页分配（逐块）",
@@ -378,6 +382,7 @@ ZH_TEXT = {
     "rerank": "重排",
     "reserve max length": "预留最大长度",
     "residual exposure": "残余暴露",
+    "review gate": "审查门",
     "response length (tokens)": "回答长度（词元）",
     "retrieval": "检索",
     "retrieval accuracy": "检索准确率",
@@ -412,11 +417,13 @@ ZH_TEXT = {
     "stack components": "技术栈组件",
     "stack responsibility": "技术栈责任",
     "stays finite": "保持有限",
+    "stop / rollback": "停止 / 回滚",
     "stream": "流处理",
     "structured cache": "结构化缓存",
     "success rate": "成功率",
     "successive model generations": "连续模型代际",
     "summary": "摘要",
+    "suggest": "建议",
     "supervision density": "监督密度",
     "system coupling": "系统耦合",
     "systems no longer separable": "系统已难以区分",
@@ -436,6 +443,7 @@ ZH_TEXT = {
     "tokens for the same sentence": "同一句话所需词元数",
     "too dense:": "过密：",
     "too sparse:": "过疏：",
+    "two-person verify": "双人复核",
     "tool use": "工具使用",
     "tools": "工具",
     "total cost": "总成本",
@@ -525,6 +533,10 @@ def _localize_svg(svg):
     return COMMENT_RE.sub(replace_comment, TEXT_RE.sub(replace_text, svg))
 
 
+def _clean_svg(svg):
+    return "\n".join(line.rstrip() for line in svg.splitlines()) + "\n"
+
+
 def _localize_figure_text(fig):
     for ax in fig.axes:
         for axis in (ax.xaxis, ax.yaxis):
@@ -550,13 +562,15 @@ def save_bilingual(fig, name):
     zh = ROOT / "zh" / "figures" / f"{name}.svg"
     en.parent.mkdir(parents=True, exist_ok=True)
     zh.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(en, format="svg", bbox_inches="tight", transparent=True)
+    buffer = io.StringIO()
+    fig.savefig(buffer, format="svg", bbox_inches="tight", transparent=True)
+    en.write_text(_clean_svg(buffer.getvalue()), encoding="utf-8")
     with matplotlib.rc_context(ZH_SVG_PARAMS):
         _localize_figure_text(fig)
         fig.tight_layout()
         buffer = io.StringIO()
         fig.savefig(buffer, format="svg", bbox_inches="tight", transparent=True)
-    zh.write_text(_localize_svg(buffer.getvalue()), encoding="utf-8")
+    zh.write_text(_clean_svg(_localize_svg(buffer.getvalue())), encoding="utf-8")
 
 
 def finish(fig, ax, name, *, legend=None, grid=False):

@@ -30,7 +30,8 @@ The spine is the lifecycle of a capability, read as a stack.
   networking, data infrastructure, and the compute frontier.
 - **Part X, Ecosystem and Economics.**
 - **Part XI, Practice and Operations.** The hands-on 2026 stack, plus
-  deployment, reliability, and the production data engine.
+  deployment, reliability, human oversight surfaces, and the production data
+  engine.
 
 Two motifs recur: the **three loops** (training, inference, agentic) and the
 **capability, efficiency, trust** lens. Watch the **constraint arrows**,

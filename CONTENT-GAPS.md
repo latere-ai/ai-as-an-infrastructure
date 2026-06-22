@@ -2,7 +2,7 @@
 
 ## Open goals
 
-- [ ] **Product / UX / human-interface layer**
+- [x] **Product / UX / human-interface layer**
 
   Add the missing human-in-the-loop perspective: how AI infrastructure reaches
   users through product surfaces, review flows, approvals, correction loops,

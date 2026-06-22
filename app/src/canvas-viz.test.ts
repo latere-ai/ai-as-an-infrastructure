@@ -93,6 +93,13 @@ test("ch48 machine-that-breaks adds a prefill/decode stepper in both languages",
   expect(src("zh/infrastructure/06-the-machine-that-breaks.qmd")).toContain('data-chip="PREFILL"');
 });
 
+test("human-interface oversight adds an approval stepper in both languages", () => {
+  expect(src("en/practice/11-human-interface-oversight.qmd")).toContain('data-viz="stepper"');
+  expect(src("en/practice/11-human-interface-oversight.qmd")).toContain('data-chip="APPROVE"');
+  expect(src("zh/practice/11-human-interface-oversight.qmd")).toContain('data-viz="stepper"');
+  expect(src("zh/practice/11-human-interface-oversight.qmd")).toContain('data-chip="批准"');
+});
+
 test("ch03 scaling-laws adds a u-shape compute-optimal curve in both languages", () => {
   expect(src("en/foundations/01-scaling-laws.qmd")).toContain('data-viz="curve" data-family="u-shape"');
   expect(src("zh/foundations/01-scaling-laws.qmd")).toContain('data-viz="curve" data-family="u-shape"');

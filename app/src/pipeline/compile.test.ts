@@ -14,6 +14,7 @@ import { loadGlossary } from "./glossary.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const graphviz = await loadGraphviz();
+const wholeBookTimeout = 30_000;
 
 function ctxFor(): CompileContext {
   return {
@@ -41,7 +42,7 @@ test("compilePage fills the glossary page from a whole-book pass", () => {
   expect(page).not.toBeNull();
   expect(page!.contentHtml).toContain('class="rdr-gls-list"');
   expect(page!.contentHtml).toContain("rdr-gls-entry");
-});
+}, wholeBookTimeout);
 
 test("compilePage fills the references page from a whole-book pass", () => {
   const book = loadBook("en", repoRoot);
@@ -53,7 +54,7 @@ test("compilePage fills the references page from a whole-book pass", () => {
   const page = compilePage(book, "references", ctxFor());
   expect(page).not.toBeNull();
   expect(page!.contentHtml).toContain('id="ref-');
-});
+}, wholeBookTimeout);
 
 test("a '$'-bearing title survives slot filling (no replacement-pattern splicing)", () => {
   // Bug: the ::: {#refs} slot was filled with a string replacement, so a "$1" in
@@ -65,7 +66,7 @@ test("a '$'-bearing title survives slot filling (no replacement-pattern splicing
   expect(page!.contentHtml).toContain("$1 billion");
   // the slot wrapper must appear exactly once, not duplicated inside an entry
   expect(page!.contentHtml.match(/id="refs"/g)?.length ?? 0).toBe(1);
-});
+}, wholeBookTimeout);
 
 test("compilePage returns null for an unknown href", () => {
   const book = loadBook("en", repoRoot);

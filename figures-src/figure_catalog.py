@@ -676,6 +676,18 @@ SPECS = {
         "ylabel": "end-to-end success",
         "ylim": (0.30, 1.02),
     },
+    "human-interface-oversight-1": {
+        "type": "scatter",
+        "points": [
+            {"label": "suggest", "x": 0.16, "y": 0.24, "color": MUTED},
+            {"label": "draft + edit", "x": 0.34, "y": 0.36, "color": DATA},
+            {"label": "review gate", "x": 0.55, "y": 0.58, "color": ACCENT},
+            {"label": "two-person verify", "x": 0.72, "y": 0.76, "color": WARN},
+            {"label": "stop / rollback", "x": 0.88, "y": 0.88, "color": WARN},
+        ],
+        "xlabel": "action autonomy",
+        "ylabel": "oversight burden",
+    },
     "production-data-engine-1": {
         "type": "scatter",
         "points": [
