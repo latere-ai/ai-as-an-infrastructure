@@ -9,7 +9,7 @@ import { createElement } from "react";
 import Reader from "./Reader.tsx";
 import { page } from "./html.ts";
 import { loadBook, type Book } from "./pipeline/book.ts";
-import { compileChapter } from "./pipeline/compile.ts";
+import { compilePage } from "./pipeline/compile.ts";
 import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
@@ -53,9 +53,10 @@ let clientJs = await buildClient();
 
 function renderPage(lang: Lang, href: string): Response {
   const book = books[lang];
-  const ch = book.chapters.find((c) => c.href === href);
-  if (!ch) return new Response(`not found: ${lang}/${href}`, { status: 404 });
-  const data = compileChapter(book, ch, ctxFor(lang));
+  // compilePage runs a full in-order book pass for aggregate back-matter pages
+  // (glossary, references) so their whole-book slots are populated on demand.
+  const data = compilePage(book, href, ctxFor(lang));
+  if (!data) return new Response(`not found: ${lang}/${href}`, { status: 404 });
   const bodyHtml = renderToString(createElement(Reader, { chapter: data }));
   const html = page({ chapter: data, bodyHtml, css, clientHref: "/client.js", afterBody });
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });

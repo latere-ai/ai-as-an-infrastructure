@@ -147,6 +147,32 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   };
 }
 
+// Back-matter pages whose body aggregates state collected from the whole book:
+// the glossary needs every used term (glossaryUsed/glossaryFirstUses), the
+// references list needs every cited key (bib.cited). Both are filled only as
+// chapters compile, so the aggregate slot is complete only after the whole book
+// has run in order (book order ends with this back matter). See compilePage.
+const AGGREGATE_HREFS = new Set(["glossary", "references"]);
+
+// Compile a single page, doing a full in-order book pass first when the target
+// is an aggregate back-matter page so its slot is populated. The static build
+// gets this for free by compiling every chapter into one shared ctx; the
+// on-demand dev server must funnel through here to render those pages correctly.
+export function compilePage(book: Book, href: string, ctx: CompileContext): ChapterData | null {
+  const target = book.chapters.find((c) => c.href === href);
+  if (!target) return null;
+  if (!AGGREGATE_HREFS.has(href)) return compileChapter(book, target, ctx);
+  // ctx may be reused across calls (dev server), so reset the cited set before
+  // recomputing it from this pass; glossary sets come fresh in the dev ctx.
+  ctx.bib.cited.clear();
+  let data: ChapterData | null = null;
+  for (const c of book.chapters) {
+    const d = compileChapter(book, c, ctx);
+    if (c.href === href) data = d;
+  }
+  return data;
+}
+
 // First real paragraph of the body, de-tagged and truncated, for <meta
 // description> / SERP snippets. Skips callout/figure chrome by taking the first
 // reasonably long <p>.
