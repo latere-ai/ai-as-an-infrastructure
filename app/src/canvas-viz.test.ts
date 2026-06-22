@@ -3,7 +3,7 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const rt = readFileSync(new URL("../../viz-runtime.html", import.meta.url), "utf8");
+const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
 function src(p: string) { return readFileSync(new URL("../../" + p, import.meta.url), "utf8"); }
 
 test("the viz runtime registers the superposition component", () => {

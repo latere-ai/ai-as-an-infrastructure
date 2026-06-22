@@ -5,13 +5,14 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const rt = readFileSync(new URL("../../viz-runtime.html", import.meta.url), "utf8");
+const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
+const css = readFileSync(new URL("./theme.css", import.meta.url), "utf8");
 const en = readFileSync(new URL("../../en/foundations/04-transformer-architecture.qmd", import.meta.url), "utf8");
 const zh = readFileSync(new URL("../../zh/foundations/04-transformer-architecture.qmd", import.meta.url), "utf8");
 
 test("the viz runtime registers the attention-heatmap component and its styles", () => {
   expect(rt).toMatch(/R\['attention-heatmap'\]\s*=\s*function/);
-  expect(rt).toContain(".viz-attn");
+  expect(css).toContain(".viz-attn");
 });
 
 test("ch06 uses the attention-heatmap figure in both languages", () => {

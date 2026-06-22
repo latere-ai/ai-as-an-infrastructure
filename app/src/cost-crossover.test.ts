@@ -4,7 +4,7 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 
-const rt = readFileSync(new URL("../../viz-runtime.html", import.meta.url), "utf8");
+const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
 const homes = [
   "en/ecosystem/03-economics.qmd",
   "en/practice/01-choosing-a-model.qmd",

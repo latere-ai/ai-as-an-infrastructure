@@ -15,7 +15,7 @@ import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
 import { resolveDevRoute } from "./dev-router.ts";
-import { buildAfterBody } from "./runtime.ts";
+import { afterBody } from "./runtime.ts";
 import type { Lang } from "./types.ts";
 import { join } from "node:path";
 
@@ -34,9 +34,6 @@ const ctxFor = (lang: Lang) => ({
   glossary, glossaryUsed: new Set<string>(), glossaryFirstUses: new Map(),
 });
 
-// Same runtime scripts the static build injects, so runnable cells, viz
-// components, and mermaid diagrams work in dev too.
-const afterBody = buildAfterBody(repoRoot);
 
 async function buildClient(): Promise<string> {
   const out = await Bun.build({
