@@ -340,6 +340,39 @@ test("zh safety prose avoids literal or note-like formulations", () => {
   expect(safetyText).not.toContain("这一层令人不适的论点是");
 });
 
+test("zh ecosystem prose avoids literal or note-like formulations", () => {
+  const ecosystemText = qmdFiles(join(zhRoot, "ecosystem"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(ecosystemText).not.toContain("第十部分换一个角度");
+  expect(ecosystemText).not.toContain("那个把工具弄坏的调用方");
+  expect(ecosystemText).not.toContain("真正要紧的调用方不再是");
+  expect(ecosystemText).not.toContain("启动它的那个聊天窗口");
+  expect(ecosystemText).not.toContain("接下来要看的，是调用方变成智能体后");
+  expect(ecosystemText).not.toContain("答案重复了四遍，都是同一个动作");
+  expect(ecosystemText).not.toContain("同一个动作，做了四遍");
+  expect(ecosystemText).not.toContain("控制点住在这里");
+  expect(ecosystemText).not.toContain("只是这个动作的一个例子，并非做成它的唯一方式。下面");
+  expect(ecosystemText).not.toContain("上面那层治理要消费");
+  expect(ecosystemText).not.toContain("是这份计划、而不是聊天记录，才是人去阅读");
+  expect(ecosystemText).not.toContain("这些层从何而来");
+  expect(ecosystemText).not.toContain("读者都该守住两条不变量");
+  expect(ecosystemText).not.toContain("运行下面这段");
+  expect(ecosystemText).not.toContain("它们会清楚地分开");
+  expect(ecosystemText).not.toContain("唯一能握得住的东西");
+  expect(ecosystemText).not.toContain("这幅格局是怎么来的");
+  expect(ecosystemText).not.toContain("许可这道闸门");
+  expect(ecosystemText).not.toContain("开放层级教会了所有人什么");
+  expect(ecosystemText).not.toContain("闭源前沿逼出来的那个结论");
+  expect(ecosystemText).not.toContain("证据说了什么");
+  expect(ecosystemText).not.toContain("真正要问的不是");
+  expect(ecosystemText).not.toContain("经济上正确的模型，是那个能越过任务质量门槛的最小模型");
+  expect(ecosystemText).not.toContain("应该盯住什么");
+  expect(ecosystemText).not.toContain("因此，生态不是技术栈旁边的背景");
+  expect(ecosystemText).not.toContain("真正有用的答案是");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
