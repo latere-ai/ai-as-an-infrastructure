@@ -84,7 +84,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/foundations/05-moe-ssm-hybrids.qmd",
-      ["路由器", "几乎免费地增长", "专家不能长期拿不到训练信号"],
+      ["路由器", "以很低的每词元计算成本增长", "专家不能长期拿不到训练信号"],
     ],
     [
       "en/generative/01-diffusion-flow-matching.qmd",
