@@ -130,6 +130,37 @@ test("zh generative prose avoids literal or note-like formulations", () => {
   expect(generativeText).not.toContain("读完这一部分，读者应");
 });
 
+test("zh adaptation prose avoids literal or note-like formulations", () => {
+  const adaptationText = qmdFiles(join(zhRoot, "adaptation"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(adaptationText).not.toContain("补上这道差距");
+  expect(adaptationText).not.toContain("有一个想法贯穿这里的约束");
+  expect(adaptationText).not.toContain("从这些比较已经存在之处开始");
+  expect(adaptationText).not.toContain("本章余下部分讨论的");
+  expect(adaptationText).not.toContain("从另一端得到一个对齐好的模型");
+  expect(adaptationText).not.toContain("同时让四个模型在场");
+  expect(adaptationText).not.toContain("一旦这个损失存在");
+  expect(adaptationText).not.toContain("前一行损失所携带");
+  expect(adaptationText).not.toContain("那别的东西，就是流水线");
+  expect(adaptationText).not.toContain("通向第四部分的铰链");
+  expect(adaptationText).not.toContain("通过时取一");
+  expect(adaptationText).not.toContain("运行时系统看到请求之前");
+  expect(adaptationText).not.toContain("模型行为的第一道线");
+  expect(adaptationText).not.toContain("答案有四个，而且");
+  expect(adaptationText).not.toContain("同一个问题的四个答案");
+  expect(adaptationText).not.toContain("在四个答案之前");
+  expect(adaptationText).not.toContain("一个第一次未必能可靠给出正确答案的模型");
+  expect(adaptationText).not.toContain("一个小而精选过滤的集合");
+  expect(adaptationText).not.toContain("在验证器是一个习得的");
+  expect(adaptationText).not.toContain("走过四个答案");
+  expect(adaptationText).not.toContain("这界限很紧");
+  expect(adaptationText).not.toContain("这界限宽松");
+  expect(adaptationText).not.toContain("反对角线");
+  expect(adaptationText).not.toContain("同一个变量的四种绑定");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
