@@ -31,15 +31,15 @@ alpha = np.linspace(0.0, 1.0, 400)
 fig, ax = plt.subplots(figsize=(5, 3))
 
 gammas = [2, 4, 8]
-shades = [0.55, 0.75, 1.0]
+shades = [0.7, 0.85, 1.0]
 for g, sh in zip(gammas, shades):
     ax.plot(alpha, expected_tokens(alpha, g), color=DATA, lw=1.8, alpha=sh,
             label=f"draft length gamma = {g}")
 
 # Reference line: one token per pass, the no-speculation baseline.
 ax.axhline(1.0, color=INK, lw=1.0, ls="--")
-ax.text(0.02, 1.15, "baseline: one token per pass", color=INK, fontsize=8.5,
-        va="bottom")
+ax.text(0.98, 0.7, "baseline: one token per pass", color=INK, fontsize=8.5,
+        va="top", ha="right")
 
 ax.set_xlim(0, 1)
 ax.set_ylim(0, max(gammas) + 1.6)
