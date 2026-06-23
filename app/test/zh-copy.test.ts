@@ -75,6 +75,38 @@ test("zh orientation prose avoids literal or note-like formulations", () => {
   expect(orientationText).not.toContain("被症状没有点名的那一层");
 });
 
+test("zh foundation prose avoids literal or note-like formulations", () => {
+  const foundationsText = qmdFiles(join(zhRoot, "foundations"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(foundationsText).not.toContain("从预报走到执行");
+  expect(foundationsText).not.toContain("先把它预报出来");
+  expect(foundationsText).not.toContain("一梯廉价的小规模训练");
+  expect(foundationsText).not.toContain("从预报训练转为执行训练");
+  expect(foundationsText).not.toContain("让它不只是管道工程的，是");
+  expect(foundationsText).not.toContain("那件人造物才是关键");
+  expect(foundationsText).not.toContain("评估那边提供的");
+  expect(foundationsText).not.toContain("带着这些契约往下看");
+  expect(foundationsText).not.toContain("该保护哪些留出集");
+  expect(foundationsText).not.toContain("不提供需要保护哪些留出集");
+  expect(foundationsText).not.toContain("读这个块要读两遍");
+  expect(foundationsText).not.toContain("三个已有定论的问题");
+  expect(foundationsText).not.toContain("位置是第三个");
+  expect(foundationsText).not.toContain("这一个事实");
+  expect(foundationsText).not.toContain("上述选择做定");
+  expect(foundationsText).not.toContain("路由器单凭自己最先出问题");
+  expect(foundationsText).not.toContain("路由器是必须做对的那一块");
+  expect(foundationsText).not.toContain("得分上一个微小的变化");
+  expect(foundationsText).not.toContain("召回才是那个坎");
+  expect(foundationsText).not.toContain("包罗万象的总目");
+  expect(foundationsText).not.toContain("有一个容错关切");
+  expect(foundationsText).not.toContain("对上一个流式处理分数的内核");
+  expect(foundationsText).not.toContain("一个流式处理分数的内核，则");
+  expect(foundationsText).not.toContain("训练序列里的相位");
+  expect(foundationsText).not.toContain("数学底材");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
