@@ -32,6 +32,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /aaai-web .
 # Stage 3: nothing but the binary. Runs unprivileged (uid set by the pod
 # securityContext); the embedded assets need no writable filesystem.
 FROM scratch
+# CA roots so the OIDC token exchange to https://auth.latere.ai can verify TLS
+# (scratch ships none; the static book never made outbound calls before).
+COPY --from=server /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=server /aaai-web /aaai-web
 EXPOSE 8080
 ENTRYPOINT ["/aaai-web"]
