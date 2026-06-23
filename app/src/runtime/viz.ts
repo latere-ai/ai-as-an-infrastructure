@@ -1713,7 +1713,9 @@
     function ramp(t) {
       if (t < start) return 0;
       var u = (t - start) / Math.max(0.05, 1 - start);
-      return share * (0.2 + 0.8 * Math.min(1, u));
+      // Ramp from 0 at the introduction point (not a 0.2-share jump), so the
+      // metric curves that read this stay continuous instead of teleporting.
+      return share * Math.min(1, u);
     }
     function targetFit(t) {
       var m = ramp(t), early = Math.max(0, 1 - start);
