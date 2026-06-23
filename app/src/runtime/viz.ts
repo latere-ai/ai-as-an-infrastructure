@@ -116,6 +116,7 @@
       host.appendChild(slider(a[0], a[1], a[2], a[3], a[4], function (v) { a[5](v); draw(); }).wrap);
     });
     draw();
+    watchTheme(host, draw);
   };
 
   // 3D point cloud (three.js), rotatable: a stand-in for an embedding space.
@@ -461,6 +462,7 @@
       });
     });
     draw();
+    watchTheme(host, draw);
   };
 
   // ROI balance: adoption value is not model capability. It is the value of
@@ -534,6 +536,7 @@
     host.appendChild(slider(labels.reviewCost, 0, 60, 1, review, function (v) { review = v; draw(); }).wrap);
     host.appendChild(slider(labels.errorCost, 0, 60, 1, error, function (v) { error = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Superposition geometry (Toy Models): how many features a 2-D space packs in
@@ -564,6 +567,7 @@
     }
     host.appendChild(slider('sparsity', 0, 1, 0.01, sparsity, function (v) { sparsity = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // PagedAttention: a pool of KV-cache blocks. Contiguous reservation must book
@@ -794,6 +798,7 @@
     host.appendChild(slider('negative hardness', 0, 0.92, 0.01, hard, function (v) { hard = v; draw(); }).wrap);
     host.appendChild(slider('temperature', 0.08, 0.6, 0.01, tau, function (v) { tau = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // comparison-explorer: filter a set of options by one facet plus free text, so
@@ -989,6 +994,7 @@
     host.appendChild(slider('base rate of “good”', 0.5, 0.97, 0.01, base, function (v) { base = v; draw(); }).wrap);
     host.appendChild(slider('each judge’s accuracy', 0.6, 0.98, 0.01, acc, function (v) { acc = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // The outlier and the shared scale: well-behaved bulk weights plus one
@@ -1032,6 +1038,7 @@
     btn.addEventListener('click', function () { mode = (mode === 'per-tensor') ? 'per-channel' : 'per-tensor'; draw(); });
     host.appendChild(slider('outlier magnitude', 1, 16, 0.5, outlier, function (v) { outlier = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // MinHash + LSH bucketing: each document collapses to a short signature; LSH
@@ -1068,6 +1075,7 @@
     }
     host.appendChild(slider('buckets (bands)', 3, 14, 1, B, function (v) { B = Math.round(v); draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Blast radius of ambient authority: one standing token reaches every resource
@@ -1103,6 +1111,7 @@
     host.appendChild(slider('scope breadth', 0.05, 1, 0.05, scope, function (v) { scope = v; draw(); }).wrap);
     host.appendChild(slider('TTL (minutes)', 1, 240, 1, ttl, function (v) { ttl = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // LoRA low-rank reconstruction: a weight update ΔW (left) approximated by a
@@ -1134,6 +1143,7 @@
     }
     host.appendChild(slider('rank r', 1, d, 1, r, function (v) { r = Math.round(v); draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Task arithmetic: a task vector τ = θ_ft − θ_base is a direction in weight
@@ -1169,6 +1179,7 @@
     btn.addEventListener('click', function () { op = op === 'add' ? 'negate' : 'add'; draw(); });
     host.appendChild(slider('angle between τA and τB', 0, 180, 5, ang, function (v) { ang = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // GRPO group-relative advantage: G completions to one prompt, each rewarded.
@@ -1218,6 +1229,7 @@
     }
     host.appendChild(slider('reward spread', 0, 1.5, 0.01, spread, function (x) { spread = x; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // SSM vs attention recall: attention keeps every past token exactly
@@ -1249,6 +1261,7 @@
     }
     host.appendChild(slider('sequence length', 4, 40, 1, len, function (v) { len = Math.round(v); draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // RL systems split: colocated keeps generation and learning on one GPU pool
@@ -1319,6 +1332,7 @@
     btn.textContent = 'shuffle sparse list';
     host.appendChild(slider('RRF constant k', 1, 100, 1, k, function (v) { k = Math.round(v); draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Decision tree: a guided model-choosing flow. Answer each branch and the path
@@ -1428,6 +1442,7 @@
     host.appendChild(slider('pipeline stages p', 2, 8, 1, p, function (v) { p = Math.round(v); draw(); }).wrap);
     host.appendChild(slider('micro-batches m', 1, 16, 1, m, function (v) { m = Math.round(v); draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Evaluation power: an accuracy gap only becomes decision-grade when the
@@ -1462,6 +1477,7 @@
     host.appendChild(slider('sample size n', 50, 10000, 50, n, function (v) { n = v; draw(); }).wrap);
     host.appendChild(slider('target gap (pp)', 0.5, 8, 0.1, gap, function (v) { gap = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Operational frontier: quality alone is not the production decision. A
@@ -1502,6 +1518,7 @@
     host.appendChild(slider('cost weight', 0, 0.8, 0.01, cw, function (v) { cw = v; draw(); }).wrap);
     host.appendChild(slider('latency weight', 0, 0.8, 0.01, lw, function (v) { lw = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Reasoning search budget: branching and depth buy coverage, but only a
@@ -1563,6 +1580,7 @@
     host.appendChild(slider(L.depth, 1, 7, 1, depth, function (v) { depth = Math.round(v); draw(); }).wrap);
     host.appendChild(slider(L.verifier, 0, 1, 0.01, verifier, function (v) { verifier = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // RLVR boundary explorer: pass@k can improve because RL concentrates mass on
@@ -1619,6 +1637,7 @@
     host.appendChild(slider(L.sharp, 0, 1, 0.01, sharp, function (v) { sharp = v; draw(); }).wrap);
     host.appendChild(slider(L.strict, 0, 1, 0.01, strict, function (v) { strict = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Adaptive test-time compute: hard prompts need longer useful thinking, while
@@ -1676,6 +1695,7 @@
     }
     host.appendChild(slider(L.difficulty, 0, 1, 0.01, diff, function (v) { diff = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Mid-training bridge: show why a mixed specialist slice is different from
@@ -1829,6 +1849,7 @@
       host.appendChild(slider(name, 0, 1, 0.01, weights[i], function (v) { weights[i] = v; draw(); }).wrap);
     });
     draw();
+    watchTheme(host, draw);
   };
 
   // Verifier-threshold: best-of-N remains useful when the selector is reliable;
@@ -1872,6 +1893,7 @@
     }
     host.appendChild(slider(labels.rel, 0.55, 0.98, 0.01, rel, function (v) { rel = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Safety frontier: threshold selection moves the operating point between
@@ -1910,6 +1932,7 @@
     }
     host.appendChild(slider(labels.th, 0.05, 0.95, 0.01, th, function (v) { th = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Verification frontier: generation can expand the stream of plausible
