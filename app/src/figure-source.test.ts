@@ -74,6 +74,17 @@ test("figure 2.2 (field-map-stack) is an inline SVG with all 11 substantive part
   expect(readFileSync(join(repoRoot, "zh", "orientation", "02-field-map.qmd"), "utf8")).toContain("十一个部分");
 });
 
+test("figure 1.3 nested-loop return arcs do not carry overlap-prone labels", () => {
+  for (const lang of ["en", "zh"]) {
+    const qmd = readFileSync(join(repoRoot, lang, "orientation", "01-whole-stack.qmd"), "utf8");
+    const block = qmd.match(/```\{dot\}\n\/\/\| label: fig-whole-stack-loops[\s\S]*?\n```/)?.[0] ?? "";
+    expect(block).toContain("tok -> prompt;");
+    expect(block).toContain("tool -> prompt;");
+    expect(block).not.toMatch(/tok -> prompt\s*\[label=/);
+    expect(block).not.toMatch(/tool -> prompt\s*\[label=/);
+  }
+});
+
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();
