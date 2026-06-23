@@ -104,6 +104,15 @@ test("structured reasoning search figure keeps modes in separated lanes", () => 
   expect(source).not.toContain('"compute wasted"');
 });
 
+test("programs solvers figure keeps repair loop off the main pipeline", () => {
+  const source = readFileSync(join(figuresSrc, "programs-solvers-symbolic-1.py"), "utf8");
+  expect(source).toContain("MAIN_FLOW = [");
+  expect(source).toContain("REPAIR_Y");
+  expect(source).not.toContain("rad=-0.12");
+  expect(source).not.toContain("rad=0.18");
+  expect(source).not.toContain('"repair loop"');
+});
+
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();
