@@ -46,8 +46,8 @@ for i in range(1, n_fit + 1):
     ax.plot([ctx, ctx], [(i - 1) * one, i * one],
             color=DATA, lw=4, alpha=0.35, solid_capstyle="butt")
 ax.annotate(f"pool holds {n_fit} such requests",
-            xy=(ctx, n_fit * one), xytext=(ctx - 6600, pool * 0.42),
-            color=INK, fontsize=8.5,
+            xy=(ctx, pool * 0.5), xytext=(ctx - 7200, pool * 0.28),
+            color=INK, fontsize=8.5, va="center",
             arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 
 ax.set_xlim(0, tokens.max())
