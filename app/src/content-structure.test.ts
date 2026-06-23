@@ -293,6 +293,37 @@ test("the expanded reasoning part is tracked in top-level book surfaces", () => 
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Reasoning and test-time compute depth**");
 });
 
+test("infrastructure closes capability measurement with verification frontier", () => {
+  const expected = [
+    "infrastructure/01-accelerators-networking.qmd",
+    "infrastructure/02-orchestration-data-infra.qmd",
+    "infrastructure/03-the-compute-frontier.qmd",
+    "infrastructure/04-making-the-silicon.qmd",
+    "infrastructure/05-powering-it.qmd",
+    "infrastructure/06-the-machine-that-breaks.qmd",
+    "infrastructure/07-where-learning-hits-limits.qmd",
+    "infrastructure/08-the-capability-horizon.qmd",
+    "infrastructure/09-verification-frontier.qmd",
+    "infrastructure/summary.qmd",
+  ];
+
+  for (const lang of ["en", "zh"]) {
+    const yml = src(`${lang}/book.yml`);
+    let last = -1;
+    for (const chapter of expected) {
+      const next = yml.indexOf(chapter);
+      expect(next, `${lang}/${chapter} missing from book.yml`).toBeGreaterThan(last);
+      last = next;
+    }
+
+    expect(src(`${lang}/infrastructure/index.qmd`)).toContain("@sec-verification-frontier");
+    expect(src(`${lang}/infrastructure/09-verification-frontier.qmd`)).toContain("{#sec-verification-frontier}");
+  }
+
+  expect(src("README.md")).toContain("compute, capability, and verification frontiers");
+  expect(src("CONTENT-GAPS.md")).toContain("- [x] **Verification frontier**");
+});
+
 test("mid-book handoffs do not signal that the whole book has ended", () => {
   const forbidden: Record<string, string[]> = {
     en: ["The book closes there", "This brings the book to its last open question"],
@@ -312,14 +343,20 @@ test("mid-book handoffs do not signal that the whole book has ended", () => {
 
 test("the infrastructure arc explicitly hands off to ecosystem and practice", () => {
   const enHorizon = src("en/infrastructure/08-the-capability-horizon.qmd");
-  expect(enHorizon).toContain("This part closes there, but the book does not");
-  expect(enHorizon).toContain("The next part asks how");
-  expect(enHorizon).toContain("operating contracts");
+  expect(enHorizon).toContain("@sec-verification-frontier takes the next step");
 
   const zhHorizon = src("zh/infrastructure/08-the-capability-horizon.qmd");
-  expect(zhHorizon).toContain("这一部分在这里收束，但全书还没有结束");
-  expect(zhHorizon).toContain("下一部分会问");
-  expect(zhHorizon).toContain("运营契约");
+  expect(zhHorizon).toContain("@sec-verification-frontier 会往前再走一步");
+
+  const enVerification = src("en/infrastructure/09-verification-frontier.qmd");
+  expect(enVerification).toContain("Part X asks how these constraints");
+  expect(enVerification).toContain("Part XI asks how to operate systems");
+  expect(enVerification).toContain("operating contracts");
+
+  const zhVerification = src("zh/infrastructure/09-verification-frontier.qmd");
+  expect(zhVerification).toContain("第十部分会问");
+  expect(zhVerification).toContain("第十一部分会问");
+  expect(zhVerification).toContain("运营契约");
 
   const enPractice = flat("en/practice/index.qmd");
   expect(enPractice).toContain("Part IX exposed");

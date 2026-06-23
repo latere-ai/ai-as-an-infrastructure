@@ -1895,6 +1895,105 @@
     draw();
   };
 
+  // Verification frontier: generation can expand the stream of plausible
+  // claims faster than proof, replication, and oversight can accept them. The
+  // shaded gap is the part that must be deferred or treated as unsafe.
+  R['verification-frontier'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh';
+    var L = zh
+      ? { gen: '生成强度', formal: '形式化覆盖', oversight: '辅助监督',
+          x: '主张复杂度', y: '主张流比例', claims: '候选主张', accepted: '可接受',
+          human: '纯人工容量', deferred: '延后', unsafe: '风险', summary: '缺口' }
+      : { gen: 'generator strength', formal: 'formalized coverage', oversight: 'assisted oversight',
+          x: 'claim complexity', y: 'share of claim stream', claims: 'candidate claims', accepted: 'accepted',
+          human: 'human-only capacity', deferred: 'deferred', unsafe: 'unsafe', summary: 'gap' };
+    var gen = 0.72, formal = 0.34, oversight = 0.46;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 305);
+    function claim(x) {
+      return Math.min(1, (0.12 + 0.78 * Math.pow(x, 1.12)) * (0.55 + 0.78 * gen));
+    }
+    function capacity(x) {
+      var executable = 0.08 + 0.78 * formal * Math.exp(-1.55 * x);
+      var assisted = 0.52 * oversight * (1 - Math.exp(-3.0 * x)) * Math.exp(-0.58 * x);
+      var empirical = 0.16 * (1 - 0.45 * x);
+      return Math.min(0.95, executable + assisted + empirical);
+    }
+    function humanOnly(x) {
+      return 0.24 - 0.11 * x;
+    }
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
+      var left = 50 * cv.dpr, right = 112 * cv.dpr, top = 24 * cv.dpr, bottom = 52 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      function X(x) { return left + x * (W - left - right); }
+      function Y(v) { return H - bottom - v * (H - top - bottom); }
+      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr; ctx.beginPath();
+      for (var i = 0; i <= 4; i++) {
+        var gx = X(i / 4), gy = Y(i / 4);
+        ctx.moveTo(gx, top); ctx.lineTo(gx, H - bottom);
+        ctx.moveTo(left, gy); ctx.lineTo(W - right, gy);
+      }
+      ctx.stroke();
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(left, H - bottom); ctx.lineTo(W - right, H - bottom); ctx.moveTo(left, top); ctx.lineTo(left, H - bottom); ctx.stroke();
+
+      // Deferred gap between candidate claims and accepted capacity.
+      ctx.beginPath();
+      for (var j = 0; j <= 140; j++) {
+        var x = j / 140, c = claim(x), a = Math.min(c, capacity(x));
+        if (j === 0) ctx.moveTo(X(x), Y(c)); else ctx.lineTo(X(x), Y(c));
+      }
+      for (var k = 140; k >= 0; k--) {
+        var xr = k / 140, cr = claim(xr), ar = Math.min(cr, capacity(xr));
+        ctx.lineTo(X(xr), Y(ar));
+      }
+      ctx.closePath(); ctx.fillStyle = 'rgba(224,147,107,0.15)'; ctx.fill();
+
+      function line(fn, col, dash) {
+        ctx.strokeStyle = col; ctx.lineWidth = 2 * cv.dpr; ctx.setLineDash(dash ? [6 * cv.dpr, 5 * cv.dpr] : []);
+        ctx.beginPath();
+        for (var n = 0; n <= 140; n++) {
+          var x = n / 140, y = fn(x);
+          if (n === 0) ctx.moveTo(X(x), Y(y)); else ctx.lineTo(X(x), Y(y));
+        }
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+      line(claim, t.accent, false);
+      line(function (x) { return Math.min(claim(x), capacity(x)); }, '#4b9f6b', false);
+      line(humanOnly, t.accent2, true);
+
+      var at = 0.78, c0 = claim(at), a0 = Math.min(c0, capacity(at)), gap = Math.max(0, c0 - a0);
+      var unsafe = gap * (0.18 + 0.48 * (1 - oversight) * (1 - formal * 0.45));
+      var deferred = Math.max(0, gap - unsafe);
+      var bx = W - right + 34 * cv.dpr, by = top + 20 * cv.dpr, bw = 28 * cv.dpr, bh = 170 * cv.dpr;
+      ctx.strokeStyle = t.grid; ctx.strokeRect(bx, by, bw, bh);
+      function seg(offset, height, color) { ctx.fillStyle = color; ctx.fillRect(bx, by + bh - offset - height, bw, height); }
+      seg(0, bh * a0, '#4b9f6b');
+      seg(bh * a0, bh * deferred, 'rgba(224,147,107,0.72)');
+      seg(bh * (a0 + deferred), bh * unsafe, 'rgba(165,70,70,0.72)');
+      ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left';
+      [[L.accepted, '#4b9f6b', 0], [L.deferred, t.accent2, 1], [L.unsafe, '#a54646', 2]].forEach(function (r) {
+        var yy = by + 16 * cv.dpr + r[2] * 19 * cv.dpr;
+        ctx.fillStyle = r[1]; ctx.fillRect(bx + 42 * cv.dpr, yy - 9 * cv.dpr, 10 * cv.dpr, 10 * cv.dpr);
+        ctx.fillStyle = t.ink; ctx.fillText(r[0], bx + 58 * cv.dpr, yy);
+      });
+
+      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(L.x, (left + W - right) / 2, H - 14 * cv.dpr);
+      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.y, 0, 0); ctx.restore();
+      ctx.textAlign = 'left'; ctx.font = (11 * cv.dpr) + 'px sans-serif';
+      ctx.fillStyle = t.accent; ctx.fillText(L.claims, left + 12 * cv.dpr, top + 16 * cv.dpr);
+      ctx.fillStyle = '#4b9f6b'; ctx.fillText(L.accepted, left + 12 * cv.dpr, top + 35 * cv.dpr);
+      ctx.fillStyle = t.accent2; ctx.fillText(L.human, left + 12 * cv.dpr, top + 54 * cv.dpr);
+      read.textContent = L.summary + ': ' + L.accepted + ' ' + Math.round(a0 * 100) + '% · ' + L.deferred + ' ' + Math.round(deferred * 100) + '% · ' + L.unsafe + ' ' + Math.round(unsafe * 100) + '%';
+    }
+    host.appendChild(slider(L.gen, 0.2, 1, 0.01, gen, function (v) { gen = v; draw(); }).wrap);
+    host.appendChild(slider(L.formal, 0.05, 0.8, 0.01, formal, function (v) { formal = v; draw(); }).wrap);
+    host.appendChild(slider(L.oversight, 0.05, 0.85, 0.01, oversight, function (v) { oversight = v; draw(); }).wrap);
+    draw();
+    watchTheme(host, draw);
+  };
+
   function init(host) {
     var name = host.getAttribute('data-viz');
     // The wrapping <figure class="figure"> is inline-block (Bootstrap), which

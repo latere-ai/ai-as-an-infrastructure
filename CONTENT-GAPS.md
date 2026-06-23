@@ -75,3 +75,14 @@
   book's distinctive thesis: its center is not deeper training/serving craft, but
   cross-layer constraint arrows and the physical, economic, and operational
   substrate that shapes the AI stack.
+
+- [x] **Verification frontier**
+
+  Added a dedicated Part IX chapter after the capability horizon to separate
+  "can the model produce an answer?" from "what evidence lets an institution
+  accept it?". The chapter now ties formal proof, executable checking, assisted
+  oversight, empirical validation, weak-to-strong supervision, AI control, and
+  ELK-style limits into the book's infrastructure thesis. It adds a static
+  figure, a DOT regime diagram, an interactive verification-gap visualization,
+  source-backed references, and cross-links into post-training, reasoning,
+  evaluation, safety, ecosystem, and operations.

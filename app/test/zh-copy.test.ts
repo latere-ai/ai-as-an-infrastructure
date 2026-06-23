@@ -623,6 +623,14 @@ test("polished chapter openings preserve key source theses", () => {
       ["不再是一个排行榜数字", "移动的地平线", "测量仪器饱和得比新仪器造出来还快", "可持续的进步", "由算力支撑的短期表象"],
     ],
     [
+      "en/infrastructure/09-verification-frontier.qmd",
+      ["verification frontier", "claim with evidence", "Formal proof as infrastructure", "Discovery loops need evaluators", "When the verifier is weaker"],
+    ],
+    [
+      "zh/infrastructure/09-verification-frontier.qmd",
+      ["验证前沿", "带证据的主张", "作为基础设施的形式证明", "发现循环需要评估器", "当验证者更弱时"],
+    ],
+    [
       "en/infrastructure/index.qmd",
       ["lower layers are stubbornly physical", "what the machine makes possible", "constraints become visible"],
     ],
@@ -855,6 +863,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/infrastructure/06-the-machine-that-breaks.qmd",
     "en/infrastructure/07-where-learning-hits-limits.qmd",
     "en/infrastructure/08-the-capability-horizon.qmd",
+    "en/infrastructure/09-verification-frontier.qmd",
     "en/infrastructure/index.qmd",
     "en/practice/01-choosing-a-model.qmd",
     "en/practice/02-serving-and-compute.qmd",
@@ -949,6 +958,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/infrastructure/06-the-machine-that-breaks.qmd",
     "zh/infrastructure/07-where-learning-hits-limits.qmd",
     "zh/infrastructure/08-the-capability-horizon.qmd",
+    "zh/infrastructure/09-verification-frontier.qmd",
     "zh/infrastructure/index.qmd",
     "zh/practice/01-choosing-a-model.qmd",
     "zh/practice/02-serving-and-compute.qmd",

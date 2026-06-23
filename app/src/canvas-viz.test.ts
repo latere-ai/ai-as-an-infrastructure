@@ -243,3 +243,15 @@ test("expanded reasoning chapters use the new interactive visualizations in both
     }
   }
 });
+
+test("the viz runtime registers the verification frontier component", () => {
+  expect(rt).toMatch(/R\['verification-frontier'\]\s*=\s*function/);
+  expect(rt).toContain("formalized coverage");
+  expect(rt).toContain("形式化覆盖");
+});
+
+test("verification frontier chapter uses the interactive visualization in both languages", () => {
+  expect(src("en/infrastructure/09-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
+  expect(src("zh/infrastructure/09-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
+  expect(src("zh/infrastructure/09-verification-frontier.qmd")).toContain('data-lang="zh"');
+});

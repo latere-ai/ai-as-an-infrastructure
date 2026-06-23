@@ -537,6 +537,18 @@ SPECS = {
         "logx": True,
         "ylim": (0.10, 0.90),
     },
+    "verification-frontier-1": {
+        "type": "stacked",
+        "categories": ["routine", "formal", "assisted", "empirical", "frontier verification"],
+        "segments": [
+            {"label": "accepted", "values": [0.34, 0.50, 0.58, 0.62, 0.65], "color": DATA},
+            {"label": "deferred", "values": [0.10, 0.20, 0.32, 0.52, 0.75], "color": WARN},
+            {"label": "unsafe to accept", "values": [0.06, 0.10, 0.20, 0.36, 0.60], "color": MUTED},
+        ],
+        "ylabel": "relative claim flow",
+        "ylim": (0, 2.10),
+        "legend": "upper right",
+    },
     "model-landscape-1": {
         "type": "scatter",
         "points": [
