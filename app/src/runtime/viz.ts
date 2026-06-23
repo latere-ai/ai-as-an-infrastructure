@@ -1215,14 +1215,17 @@
       ctx.fillText('advantage Aᵢ (solid) · reward − mean (faint)', pd, pd - 4 * cv.dpr);
       adv.forEach(function (a, i) {
         var slot = pd + bw * i, pos = a >= 0;
-        // Faint raw gap: wider, behind, scales with spread.
-        var rg = raw[i], rw = bw * 0.56, rx = slot + bw * 0.22, rh = (rg / amax) * half;
-        ctx.fillStyle = (rg >= 0 ? 'rgba(61,189,138,' : 'rgba(224,147,107,') + '0.3)';
-        if (rg >= 0) ctx.fillRect(rx, z - rh, rw, rh); else ctx.fillRect(rx, z, rw, -rh);
-        // Solid normalized advantage: narrower, in front, fixed.
-        var aw = bw * 0.32, ax = slot + bw * 0.34, ah = (a / amax) * half;
+        // Two side-by-side bars per group so they never merge into one shape:
+        // faint raw gap (left) scales with spread; solid normalized advantage
+        // (right) holds fixed. Dragging spread grows/shrinks the left bar while
+        // the right stays put, which is the whole point.
+        var pw = bw * 0.26;
+        var rg = raw[i], rx = slot + bw * 0.18, rh = (rg / amax) * half;
+        ctx.fillStyle = (rg >= 0 ? 'rgba(61,189,138,' : 'rgba(224,147,107,') + '0.4)';
+        if (rg >= 0) ctx.fillRect(rx, z - rh, pw, rh); else ctx.fillRect(rx, z, pw, -rh);
+        var ax = slot + bw * 0.52, ah = (a / amax) * half;
         ctx.fillStyle = pos ? '#3dbd8a' : '#e0936b';
-        if (pos) ctx.fillRect(ax, z - ah, aw, ah); else ctx.fillRect(ax, z, aw, -ah);
+        if (pos) ctx.fillRect(ax, z - ah, pw, ah); else ctx.fillRect(ax, z, pw, -ah);
         ctx.fillStyle = 'rgba(128,128,128,0.85)'; ctx.font = (10 * cv.dpr) + 'px ui-monospace,monospace'; ctx.textAlign = 'center';
         ctx.fillText('r ' + r[i].toFixed(2), slot + bw * 0.5, H - pd + 14 * cv.dpr);
       });
