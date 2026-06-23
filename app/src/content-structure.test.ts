@@ -257,6 +257,26 @@ test("scaling laws explain training tokens inline at first use", () => {
   expect(flat("zh/foundations/01-scaling-laws.qmd")).toContain("同一段文本如果重复训练两轮，就计两次");
 });
 
+test("high-friction glossary terms explain themselves in the reading flow", () => {
+  const required = [
+    ["en/foundations/04-transformer-architecture.qmd", "The first pass is **@gls-prefill**: it reads the entire prompt"],
+    ["zh/foundations/04-transformer-architecture.qmd", "第一遍就是 **@gls-prefill** 阶段：它一次读完整个提示词"],
+    ["zh/foundations/06-training-at-scale.qmd", "*@gls-tp*先切开单层内部的矩阵乘法"],
+    ["en/ecosystem/03-economics.qmd", "Training is a @gls-capex: a capital-style, one-time spend"],
+    ["zh/ecosystem/03-economics.qmd", "训练是一笔@gls-capex：像资本开支一样一次性付出"],
+    ["en/safety/01-mechanistic-interpretability.qmd", "The hypothesis is @gls-superposition: a model represents more features than it has dimensions"],
+    ["zh/safety/01-mechanistic-interpretability.qmd", "这个假说叫@gls-superposition：模型表示的特征多于它的维度"],
+    ["en/safety/02-scalable-oversight-control.qmd", "The answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training"],
+    ["zh/safety/02-scalable-oversight-control.qmd", "答案是@gls-deceptive-alignment：模型可能在训练与评测下表现得像是对齐"],
+    ["en/practice/11-human-interface-oversight.qmd", "It may have created @gls-automation-bias: people over-accepting automated advice"],
+    ["zh/practice/11-human-interface-oversight.qmd", "它也可能制造 @gls-automation-bias：人会过度接受自动化建议"],
+  ];
+
+  for (const [path, snippet] of required) {
+    expect(flat(path), `${path} should keep an inline explanation for ${snippet}`).toContain(snippet);
+  }
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
