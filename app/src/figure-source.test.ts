@@ -85,6 +85,15 @@ test("figure 1.3 nested-loop return arcs do not carry overlap-prone labels", () 
   }
 });
 
+test("English static SVG labels stay as selectable text nodes", () => {
+  const common = readFileSync(join(figuresSrc, "common.py"), "utf8");
+  expect(common).toMatch(/SVG_TEXT_PARAMS\s*=\s*\{\s*"svg\.fonttype":\s*"none"/);
+  const scalingLaw = readFileSync(join(repoRoot, "en", "figures", "scaling-laws-1.svg"), "utf8");
+  expect(scalingLaw).toContain("<text");
+  expect(scalingLaw).toContain(">extrapolate</text>");
+  expect(scalingLaw).toContain(">affordable</text>");
+});
+
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();

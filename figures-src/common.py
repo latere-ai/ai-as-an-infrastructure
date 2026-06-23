@@ -13,8 +13,12 @@ import matplotlib.pyplot as plt
 from matplotlib.text import Text
 from matplotlib.ticker import FixedFormatter, FuncFormatter
 
-ZH_SVG_PARAMS = {
+SVG_TEXT_PARAMS = {
     "svg.fonttype": "none",
+}
+
+ZH_SVG_PARAMS = {
+    **SVG_TEXT_PARAMS,
     "font.family": "sans-serif",
     "font.sans-serif": [
         "PingFang SC",
@@ -632,7 +636,8 @@ def save_bilingual(fig, name):
     en.parent.mkdir(parents=True, exist_ok=True)
     zh.parent.mkdir(parents=True, exist_ok=True)
     buffer = io.StringIO()
-    fig.savefig(buffer, format="svg", bbox_inches="tight", transparent=True)
+    with matplotlib.rc_context(SVG_TEXT_PARAMS):
+        fig.savefig(buffer, format="svg", bbox_inches="tight", transparent=True)
     en.write_text(_clean_svg(buffer.getvalue()), encoding="utf-8")
     with matplotlib.rc_context(ZH_SVG_PARAMS):
         _localize_figure_text(fig)
