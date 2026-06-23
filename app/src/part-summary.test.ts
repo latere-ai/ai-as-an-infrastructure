@@ -53,3 +53,15 @@ test("part summaries are standalone narrative pages, not intro checklists", () =
     expect(paragraphs(zhSummary).length, `zh/${summary} should be narrative prose`).toBeGreaterThanOrEqual(2);
   }
 });
+
+test("foundations summary hands off to generative and multimodal architectures", () => {
+  const enSummary = src("en/foundations/summary.qmd");
+  expect(enSummary).toContain("Part II");
+  expect(enSummary).toContain("image, a sound, a video");
+  expect(enSummary).toContain("do not arrive as natural strings");
+
+  const zhSummary = src("zh/foundations/summary.qmd");
+  expect(zhSummary).toContain("第二部分");
+  expect(zhSummary).toContain("图像、声音、视频");
+  expect(zhSummary).toContain("不是「文本之后还有多模态」");
+});
