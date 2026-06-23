@@ -1567,7 +1567,9 @@
         ctx.fillText(b.n, x, H - pd + 20 * cv.dpr);
         ctx.fillText(Math.round(b.v * 100) + '%', x, y - 8 * cv.dpr);
       });
-      var sx = pd + 10 * cv.dpr, sy = pd + 8 * cv.dpr, sw = 96 * cv.dpr, sh = 11 * cv.dpr;
+      // Cost-breakdown legend sits in the gap right of the (often full-height)
+      // coverage bar, so it never overlaps that bar or its percentage label.
+      var sx = X(0) + 58 * cv.dpr, sy = pd + 8 * cv.dpr, sw = 96 * cv.dpr, sh = 11 * cv.dpr;
       [
         [L.gen, genCost, t.accent],
         [L.score, scoreCost, 'rgba(128,128,128,0.55)'],
