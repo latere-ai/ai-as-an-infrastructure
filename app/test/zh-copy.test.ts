@@ -36,6 +36,17 @@ test("polished prose avoids loose trick and scaffold calques", () => {
   expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
 });
 
+test("zh introductory prose avoids abrupt bridges and stiff commitment framing", () => {
+  const preface = readFileSync(join(repoRoot, "zh/index.qmd"), "utf8");
+  const orientation = readFileSync(join(repoRoot, "zh/orientation/index.qmd"), "utf8");
+
+  expect(preface).toContain("本书只取它的工程后果");
+  expect(preface).not.toContain("它是一串承诺");
+  expect(preface).not.toContain("能不能被信任、负担");
+  expect(orientation).toContain("为了让这种读法不散，每章都会提供三类路标");
+  expect(orientation).not.toContain("三个习惯让这种读法成立");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
