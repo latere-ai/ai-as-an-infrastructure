@@ -161,6 +161,46 @@ test("zh adaptation prose avoids literal or note-like formulations", () => {
   expect(adaptationText).not.toContain("同一个变量的四种绑定");
 });
 
+test("zh reasoning prose avoids literal or note-like formulations", () => {
+  const reasoningText = qmdFiles(join(zhRoot, "reasoning"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(reasoningText).not.toContain("换一种读法");
+  expect(reasoningText).not.toContain("再不依赖它的单个样本");
+  expect(reasoningText).not.toContain("四种形态");
+  expect(reasoningText).not.toContain("诸条推理路径积分掉");
+  expect(reasoningText).not.toContain("在一片部分解的空间上做搜索");
+  expect(reasoningText).not.toContain("循步指令");
+  expect(reasoningText).not.toContain("彼此竞争");
+  expect(reasoningText).not.toContain("值得得到下一份算力");
+  expect(reasoningText).not.toContain("中间 thought");
+  expect(reasoningText).not.toContain("thought 背后");
+  expect(reasoningText).not.toContain("短 thought");
+  expect(reasoningText).not.toContain("早先 thought");
+  expect(reasoningText).not.toContain("反馈把手");
+  expect(reasoningText).not.toContain("每一种回答的问题都不同");
+  expect(reasoningText).not.toContain("credit 的单位");
+  expect(reasoningText).not.toContain("章节之间的铰链");
+  expect(reasoningText).not.toContain("一个单一的对象");
+  expect(reasoningText).not.toContain("这个对象被固定");
+  expect(reasoningText).not.toContain("激发这一切的失效");
+  expect(reasoningText).not.toContain("展开这个对象");
+  expect(reasoningText).not.toContain("则是展示了");
+  expect(reasoningText).not.toContain("这一对照承载了它的主张");
+  expect(reasoningText).not.toContain("奖励给谁");
+  expect(reasoningText).not.toContain("监督这个问题有它自己的脉络");
+  expect(reasoningText).not.toContain("组基线偏在何处");
+  expect(reasoningText).not.toContain("行为捐给");
+  expect(reasoningText).not.toContain("自改进推理数据形式");
+  expect(reasoningText).not.toContain("生产端问题提供了答案");
+  expect(reasoningText).not.toContain("这个界限并非脚注");
+  expect(reasoningText).not.toContain("放它的地方");
+  expect(reasoningText).not.toContain("核心的那个");
+  expect(reasoningText).not.toContain("控制问题来读");
+  expect(reasoningText).not.toContain("内部器官");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
