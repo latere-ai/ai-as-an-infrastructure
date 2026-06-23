@@ -4,6 +4,7 @@
 // the Go server; renders nothing destructive (markdown-it with html:false).
 import MarkdownIt from "markdown-it";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type Anchor as TextAnchor, buildAnchor, findAnchor, markRange, textIndex } from "./anchor.ts";
 
 export type Me = { sub: string; name: string; avatar: string; admin: boolean; csrf: string };
 export type Reaction = { emoji: string; count: number; mine: boolean };
@@ -42,6 +43,7 @@ const ui = {
     reply: "Reply", edit: "Edit", del: "Delete", save: "Save", cancel: "Cancel",
     deleted: "[deleted]", empty: "No comments yet. Start the discussion.",
     confirmDel: "Delete this comment?", react: "Add reaction", sending: "Posting…",
+    mark: "Comment on selection", moved: "Marks whose text has since moved",
   },
   zh: {
     title: "评论", login: "登录后评论", logout: "退出",
@@ -49,6 +51,7 @@ const ui = {
     reply: "回复", edit: "编辑", del: "删除", save: "保存", cancel: "取消",
     deleted: "[已删除]", empty: "还没有评论，来开个头。", confirmDel: "删除这条评论？",
     react: "添加表情", sending: "发送中…",
+    mark: "对所选文字评论", moved: "原文已变动的标注",
   },
 };
 
@@ -201,7 +204,7 @@ function CommentItem({ c, me, api, t, refresh, onReply }: {
   const canEdit = c.mine && !c.deleted;
   const canDel = (c.mine || me?.admin) && !c.deleted;
   return (
-    <div style={{ display: "flex", gap: 10 }}>
+    <div id={`rdr-comment-${c.id}`} style={{ display: "flex", gap: 10, scrollMarginTop: 80 }}>
       <Avatar src={c.avatar} name={c.author} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, color: "var(--fg-2)" }}>
@@ -244,6 +247,10 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
   const [me, setMe] = useState<Me | null>(null);
   const [list, setList] = useState<Comment[] | null>(null);
   const [replyTo, setReplyTo] = useState<string | null>(null);
+  // inline marking: floating button on selection, then a composer popover.
+  const [mark, setMark] = useState<{ anchor: TextAnchor; x: number; y: number } | null>(null);
+  const [composing, setComposing] = useState(false);
+  const [orphans, setOrphans] = useState<Comment[]>([]);
 
   const refresh = useCallback(() => { api.list(lang, path).then(setList).catch(() => setList([])); }, [api, lang, path]);
 
@@ -252,11 +259,58 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
     refresh();
   }, [api, refresh]);
 
-  const post = async (body: string, parentId?: string) => {
-    await api.create({ lang, path, body, parentId: parentId ?? null });
-    setReplyTo(null);
+  const post = async (body: string, parentId?: string, anchor?: TextAnchor) => {
+    await api.create({ lang, path, body, parentId: parentId ?? null, anchor: anchor ?? null });
+    setReplyTo(null); setMark(null); setComposing(false);
     refresh();
   };
+
+  // Render inline marks for anchored comments on the article; collect orphans.
+  useEffect(() => {
+    if (list === null) return;
+    const article = document.querySelector(".rdr-article");
+    if (!article) return;
+    article.querySelectorAll(".rdr-cmt-mark").forEach((m) => {
+      const p = m.parentNode!;
+      while (m.firstChild) p.insertBefore(m.firstChild, m);
+      p.removeChild(m);
+    });
+    article.normalize();
+    const { text, nodes } = textIndex(article);
+    const orphaned: Comment[] = [];
+    for (const c of list) {
+      if (!c.anchor?.exact || c.deleted) continue;
+      const span = findAnchor(text, c.anchor);
+      if (!span) { orphaned.push(c); continue; }
+      markRange(nodes, span[0], span[1], () => {
+        const el = document.createElement("mark");
+        el.className = "rdr-cmt-mark";
+        el.style.cssText = "background:var(--accent-glow);border-bottom:1px solid var(--accent);cursor:pointer";
+        el.onclick = () => flashComment(c.id);
+        return el;
+      });
+    }
+    setOrphans(orphaned);
+  }, [list]);
+
+  // Capture a selection inside the article into a pending anchor (logged-in only).
+  useEffect(() => {
+    if (!me) return;
+    const onUp = () => {
+      if (composing) return;
+      const sel = window.getSelection();
+      const article = document.querySelector(".rdr-article");
+      if (!sel || sel.isCollapsed || !sel.rangeCount || !article) { setMark(null); return; }
+      const range = sel.getRangeAt(0);
+      if (!article.contains(range.commonAncestorContainer)) { setMark(null); return; }
+      const anchor = buildAnchor(article, sel);
+      if (!anchor || anchor.exact.trim().length < 4) { setMark(null); return; }
+      const r = range.getBoundingClientRect();
+      setMark({ anchor, x: r.left + r.width / 2, y: r.top });
+    };
+    document.addEventListener("mouseup", onUp);
+    return () => document.removeEventListener("mouseup", onUp);
+  }, [me, composing]);
 
   const top = list ?? [];
   return (
@@ -267,6 +321,16 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
       ) : (
         <a href="/login" style={{ ...btn(true), display: "inline-block", textDecoration: "none" }}>{t.login}</a>
       )}
+
+      {orphans.length > 0 && (
+        <details style={{ marginTop: 20, fontSize: 13, color: "var(--fg-3)" }}>
+          <summary style={{ cursor: "pointer" }}>{t.moved} · {orphans.length}</summary>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 12 }}>
+            {orphans.map((c) => <CommentItem key={c.id} c={c} me={me} api={api} t={t} refresh={refresh} />)}
+          </div>
+        </details>
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 22, marginTop: 24 }}>
         {list === null ? null : top.length === 0 ? (
           <p style={{ color: "var(--fg-3)" }}>{t.empty}</p>
@@ -283,8 +347,32 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
           ))
         )}
       </div>
+
+      {/* floating "comment on selection" button */}
+      {mark && !composing && (
+        <button type="button" onClick={() => setComposing(true)}
+          style={{ position: "fixed", left: mark.x, top: mark.y - 40, transform: "translateX(-50%)", zIndex: 50, ...btn(true), boxShadow: "var(--shadow-md)" }}>
+          💬 {t.mark}
+        </button>
+      )}
+      {/* inline composer popover */}
+      {mark && composing && (
+        <div style={{ position: "fixed", left: Math.min(mark.x, window.innerWidth - 340), top: Math.min(mark.y + 10, window.innerHeight - 220), width: 320, zIndex: 50, padding: 12, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)" }}>
+          <blockquote style={{ margin: "0 0 8px", padding: "2px 8px", borderLeft: "2px solid var(--accent)", color: "var(--fg-3)", fontSize: 12, maxHeight: 48, overflow: "hidden" }}>“{mark.anchor.exact}”</blockquote>
+          <Composer t={t} busy={false} autoFocus onSubmit={(b) => post(b, undefined, mark.anchor)} onCancel={() => { setMark(null); setComposing(false); }} />
+        </div>
+      )}
     </section>
   );
+}
+
+function flashComment(id: string) {
+  const el = document.getElementById(`rdr-comment-${id}`);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.style.transition = "background .3s";
+  el.style.background = "var(--accent-glow)";
+  setTimeout(() => { el.style.background = ""; }, 1200);
 }
 
 function countAll(cs: Comment[]): number {
