@@ -18,6 +18,7 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -29,7 +30,17 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/latere-ai/ai-as-an-infrastructure/internal/api"
+	"github.com/latere-ai/ai-as-an-infrastructure/internal/config"
+	"github.com/latere-ai/ai-as-an-infrastructure/internal/store"
 )
+
+// commentsAPI is the reader-comments handler, set in main() only when a database
+// is configured. Nil means the comments feature is off and the server behaves
+// exactly like the static-only book (so the routing tests, which call serve
+// directly, are unaffected).
+var commentsAPI *api.Handler
 
 //go:embed all:_book
 var embedded embed.FS
@@ -107,6 +118,18 @@ func serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		io.WriteString(w, "ok\n")
 		return
+	}
+
+	// Dynamic routes (comments API, plus the OIDC login flow added in M3). Matched
+	// before the reorg/canonicalization rules so they are never rewritten or
+	// swallowed by the static try_files fallback. Skipped entirely when comments
+	// are disabled, leaving the static contract untouched.
+	if commentsAPI != nil && commentsAPI.Owns(p) {
+		commentsAPI.ServeHTTP(w, r)
+		return
+	}
+
+	switch p {
 	case "/":
 		// Apex -> reader's saved language, else English. 302 (not 301) + Vary:
 		// Cookie so the per-language choice is never frozen in a cache.
@@ -271,7 +294,26 @@ func acceptsGzip(r *http.Request) bool {
 }
 
 func main() {
-	addr := ":" + getenv("PORT", "8080")
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if cfg.DatabaseURL != "" {
+		pool, err := store.NewPool(context.Background(), cfg.DatabaseURL)
+		if err != nil {
+			log.Fatalf("database: %v", err)
+		}
+		defer pool.Close()
+		// Identity is anonymous until the OIDC flow is wired (M3): the read path
+		// is public, writes return 401 until then.
+		commentsAPI = api.New(store.New(pool), api.Anonymous{})
+		log.Printf("comments enabled (database configured)")
+	}
+
+	addr := cfg.ListenAddr
+	if addr == "" {
+		addr = ":" + getenv("PORT", "8080")
+	}
 	log.Printf("aaai-web serving embedded _book on %s", addr)
 	if err := http.ListenAndServe(addr, http.HandlerFunc(serve)); err != nil {
 		log.Fatal(err)
