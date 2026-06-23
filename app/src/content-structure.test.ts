@@ -310,6 +310,30 @@ test("abbreviations and decoding methods are defined at first use", () => {
   }
 });
 
+test("early-book glossary first uses are readable without leaving the page", () => {
+  const required = [
+    ["en/orientation/01-whole-stack.qmd", "a @gls-moe model that activates only a few expert sub-networks"],
+    ["zh/orientation/01-whole-stack.qmd", "DeepSeek-V3 是@gls-moe模型，也就是每个词元只激活少数专家子网络的模型"],
+    ["en/orientation/01-whole-stack.qmd", "with @gls-mla, an attention design that shrinks the inference-time cache"],
+    ["zh/orientation/01-whole-stack.qmd", "配上@gls-mla这种压缩推断时缓存的注意力设计"],
+    ["en/orientation/02-field-map.qmd", "@gls-scaling-law, an empirical formula that predicts loss from model size, data, and compute"],
+    ["zh/orientation/02-field-map.qmd", "@gls-scaling-law 给训练定规模，也就是用一条把损失同模型规模、数据量与算力联系起来的经验公式"],
+    ["en/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding, which emits fractional-probability symbols as one near-optimal bit stream"],
+    ["zh/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding把带小数概率的符号写成一条近似最优的比特码流"],
+    ["en/orientation/03-borrowed-ideas.qmd", "@gls-two-part-code, an accounting that charges for the model description"],
+    ["zh/orientation/03-borrowed-ideas.qmd", "用@gls-two-part-code来算，也就是先付模型描述长度"],
+    ["en/foundations/01-scaling-laws.qmd", "@gls-cross-entropy is the loss on the shifted sequence"],
+    ["en/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp is the native version of the same full sharding idea"],
+    ["zh/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp 则是同一全分片思路的原生版本"],
+    ["en/foundations/07-mid-training.qmd", "@gls-sft on demonstrations, @gls-dpo from chosen-versus-rejected preferences"],
+    ["zh/foundations/07-mid-training.qmd", "在示范数据上做@gls-sft，从胜出与被拒回复的偏好里做@gls-dpo"],
+  ];
+
+  for (const [path, snippet] of required) {
+    expect(flat(path), `${path} should keep early first-use explanation: ${snippet}`).toContain(snippet);
+  }
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
