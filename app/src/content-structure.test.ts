@@ -1,8 +1,23 @@
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 
 function src(p: string) {
   return readFileSync(new URL("../../" + p, import.meta.url), "utf8");
+}
+
+function flat(p: string) {
+  return src(p).replace(/\s+/g, " ");
+}
+
+function qmdPaths(dir: string): string[] {
+  const base = new URL("../../" + dir + "/", import.meta.url);
+  const out: string[] = [];
+  for (const entry of readdirSync(base, { withFileTypes: true })) {
+    const path = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) out.push(...qmdPaths(path));
+    else if (entry.name.endsWith(".qmd")) out.push(path);
+  }
+  return out;
 }
 
 test("human-interface oversight is wired into both book manifests before the data engine", () => {
@@ -276,4 +291,43 @@ test("the expanded reasoning part is tracked in top-level book surfaces", () => 
   expect(src("README.md")).toContain("verifiers");
   expect(src("README.md")).toContain("reasoning data");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Reasoning and test-time compute depth**");
+});
+
+test("mid-book handoffs do not signal that the whole book has ended", () => {
+  const forbidden: Record<string, string[]> = {
+    en: ["The book closes there", "This brings the book to its last open question"],
+    zh: ["全书在这里收束", "全书最后留下", "全书最后落在"],
+  };
+
+  for (const lang of ["en", "zh"]) {
+    for (const path of qmdPaths(lang)) {
+      if (path.endsWith("/summary.qmd")) continue;
+      const text = src(path);
+      for (const phrase of forbidden[lang]) {
+        expect(text.includes(phrase), `${path} uses premature finality phrase: ${phrase}`).toBe(false);
+      }
+    }
+  }
+});
+
+test("the infrastructure arc explicitly hands off to ecosystem and practice", () => {
+  const enHorizon = src("en/infrastructure/08-the-capability-horizon.qmd");
+  expect(enHorizon).toContain("This part closes there, but the book does not");
+  expect(enHorizon).toContain("The next part asks how");
+  expect(enHorizon).toContain("operating contracts");
+
+  const zhHorizon = src("zh/infrastructure/08-the-capability-horizon.qmd");
+  expect(zhHorizon).toContain("这一部分在这里收束，但全书还没有结束");
+  expect(zhHorizon).toContain("下一部分会问");
+  expect(zhHorizon).toContain("运营契约");
+
+  const enPractice = flat("en/practice/index.qmd");
+  expect(enPractice).toContain("Part IX exposed");
+  expect(enPractice).toContain("Part X showed");
+  expect(enPractice).toContain("This part asks");
+
+  const zhPractice = src("zh/practice/index.qmd");
+  expect(zhPractice).toContain("第九部分暴露");
+  expect(zhPractice).toContain("第十部分则说明");
+  expect(zhPractice).toContain("这里开始问");
 });
