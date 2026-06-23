@@ -196,7 +196,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/03-inference-time-scaling.qmd",
-      ["重复采样买到的是覆盖率，而不是答案", "串行修订与并行搜索", "计算最优分配按问题难度调度预算", "选择器并不完美"],
+      ["重复采样提高的是覆盖率，而不是答案质量", "串行修订与并行搜索", "计算最优分配按问题难度调度预算", "选择器并不完美"],
     ],
     [
       "en/reasoning/index.qmd",
@@ -204,7 +204,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/index.qmd",
-      ["答案落定之前额外花掉的计算", "多出来的计算花在哪里", "谁在检查它"],
+      ["答案确定之前额外投入的计算", "额外计算投入在哪里", "谁在检查它"],
     ],
     [
       "en/orchestration/01-training-agents-to-act.qmd",
