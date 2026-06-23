@@ -1,0 +1,355 @@
+# Operating Contracts: SLOs, Cost, Incidents, and Tenancy {#sec-operating-contracts}
+
+A stack becomes infrastructure only when a team can say what it promises, what it
+costs, how it fails, who shares it, and which record will be trusted after the
+failure. Everything before this point built pieces of that answer. @sec-wiring-stack
+named the seams, @sec-deployment-lifecycle made release a statistical promotion
+problem, @sec-reliability moved reliability from exact responses to judged
+distributions, @sec-human-interface-oversight placed human approval in the runtime
+loop, and @sec-data-engine turned production traces into the next round of
+evidence. The missing object is the operating contract tying those pieces together.
+
+![Schematic risk curve for operating contracts. A governed stack lowers unpriced risk as contracts cover SLOs, cost, incidents, tenancy, and evidence; an ad hoc stack keeps most risk outside the control plane. Idealized curves, not measured data.](/figures/operating-contracts-1.svg){#fig-operating-contracts-1}
+
+The old production playbook still matters. Service level indicators and service
+level objectives give a service a measurable promise [@beyer2016sre]. Incident
+command separates decision-making from hands-on repair when the system is under
+stress [@beyer2016sre]. FinOps turns cost into a shared engineering, finance, and
+product discipline rather than an accounting report after the fact
+[@finops2026what]. Multi-tenancy turns fairness, isolation, and chargeback into
+platform design [@kubernetes2026multitenancy]. AI changes the payload these
+disciplines carry. The service is not only reachable or slow; it can be fluent and
+wrong. The cost is not only CPU hours; it is tokens, GPU seconds, judge calls,
+retrieval, reranks, and human review. The incident is not only an outage; it can be
+a quality regression, a policy failure, a cost runaway, a grounding failure, or a
+tenant leak. The contract must cover all of them.
+
+## The Contract Surface
+
+An AI product has at least five contracts. They should be written, instrumented,
+and enforceable at the same seams that route traffic.
+
+| Contract | Promise | Meter | Enforcement point |
+| --- | --- | --- | --- |
+| **Service level** | The system answers within latency, availability, and quality bounds. | Availability, p95/p99 latency, judged pass rate, task success. | Gateway, serving tier, eval gate, fallback chain. |
+| **Cost** | Work stays inside a budget and has an owner. | Tokens, cached tokens, GPU seconds, judge calls, review minutes, storage. | Gateway budgets, quota service, scheduler, FinOps ledger. |
+| **Incident** | A live failure has roles, state, mitigations, and a learning path. | Severity, affected tenants, spend burn, failing eval slices, mitigation time. | Incident command, runbook, feature flags, rollback, postmortem. |
+| **Tenancy** | One tenant cannot steal another tenant's capacity, data, tools, or budget. | Quota, priority, cache partition, index namespace, sandbox boundary, audit log. | Gateway virtual keys, scheduler, vector store, sandbox, policy layer. |
+| **Evidence** | Releases and remediations are decided from reproducible records. | Dataset version, prompt/config hash, trace ID, judge version, consent basis. | Eval store, trace store, data engine, model registry. |
+
+@fig-operating-contracts-control-plane draws the contract surface as a control
+plane rather than a document. A request enters through the gateway. The gateway
+does not merely forward it. It attaches tenant identity, budget, routing policy,
+trace ID, and service target. The agent runtime, retrieval layer, sandbox, eval
+harness, and serving engine all inherit that envelope. When something goes wrong,
+the same envelope lets the operator answer the first hard questions: who was
+affected, what changed, what was spent, what boundary was crossed, and which trace
+can reproduce it.
+
+```{dot}
+//| label: fig-operating-contracts-control-plane
+//| fig-cap: "Operating contracts as a control plane. Tenant identity, SLO target, cost budget, incident state, and evidence ID travel with the request instead of living in separate spreadsheets."
+digraph contracts {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.45; ranksep=0.55;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  user [label="tenant request"];
+  gw [label="gateway\ntenant, model, budget, SLO"];
+  app [label="agent / app runtime\ntrace envelope"];
+  rag [label="retrieval\nnamespace + rerank"];
+  sbx [label="sandbox\ntool boundary"];
+  model [label="model serving\nlatency + fallback"];
+  obs [label="observability\nspans + spend"];
+  eval [label="live eval\nsample + judge"];
+  inc [label="incident state\nroles + mitigations"];
+  data [label="evidence store\ntrace, config, eval, consent", shape=cylinder];
+
+  user -> gw -> app;
+  app -> rag;
+  app -> sbx;
+  app -> model;
+  gw -> obs [style=dashed];
+  app -> obs [style=dashed];
+  obs -> eval [style=dashed, label="sample"];
+  obs -> inc [style=dashed, label="alert"];
+  eval -> data [style=dashed];
+  inc -> data [style=dashed];
+  data -> gw [style=dashed, label="new guard"];
+}
+```
+
+::: {.callout-tip}
+## Constraint arrow
+The operating contract is a reverse arrow: production obligations reach down and
+reshape every technical layer beneath them. A 99.9 percent availability promise
+changes model routing and fallback. A per-tenant spend ceiling changes gateway
+policy and scheduler priority. A privacy boundary changes retrieval namespaces,
+sandbox egress, and trace retention. An incident review changes the eval suite
+and post-training data. The contract is not documentation after the system is
+built. It is the lower-layer design constraint written in operational language.
+:::
+
+## SLOs for Semantic Systems
+
+Traditional SRE asks which user-visible behaviors matter and how to measure them
+[@beyer2016sre]. In a model-backed system the answer has three families. The first
+two are familiar: the service must be available and it must be fast enough. The
+third is semantic quality. A response can arrive quickly and still violate the
+product's promise.
+
+A quality SLI is a sampled and judged pass rate. For a window of $n$ sampled
+production events, let $s_i = 1$ when the response passes the task rubric and
+$s_i = 0$ otherwise:
+
+$$
+\hat q = \frac{1}{n}\sum_{i=1}^{n}s_i .
+$$
+
+Because the sample is finite, the operating decision should use a lower confidence
+bound, not the point estimate. With a target $q^\star$, a release or route is
+healthy only when the lower bound stays above $q^\star$. That single detail keeps
+the system from treating a lucky thin sample as evidence. @sec-statistical-reliability
+supplies the measurement discipline; @sec-reliability supplies the nondeterministic
+service model. The contract connects them to pager rules and release gates.
+
+The interactive curve below shows the operational trade. The x-axis is extra
+evaluation, fallback, or review spend. The y-axis is residual live risk. The slider
+sets how quickly the risk falls. A brittle system has a long half-life: each extra
+dollar removes little risk. A well-instrumented system has a short half-life:
+targeted evals and fallbacks quickly remove the failures that matter.
+
+```{=html}
+<figure id="fig-operating-contracts-risk">
+<div class="viz" data-viz="curve" data-family="exp-decay" data-xlabel="extra eval / fallback spend" data-ylabel="residual live risk" data-plabel="risk half-life" data-pmin="0.4" data-pmax="4" data-p="1.4"></div>
+<figcaption>Operational spend should remove live risk, not merely add process. Drag the half-life: shorter half-lives mean the team has targeted eval slices, effective validators, and fallbacks that remove the failures users actually see.</figcaption>
+</figure>
+```
+
+:::: {.runnable}
+```python
+import math
+
+def wilson_lower(passes, n, z=1.96):
+    if n == 0:
+        return 0.0
+    phat = passes / n
+    denom = 1 + z * z / n
+    center = phat + z * z / (2 * n)
+    margin = z * math.sqrt(phat * (1 - phat) / n + z * z / (4 * n * n))
+    return (center - margin) / denom
+
+target = 0.92
+for n, passes in [(50, 48), (200, 188), (1000, 935)]:
+    point = passes / n
+    lower = wilson_lower(passes, n)
+    decision = "ship" if lower >= target else "hold"
+    print(f"n={n:4d}, point={point:.3f}, lower95={lower:.3f}, target={target:.2f}, decision={decision}")
+```
+::::
+
+This framing also prevents an SLO from becoming a slogan. "Helpful answers" is
+not an SLO. "At least 92 percent of sampled support answers pass the grounded
+resolution rubric over a rolling day, with lower 95 percent confidence bound
+above 90 percent, and p95 latency below four seconds" is an SLO a system can
+enforce. The exact numbers are product choices; the shape is not.
+
+## Cost Governance as a Runtime Control
+
+Cost governance has to sit in the request path. A monthly report arrives too late
+to stop a runaway agent, a misrouted judge, or a prompt template that quietly
+tripled output length. FinOps is useful here because it defines cost as a shared
+operating discipline across engineering, finance, and product, with trade-offs
+among speed, cost, and quality made explicitly [@finops2026what]. FOCUS matters
+because normalized cost data lets AI spend sit beside cloud, SaaS, and data-center
+spend rather than living in a vendor-specific export [@focus2026spec].
+
+The runtime ledger should record the unit economics of a task, not only the bill:
+
+$$
+C =
+\sum_r
+\left(
+p_{\text{in}}m_{\text{in},r}
++ p_{\text{out}}m_{\text{out},r}
++ c_{\text{gpu}}t_{\text{gpu},r}
++ c_{\text{judge}}j_r
++ c_{\text{review}}h_r
++ c_{\text{store}}g_r
+\right).
+$$
+
+The point is not that every term will be known exactly. The point is that the
+contract names the meter: input tokens, output tokens, GPU time, judge calls,
+human review minutes, and storage. Once the meter is named, the gateway can enforce
+budgets before the bill arrives:
+
+- route easy tasks to cheaper models and hard tasks to stronger ones;
+- cap tool loops by task class and tenant;
+- reject or defer traffic when a budget is exhausted;
+- allocate cached-input discounts and self-hosted capacity to the tenants that
+  create the demand;
+- price eval, judge, and review work as part of the product, not as invisible
+  platform overhead.
+
+The difficult part is political rather than mathematical. A model team may want
+more test-time compute to increase quality. A product team may want lower latency.
+A finance team may want a hard cost ceiling. The operating contract makes that
+conflict explicit: it states which target wins under which condition, and which
+person can change the threshold.
+
+## Incident Classes
+
+Incident management exists because humans under stress otherwise freelance,
+duplicate work, and lose state. Google's SRE practice makes the point in generic
+terms: separate incident command, operational work, communication, and planning,
+and keep a live incident state document [@beyer2016sre]. AI systems need the same
+roles, but the incident taxonomy is broader than "the service is down."
+
+| Class | Symptom | Fast mitigation | Evidence to preserve |
+| --- | --- | --- | --- |
+| **Availability / latency** | errors, timeouts, p99 spike, queue growth | shed load, route to smaller model, disable optional tools | request IDs, queue metrics, model route, deployment hash |
+| **Quality regression** | live judged pass rate or complaint slice drops | rollback model/prompt/index, raise fallback threshold | sampled traces, judge version, eval slice, changed config |
+| **Grounding failure** | citations wrong, stale documents, retrieval misses | pin index version, narrow sources, answer with uncertainty | retrieved chunks, corpus version, reranker route |
+| **Safety / policy** | disallowed content, prompt-injection success, unsafe action | disable tool, require approval, block route | full trajectory, policy version, sandbox log |
+| **Cost runaway** | spend burn or token output spikes | cap tenant, kill loop, switch route, disable judge fan-out | budget ledger, prompt hash, loop count |
+| **Tenant boundary** | data, cache, index, or tool access crosses boundary | isolate tenant, revoke keys, freeze affected traces | namespace, virtual key, ACL diff, audit log |
+
+@fig-operating-incident-loop shows the incident loop. Detection is only the first
+step. The operator has to command, mitigate, communicate, preserve evidence, and
+turn the failure into either a regression test or a known accepted risk. Sculley
+et al.'s warning about hidden technical debt in ML systems is relevant here:
+undeclared consumers, feedback loops, and glue code create failures that are hard
+to see until the system is already in production [@sculley2015debt]. The incident
+loop is how those hidden dependencies become declared.
+
+```{dot}
+//| label: fig-operating-incident-loop
+//| fig-cap: "An AI incident loop. The loop is closed only when the live failure becomes a regression eval, a policy change, a data-engine sample, or an explicitly accepted risk."
+digraph incident {
+  bgcolor="transparent";
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  detect [label="detect\nalert, complaint, eval"];
+  command [label="command\nroles + state doc"];
+  mitigate [label="mitigate\nrollback, route, cap, gate"];
+  communicate [label="communicate\nstakeholders + tenants"];
+  evidence [label="preserve evidence\ntrace, config, data, consent"];
+  learn [label="learn\nregression eval or accepted risk"];
+
+  detect -> command -> mitigate -> communicate -> evidence -> learn;
+  learn -> detect [style=dashed, label="new guard"];
+}
+```
+
+The last edge is where many organizations fail. They hold the postmortem, but the
+system remains unchanged. In AI infrastructure a postmortem that does not add an
+eval case, a budget guard, a route rule, a tenant isolation control, a data quality
+check, or a human approval gate is only prose. It has not modified the machinery.
+
+## Multi-Tenancy and Noisy Neighbors
+
+AI multi-tenancy is more than Kubernetes namespaces. A tenant shares GPUs, KV
+cache, batch slots, vector indexes, judge capacity, tool servers, sandboxes, and
+sometimes humans in review queues. Kubernetes documentation names the familiar
+isolation tools: namespaces, access control, quotas, sandboxing, node isolation,
+API priority, and QoS [@kubernetes2026multitenancy]. AI inherits all of them and
+adds semantic boundaries.
+
+The tenant contract must answer four questions.
+
+1. **Capacity:** can one tenant's long-context or agentic workload push another
+   tenant over the latency SLO?
+2. **Data:** can one tenant's prompt, retrieval chunk, cached prefix, trace, or
+   label enter another tenant's context or training stream?
+3. **Authority:** can one tenant's agent reach a tool, credential, or egress path
+   meant for another tenant?
+4. **Accounting:** can the platform explain who consumed tokens, cached tokens,
+   GPU seconds, judge calls, review minutes, and storage?
+
+Isolation strength should match blast radius. A low-risk internal assistant may
+share a cluster with namespace and quota boundaries. A customer-facing agent that
+runs untrusted code should use a sandbox or a tenant-dedicated node pool. A
+regulated customer may need a separate index, separate encryption keys, separate
+model route, and separate retention policy. The mistake is treating tenancy as a
+single platform toggle. It is a bundle of isolation choices, each priced
+differently.
+
+## Governance Without a Separate Book
+
+Governance appears elsewhere in the book as law, safety, provenance, and
+oversight. The operating contract is where it becomes executable. NIST's AI Risk
+Management Framework frames AI risk management as a voluntary process for
+trustworthiness across design, development, use, and evaluation [@nist2023airmf],
+with a generative AI profile that calls out risks unique to generative systems
+[@nist2024genai]. The operational translation is concrete:
+
+- a policy requirement becomes a gateway rule or approval gate;
+- a data requirement becomes a provenance and retention field on traces;
+- a transparency requirement becomes a citation, uncertainty, or disclosure
+  surface;
+- a safety requirement becomes an eval slice, sandbox boundary, or tool allowlist;
+- an accountability requirement becomes an incident role, audit record, and owner.
+
+Microsoft's GenAIOps guidance makes the same practical point from a workload
+perspective: AI workloads are nondeterministic and require processes for drift,
+monitoring, governance, deployment, and continuous operation
+[@microsoft2024genaiops]. In this book's terms, governance is not a review board
+floating above the stack. It is a set of constraints compiled into routing,
+evaluation, data, incident, and tenancy mechanisms.
+
+## Trade-Offs
+
+Operating contracts introduce overhead. They add metadata to every request, state
+to every incident, meters to every route, and evidence requirements to every
+release. A team can overdo it: a small prototype can drown under controls meant
+for a regulated multi-tenant platform. The contract should grow with blast radius.
+The first contract can be simple: model pin, budget cap, trace ID, rollback rule,
+and one quality eval. What cannot be deferred is deciding where the contract will
+live. If it lives in chat messages and spreadsheets, the system cannot enforce it.
+
+::: {.callout-important}
+## What's contested
+
+- **Can open-ended quality be an SLO?** One position says yes, if the task is
+  narrowed, sampled, judged with uncertainty, and tied to user-visible outcomes.
+  The other says semantic quality is too contextual for SLO arithmetic and should
+  stay advisory. The practical compromise is to use quality SLOs only for named
+  task classes, with confidence intervals and periodic human calibration.
+- **Should cost gates block product behavior?** Finance wants hard ceilings;
+  product wants graceful degradation; research wants extra compute when it helps.
+  The operating contract must decide which traffic is denied, degraded, delayed,
+  or escalated when the budget is nearly spent.
+- **How much tenant isolation is enough?** Strong isolation lowers risk and raises
+  cost. Weak isolation lowers cost and raises the chance that cache, index, tool,
+  or trace boundaries fail. The right point depends on the tenant's data, tool
+  authority, and regulatory exposure.
+- **How much incident response should be automated?** Automated rollback and route
+  changes cut mitigation time, but they can also erase evidence or mask a semantic
+  failure. Mature operations automate the reversible mitigation and preserve the
+  human role for command, communication, and risk acceptance.
+:::
+
+## Infrastructure Means Being Operated
+
+The title of this book uses infrastructure in a demanding sense. Infrastructure is
+not only a stack that can be assembled. It is a stack that can be promised,
+metered, shared, repaired, audited, and improved after it fails. The operating
+contract is the mechanism that gives those verbs a place in the system.
+
+Capability is the contract's product: can the system perform the task under the
+conditions users actually bring. Efficiency is the contract's budget: does the
+system spend tokens, GPU seconds, judge calls, and human attention where they
+change outcomes. Trust is the contract's evidence: can the team explain why it
+shipped, who it affected, what it cost, where it failed, and what changed after
+the failure. A stack without those answers may be powerful, but it is not yet
+infrastructure.
+
+## Further reading
+
+::: {#further-reading}
+:::

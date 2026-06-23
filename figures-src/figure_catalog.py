@@ -699,6 +699,17 @@ SPECS = {
         "xlabel": "freshness",
         "ylabel": "quality control",
     },
+    "operating-contracts-1": {
+        "type": "line",
+        "x": [0, 1, 2, 3, 4, 5],
+        "series": [
+            {"label": "governed stack", "y": [0.78, 0.58, 0.42, 0.31, 0.25, 0.21], "color": DATA},
+            {"label": "ad hoc stack", "y": [0.78, 0.72, 0.68, 0.65, 0.63, 0.61], "color": WARN},
+        ],
+        "xlabel": "contract coverage",
+        "ylabel": "unpriced risk",
+        "ylim": (0.15, 0.85),
+    },
     "model-landscape-2": {
         "type": "bars",
         "categories": ["open source AI", "open weights", "API only"],

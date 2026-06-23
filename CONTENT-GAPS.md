@@ -64,3 +64,14 @@
   design changes reliability and safety, when approval gates are required, how
   feedback becomes training/evaluation data, and how product experience exposes
   or hides model uncertainty.
+
+- [x] **Operating contracts and infrastructure operations**
+
+  Added the missing production-operations layer that makes the title "AI as an
+  Infrastructure" operational rather than only architectural. The book now closes
+  Part XI with SLOs for semantic systems, runtime cost governance, incident
+  classes, tenant isolation, evidence records, and governance compiled into
+  routing, evaluation, data, and sandbox controls. This also strengthens the
+  book's distinctive thesis: its center is not deeper training/serving craft, but
+  cross-layer constraint arrows and the physical, economic, and operational
+  substrate that shapes the AI stack.

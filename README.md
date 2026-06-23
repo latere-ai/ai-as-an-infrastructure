@@ -36,16 +36,20 @@ The spine is the lifecycle of a capability, read as a stack.
   governance.
 - **Part VIII, Safety, Interpretability, and Governance.**
 - **Part IX, Infrastructure, Compute, and Frontiers.** Accelerators,
-  networking, data infrastructure, and the compute frontier.
+  networking, data infrastructure, silicon, power, geography, failure, and the
+  compute frontier.
 - **Part X, Ecosystem and Economics.** Model openness, tooling standards,
   compute markets, market structure, adoption and productivity, and data rights.
 - **Part XI, Practice and Operations.** The hands-on 2026 stack, plus
-  deployment, reliability, human oversight surfaces, and the production data
-  engine.
+  deployment, reliability, human oversight surfaces, the production data engine,
+  and operating contracts for SLOs, cost governance, incidents, and multi-tenancy.
 
 Two motifs recur: the **three loops** (training, inference, agentic) and the
 **capability, efficiency, trust** lens. Watch the **constraint arrows**,
-where a lower layer dictates an upper layer's choice.
+where a lower layer dictates an upper layer's choice. The book's distinctive
+ground is those cross-layer arrows, especially where silicon, electricity,
+geography, price, and operational contracts constrain what the model stack can
+become.
 
 ## Layout
 

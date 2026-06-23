@@ -26,6 +26,47 @@ test("the human-interface chapter closes the recorded content gap", () => {
   expect(src("README.md")).toContain("human oversight surfaces");
 });
 
+test("practice and operations closes with operating contracts in both languages", () => {
+  const expected = [
+    "practice/01-choosing-a-model.qmd",
+    "practice/02-serving-and-compute.qmd",
+    "practice/03-edge-on-device.qmd",
+    "practice/04-training-finetuning-practice.qmd",
+    "practice/05-agents-and-sandboxes.qmd",
+    "practice/06-retrieval-and-documents.qmd",
+    "practice/07-evaluation-and-observability.qmd",
+    "practice/08-wiring-a-2026-stack.qmd",
+    "practice/09-deployment-lifecycle.qmd",
+    "practice/10-reliability-nondeterministic.qmd",
+    "practice/11-human-interface-oversight.qmd",
+    "practice/12-production-data-engine.qmd",
+    "practice/13-operating-contracts.qmd",
+  ];
+
+  for (const lang of ["en", "zh"]) {
+    const yml = src(`${lang}/book.yml`);
+    let last = -1;
+    for (const chapter of expected) {
+      const next = yml.indexOf(chapter);
+      expect(next, `${lang}/${chapter} missing from book.yml`).toBeGreaterThan(last);
+      last = next;
+    }
+
+    expect(src(`${lang}/practice/index.qmd`)).toContain("@sec-operating-contracts");
+    expect(src(`${lang}/orientation/02-field-map.qmd`)).toContain("@sec-operating-contracts");
+    expect(src(`${lang}/practice/13-operating-contracts.qmd`)).toContain("{#sec-operating-contracts}");
+  }
+});
+
+test("operating contracts are tracked in top-level book surfaces", () => {
+  expect(src("README.md")).toContain("operating contracts for SLOs, cost governance, incidents, and multi-tenancy");
+  expect(src("CONTENT-GAPS.md")).toContain("- [x] **Operating contracts and infrastructure operations**");
+  expect(src("en/index.qmd")).toContain("SLOs, cost governance, incidents");
+  expect(src("zh/index.qmd")).toContain("SLO、成本治理、事故");
+  expect(src("en/summary.qmd")).toContain("operating contracts turn SLOs");
+  expect(src("zh/summary.qmd")).toContain("运营契约把 SLO");
+});
+
 test("ecosystem and economics is a full six-chapter part in both languages", () => {
   const expected = [
     "ecosystem/01-model-landscape.qmd",

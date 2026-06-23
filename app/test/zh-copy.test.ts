@@ -727,12 +727,20 @@ test("polished chapter openings preserve key source theses", () => {
       ["真实用户提出真实问题", "常设装置", "训练信号", "稀缺标注预算", "下一轮循环的入口"],
     ],
     [
+      "en/practice/13-operating-contracts.qmd",
+      ["what it promises, what it costs", "operating contract", "Cost Governance", "Tenant boundary", "evidence store"],
+    ],
+    [
+      "zh/practice/13-operating-contracts.qmd",
+      ["承诺什么、花费什么", "运营契约", "成本治理", "租户边界", "证据库"],
+    ],
+    [
       "en/practice/index.qmd",
-      ["deadlines, budgets, licenses", "production AI system as a set of contracts", "something a team can operate"],
+      ["deadlines, budgets, licenses", "production AI system as a set of contracts", "tenant boundary", "something a team can operate"],
     ],
     [
       "zh/practice/index.qmd",
-      ["期限、预算、许可证", "生产 AI 系统看成一组契约", "可以运营的系统"],
+      ["期限、预算、许可证", "生产 AI 系统看成一组契约", "租户边界", "可以运营的系统"],
     ],
     [
       "en/summary.qmd",
@@ -860,6 +868,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/practice/10-reliability-nondeterministic.qmd",
     "en/practice/11-human-interface-oversight.qmd",
     "en/practice/12-production-data-engine.qmd",
+    "en/practice/13-operating-contracts.qmd",
     "en/practice/index.qmd",
     "zh/index.qmd",
     "zh/summary.qmd",
@@ -953,6 +962,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/practice/10-reliability-nondeterministic.qmd",
     "zh/practice/11-human-interface-oversight.qmd",
     "zh/practice/12-production-data-engine.qmd",
+    "zh/practice/13-operating-contracts.qmd",
     "zh/practice/index.qmd",
   ];
   const banned = /By the end|reader can explain|reader can say|A reader should finish|The reader should|the book asks the reader|the reader has|The reader is no longer|This chapter owns|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一章|读完这一部分|读完它|读者已经|读者面对|本书和读者|本章负责|本章来讲这个|本章把一个故事|本章要讲清/;
