@@ -2,6 +2,16 @@
 
 ## Open goals
 
+- [x] **Mid-training bridge**
+
+  Added a dedicated Part I chapter between pre-training and post-training:
+  mid-training as quality annealing, mixed-domain bridging, specialist
+  continuation, and long-context extension. The book now distinguishes broad
+  pre-training, continued pretraining, mid-training, and post-training with
+  source-backed references, a static boundary diagram, an interactive bridge
+  visualization, updated top-level surfaces, and cross-links into adaptation,
+  reasoning, serving, and practice.
+
 - [x] **Post-training adaptation and alignment depth**
 
   Expanded Part III from a four-chapter sketch of fine-tuning, RLHF, DPO, and

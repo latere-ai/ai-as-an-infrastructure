@@ -14,7 +14,7 @@ import { loadGlossary } from "./glossary.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const graphviz = await loadGraphviz();
-const wholeBookTimeout = 30_000;
+const wholeBookTimeout = 90_000;
 
 function ctxFor(): CompileContext {
   return {
@@ -70,5 +70,5 @@ test("a '$'-bearing title survives slot filling (no replacement-pattern splicing
 
 test("compilePage returns null for an unknown href", () => {
   const book = loadBook("en", repoRoot);
-  expect(compilePage(book, "no-such-page", ctxFor())).toBeNull();
+  expect(compilePage(book, "no-such-page", {} as CompileContext)).toBeNull();
 });

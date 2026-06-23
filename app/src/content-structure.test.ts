@@ -149,6 +149,52 @@ test("the expanded adaptation part is tracked in top-level book surfaces", () =>
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Post-training adaptation and alignment depth**");
 });
 
+test("foundations and pretraining ends with a mid-training bridge chapter", () => {
+  const expected = [
+    "foundations/01-scaling-laws.qmd",
+    "foundations/02-data-curation.qmd",
+    "foundations/03-tokenization.qmd",
+    "foundations/04-transformer-architecture.qmd",
+    "foundations/05-moe-ssm-hybrids.qmd",
+    "foundations/06-training-at-scale.qmd",
+    "foundations/07-mid-training.qmd",
+  ];
+
+  for (const lang of ["en", "zh"]) {
+    const yml = src(`${lang}/book.yml`);
+    let last = -1;
+    for (const chapter of expected) {
+      const next = yml.indexOf(chapter);
+      expect(next, `${lang}/${chapter} missing from book.yml`).toBeGreaterThan(last);
+      last = next;
+    }
+
+    const intro = src(`${lang}/foundations/index.qmd`);
+    for (const section of [
+      "@sec-scaling-laws",
+      "@sec-data-curation",
+      "@sec-tokenization",
+      "@sec-transformer-architecture",
+      "@sec-moe-ssm-hybrids",
+      "@sec-training-at-scale",
+      "@sec-mid-training",
+    ]) {
+      expect(intro).toContain(section);
+    }
+  }
+});
+
+test("the mid-training bridge is tracked in top-level book surfaces", () => {
+  expect(src("README.md")).toContain("mid-training bridges");
+  expect(src("en/index.qmd")).toContain("mid-training bridges");
+  expect(src("zh/index.qmd")).toContain("中段训练桥接");
+  expect(src("CONTENT-GAPS.md")).toContain("- [x] **Mid-training bridge**");
+  expect(src("en/orientation/01-whole-stack.qmd")).toContain("@sec-mid-training");
+  expect(src("zh/orientation/01-whole-stack.qmd")).toContain("@sec-mid-training");
+  expect(src("en/foundations/02-data-curation.qmd")).toContain("covered in @sec-mid-training");
+  expect(src("zh/foundations/02-data-curation.qmd")).toContain("放在 @sec-mid-training 讨论");
+});
+
 test("reasoning and test-time compute is a full seven-chapter part in both languages", () => {
   const expected = [
     "reasoning/01-eliciting-reasoning.qmd",

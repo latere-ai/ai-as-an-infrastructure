@@ -18,7 +18,7 @@ The spine is the lifecycle of a capability, read as a stack.
 
 - **Part 0, Orientation.** The whole stack in one pass, and how to read.
 - **Part I, Foundations and Pretraining.** Scaling, data, tokenization,
-  architecture, training at scale.
+  architecture, training at scale, and mid-training bridges.
 - **Part II, Generative and Multimodal Architectures.** Diffusion and flow
   matching, diffusion language models, speech, multimodal fusion.
 - **Part III, Post-Training: Adaptation, Preference, and Alignment.**

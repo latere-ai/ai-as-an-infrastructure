@@ -87,6 +87,14 @@ test("polished chapter openings preserve key source theses", () => {
       ["路由器", "以很低的每词元计算成本增长", "专家不能长期拿不到训练信号"],
     ],
     [
+      "en/foundations/07-mid-training.qmd",
+      ["distributional bridge", "Quality annealing", "Long-context mid-training"],
+    ],
+    [
+      "zh/foundations/07-mid-training.qmd",
+      ["分布桥接", "质量退火", "长上下文中段训练"],
+    ],
+    [
       "en/generative/01-diffusion-flow-matching.qmd",
       ["almost all non-text media", "denoiser, score, or velocity", "thousand evaluations"],
     ],
@@ -772,6 +780,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/foundations/04-transformer-architecture.qmd",
     "en/foundations/05-moe-ssm-hybrids.qmd",
     "en/foundations/06-training-at-scale.qmd",
+    "en/foundations/07-mid-training.qmd",
     "en/foundations/index.qmd",
     "en/generative/index.qmd",
     "en/generative/01-diffusion-flow-matching.qmd",
@@ -864,6 +873,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/foundations/04-transformer-architecture.qmd",
     "zh/foundations/05-moe-ssm-hybrids.qmd",
     "zh/foundations/06-training-at-scale.qmd",
+    "zh/foundations/07-mid-training.qmd",
     "zh/foundations/index.qmd",
     "zh/generative/index.qmd",
     "zh/generative/01-diffusion-flow-matching.qmd",

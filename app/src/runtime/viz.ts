@@ -1661,6 +1661,97 @@
     draw();
   };
 
+  // Mid-training bridge: show why a mixed specialist slice is different from
+  // an abrupt continued-pretraining switch. The curves are qualitative.
+  R['midtraining-bridge'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh';
+    var L = zh
+      ? { start: '引入时点', share: '专门数据占比', x: '训练进度', y: '相对指标',
+          broad: '宽泛数据', specialist: '专门切片', target: '目标适配', retention: '一般保留',
+          abrupt: '完全切换', summary: '桥接' }
+      : { start: 'introduction point', share: 'specialist share', x: 'training progress', y: 'relative score',
+          broad: 'broad data', specialist: 'specialist slice', target: 'target fit', retention: 'general retention',
+          abrupt: 'full switch', summary: 'bridge' };
+    var start = 0.58, share = 0.26;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 300);
+    function ramp(t) {
+      if (t < start) return 0;
+      var u = (t - start) / Math.max(0.05, 1 - start);
+      return share * (0.2 + 0.8 * Math.min(1, u));
+    }
+    function targetFit(t) {
+      var m = ramp(t), early = Math.max(0, 1 - start);
+      return 0.28 + 0.56 * (1 - Math.exp(-4.5 * m * early)) + 0.08 * t;
+    }
+    function retention(t) {
+      var m = ramp(t);
+      return 0.94 - 0.34 * Math.pow(m, 1.35) - 0.06 * Math.max(0, t - start);
+    }
+    function abruptRetention(t) {
+      if (t < start) return 0.94;
+      var u = (t - start) / Math.max(0.05, 1 - start);
+      return 0.94 - 0.44 * Math.pow(u, 0.75);
+    }
+    function draw() {
+      var th = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
+      var left = 52 * cv.dpr, right = 28 * cv.dpr, top = 26 * cv.dpr, bottom = 54 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      function X(t) { return left + t * (W - left - right); }
+      function Y(v) { return H - bottom - (v - 0.15) / 0.9 * (H - top - bottom); }
+      ctx.strokeStyle = th.grid; ctx.lineWidth = cv.dpr; ctx.beginPath();
+      for (var i = 0; i <= 4; i++) {
+        var gx = X(i / 4), gy = Y(0.2 + i * 0.2);
+        ctx.moveTo(gx, top); ctx.lineTo(gx, H - bottom);
+        ctx.moveTo(left, gy); ctx.lineTo(W - right, gy);
+      }
+      ctx.stroke();
+      ctx.strokeStyle = th.grid; ctx.beginPath(); ctx.moveTo(left, H - bottom); ctx.lineTo(W - right, H - bottom); ctx.moveTo(left, top); ctx.lineTo(left, H - bottom); ctx.stroke();
+
+      // Data mixture band: broad data remains present while specialist data ramps.
+      var bandY = H - bottom + 15 * cv.dpr, bandH = 11 * cv.dpr;
+      ctx.fillStyle = 'rgba(75,159,107,0.23)';
+      ctx.fillRect(left, bandY, W - left - right, bandH);
+      ctx.beginPath();
+      for (var j = 0; j <= 100; j++) {
+        var tt = j / 100, m = ramp(tt), x = X(tt), y = bandY + bandH - m / 0.65 * bandH;
+        if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.lineTo(X(1), bandY + bandH); ctx.lineTo(X(0), bandY + bandH); ctx.closePath();
+      ctx.fillStyle = 'rgba(224,147,107,0.65)'; ctx.fill();
+
+      function line(fn, col, dash) {
+        ctx.strokeStyle = col; ctx.lineWidth = 2 * cv.dpr; ctx.setLineDash(dash ? [6 * cv.dpr, 5 * cv.dpr] : []);
+        ctx.beginPath();
+        for (var k = 0; k <= 100; k++) {
+          var t = k / 100, x = X(t), y = Y(fn(t));
+          if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+      line(targetFit, th.accent, false);
+      line(retention, '#4b9f6b', false);
+      line(abruptRetention, th.accent2, true);
+      ctx.strokeStyle = th.grid; ctx.setLineDash([4 * cv.dpr, 5 * cv.dpr]); ctx.beginPath(); ctx.moveTo(X(start), top); ctx.lineTo(X(start), H - bottom + 26 * cv.dpr); ctx.stroke(); ctx.setLineDash([]);
+
+      var tf = targetFit(1), gr = retention(1), abr = abruptRetention(1);
+      ctx.fillStyle = th.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillText(L.target, X(0.58), Y(targetFit(0.58)) - 10 * cv.dpr);
+      ctx.fillText(L.retention, X(0.18), Y(retention(0.18)) - 8 * cv.dpr);
+      ctx.fillStyle = th.accent2; ctx.fillText(L.abrupt, X(0.72), Y(abruptRetention(0.72)) + 14 * cv.dpr);
+      ctx.fillStyle = th.ink; ctx.textAlign = 'center'; ctx.font = (12 * cv.dpr) + 'px sans-serif';
+      ctx.fillText(L.x, (left + W - right) / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.y, 0, 0); ctx.restore();
+      ctx.textAlign = 'left'; ctx.fillStyle = '#4b9f6b'; ctx.fillText(L.broad, left, bandY + 27 * cv.dpr);
+      ctx.fillStyle = th.accent2; ctx.fillText(L.specialist, left + 100 * cv.dpr, bandY + 27 * cv.dpr);
+      read.textContent = L.summary + ': ' + L.target + ' ' + Math.round(tf * 100) + '% · ' + L.retention + ' ' + Math.round(gr * 100) + '% · ' + L.abrupt + ' ' + Math.round(abr * 100) + '%';
+    }
+    host.appendChild(slider(L.start, 0.25, 0.85, 0.01, start, function (v) { start = v; draw(); }).wrap);
+    host.appendChild(slider(L.share, 0.05, 0.55, 0.01, share, function (v) { share = v; draw(); }).wrap);
+    draw();
+    watchTheme(host, draw);
+  };
+
   // Preference-signal mixer: a pairwise preference label is a weighted
   // multi-attribute judgment. Change the implicit rubric weights and the chosen
   // answer can flip even though the candidate responses do not move.

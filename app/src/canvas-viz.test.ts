@@ -154,6 +154,18 @@ test("the viz runtime registers the post-training adaptation components", () => 
   }
 });
 
+test("the viz runtime registers the mid-training bridge component", () => {
+  expect(rt).toMatch(/R\['midtraining-bridge'\]\s*=\s*function/);
+  expect(rt).toContain("introduction point");
+  expect(rt).toContain("专门数据占比");
+});
+
+test("mid-training uses the bridge visualization in both languages", () => {
+  expect(src("en/foundations/07-mid-training.qmd")).toContain('data-viz="midtraining-bridge"');
+  expect(src("zh/foundations/07-mid-training.qmd")).toContain('data-viz="midtraining-bridge"');
+  expect(src("zh/foundations/07-mid-training.qmd")).toContain('data-lang="zh"');
+});
+
 test("expanded adaptation chapters use the post-training visualizations in both languages", () => {
   const uses: [string, string][] = [
     ["adaptation/02-behavior-specs-preference-data", "preference-signal-mixer"],
