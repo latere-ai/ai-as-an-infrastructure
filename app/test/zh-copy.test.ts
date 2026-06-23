@@ -412,7 +412,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/ecosystem/01-model-landscape.qmd",
-      ["从开放到封闭的谱系", "一次发布可以披露哪五样东西", "权重许可证", "已公开的训练实践", "开放实验室"],
+      ["从开放到封闭的连续区间", "一次发布可以披露哪五样东西", "权重许可证", "已公开的训练实践", "开放实验室"],
     ],
     [
       "en/ecosystem/02-tooling-ecosystem.qmd",
@@ -428,7 +428,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/ecosystem/03-economics.qmd",
-      ["整个技术栈说到底是一种花钱的方式", "算力在哪里购买", "训练与推断为什么是两种性质不同的成本", "什么时候该自建一个模型、什么时候该通过 API 买一个", "推断主导全生命周期账单"],
+      ["整个技术栈最终都会落实为一套成本结构", "算力在哪里购买", "训练与推断为什么是两种性质不同的成本", "什么时候该自建一个模型、什么时候该通过 API 买一个", "推断主导全生命周期账单"],
     ],
     [
       "en/ecosystem/index.qmd",
@@ -963,7 +963,7 @@ test("polished prose avoids read-as-analysis scaffolds", () => {
 });
 
 test("public prose avoids internal draft markers", () => {
-  const banned = /marked as `TODO`|标为 `TODO`|FIXME|TBD|待补|待写/;
+  const banned = /marked as `TODO`|标为 `TODO`|FIXME|TBD|PUBLISH-GATED|待补|待写|公开前需要审阅/;
   const offenders = [...qmdFiles(enRoot), ...qmdFiles(zhRoot)].filter((path) =>
     banned.test(readFileSync(path, "utf8")),
   );
