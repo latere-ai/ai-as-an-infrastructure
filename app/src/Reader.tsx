@@ -8,6 +8,7 @@ import type { ChapterData, Lang, Layout, Palette, ReaderSettings } from "./types
 import { DEFAULT_SETTINGS } from "./types.ts";
 import { runSearch, type SearchDoc } from "./search-match.ts";
 import { Comments } from "./comments.tsx";
+import { BookmarkButton, ChapterStats, HeaderAuth } from "./account.tsx";
 
 type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
@@ -326,6 +327,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           </button>
           {settingsOpen && <SettingsPanel t={t} s={s} set={set} chapter={chapter} />}
         </div>
+
+        <HeaderAuth lang={lang} />
       </header>
 
       {/* reading progress */}
@@ -411,6 +414,7 @@ function MetaRow({ chapter, t }: { chapter: ChapterData; t: Strings }) {
           <span className="rdr-meta-value" style={{ minWidth: 0, fontSize: 14, color: "var(--fg-1)" }}>{i.v}</span>
         </div>
       ))}
+      <ChapterStats lang={chapter.lang} path={chapter.path} />
     </div>
   );
 }
@@ -420,6 +424,7 @@ function ChapterOpener({ chapter, t }: { chapter: ChapterData; t: Strings }) {
     <div style={{ marginBottom: 26 }}>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: ".15em", textTransform: "uppercase", color: "var(--accent)", marginBottom: 10 }}>{chapter.eyebrow}</div>
       <h1 style={{ fontFamily: "var(--font-ui)", fontWeight: 600, letterSpacing: "-.025em", lineHeight: 1.1, fontSize: "clamp(2rem,4vw,2.9rem)", color: "var(--fg-1)", marginBottom: 14 }}>{chapter.title}</h1>
+      <div style={{ marginBottom: 14 }}><BookmarkButton lang={chapter.lang} path={chapter.path} /></div>
       <MetaRow chapter={chapter} t={t} />
     </div>
   );
