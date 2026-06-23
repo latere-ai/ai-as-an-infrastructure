@@ -44,6 +44,8 @@ const ui = {
     deleted: "[deleted]", empty: "No comments yet. Start the discussion.",
     confirmDel: "Delete this comment?", react: "Add reaction", sending: "Posting…",
     mark: "Comment on selection", moved: "Marks whose text has since moved",
+    bold: "Bold", italic: "Italic", tCode: "Code", tLink: "Link", tList: "List",
+    tQuote: "Quote", tEmoji: "Emoji", tText: "text",
   },
   zh: {
     title: "评论", login: "登录后评论", logout: "退出",
@@ -52,6 +54,8 @@ const ui = {
     deleted: "[已删除]", empty: "还没有评论，来开个头。", confirmDel: "删除这条评论？",
     react: "添加表情", sending: "发送中…",
     mark: "对所选文字评论", moved: "原文已变动的标注",
+    bold: "加粗", italic: "斜体", tCode: "代码", tLink: "链接", tList: "列表",
+    tQuote: "引用", tEmoji: "表情", tText: "文字",
   },
 };
 
@@ -109,12 +113,20 @@ function Avatar({ src, name }: { src: string; name: string }) {
 
 // --- composer with :emoji: autocomplete ------------------------------------
 
+const PICKER = ["👍", "👎", "❤️", "🎉", "😄", "😅", "😂", "🤔", "😕", "🙏", "👏", "🔥", "🚀", "✨", "💡", "✅", "❌", "⚠️", "🐛", "👀", "💯", "🙌", "😎", "🤝"];
+
+const toolBtn: React.CSSProperties = {
+  width: 28, height: 26, display: "grid", placeItems: "center", border: "1px solid transparent",
+  borderRadius: "var(--radius-sm)", background: "none", color: "var(--fg-2)", cursor: "pointer", fontSize: 13,
+};
+
 function Composer({ t, busy, initial, onSubmit, onCancel, autoFocus }: {
   t: typeof ui.en; busy: boolean; initial?: string; autoFocus?: boolean;
   onSubmit: (body: string) => void; onCancel?: () => void;
 }) {
   const [text, setText] = useState(initial ?? "");
   const [menu, setMenu] = useState<{ items: string[]; from: number } | null>(null);
+  const [emojiOpen, setEmojiOpen] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   const onChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -136,13 +148,61 @@ function Composer({ t, busy, initial, onSubmit, onCancel, autoFocus }: {
   };
   const submit = () => { const b = text.trim(); if (b) { onSubmit(b); setText(""); } };
 
+  // Toolbar transforms operating on the textarea selection.
+  const surround = (before: string, after: string, ph = "") => {
+    const ta = ref.current; if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const seg = text.slice(s, e) || ph;
+    setText(text.slice(0, s) + before + seg + after + text.slice(e));
+    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(s + before.length, s + before.length + seg.length); });
+  };
+  const prefix = (p: string) => {
+    const ta = ref.current; if (!ta) return;
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    const ls = text.lastIndexOf("\n", s - 1) + 1;
+    const out = text.slice(ls, e).split("\n").map((l) => p + l).join("\n");
+    setText(text.slice(0, ls) + out + text.slice(e));
+    requestAnimationFrame(() => ta.focus());
+  };
+  const insert = (str: string) => {
+    const ta = ref.current; if (!ta) return;
+    const s = ta.selectionStart;
+    setText(text.slice(0, s) + str + text.slice(ta.selectionEnd));
+    requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(s + str.length, s + str.length); });
+  };
+
+  const tools: [string, string, () => void, React.CSSProperties?][] = [
+    ["B", t.bold, () => surround("**", "**", t.tText), { fontWeight: 700 }],
+    ["I", t.italic, () => surround("*", "*", t.tText), { fontStyle: "italic" }],
+    ["<>", t.tCode, () => surround("`", "`", "code"), { fontFamily: "var(--font-mono, monospace)", fontSize: 11 }],
+    ["🔗", t.tLink, () => surround("[", "](https://)", t.tText)],
+    ["•", t.tList, () => prefix("- ")],
+    ["❝", t.tQuote, () => prefix("> ")],
+  ];
+
   return (
     <div style={{ position: "relative" }}>
+      <div style={{ display: "flex", gap: 2, marginBottom: 6, alignItems: "center" }}>
+        {tools.map(([label, title, on, st]) => (
+          <button key={label} type="button" title={title} onMouseDown={(e) => e.preventDefault()} onClick={on}
+            style={{ ...toolBtn, ...st }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-raised)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "none")}>{label}</button>
+        ))}
+        <div style={{ position: "relative" }}>
+          <button type="button" title={t.tEmoji} onMouseDown={(e) => e.preventDefault()} onClick={() => setEmojiOpen((o) => !o)} style={toolBtn}>😀</button>
+          {emojiOpen && (
+            <div style={{ position: "absolute", zIndex: 6, top: 30, left: 0, width: 232, display: "flex", flexWrap: "wrap", gap: 1, padding: 6, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow-md)" }}>
+              {PICKER.map((e) => <button key={e} type="button" onMouseDown={(ev) => ev.preventDefault()} onClick={() => { insert(e); setEmojiOpen(false); }} style={{ border: 0, background: "none", cursor: "pointer", fontSize: 17, padding: 3, lineHeight: 1 }}>{e}</button>)}
+            </div>
+          )}
+        </div>
+      </div>
       <textarea
         ref={ref} value={text} onChange={onChange} disabled={busy} autoFocus={autoFocus}
         placeholder={t.placeholder} rows={3}
         onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit(); }}
-        style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "9px 11px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--fg-1)", font: "inherit", fontSize: 14, lineHeight: 1.5 }}
+        style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "9px 11px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--fg-1)", fontFamily: "var(--font-ui)", fontSize: 14, lineHeight: 1.5 }}
       />
       {menu && (
         <ul style={{ position: "absolute", zIndex: 5, listStyle: "none", margin: 0, padding: 4, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow-md)" }}>
@@ -154,6 +214,23 @@ function Composer({ t, busy, initial, onSubmit, onCancel, autoFocus }: {
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         <button type="button" onClick={submit} disabled={busy || !text.trim()} style={btn(true)}>{busy ? t.sending : t.post}</button>
         {onCancel && <button type="button" onClick={onCancel} style={btn(false)}>{t.cancel}</button>}
+      </div>
+    </div>
+  );
+}
+
+// ConfirmModal replaces the browser's native confirm() for destructive actions.
+function ConfirmModal({ title, confirmLabel, cancelLabel, onConfirm, onCancel }: {
+  title: string; confirmLabel: string; cancelLabel: string; onConfirm: () => void; onCancel: () => void;
+}) {
+  return (
+    <div onClick={onCancel} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", display: "grid", placeItems: "center", zIndex: 100, fontFamily: "var(--font-ui)" }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", padding: 20, width: 300, boxShadow: "var(--shadow-lg)" }}>
+        <p style={{ margin: "0 0 18px", fontSize: 14, color: "var(--fg-1)" }}>{title}</p>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <button type="button" onClick={onCancel} style={btn(false)}>{cancelLabel}</button>
+          <button type="button" autoFocus onClick={onConfirm} style={{ padding: "6px 14px", borderRadius: "var(--radius-sm)", cursor: "pointer", font: "inherit", fontSize: 13, border: "1px solid #a54646", background: "#a54646", color: "#fff" }}>{confirmLabel}</button>
+        </div>
       </div>
     </div>
   );
@@ -197,8 +274,8 @@ function Reactions({ c, me, api, refresh }: { c: Comment; me: Me | null; api: Ap
 
 // --- one comment ------------------------------------------------------------
 
-function CommentItem({ c, me, api, t, refresh, onReply }: {
-  c: Comment; me: Me | null; api: Api; t: typeof ui.en; refresh: () => void; onReply?: (id: string) => void;
+function CommentItem({ c, me, api, t, refresh, onReply, onDelete }: {
+  c: Comment; me: Me | null; api: Api; t: typeof ui.en; refresh: () => void; onReply?: (id: string) => void; onDelete: (c: Comment) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const canEdit = c.mine && !c.deleted;
@@ -226,10 +303,10 @@ function CommentItem({ c, me, api, t, refresh, onReply }: {
         <div style={{ display: "flex", gap: 12, marginTop: 4, fontSize: 12 }}>
           {me && onReply && !c.deleted && <button type="button" onClick={() => onReply(c.id)} style={linkBtn}>{t.reply}</button>}
           {canEdit && <button type="button" onClick={() => setEditing(true)} style={linkBtn}>{t.edit}</button>}
-          {canDel && <button type="button" onClick={async () => { if (confirm(t.confirmDel)) { await api.del(c.id); refresh(); } }} style={linkBtn}>{t.del}</button>}
+          {canDel && <button type="button" onClick={() => onDelete(c)} style={linkBtn}>{t.del}</button>}
         </div>
         {c.replies?.map((r) => (
-          <div key={r.id} style={{ marginTop: 12 }}><CommentItem c={r} me={me} api={api} t={t} refresh={refresh} /></div>
+          <div key={r.id} style={{ marginTop: 12 }}><CommentItem c={r} me={me} api={api} t={t} refresh={refresh} onDelete={onDelete} /></div>
         ))}
       </div>
     </div>
@@ -251,6 +328,7 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
   const [mark, setMark] = useState<{ anchor: TextAnchor; x: number; y: number } | null>(null);
   const [composing, setComposing] = useState(false);
   const [orphans, setOrphans] = useState<Comment[]>([]);
+  const [delTarget, setDelTarget] = useState<Comment | null>(null);
 
   const refresh = useCallback(() => { api.list(lang, path).then(setList).catch(() => setList([])); }, [api, lang, path]);
 
@@ -293,10 +371,13 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
     setOrphans(orphaned);
   }, [list]);
 
-  // Capture a selection inside the article into a pending anchor (logged-in only).
+  // Capture a selection inside the article into a pending anchor (logged-in
+  // only). selectionchange covers touch devices (iOS, where mouseup doesn't fire
+  // for the native selection handles); mouseup keeps desktop snappy.
   useEffect(() => {
     if (!me) return;
-    const onUp = () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = () => {
       if (composing) return;
       const sel = window.getSelection();
       const article = document.querySelector(".rdr-article");
@@ -306,16 +387,18 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
       const anchor = buildAnchor(article, sel);
       if (!anchor || anchor.exact.trim().length < 4) { setMark(null); return; }
       const r = range.getBoundingClientRect();
-      setMark({ anchor, x: r.left + r.width / 2, y: r.top });
+      setMark({ anchor, x: r.left + r.width / 2, y: Math.max(r.top, 8) });
     };
-    document.addEventListener("mouseup", onUp);
-    return () => document.removeEventListener("mouseup", onUp);
+    const debounced = () => { clearTimeout(timer); timer = setTimeout(check, 350); };
+    document.addEventListener("selectionchange", debounced);
+    document.addEventListener("mouseup", check);
+    return () => { clearTimeout(timer); document.removeEventListener("selectionchange", debounced); document.removeEventListener("mouseup", check); };
   }, [me, composing]);
 
   const top = list ?? [];
   return (
-    <section className="rdr-comments" style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid var(--border)" }}>
-      <h2 style={{ fontSize: 18, marginBottom: 16 }}>{t.title}{list ? ` · ${countAll(top)}` : ""}</h2>
+    <section className="rdr-comments" style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid var(--border)", fontFamily: "var(--font-ui)", fontSize: 14, lineHeight: 1.6, color: "var(--fg-1)" }}>
+      <h2 style={{ fontFamily: "var(--font-ui)", fontSize: 17, fontWeight: 600, marginBottom: 16 }}>{t.title}{list ? ` · ${countAll(top)}` : ""}</h2>
       {me ? (
         <Composer t={t} busy={false} onSubmit={(b) => post(b)} />
       ) : (
@@ -326,7 +409,7 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
         <details style={{ marginTop: 20, fontSize: 13, color: "var(--fg-3)" }}>
           <summary style={{ cursor: "pointer" }}>{t.moved} · {orphans.length}</summary>
           <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 12 }}>
-            {orphans.map((c) => <CommentItem key={c.id} c={c} me={me} api={api} t={t} refresh={refresh} />)}
+            {orphans.map((c) => <CommentItem key={c.id} c={c} me={me} api={api} t={t} refresh={refresh} onDelete={setDelTarget} />)}
           </div>
         </details>
       )}
@@ -337,7 +420,7 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
         ) : (
           top.map((c) => (
             <div key={c.id}>
-              <CommentItem c={c} me={me} api={api} t={t} refresh={refresh} onReply={setReplyTo} />
+              <CommentItem c={c} me={me} api={api} t={t} refresh={refresh} onReply={setReplyTo} onDelete={setDelTarget} />
               {replyTo === c.id && (
                 <div style={{ marginLeft: 38, marginTop: 10 }}>
                   <Composer t={t} busy={false} autoFocus onSubmit={(b) => post(b, c.id)} onCancel={() => setReplyTo(null)} />
@@ -361,6 +444,14 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
           <blockquote style={{ margin: "0 0 8px", padding: "2px 8px", borderLeft: "2px solid var(--accent)", color: "var(--fg-3)", fontSize: 12, maxHeight: 48, overflow: "hidden" }}>“{mark.anchor.exact}”</blockquote>
           <Composer t={t} busy={false} autoFocus onSubmit={(b) => post(b, undefined, mark.anchor)} onCancel={() => { setMark(null); setComposing(false); }} />
         </div>
+      )}
+
+      {delTarget && (
+        <ConfirmModal
+          title={t.confirmDel} confirmLabel={t.del} cancelLabel={t.cancel}
+          onCancel={() => setDelTarget(null)}
+          onConfirm={async () => { const id = delTarget.id; setDelTarget(null); await api.del(id); refresh(); }}
+        />
       )}
     </section>
   );
