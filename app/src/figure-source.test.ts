@@ -94,6 +94,16 @@ test("English static SVG labels stay as selectable text nodes", () => {
   expect(scalingLaw).toContain(">affordable</text>");
 });
 
+test("structured reasoning search figure keeps modes in separated lanes", () => {
+  const source = readFileSync(join(figuresSrc, "structured-reasoning-search-1.py"), "utf8");
+  expect(source).toContain("LANES = [");
+  expect(source).toContain("def lane_label");
+  expect(source).not.toContain('"selected frontier"');
+  expect(source).not.toContain('"dead branches"');
+  expect(source).not.toContain('"compute well spent"');
+  expect(source).not.toContain('"compute wasted"');
+});
+
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();

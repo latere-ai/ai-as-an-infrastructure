@@ -2,112 +2,127 @@ import matplotlib
 
 matplotlib.use("svg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
+from matplotlib.patches import FancyArrowPatch
 
 from common import ACCENT, DATA, INK, MUTED, WARN, save_bilingual
 
 
-def box(ax, x, y, w, h, text, color=MUTED, lw=1.0):
-    patch = FancyBboxPatch(
-        (x, y),
-        w,
-        h,
-        boxstyle="round,pad=0.02,rounding_size=0.025",
-        linewidth=lw,
-        edgecolor=color,
-        facecolor="none",
-    )
-    ax.add_patch(patch)
-    ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", color=INK, fontsize=8)
+SUBTLE = "#d1d5db"
+
+LANES = [
+    ("chain", 0.82),
+    ("tree search", 0.61),
+    ("graph reuse", 0.40),
+    ("value-guided", 0.19),
+]
 
 
-def node(ax, x, y, color, filled=True):
+def lane_label(ax, text, y):
+    ax.text(0.045, y, text, ha="left", va="center", color=INK, fontsize=9.5, fontweight="bold")
+
+
+def node(ax, x, y, color, filled=True, size=76):
     ax.scatter(
         [x],
         [y],
-        s=74,
+        s=size,
         facecolors=color if filled else "none",
         edgecolors=color,
-        linewidths=1.2,
-        zorder=3,
+        linewidths=1.35,
+        zorder=4,
     )
 
 
-def edge(ax, x1, y1, x2, y2, color=INK, ls="-", alpha=0.8):
+def edge(ax, x1, y1, x2, y2, color=DATA, alpha=0.78, lw=1.05):
     ax.add_patch(
         FancyArrowPatch(
             (x1, y1),
             (x2, y2),
             arrowstyle="-|>",
-            mutation_scale=8,
-            linewidth=0.9,
+            mutation_scale=8.5,
+            linewidth=lw,
             color=color,
-            linestyle=ls,
             alpha=alpha,
-            shrinkA=5,
-            shrinkB=5,
+            shrinkA=6,
+            shrinkB=6,
+            zorder=2,
         )
     )
 
 
-fig, ax = plt.subplots(figsize=(6.4, 3.2))
+def chain(ax, y):
+    xs = [0.30, 0.43, 0.56, 0.69, 0.82]
+    for i, x in enumerate(xs):
+        node(ax, x, y, ACCENT if i == len(xs) - 1 else DATA)
+        if i:
+            edge(ax, xs[i - 1], y, x, y)
+
+
+def tree(ax, y):
+    root = (0.31, y)
+    kept = [(0.44, y - 0.045), (0.57, y - 0.015), (0.72, y + 0.035)]
+    pruned = [(0.44, y + 0.045), (0.57, y + 0.075), (0.72, y - 0.060)]
+
+    node(ax, *root, DATA)
+    edge(ax, *root, *pruned[0], color=MUTED, alpha=0.35)
+    edge(ax, *root, *kept[0])
+    node(ax, *pruned[0], MUTED, filled=False)
+    node(ax, *kept[0], DATA)
+
+    edge(ax, *kept[0], *pruned[1], color=MUTED, alpha=0.35)
+    edge(ax, *kept[0], *kept[1])
+    node(ax, *pruned[1], MUTED, filled=False)
+    node(ax, *kept[1], DATA)
+
+    edge(ax, *kept[1], *kept[2])
+    edge(ax, *kept[1], *pruned[2], color=MUTED, alpha=0.35)
+    node(ax, *kept[2], ACCENT)
+    node(ax, *pruned[2], WARN, filled=False)
+
+
+def graph(ax, y):
+    points = [
+        (0.31, y + 0.055),
+        (0.31, y - 0.055),
+        (0.46, y),
+        (0.60, y + 0.055),
+        (0.60, y - 0.055),
+        (0.75, y),
+        (0.88, y),
+    ]
+    for i, point in enumerate(points):
+        node(ax, *point, ACCENT if i == len(points) - 1 else DATA)
+    for a, b in [(0, 2), (1, 2), (2, 3), (2, 4), (3, 5), (4, 5), (5, 6)]:
+        edge(ax, *points[a], *points[b])
+
+
+def value_guided(ax, y):
+    xs = [0.31, 0.44, 0.57, 0.70, 0.83]
+    heights = [0.03, 0.10, 0.05, 0.14, 0.025]
+    colors = [DATA, ACCENT, DATA, ACCENT, MUTED]
+    for i, (x, h, color) in enumerate(zip(xs, heights, colors)):
+        filled = color != MUTED
+        node(ax, x, y, color, filled=filled)
+        ax.vlines(x, y - 0.035 - h, y - 0.035, colors=color, linewidth=2.0, zorder=3)
+        if i:
+            edge(ax, xs[i - 1], y, x, y, color=DATA if filled else MUTED, alpha=0.78 if filled else 0.35)
+
+
+fig, ax = plt.subplots(figsize=(7.2, 3.6))
 ax.set_xlim(0, 1)
 ax.set_ylim(0, 1)
 ax.axis("off")
 
-box(ax, 0.03, 0.84, 0.12, 0.12, "prompt", color=INK)
+for label, y in LANES:
+    lane_label(ax, label, y)
 
-rows = [
-    ("chain", 0.78),
-    ("tree frontier", 0.58),
-    ("graph reuse", 0.37),
-    ("value-guided", 0.17),
-]
-for label, y in rows:
-    ax.text(0.04, y, label, ha="left", va="center", color=INK, fontsize=8.5)
+for y in [0.715, 0.505, 0.295]:
+    ax.hlines(y, 0.035, 0.94, color=SUBTLE, linewidth=0.65, alpha=0.75)
 
-# Chain: one committed path.
-chain_x = [0.25, 0.38, 0.51, 0.64, 0.77]
-for i, x in enumerate(chain_x):
-    node(ax, x, rows[0][1], DATA if i < 4 else ACCENT)
-    if i:
-        edge(ax, chain_x[i - 1], rows[0][1], x, rows[0][1], color=DATA)
-
-# Tree: surviving frontier plus pruned branches.
-y = rows[1][1]
-node(ax, 0.27, y, DATA)
-for x2, y2, c, keep in [
-    (0.40, y + 0.08, MUTED, False),
-    (0.40, y - 0.08, DATA, True),
-    (0.54, y + 0.10, MUTED, False),
-    (0.54, y - 0.02, DATA, True),
-    (0.68, y + 0.04, ACCENT, True),
-    (0.68, y - 0.10, WARN, False),
-]:
-    parent = 0.27 if x2 == 0.40 else (0.40 if x2 == 0.54 else 0.54)
-    py = y if x2 == 0.40 else (y - 0.08 if x2 == 0.54 else y - 0.02)
-    edge(ax, parent, py, x2, y2, color=DATA if keep else MUTED, alpha=0.8 if keep else 0.35)
-    node(ax, x2, y2, c, filled=keep)
-ax.text(0.72, y + 0.08, "selected frontier", ha="left", va="center", color=INK, fontsize=8)
-ax.text(0.72, y - 0.10, "dead branches", ha="left", va="center", color=INK, fontsize=8)
-
-# Graph: merge partial work instead of duplicating it.
-y = rows[2][1]
-points = [(0.27, y), (0.41, y + 0.07), (0.41, y - 0.07), (0.56, y), (0.70, y + 0.07), (0.70, y - 0.07)]
-for x, yy in points:
-    node(ax, x, yy, DATA if x < 0.65 else ACCENT)
-for a, b in [(0, 1), (0, 2), (1, 3), (2, 3), (3, 4), (3, 5), (4, 5)]:
-    edge(ax, *points[a], *points[b], color=DATA, alpha=0.75)
-
-# Value guidance: score partial states before fully expanding them.
-y = rows[3][1]
-for x, h, c in [(0.27, 0.03, DATA), (0.40, 0.10, ACCENT), (0.53, 0.05, DATA), (0.66, 0.16, ACCENT), (0.79, 0.02, MUTED)]:
-    node(ax, x, y, c, filled=c != MUTED)
-    ax.vlines(x, y + 0.035, y + 0.035 + h, colors=c, linewidth=2)
-for x1, x2 in zip([0.27, 0.40, 0.53, 0.66], [0.40, 0.53, 0.66, 0.79]):
-    edge(ax, x1, y, x2, y, color=DATA if x2 < 0.79 else MUTED, alpha=0.7)
-ax.text(0.84, y + 0.10, "compute well spent", ha="left", va="center", color=INK, fontsize=8)
-ax.text(0.84, y - 0.02, "compute wasted", ha="left", va="center", color=INK, fontsize=8)
+chain(ax, LANES[0][1])
+tree(ax, LANES[1][1])
+graph(ax, LANES[2][1])
+value_guided(ax, LANES[3][1])
 
 fig.tight_layout()
 save_bilingual(fig, "structured-reasoning-search-1")
