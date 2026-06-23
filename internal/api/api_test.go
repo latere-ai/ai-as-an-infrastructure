@@ -60,6 +60,25 @@ func (f *fakeStore) ToggleReaction(_ context.Context, _, _, _ string) (bool, err
 func (f *fakeStore) CountRecentByAuthor(_ context.Context, _ string, _ time.Time) (int, error) {
 	return 0, nil
 }
+func (f *fakeStore) ToggleBookmark(_ context.Context, _, _, _ string) (bool, error) { return true, nil }
+func (f *fakeStore) ListBookmarks(_ context.Context, _ string) ([]store.PageRef, error) {
+	return nil, nil
+}
+func (f *fakeStore) ListByAuthor(_ context.Context, _ string) ([]*store.Comment, error) {
+	return nil, nil
+}
+func (f *fakeStore) CreateNote(_ context.Context, n *store.Note, _ string) (*store.Note, error) {
+	n.ID = "n1"
+	return n, nil
+}
+func (f *fakeStore) ListNotes(_ context.Context, _, _, _ string) ([]*store.Note, error) {
+	return nil, nil
+}
+func (f *fakeStore) DeleteNote(_ context.Context, _, _ string) error    { return nil }
+func (f *fakeStore) RecordView(_ context.Context, _, _, _ string) error { return nil }
+func (f *fakeStore) PageStats(_ context.Context, _, _ string) (store.Stats, error) {
+	return store.Stats{}, nil
+}
 
 func itoa(n int) string { return string(rune('0' + n)) }
 

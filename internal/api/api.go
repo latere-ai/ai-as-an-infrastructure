@@ -62,6 +62,15 @@ type commentStore interface {
 	SoftDelete(ctx context.Context, id string) error
 	ToggleReaction(ctx context.Context, commentID, authorSub, emoji string) (bool, error)
 	CountRecentByAuthor(ctx context.Context, authorSub string, since time.Time) (int, error)
+	// account features (bookmarks, notes, views)
+	ToggleBookmark(ctx context.Context, sub, lang, path string) (bool, error)
+	ListBookmarks(ctx context.Context, sub string) ([]store.PageRef, error)
+	ListByAuthor(ctx context.Context, sub string) ([]*store.Comment, error)
+	CreateNote(ctx context.Context, n *store.Note, sub string) (*store.Note, error)
+	ListNotes(ctx context.Context, sub, lang, path string) ([]*store.Note, error)
+	DeleteNote(ctx context.Context, id, sub string) error
+	RecordView(ctx context.Context, lang, path, visitorID string) error
+	PageStats(ctx context.Context, lang, path string) (store.Stats, error)
 }
 
 // Handler is the comments API.
@@ -95,6 +104,7 @@ func New(s commentStore, id Identity, auth *AuthRoutes) *Handler {
 	mux.HandleFunc("PATCH /api/comments/{id}", h.update)
 	mux.HandleFunc("DELETE /api/comments/{id}", h.delete)
 	mux.HandleFunc("PUT /api/comments/{id}/reactions/{emoji}", h.react)
+	h.registerAccount(mux)
 	if auth != nil {
 		mux.HandleFunc("GET /login", auth.Login)
 		mux.HandleFunc("GET /callback", auth.Callback)

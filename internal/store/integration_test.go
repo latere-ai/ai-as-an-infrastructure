@@ -74,3 +74,52 @@ func TestIntegration(t *testing.T) {
 		t.Fatalf("want tombstone after delete, got %+v", list)
 	}
 }
+
+func TestAccountIntegration(t *testing.T) {
+	dsn := os.Getenv("AAAI_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("set AAAI_TEST_DATABASE_URL")
+	}
+	ctx := context.Background()
+	pool, err := store.NewPool(ctx, dsn) // runs migrations 0001 + 0002
+	if err != nil {
+		t.Fatalf("NewPool/migrations: %v", err)
+	}
+	defer pool.Close()
+	for _, q := range []string{"truncate bookmarks", "truncate notes", "truncate page_stats", "truncate page_visitors"} {
+		pool.Exec(ctx, q)
+	}
+	s := store.New(pool)
+
+	// bookmark toggle
+	if on, err := s.ToggleBookmark(ctx, "u1", "en", "reasoning/x"); err != nil || !on {
+		t.Fatalf("bookmark on: %v %v", on, err)
+	}
+	if bm, _ := s.ListBookmarks(ctx, "u1"); len(bm) != 1 || bm[0].Path != "reasoning/x" {
+		t.Fatalf("list bookmarks: %+v", bm)
+	}
+	if on, _ := s.ToggleBookmark(ctx, "u1", "en", "reasoning/x"); on {
+		t.Fatalf("bookmark should toggle off")
+	}
+
+	// note round-trip
+	n, err := s.CreateNote(ctx, &store.Note{Lang: "en", Path: "p", BodyMD: "private", Anchor: &store.Anchor{Exact: "x"}}, "u1")
+	if err != nil || n.ID == "" {
+		t.Fatalf("create note: %v", err)
+	}
+	if ns, _ := s.ListNotes(ctx, "u1", "en", "p"); len(ns) != 1 || ns[0].BodyMD != "private" {
+		t.Fatalf("list notes: %+v", ns)
+	}
+	if err := s.DeleteNote(ctx, n.ID, "u1"); err != nil {
+		t.Fatalf("delete note: %v", err)
+	}
+
+	// views: 2 hits from 2 visitors -> views=2, visitors=2; same visitor again -> views=3, visitors=2
+	s.RecordView(ctx, "en", "p", "v:a")
+	s.RecordView(ctx, "en", "p", "v:b")
+	s.RecordView(ctx, "en", "p", "v:a")
+	st, err := s.PageStats(ctx, "en", "p")
+	if err != nil || st.Views != 3 || st.Visitors != 2 {
+		t.Fatalf("stats: %+v err=%v (want views=3 visitors=2)", st, err)
+	}
+}
