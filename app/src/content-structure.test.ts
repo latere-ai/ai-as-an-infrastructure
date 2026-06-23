@@ -356,6 +356,34 @@ test("the expanded reasoning part is tracked in top-level book surfaces", () => 
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Reasoning and test-time compute depth**");
 });
 
+test("substantive chapters expose uncertainty and lower-layer constraints", () => {
+  const contestedExceptions = new Set([
+    "en/orientation/01-whole-stack.qmd",
+    "zh/orientation/01-whole-stack.qmd",
+  ]);
+  const constraintExceptions = new Set([
+    "en/orientation/03-borrowed-ideas.qmd",
+    "zh/orientation/03-borrowed-ideas.qmd",
+  ]);
+
+  for (const lang of ["en", "zh"]) {
+    for (const path of qmdPaths(lang)) {
+      if (path.endsWith("/index.qmd") || path.endsWith("/summary.qmd")) continue;
+      if (path.endsWith("references.qmd") || path.endsWith("glossary.qmd")) continue;
+
+      const text = src(path);
+      if (!contestedExceptions.has(path)) {
+        const contested = lang === "en" ? /^## .*contested/im : /^## .*争议/m;
+        expect(text, `${path} should include a contested/open-question section`).toMatch(contested);
+      }
+      if (!constraintExceptions.has(path)) {
+        const constraint = lang === "en" ? /^## .*(constraint arrow|lower-layer constraint)/im : /^## 下层约束/m;
+        expect(text, `${path} should include a lower-layer constraint section`).toMatch(constraint);
+      }
+    }
+  }
+});
+
 test("infrastructure closes capability measurement with verification frontier", () => {
   const expected = [
     "infrastructure/01-accelerators-networking.qmd",
