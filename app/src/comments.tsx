@@ -43,7 +43,7 @@ const ui = {
     reply: "Reply", edit: "Edit", del: "Delete", save: "Save", cancel: "Cancel",
     deleted: "[deleted]", empty: "No comments yet. Start the discussion.",
     confirmDel: "Delete this comment?", react: "Add reaction", sending: "Posting…",
-    mark: "Comment on selection", moved: "Marks whose text has since moved",
+    mark: "Comment", note: "Private note", moved: "Marks whose text has since moved",
     bold: "Bold", italic: "Italic", tCode: "Code", tLink: "Link", tList: "List",
     tQuote: "Quote", tEmoji: "Emoji", tText: "text",
   },
@@ -53,7 +53,7 @@ const ui = {
     reply: "回复", edit: "编辑", del: "删除", save: "保存", cancel: "取消",
     deleted: "[已删除]", empty: "还没有评论，来开个头。", confirmDel: "删除这条评论？",
     react: "添加表情", sending: "发送中…",
-    mark: "对所选文字评论", moved: "原文已变动的标注",
+    mark: "评论", note: "私人笔记", moved: "原文已变动的标注",
     bold: "加粗", italic: "斜体", tCode: "代码", tLink: "链接", tList: "列表",
     tQuote: "引用", tEmoji: "表情", tText: "文字",
   },
@@ -85,9 +85,14 @@ function makeApi(csrfRef: { current: string }) {
     update: (id: string, body: string) => write("PATCH", `/api/comments/${id}`, { body }).then(jsonOrNull),
     del: (id: string) => write("DELETE", `/api/comments/${id}`),
     react: (id: string, emoji: string) => write("PUT", `/api/comments/${id}/reactions/${encodeURIComponent(emoji)}`),
+    listNotes: (lang: string, path: string) =>
+      fetch(`/api/notes?lang=${lang}&path=${encodeURIComponent(path)}`).then(jsonOrNull) as Promise<Note[]>,
+    createNote: (b: object) => write("POST", "/api/notes", b).then(jsonOrNull) as Promise<Note>,
+    delNote: (id: string) => write("DELETE", `/api/notes/${id}`),
   };
 }
 type Api = ReturnType<typeof makeApi>;
+export type Note = { id: string; body: string; anchor?: Anchor; createdAt: string };
 
 // --- helpers ----------------------------------------------------------------
 
@@ -326,21 +331,30 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
   const [replyTo, setReplyTo] = useState<string | null>(null);
   // inline marking: floating button on selection, then a composer popover.
   const [mark, setMark] = useState<{ anchor: TextAnchor; x: number; y: number } | null>(null);
-  const [composing, setComposing] = useState(false);
+  const [composing, setComposing] = useState<"comment" | "note" | null>(null);
   const [orphans, setOrphans] = useState<Comment[]>([]);
   const [delTarget, setDelTarget] = useState<Comment | null>(null);
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [noteView, setNoteView] = useState<{ note: Note; x: number; y: number } | null>(null);
 
   const refresh = useCallback(() => { api.list(lang, path).then(setList).catch(() => setList([])); }, [api, lang, path]);
 
+  const loadNotes = useCallback(() => { api.listNotes(lang, path).then((n) => setNotes(n ?? [])).catch(() => setNotes([])); }, [api, lang, path]);
+
   useEffect(() => {
-    api.me().then((m) => { setMe(m); if (m) csrfRef.current = m.csrf; }).catch(() => setMe(null));
+    api.me().then((m) => { setMe(m); if (m) { csrfRef.current = m.csrf; loadNotes(); } }).catch(() => setMe(null));
     refresh();
-  }, [api, refresh]);
+  }, [api, refresh, loadNotes]);
 
   const post = async (body: string, parentId?: string, anchor?: TextAnchor) => {
     await api.create({ lang, path, body, parentId: parentId ?? null, anchor: anchor ?? null });
-    setReplyTo(null); setMark(null); setComposing(false);
+    setReplyTo(null); setMark(null); setComposing(null);
     refresh();
+  };
+  const postNote = async (body: string, anchor: TextAnchor) => {
+    await api.createNote({ lang, path, body, anchor });
+    setMark(null); setComposing(null);
+    loadNotes();
   };
 
   // Render inline marks for anchored comments on the article; collect orphans.
@@ -368,8 +382,22 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
         return el;
       });
     }
+    // Private notes: amber marks, visible only to their author. Click shows the
+    // note (no orphan list; a note whose text moved just won't render this pass).
+    for (const n of notes) {
+      if (!n.anchor?.exact) continue;
+      const span = findAnchor(text, n.anchor);
+      if (!span) continue;
+      markRange(nodes, span[0], span[1], () => {
+        const el = document.createElement("mark");
+        el.className = "rdr-cmt-mark rdr-note-mark";
+        el.style.cssText = "background:rgba(224,147,107,.22);border-bottom:1px dashed var(--accent2,#e0936b);cursor:pointer";
+        el.onclick = (ev) => setNoteView({ note: n, x: (ev as MouseEvent).clientX, y: (ev as MouseEvent).clientY });
+        return el;
+      });
+    }
     setOrphans(orphaned);
-  }, [list]);
+  }, [list, notes]);
 
   // Capture a selection inside the article into a pending anchor (logged-in
   // only). selectionchange covers touch devices (iOS, where mouseup doesn't fire
@@ -431,18 +459,34 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
         )}
       </div>
 
-      {/* floating "comment on selection" button */}
+      {/* floating selection actions: comment (public) or private note */}
       {mark && !composing && (
-        <button type="button" onClick={() => setComposing(true)}
-          style={{ position: "fixed", left: mark.x, top: mark.y - 40, transform: "translateX(-50%)", zIndex: 50, ...btn(true), boxShadow: "var(--shadow-md)" }}>
-          💬 {t.mark}
-        </button>
+        <div style={{ position: "fixed", left: mark.x, top: mark.y - 42, transform: "translateX(-50%)", zIndex: 50, display: "flex", gap: 6 }}>
+          <button type="button" onClick={() => setComposing("comment")} style={{ ...btn(true), boxShadow: "var(--shadow-md)" }}>💬 {t.mark}</button>
+          <button type="button" onClick={() => setComposing("note")} style={{ ...btn(false), background: "var(--bg-surface)", boxShadow: "var(--shadow-md)" }}>📝 {t.note}</button>
+        </div>
       )}
-      {/* inline composer popover */}
+      {/* inline composer popover (comment or note) */}
       {mark && composing && (
         <div style={{ position: "fixed", left: Math.min(mark.x, window.innerWidth - 340), top: Math.min(mark.y + 10, window.innerHeight - 220), width: 320, zIndex: 50, padding: 12, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)" }}>
-          <blockquote style={{ margin: "0 0 8px", padding: "2px 8px", borderLeft: "2px solid var(--accent)", color: "var(--fg-3)", fontSize: 12, maxHeight: 48, overflow: "hidden" }}>“{mark.anchor.exact}”</blockquote>
-          <Composer t={t} busy={false} autoFocus onSubmit={(b) => post(b, undefined, mark.anchor)} onCancel={() => { setMark(null); setComposing(false); }} />
+          <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 6 }}>{composing === "note" ? `📝 ${t.note}` : `💬 ${t.mark}`}</div>
+          <blockquote style={{ margin: "0 0 8px", padding: "2px 8px", borderLeft: `2px solid ${composing === "note" ? "var(--accent2,#e0936b)" : "var(--accent)"}`, color: "var(--fg-3)", fontSize: 12, maxHeight: 48, overflow: "hidden" }}>“{mark.anchor.exact}”</blockquote>
+          <Composer t={t} busy={false} autoFocus
+            onSubmit={(b) => (composing === "note" ? postNote(b, mark.anchor) : post(b, undefined, mark.anchor))}
+            onCancel={() => { setMark(null); setComposing(null); }} />
+        </div>
+      )}
+      {/* private-note view popover */}
+      {noteView && (
+        <div onClick={() => setNoteView(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ position: "fixed", left: Math.min(noteView.x, window.innerWidth - 300), top: Math.min(noteView.y + 8, window.innerHeight - 180), width: 280, padding: 12, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)", fontFamily: "var(--font-ui)" }}>
+            <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 6 }}>📝 {t.note}</div>
+            <div style={{ fontSize: 14, lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: renderMd(noteView.note.body) }} />
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
+              <button type="button" onClick={() => setNoteView(null)} style={btn(false)}>{t.cancel}</button>
+              <button type="button" onClick={async () => { await api.delNote(noteView.note.id); setNoteView(null); loadNotes(); }} style={{ ...btn(false), color: "#a54646", borderColor: "#a54646" }}>{t.del}</button>
+            </div>
+          </div>
         </div>
       )}
 

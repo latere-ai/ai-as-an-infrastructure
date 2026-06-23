@@ -19,7 +19,22 @@ func (h *Handler) registerAccount(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/me/comments", h.myComments)
 	mux.HandleFunc("POST /api/notes", h.createNote)
 	mux.HandleFunc("GET /api/notes", h.listNotes)
+	mux.HandleFunc("GET /api/me/notes", h.myNotes)
 	mux.HandleFunc("DELETE /api/notes/{id}", h.deleteNote)
+}
+
+func (h *Handler) myNotes(w http.ResponseWriter, r *http.Request) {
+	u := h.id.User(w, r)
+	if u == nil {
+		writeErr(w, http.StatusUnauthorized, "login required")
+		return
+	}
+	list, err := h.store.ListAllNotes(r.Context(), u.Sub)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "list failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, nonNil(list))
 }
 
 // recordView counts a page view (public). The visitor is the logged-in sub, else

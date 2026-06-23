@@ -74,6 +74,9 @@ func (f *fakeStore) CreateNote(_ context.Context, n *store.Note, _ string) (*sto
 func (f *fakeStore) ListNotes(_ context.Context, _, _, _ string) ([]*store.Note, error) {
 	return nil, nil
 }
+func (f *fakeStore) ListAllNotes(_ context.Context, _ string) ([]*store.Note, error) {
+	return nil, nil
+}
 func (f *fakeStore) DeleteNote(_ context.Context, _, _ string) error    { return nil }
 func (f *fakeStore) RecordView(_ context.Context, _, _, _ string) error { return nil }
 func (f *fakeStore) PageStats(_ context.Context, _, _ string) (store.Stats, error) {

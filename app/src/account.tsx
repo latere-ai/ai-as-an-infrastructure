@@ -63,8 +63,7 @@ function UserMenu({ me, t, lang }: { me: NonNullable<Me>; t: typeof A.en; lang: 
   const [items, setItems] = useState<PageRef[] | null>(null);
   useEffect(() => {
     setItems(null);
-    const url = tab === "bookmarks" ? "/api/bookmarks" : tab === "comments" ? "/api/me/comments" : null;
-    if (!url) { setItems([]); return; } // notes are per-page; listed inline, not here
+    const url = tab === "bookmarks" ? "/api/bookmarks" : tab === "comments" ? "/api/me/comments" : "/api/me/notes";
     fetch(url).then((r) => r.json()).then(setItems).catch(() => setItems([]));
   }, [tab]);
   const tabBtn = (k: typeof tab, label: string) => (
@@ -78,7 +77,7 @@ function UserMenu({ me, t, lang }: { me: NonNullable<Me>; t: typeof A.en; lang: 
         <a href="/logout" style={{ flex: "none", fontSize: 12, color: "var(--fg-3)", textDecoration: "none" }}>{t.logout}</a>
       </div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
-        {tabBtn("bookmarks", t.bookmarks)}{tabBtn("comments", t.comments)}
+        {tabBtn("bookmarks", t.bookmarks)}{tabBtn("comments", t.comments)}{tabBtn("notes", t.notes)}
       </div>
       <div style={{ maxHeight: 300, overflowY: "auto", padding: 6 }}>
         {items === null ? null : items.length === 0 ? (

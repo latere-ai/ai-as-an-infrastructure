@@ -68,6 +68,7 @@ type commentStore interface {
 	ListByAuthor(ctx context.Context, sub string) ([]*store.Comment, error)
 	CreateNote(ctx context.Context, n *store.Note, sub string) (*store.Note, error)
 	ListNotes(ctx context.Context, sub, lang, path string) ([]*store.Note, error)
+	ListAllNotes(ctx context.Context, sub string) ([]*store.Note, error)
 	DeleteNote(ctx context.Context, id, sub string) error
 	RecordView(ctx context.Context, lang, path, visitorID string) error
 	PageStats(ctx context.Context, lang, path string) (store.Stats, error)

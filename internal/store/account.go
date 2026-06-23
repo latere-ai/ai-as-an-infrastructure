@@ -143,6 +143,26 @@ func (s *Store) ListNotes(ctx context.Context, sub, lang, path string) ([]*Note,
 	return out, rows.Err()
 }
 
+// ListAllNotes returns all of a user's notes across pages, newest first.
+func (s *Store) ListAllNotes(ctx context.Context, sub string) ([]*Note, error) {
+	rows, err := s.db.Query(ctx, `select id, lang, path, body_md,
+		anchor_exact, anchor_prefix, anchor_suffix, anchor_section, created_at, updated_at
+		from notes where user_sub = $1 order by created_at desc limit 200`, sub)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Note
+	for rows.Next() {
+		n, err := scanNote(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
 // DeleteNote removes a note the caller owns.
 func (s *Store) DeleteNote(ctx context.Context, id, sub string) error {
 	tag, err := s.db.Exec(ctx, `delete from notes where id = $1 and user_sub = $2`, id, sub)
