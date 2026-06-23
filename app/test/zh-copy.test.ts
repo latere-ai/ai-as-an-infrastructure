@@ -418,6 +418,63 @@ test("zh infrastructure prose avoids literal or note-like formulations", () => {
   expect(infrastructureText).not.toContain("真正的限制很少写在模型卡上");
 });
 
+test("zh practice prose avoids literal or note-like formulations", () => {
+  const practiceText = qmdFiles(join(zhRoot, "practice"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(practiceText).not.toContain("最后一个实质部分转入实践视角");
+  expect(practiceText).not.toContain("更有用的读法");
+  expect(practiceText).not.toContain("实践顺序是");
+  expect(practiceText).not.toContain("下面两张表是");
+  expect(practiceText).not.toContain("在代码里拨动滑块试试");
+  expect(practiceText).not.toContain("这个默认是一个起步姿态");
+  expect(practiceText).not.toContain("真正付得起的算力");
+  expect(practiceText).not.toContain("真正重要的那些特性");
+  expect(practiceText).not.toContain("可这么说低估了它");
+  expect(practiceText).not.toContain("上面的一切最终都落到一块 GPU 上");
+  expect(practiceText).not.toContain("改一改这两个每小时价");
+  expect(practiceText).not.toContain("事后那条路存在");
+  expect(practiceText).not.toContain("那个统领性的恒等式");
+  expect(practiceText).not.toContain("那个生产实例");
+  expect(practiceText).not.toContain("真正的活儿都去云端");
+  expect(practiceText).not.toContain("那个冻结的模型本身");
+  expect(practiceText).not.toContain("改一改下面这些数字");
+  expect(practiceText).not.toContain("下面这些表格");
+  expect(practiceText).not.toContain("一份最小的 Axolotl QLoRA 配置，只是示意，拿去改的");
+  expect(practiceText).not.toContain("真正有用的选择不是给库排名");
+  expect(practiceText).not.toContain("真正要紧的那条轴");
+  expect(practiceText).not.toContain("它是那个协议");
+  expect(practiceText).not.toContain("改一改空闲占比");
+  expect(practiceText).not.toContain("要点：空闲占比");
+  expect(practiceText).not.toContain("那个横切关注点");
+  expect(practiceText).not.toContain("试着改下面的 `k`");
+  expect(practiceText).not.toContain("本章余下部分要记在心里的那张图");
+  expect(practiceText).not.toContain("读者却看不出来");
+  expect(practiceText).not.toContain("下面这套栈");
+  expect(practiceText).not.toContain("这个默认有两点提醒");
+  expect(practiceText).not.toContain("下面是一份最小的 Promptfoo 配置");
+  expect(practiceText).not.toContain("就这一个决定");
+  expect(practiceText).not.toContain("本书开篇就许下一个承诺");
+  expect(practiceText).not.toContain("收官处是一套");
+  expect(practiceText).not.toContain("三份契约共同汇聚的那个组件");
+  expect(practiceText).not.toContain("本章独有的那张表");
+  expect(practiceText).not.toContain("最单薄的描述");
+  expect(practiceText).not.toContain("有三件事让这张图在生产里立得住");
+  expect(practiceText).not.toContain("改一改下面两个价格参数");
+  expect(practiceText).not.toContain("总得有什么来决定");
+  expect(practiceText).not.toContain("把这件事当成");
+  expect(practiceText).not.toContain("信任才是全部的要点");
+  expect(practiceText).not.toContain("## 那个不再奏效的健康探测");
+  expect(practiceText).not.toContain("上面那个约束关系");
+  expect(practiceText).not.toContain("那个要紧的承诺");
+  expect(practiceText).not.toContain("它是一块控制面板");
+  expect(practiceText).not.toContain("真正重要的指标");
+  expect(practiceText).not.toContain("这与 @sec-synthetic-data 里的那台机器不同");
+  expect(practiceText).not.toContain("效率是那个挑选问题");
+  expect(practiceText).not.toContain("下面的交互曲线展示这项权衡");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
@@ -1074,7 +1131,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/07-evaluation-and-observability.qmd",
-      ["公开榜单", "特定", "检索上下文", "智能体循环", "正在运行的那个系统"],
+      ["公开榜单", "特定", "检索上下文", "智能体循环", "正在运行的系统"],
     ],
     [
       "en/practice/08-wiring-a-2026-stack.qmd",
@@ -1106,7 +1163,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/11-human-interface-oversight.qmd",
-      ["它是一块控制面板", "校准后的依赖", "批准门", "修正回路", "@gls-automation-bias"],
+      ["承担控制面板的作用", "校准后的依赖", "批准门", "修正回路", "@gls-automation-bias"],
     ],
     [
       "en/practice/12-production-data-engine.qmd",
