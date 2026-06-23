@@ -236,7 +236,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/04-the-harness.qmd",
-      ["模型周围的运行时层", "暂停、重定向、分叉", "评估分数的撬动也不亚于一次模型更换"],
+      ["模型周围的运行时层", "暂停、重定向、分叉", "评估分数的影响也不亚于一次模型更换"],
     ],
     [
       "en/orchestration/05-multi-agent-systems.qmd",
@@ -260,7 +260,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/07-embeddings-representation.qmd",
-      ["生成器的隐藏状态构成一个糟糕的度量空间", "对齐与均匀", "查询与文档交互的位置", "负样本的选择是核心训练变量", "网上挖文本对", "解码器即嵌入器"],
+      ["生成器的隐藏状态不适合作为度量空间", "对齐与均匀", "查询与文档交互的位置", "负样本的选择是核心训练变量", "网上挖掘文本对", "解码器即嵌入器"],
     ],
     [
       "en/orchestration/08-context-engineering.qmd",
