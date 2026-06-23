@@ -56,6 +56,7 @@ test("zh introductory prose avoids abrupt bridges and stiff commitment framing",
   expect(zhText).not.toContain("训练和服务在这里重要，是因为");
   expect(zhText).not.toContain("问题在于，当调用方变成智能体时");
   expect(zhText).not.toContain("真正的问题是：既然算力是稀缺的输入");
+  expect(zhText).not.toContain("有三个约束让这个问题变难");
 });
 
 test("polished chapter openings preserve key source theses", () => {
