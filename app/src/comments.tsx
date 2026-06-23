@@ -323,6 +323,10 @@ const linkBtn: React.CSSProperties = { border: 0, background: "none", color: "va
 
 // --- the section ------------------------------------------------------------
 
+// On phones the native selection menu (Copy/Look Up) sits right where a popover
+// anchored to the selection would, so the selection actions move to a bar/sheet.
+function isNarrow() { return typeof window !== "undefined" && window.matchMedia("(max-width: 991px)").matches; }
+
 export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
   const t = ui[lang];
   const csrfRef = useRef("");
@@ -465,22 +469,38 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
       </div>
 
       {/* floating selection actions: comment (public) or private note */}
-      {mark && !composing && (
-        <div style={{ position: "fixed", left: mark.x, top: mark.y - 42, transform: "translateX(-50%)", zIndex: 50, display: "flex", gap: 6 }}>
-          <button type="button" onClick={() => setComposing("comment")} style={{ ...btn(true), boxShadow: "var(--shadow-md)" }}>💬 {t.mark}</button>
-          <button type="button" onClick={() => setComposing("note")} style={{ ...btn(false), background: "var(--bg-surface)", boxShadow: "var(--shadow-md)" }}>📝 {t.note}</button>
-        </div>
-      )}
-      {/* inline composer popover (comment or note) */}
-      {mark && composing && (
-        <div style={{ position: "fixed", left: Math.min(mark.x, window.innerWidth - 340), top: Math.min(mark.y + 10, window.innerHeight - 220), width: 320, zIndex: 50, padding: 12, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)" }}>
-          <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 6 }}>{composing === "note" ? `📝 ${t.note}` : `💬 ${t.mark}`}</div>
-          <blockquote style={{ margin: "0 0 8px", padding: "2px 8px", borderLeft: `2px solid ${composing === "note" ? "var(--accent2,#e0936b)" : "var(--accent)"}`, color: "var(--fg-3)", fontSize: 12, maxHeight: 48, overflow: "hidden" }}>“{mark.anchor.exact}”</blockquote>
-          <Composer t={t} busy={false} autoFocus
-            onSubmit={(b) => (composing === "note" ? postNote(b, mark.anchor) : post(b, undefined, mark.anchor))}
-            onCancel={() => { setMark(null); setComposing(null); }} />
-        </div>
-      )}
+      {mark && !composing && (() => {
+        const narrow = isNarrow();
+        // Mobile: a bottom bar, clear of iOS's native selection menu. Desktop: a
+        // small popover floating just above the selection.
+        const wrap: React.CSSProperties = narrow
+          ? { position: "fixed", left: 12, right: 12, bottom: "calc(12px + env(safe-area-inset-bottom))", zIndex: 50, display: "flex", gap: 8, justifyContent: "center" }
+          : { position: "fixed", left: mark.x, top: mark.y - 42, transform: "translateX(-50%)", zIndex: 50, display: "flex", gap: 6 };
+        return (
+          <div style={wrap}>
+            <button type="button" onClick={() => setComposing("comment")} style={{ ...btn(true), boxShadow: "var(--shadow-md)" }}>💬 {t.mark}</button>
+            <button type="button" onClick={() => setComposing("note")} style={{ ...btn(false), background: "var(--bg-surface)", boxShadow: "var(--shadow-md)" }}>📝 {t.note}</button>
+            {narrow && <button type="button" aria-label="cancel" onClick={() => setMark(null)} style={{ ...btn(false), background: "var(--bg-surface)", boxShadow: "var(--shadow-md)" }}>✕</button>}
+          </div>
+        );
+      })()}
+      {/* inline composer (popover on desktop, top sheet on mobile so the keyboard
+          does not cover it) */}
+      {mark && composing && (() => {
+        const narrow = isNarrow();
+        const wrap: React.CSSProperties = narrow
+          ? { position: "fixed", left: 8, right: 8, top: "calc(8px + env(safe-area-inset-top))", maxHeight: "62vh", overflowY: "auto", zIndex: 55, padding: 12, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)" }
+          : { position: "fixed", left: Math.min(mark.x, window.innerWidth - 340), top: Math.min(mark.y + 10, window.innerHeight - 220), width: 320, zIndex: 50, padding: 12, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)", boxShadow: "var(--shadow-lg)" };
+        return (
+          <div style={wrap}>
+            <div style={{ fontSize: 11, color: "var(--fg-3)", marginBottom: 6 }}>{composing === "note" ? `📝 ${t.note}` : `💬 ${t.mark}`}</div>
+            <blockquote style={{ margin: "0 0 8px", padding: "2px 8px", borderLeft: `2px solid ${composing === "note" ? "var(--accent2,#e0936b)" : "var(--accent)"}`, color: "var(--fg-3)", fontSize: 12, maxHeight: 48, overflow: "hidden" }}>“{mark.anchor.exact}”</blockquote>
+            <Composer t={t} busy={false} autoFocus
+              onSubmit={(b) => (composing === "note" ? postNote(b, mark.anchor) : post(b, undefined, mark.anchor))}
+              onCancel={() => { setMark(null); setComposing(null); }} />
+          </div>
+        );
+      })()}
       {/* private-note view popover */}
       {noteView && (
         <div onClick={() => setNoteView(null)} style={{ position: "fixed", inset: 0, zIndex: 60 }}>
