@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterData, Lang, Layout, Palette, ReaderSettings } from "./types.ts";
 import { DEFAULT_SETTINGS } from "./types.ts";
 import { runSearch, type SearchDoc } from "./search-match.ts";
+import { Comments } from "./comments.tsx";
 
 type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
@@ -349,6 +350,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             <ChapterOpener chapter={chapter} t={t} />
             {articleBody}
             <PrevNextNav chapter={chapter} t={t} />
+            <Comments lang={chapter.lang} path={chapter.path} />
           </article>
         </main>
 
