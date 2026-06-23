@@ -44,27 +44,27 @@ ax.set_ylim(0, 1)
 ax.axis("off")
 
 top = [
-    (0.04, "base model", DATA),
-    (0.25, "trace pool", DATA),
-    (0.47, "checker", ACCENT),
-    (0.68, "accepted", ACCENT),
+    (0.02, "base model", DATA),
+    (0.225, "trace pool", DATA),
+    (0.43, "checker", ACCENT),
+    (0.635, "accepted", ACCENT),
     (0.84, "train", WARN),
 ]
 for x, label, color in top:
     box(ax, x, 0.57, 0.13, 0.16, label, color)
 
-for x1, x2 in [(0.17, 0.25), (0.38, 0.47), (0.60, 0.68), (0.81, 0.84)]:
+for x1, x2 in [(0.15, 0.225), (0.355, 0.43), (0.56, 0.635), (0.765, 0.84)]:
     arrow(ax, x1, 0.65, x2, 0.65)
 
-ax.text(0.55, 0.43, "rejected traces", ha="center", va="center", color=INK, fontsize=8)
-arrow(ax, 0.535, 0.57, 0.535, 0.47, color=MUTED, ls="--")
+ax.text(0.51, 0.43, "rejected traces", ha="center", va="center", color=INK, fontsize=8)
+arrow(ax, 0.495, 0.57, 0.495, 0.47, color=MUTED, ls="--")
 
 box(ax, 0.16, 0.18, 0.14, 0.15, "long teacher", DATA)
 box(ax, 0.43, 0.18, 0.16, 0.15, "long-to-short", ACCENT)
 box(ax, 0.72, 0.18, 0.14, 0.15, "short student", WARN)
 arrow(ax, 0.30, 0.255, 0.43, 0.255)
 arrow(ax, 0.59, 0.255, 0.72, 0.255)
-arrow(ax, 0.745, 0.57, 0.79, 0.33, color=MUTED, rad=-0.15)
+arrow(ax, 0.70, 0.57, 0.79, 0.33, color=MUTED, rad=-0.15)
 
 fig.tight_layout()
 save_bilingual(fig, "reasoning-data-distillation-1")
