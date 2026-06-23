@@ -295,6 +295,21 @@ test("specialized practice terms get local definitions before use", () => {
   }
 });
 
+test("abbreviations and decoding methods are defined at first use", () => {
+  const required = [
+    ["en/infrastructure/01-accelerators-networking.qmd", "the @gls-hbm sitting beside the accelerator die"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "紧贴加速器裸片的@gls-hbm供给单块芯片"],
+    ["en/inference/03-faster-decoding.qmd", "@gls-speculative-decoding is the exact version of that pattern"],
+    ["zh/inference/03-faster-decoding.qmd", "@gls-speculative-decoding就是这个模式的精确版本"],
+    ["en/generative/03-speech-and-voice.qmd", "@gls-tts, the task of synthesizing speech from text"],
+    ["zh/generative/03-speech-and-voice.qmd", "@gls-tts，也就是把文字合成为语音的任务"],
+  ];
+
+  for (const [path, snippet] of required) {
+    expect(flat(path), `${path} should define ${snippet} at first use`).toContain(snippet);
+  }
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
