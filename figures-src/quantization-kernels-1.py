@@ -49,8 +49,8 @@ ax.text(4, top + 1.5, "per-tensor scale must reach the top outlier",
 bulk_top = np.percentile(bulk[mask], 99)
 ax.axhspan(0, bulk_top, color=DATA, alpha=0.07)
 ax.annotate("bulk crushed onto a few levels",
-            xy=(150, bulk_top), xytext=(70, top * 0.45),
-            color=INK, fontsize=8.5,
+            xy=(182, bulk_top), xytext=(182, top * 0.95),
+            color=INK, fontsize=8.5, ha="center", va="center",
             arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 
 ax.set_xlim(0, n_channels)
