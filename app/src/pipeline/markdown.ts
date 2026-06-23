@@ -6,6 +6,9 @@
 import MarkdownIt from "markdown-it";
 import attrs from "markdown-it-attrs";
 import { katex } from "@mdit/plugin-katex";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Heading } from "../types.ts";
 import { inlineRefs } from "./inline-refs.ts";
 import type { Bibliography } from "./citations.ts";
@@ -38,6 +41,8 @@ export interface RenderedChapter {
   headings: Heading[];
 }
 
+const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
+
 function slugify(s: string): string {
   return s.toLowerCase().trim().replace(/[^\w一-鿿\s-]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-");
 }
@@ -46,6 +51,62 @@ function slugify(s: string): string {
 function figPrefix(currentHref: string): string {
   const depth = currentHref.split("/").length - 1;
   return "../".repeat(depth) + "figures/";
+}
+
+function attrValue(tag: string, name: string): string | undefined {
+  return tag.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1];
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function localFigureSvgPath(src: string, ctx: RenderContext): string | null {
+  if (!/\.svg(?:[?#][^"]*)?$/i.test(src)) return null;
+  const cleanSrc = src.split(/[?#]/, 1)[0];
+  const match = cleanSrc.match(/(?:^|\/)figures\/([^/]+\.svg)$/i);
+  if (!match) return null;
+  return join(repoRoot, ctx.lang, "figures", basename(match[1]));
+}
+
+function stripSvgPreamble(svg: string): string {
+  const withoutXml = svg.replace(/^\s*<\?xml[\s\S]*?\?>\s*/i, "");
+  return withoutXml.replace(/^\s*<!DOCTYPE[\s\S]*?>\s*/i, "").trim();
+}
+
+function namespaceSvgIds(svg: string, prefix: string): string {
+  const ids = new Set([...svg.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]));
+  for (const id of ids) {
+    const next = `${prefix}${id}`;
+    const escaped = escapeRegExp(id);
+    svg = svg
+      .replace(new RegExp(`\\bid="${escaped}"`, "g"), `id="${next}"`)
+      .replace(new RegExp(`url\\(#${escaped}\\)`, "g"), `url(#${next})`)
+      .replace(new RegExp(`(href|xlink:href)="#${escaped}"`, "g"), `$1="#${next}"`);
+  }
+  return svg;
+}
+
+function addInlineSvgAttrs(svg: string, alt: string): string {
+  return svg.replace(/<svg\b([^>]*)>/i, (_match, attrs: string) => {
+    let next = attrs.replace(/\s+id="[^"]*"/, "");
+    next = /\bclass="/.test(next)
+      ? next.replace(/\bclass="([^"]*)"/, `class="rdr-inline-svg $1"`)
+      : `${next} class="rdr-inline-svg"`;
+    if (!/\brole=/.test(next)) next += ' role="img"';
+    if (alt && !/\baria-label=/.test(next) && !/\baria-labelledby=/.test(next)) next += ` aria-label="${alt}"`;
+    if (!/\bfocusable=/.test(next)) next += ' focusable="false"';
+    return `<svg${next}>`;
+  });
+}
+
+function inlineLocalSvgFigure(img: string, id: string, alt: string, ctx: RenderContext): string | null {
+  const src = attrValue(img, "src");
+  if (!src) return null;
+  const svgPath = localFigureSvgPath(src, ctx);
+  if (!svgPath || !existsSync(svgPath)) return null;
+  const svg = stripSvgPreamble(readFileSync(svgPath, "utf8"));
+  return addInlineSvgAttrs(namespaceSvgIds(svg, `${id}-`), alt);
 }
 
 function createMd(ctx: RenderContext): MarkdownIt {
@@ -125,7 +186,8 @@ function postProcess(html: string, ctx: RenderContext): string {
     const numPart = num ? `<span class="rdr-fig-num">${num}.</span> ` : "";
     const altHtml = alt ? resolveXrefsInText(alt, ctx.xref, ctx.currentHref, ctx.prefix) : "";
     const caption = alt || num ? `<figcaption>${numPart}${altHtml}</figcaption>` : "";
-    return `<figure class="rdr-figure" id="${id}">${img}${caption}</figure>`;
+    const media = inlineLocalSvgFigure(img, id, alt, ctx) ?? img;
+    return `<figure class="rdr-figure" id="${id}">${media}${caption}</figure>`;
   });
   // Raw {=html} viz figures: <figure id="fig-x">…<figcaption>…  →  add the
   // rdr-figure class and prepend the "Figure C.N." number, so interactive viz
