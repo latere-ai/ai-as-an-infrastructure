@@ -250,6 +250,13 @@ test("base model formation ends with a mid-training bridge chapter", () => {
   }
 });
 
+test("scaling laws explain training tokens inline at first use", () => {
+  expect(flat("en/foundations/01-scaling-laws.qmd")).toContain("training tokens are not vocabulary entries");
+  expect(flat("en/foundations/01-scaling-laws.qmd")).toContain("repeated passes over the same text count again");
+  expect(flat("zh/foundations/01-scaling-laws.qmd")).toContain("训练词元不是词表项");
+  expect(flat("zh/foundations/01-scaling-laws.qmd")).toContain("同一段文本如果重复训练两轮，就计两次");
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");

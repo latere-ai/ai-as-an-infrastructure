@@ -165,6 +165,7 @@ const auditedGlossaryTerms = [
   { key: "next-token-prediction", en: "next-token prediction", zh: "下一词元预测", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
   { key: "cross-entropy", en: "cross-entropy", zh: "交叉熵", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
   { key: "perplexity", en: "perplexity", zh: "困惑度", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
+  { key: "training-tokens", en: "training tokens", zh: "训练词元", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
   { key: "compute-optimal", en: "compute-optimal", zh: "计算最优", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
   { key: "adamw", en: "AdamW", zh: "AdamW 优化器", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
   { key: "warmup-stable-decay", en: "warmup-stable-decay", zh: "预热-稳定-衰减调度", files: both("en/foundations/01-scaling-laws.qmd", "zh/foundations/01-scaling-laws.qmd") },
