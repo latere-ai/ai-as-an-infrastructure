@@ -516,7 +516,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/03-the-compute-frontier.qmd",
-      ["稀缺的资源是字节，而不是算术", "小芯片封装", "NVLink 边界从机箱移到机架", "不断抬高的算术强度地板"],
+      ["稀缺的资源是字节，而不是算术", "小芯片封装", "NVLink 边界从机箱移到机架", "不断抬高的算术强度门槛"],
     ],
     [
       "en/infrastructure/04-making-the-silicon.qmd",
@@ -540,7 +540,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/06-the-machine-that-breaks.qmd",
-      ["几乎在任何时刻都有某处在出故障", "预防故障」转向了「摊销故障", "不拉警报", "延迟层级和解码带宽墙", "连跑数小时的智能体"],
+      ["几乎在任何时刻都有某处在出故障", "预防故障」转向「摊销故障", "不发出警报", "延迟层级和解码带宽限制", "连跑数小时的智能体"],
     ],
     [
       "en/infrastructure/07-where-learning-hits-limits.qmd",
@@ -548,7 +548,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/07-where-learning-hits-limits.qmd",
-      ["廉价资源正在见底", "数据墙、合成数据、在推理上做强化学习", "模仿一个有限的语料", "真正改变了这个答案"],
+      ["廉价资源正在接近耗尽", "数据墙、合成数据、在推理上做强化学习", "模仿一个有限的语料", "真正改变了这个答案"],
     ],
     [
       "en/infrastructure/08-the-capability-horizon.qmd",
@@ -556,7 +556,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/08-the-capability-horizon.qmd",
-      ["不再是一个排行榜数字", "移动的地平线", "测量仪器饱和得比新仪器造出来还快", "可持续的进步", "用算力买来的表象"],
+      ["不再是一个排行榜数字", "移动的地平线", "测量仪器饱和得比新仪器造出来还快", "可持续的进步", "由算力支撑的短期表象"],
     ],
     [
       "en/infrastructure/index.qmd",
@@ -564,7 +564,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/index.qmd",
-      ["最底下始终是物理机器", "机器已经替我们决定了什么", "约束终于显形"],
+      ["最底下始终是物理机器", "机器已经替我们决定了什么", "约束变得清楚"],
     ],
     [
       "en/practice/01-choosing-a-model.qmd",
