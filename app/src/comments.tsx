@@ -207,7 +207,8 @@ function Composer({ t, busy, initial, onSubmit, onCancel, autoFocus }: {
         ref={ref} value={text} onChange={onChange} disabled={busy} autoFocus={autoFocus}
         placeholder={t.placeholder} rows={3}
         onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submit(); }}
-        style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "9px 11px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--fg-1)", fontFamily: "var(--font-ui)", fontSize: 14, lineHeight: 1.5 }}
+        // 16px so iOS Safari does not auto-zoom the page on focus.
+        style={{ width: "100%", boxSizing: "border-box", resize: "vertical", padding: "10px 12px", borderRadius: "var(--radius-md)", border: "1px solid var(--border)", background: "var(--bg-surface)", color: "var(--fg-1)", fontFamily: "var(--font-ui)", fontSize: 16, lineHeight: 1.5 }}
       />
       {menu && (
         <ul style={{ position: "absolute", zIndex: 5, listStyle: "none", margin: 0, padding: 4, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow-md)" }}>
@@ -407,6 +408,10 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const check = () => {
       if (composing) return;
+      // Ignore selection churn while the user is typing in a field (the composer
+      // textarea), which otherwise re-renders the thread on every keystroke.
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === "TEXTAREA" || ae.tagName === "INPUT")) return;
       const sel = window.getSelection();
       const article = document.querySelector(".rdr-article");
       if (!sel || sel.isCollapsed || !sel.rangeCount || !article) { setMark(null); return; }
