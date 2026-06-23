@@ -12,7 +12,6 @@
 // and it becomes an editable, runnable cell (no server). Pyodide loads lazily
 // on the first Run, once per page.
   var PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v0.27.2/full/';
-  var BLANK = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
   var pyPromise = null;
   // Matplotlib's bundled fonts (DejaVu Sans) have no CJK glyphs, so Chinese
   // labels in zh runnable cells render as tofu boxes. Fetch a CJK font on
@@ -98,7 +97,7 @@
   // plt.show() is a no-op (no canvas leaks into the page body); we capture the
   // figure via savefig.
   var HARNESS = [
-    'import sys, io, base64, json',
+    'import sys, io, json',
     'def __style_mpl(__t):',
     '    import matplotlib',
     '    matplotlib.use("Agg")',
@@ -108,9 +107,9 @@
     '    mpl.rcParams.update({',
     '        "figure.figsize": (6.2, 4.2), "figure.dpi": 130,',
     // Transparent canvas (themed panel shows through -> fits light/dark) and
-    // text-as-paths so SVG labels render identically inside the <img>.
+    // live SVG text nodes so labels can be selected in the page.
     '        "figure.facecolor": "none", "axes.facecolor": "none",',
-    '        "svg.fonttype": "path",',
+    '        "svg.fonttype": "none",',
     '        "text.color": fg, "axes.labelcolor": fg, "axes.titlecolor": fg, "axes.edgecolor": grid,',
     '        "xtick.color": fg, "ytick.color": fg, "xtick.labelcolor": fg, "ytick.labelcolor": fg,',
     '        "axes.grid": True, "grid.color": grid, "grid.alpha": 0.32, "grid.linewidth": 0.7,',
@@ -144,7 +143,7 @@
     '                    __b = io.BytesIO()',
     '                    plt.savefig(__b, format="svg", bbox_inches="tight", transparent=True)',
     '                    plt.close("all")',
-    '                    __img = base64.b64encode(__b.getvalue()).decode()',
+    '                    __img = __b.getvalue().decode("utf-8", "replace")',
     '        except Exception:',
     '            pass',
     '    finally:',
@@ -173,9 +172,37 @@
     };
   }
 
-  async function run(cell, code, status, outEl, imgEl) {
+  function clearSvg(svgEl) {
+    svgEl.replaceChildren();
+    svgEl.style.display = 'none';
+  }
+
+  function mountSvg(svgEl, markup) {
+    clearSvg(svgEl);
+    var doc = new DOMParser().parseFromString(markup, 'image/svg+xml');
+    if (doc.querySelector('parsererror')) throw new Error('invalid svg output');
+    var svg = doc.documentElement;
+    if (!svg || svg.nodeName.toLowerCase() !== 'svg') throw new Error('invalid svg output');
+    var blocked = svg.querySelectorAll('script, foreignObject');
+    for (var i = 0; i < blocked.length; i++) blocked[i].remove();
+    var nodes = [svg].concat(Array.prototype.slice.call(svg.querySelectorAll('*')));
+    for (var n = 0; n < nodes.length; n++) {
+      var attrs = Array.prototype.slice.call(nodes[n].attributes || []);
+      for (var a = 0; a < attrs.length; a++) {
+        var name = attrs[a].name;
+        var value = String(attrs[a].value || '').trim();
+        if (/^on/i.test(name) || (/^(?:href|xlink:href)$/i.test(name) && /^javascript:/i.test(value))) {
+          nodes[n].removeAttribute(name);
+        }
+      }
+    }
+    svgEl.appendChild(document.importNode(svg, true));
+    svgEl.style.display = 'block';
+  }
+
+  async function run(cell, code, status, outEl, svgEl) {
     cell.classList.add('ran');
-    outEl.textContent = ''; imgEl.src = BLANK; imgEl.style.display = 'none';
+    outEl.textContent = ''; clearSvg(svgEl);
     var py;
     try { py = await getPyodide(status); }
     catch (e) { status('Failed to load Python: ' + e.message); return; }
@@ -198,7 +225,7 @@
       var res = py.globals.get('__run_user_code')(code, JSON.stringify(theme));
       var data = JSON.parse(res);
       outEl.textContent = data.out || '';
-      if (data.img) { imgEl.src = 'data:image/svg+xml;base64,' + data.img; imgEl.style.display = 'block'; }
+      if (data.img) mountSvg(svgEl, data.img);
       status(data.out || data.img ? '' : 'Ran (no output).');
     } catch (e) {
       outEl.textContent = String(e && e.message ? e.message : e);
@@ -231,8 +258,7 @@
     var status = document.createElement('span'); status.className = 'live-status';
     bar.appendChild(runBtn); bar.appendChild(resetBtn); bar.appendChild(status);
     var out = document.createElement('pre'); out.className = 'live-out';
-    var img = document.createElement('img'); img.className = 'live-img'; img.alt = 'figure output'; img.style.display = 'none';
-    img.src = BLANK;
+    var svg = document.createElement('div'); svg.className = 'live-svg'; svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'figure output'); svg.style.display = 'none';
 
     // Keep the highlight layer in sync with the textarea (content + scroll).
     function paint() { hlCode.innerHTML = highlightPy(ta.value); }
@@ -251,20 +277,20 @@
     });
 
     function setStatus(t) { status.textContent = t; }
-    runBtn.addEventListener('click', function () { run(wrap, ta.value, setStatus, out, img); });
+    runBtn.addEventListener('click', function () { run(wrap, ta.value, setStatus, out, svg); });
     resetBtn.addEventListener('click', function () {
       ta.value = source; paint(); syncScroll();
-      out.textContent = ''; img.style.display = 'none'; setStatus('');
+      out.textContent = ''; clearSvg(svg); setStatus('');
       wrap.classList.remove('ran');
     });
     ta.addEventListener('keydown', function (e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); run(wrap, ta.value, setStatus, out, img); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); run(wrap, ta.value, setStatus, out, svg); }
     });
 
     if (pre) pre.style.display = 'none';
     edit.appendChild(hl); edit.appendChild(ta);
     codeCol.appendChild(edit); codeCol.appendChild(bar);
-    resultCol.appendChild(out); resultCol.appendChild(img);
+    resultCol.appendChild(out); resultCol.appendChild(svg);
     grid.appendChild(codeCol); grid.appendChild(resultCol);
     wrap.appendChild(grid);
     block.appendChild(wrap);

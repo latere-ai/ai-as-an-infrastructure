@@ -1,7 +1,8 @@
 // Guard the runnable-cell matplotlib rendering contract (src/runtime/live.ts).
-// The figure must be a transparent vector SVG with text flattened to paths, so
-// it stays crisp on Retina and blends into the themed (light/dark) result panel.
-// Regression target: a blurry, opaque, white-background raster PNG.
+// The figure must be a transparent inline SVG with live text nodes, so labels
+// stay selectable and the plot blends into the themed result panel.
+// Regression target: a blurry, opaque, white-background raster PNG or an
+// <img>-mounted SVG whose labels cannot be selected.
 
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -14,8 +15,9 @@ test("matplotlib output is a transparent SVG (vector, theme-fitting), not a PNG"
   expect(rt).not.toMatch(/format="png"/);
 });
 
-test("SVG text is flattened to paths so it renders identically inside the <img>", () => {
-  expect(rt).toMatch(/"svg\.fonttype":\s*"path"/);
+test("SVG text stays as text nodes so labels can be selected", () => {
+  expect(rt).toMatch(/"svg\.fonttype":\s*"none"/);
+  expect(rt).not.toMatch(/"svg\.fonttype":\s*"path"/);
 });
 
 test("CJK code triggers loading and registering a CJK font (no tofu boxes)", () => {
@@ -36,8 +38,16 @@ test("the figure canvas is transparent (no baked-in background color)", () => {
   expect(rt).toMatch(/"figure\.facecolor":\s*"none",\s*"axes\.facecolor":\s*"none"/);
 });
 
-test("the result panel is displayed from an svg+xml data URI", () => {
-  expect(rt).toContain("data:image/svg+xml;base64,");
+test("the result panel mounts generated SVG inline, not through an image data URI", () => {
+  expect(rt).toContain("new DOMParser().parseFromString(markup, 'image/svg+xml')");
+  expect(rt).toContain("document.createElement('div'); svg.className = 'live-svg'");
+  expect(rt).not.toContain("data:image/svg+xml;base64,");
+  expect(rt).not.toContain("document.createElement('img')");
+});
+
+test("selectable figure SVG has a layout rule", () => {
+  const rule = css.match(/\.live-svg \{[^}]*\}/)?.[0] ?? "";
+  expect(rule).toContain("user-select: text");
 });
 
 test("the result panel shares the cell surface, not the near-white --bg-surface", () => {
