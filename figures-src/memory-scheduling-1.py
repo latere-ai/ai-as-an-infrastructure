@@ -46,8 +46,8 @@ r0 = 0.3
 rm0 = r0
 pg0 = 1.0 / (1.0 + partial_block_overhead)
 ax.annotate("reclaimed utilization,\nand thus higher batch size",
-            xy=(r0, (rm0 + pg0) / 2.0), xytext=(0.40, 0.30),
-            color=INK, fontsize=8.5,
+            xy=(r0, (rm0 + pg0) / 2.0), xytext=(0.50, 0.12),
+            color=INK, fontsize=8.5, ha="left", va="center",
             arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 ax.plot([r0, r0], [rm0, pg0], color=INK, lw=1.0, alpha=0.5)
 
