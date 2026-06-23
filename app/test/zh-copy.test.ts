@@ -201,6 +201,34 @@ test("zh reasoning prose avoids literal or note-like formulations", () => {
   expect(reasoningText).not.toContain("内部器官");
 });
 
+test("zh inference prose avoids literal or note-like formulations", () => {
+  const inferenceText = qmdFiles(join(zhRoot, "inference"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(inferenceText).not.toContain("本章沿着这个资源展开");
+  expect(inferenceText).not.toContain("一个问题的两个事实");
+  expect(inferenceText).not.toContain("显存这一面的事实是");
+  expect(inferenceText).not.toContain("调度这一面的事实是");
+  expect(inferenceText).not.toContain("所以问题分两半");
+  expect(inferenceText).not.toContain("同一个基本动作");
+  expect(inferenceText).not.toContain("下文围绕两个问题展开");
+  expect(inferenceText).not.toContain("这份收益画得具体");
+  expect(inferenceText).not.toContain("最好读作");
+  expect(inferenceText).not.toContain("这条演化线索");
+  expect(inferenceText).not.toContain("这道交易之下");
+  expect(inferenceText).not.toContain("从瓶颈读出情形");
+  expect(inferenceText).not.toContain("两个前几章没有解决的诉求");
+  expect(inferenceText).not.toContain("两条演化线索并置");
+  expect(inferenceText).not.toContain("两条线索汇于同一处");
+  expect(inferenceText).not.toContain("这两项机制把本章分成");
+  expect(inferenceText).not.toContain("分词器从未造出的那个 token");
+  expect(inferenceText).not.toContain("第一根是基础网格");
+  expect(inferenceText).not.toContain("第二根是切片");
+  expect(inferenceText).not.toContain("第三根是动态分辨率");
+  expect(inferenceText).not.toContain("读完这一部分");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
