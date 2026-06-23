@@ -69,8 +69,9 @@ type fakeID struct {
 	csrf bool
 }
 
-func (f fakeID) User(http.ResponseWriter, *http.Request) *api.User { return f.user }
-func (f fakeID) CheckCSRF(*http.Request) bool                      { return f.csrf }
+func (f fakeID) User(http.ResponseWriter, *http.Request) *api.User    { return f.user }
+func (f fakeID) EnsureCSRF(http.ResponseWriter, *http.Request) string { return "tok" }
+func (f fakeID) CheckCSRF(*http.Request) bool                         { return f.csrf }
 
 func do(h *api.Handler, method, target, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -82,7 +83,7 @@ func do(h *api.Handler, method, target, body string) *httptest.ResponseRecorder 
 func TestListIsPublic(t *testing.T) {
 	fs := newFakeStore()
 	fs.byID["x"] = &store.Comment{ID: "x", Lang: "en", Path: "p", BodyMD: "hi"}
-	h := api.New(fs, api.Anonymous{})
+	h := api.New(fs, api.Anonymous{}, nil)
 	w := do(h, "GET", "/api/comments?lang=en&path=p", "")
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "hi") {
 		t.Fatalf("public read failed: %d %s", w.Code, w.Body)
@@ -90,7 +91,7 @@ func TestListIsPublic(t *testing.T) {
 }
 
 func TestMeAnonymousIs204(t *testing.T) {
-	h := api.New(newFakeStore(), api.Anonymous{})
+	h := api.New(newFakeStore(), api.Anonymous{}, nil)
 	if w := do(h, "GET", "/api/me", ""); w.Code != http.StatusNoContent {
 		t.Fatalf("want 204, got %d", w.Code)
 	}
@@ -101,17 +102,17 @@ func TestPostRequiresAuthThenCSRF(t *testing.T) {
 	body := `{"lang":"en","path":"p","body":"hello"}`
 
 	// anonymous -> 401
-	if w := do(api.New(fs, api.Anonymous{}), "POST", "/api/comments", body); w.Code != 401 {
+	if w := do(api.New(fs, api.Anonymous{}, nil), "POST", "/api/comments", body); w.Code != 401 {
 		t.Fatalf("anon want 401, got %d", w.Code)
 	}
 	// authed but no csrf -> 403
 	authedNoCSRF := fakeID{user: &api.User{Sub: "u1", Name: "Ada"}, csrf: false}
-	if w := do(api.New(fs, authedNoCSRF), "POST", "/api/comments", body); w.Code != 403 {
+	if w := do(api.New(fs, authedNoCSRF, nil), "POST", "/api/comments", body); w.Code != 403 {
 		t.Fatalf("no-csrf want 403, got %d", w.Code)
 	}
 	// authed + csrf -> 201
 	authed := fakeID{user: &api.User{Sub: "u1", Name: "Ada"}, csrf: true}
-	if w := do(api.New(fs, authed), "POST", "/api/comments", body); w.Code != 201 {
+	if w := do(api.New(fs, authed, nil), "POST", "/api/comments", body); w.Code != 201 {
 		t.Fatalf("authed want 201, got %d (%s)", w.Code, w.Body)
 	}
 }
@@ -121,11 +122,11 @@ func TestDeleteAuthorization(t *testing.T) {
 	fs.byID["c1"] = &store.Comment{ID: "c1", Lang: "en", Path: "p", AuthorSub: "owner"}
 
 	other := fakeID{user: &api.User{Sub: "other"}, csrf: true}
-	if w := do(api.New(fs, other), "DELETE", "/api/comments/c1", ""); w.Code != 403 {
+	if w := do(api.New(fs, other, nil), "DELETE", "/api/comments/c1", ""); w.Code != 403 {
 		t.Fatalf("non-owner want 403, got %d", w.Code)
 	}
 	admin := fakeID{user: &api.User{Sub: "admin", IsSuperadmin: true}, csrf: true}
-	if w := do(api.New(fs, admin), "DELETE", "/api/comments/c1", ""); w.Code != http.StatusNoContent {
+	if w := do(api.New(fs, admin, nil), "DELETE", "/api/comments/c1", ""); w.Code != http.StatusNoContent {
 		t.Fatalf("admin want 204, got %d", w.Code)
 	}
 }
@@ -134,7 +135,7 @@ func TestReactionEmojiAllowlist(t *testing.T) {
 	fs := newFakeStore()
 	fs.byID["c1"] = &store.Comment{ID: "c1", Lang: "en", Path: "p"}
 	authed := fakeID{user: &api.User{Sub: "u1"}, csrf: true}
-	h := api.New(fs, authed)
+	h := api.New(fs, authed, nil)
 	if w := do(h, "PUT", "/api/comments/c1/reactions/💩", ""); w.Code != 400 {
 		t.Fatalf("bad emoji want 400, got %d", w.Code)
 	}

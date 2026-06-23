@@ -31,7 +31,10 @@ import (
 	"strconv"
 	"strings"
 
+	"latere.ai/x/pkg/oidc"
+
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/api"
+	"github.com/latere-ai/ai-as-an-infrastructure/internal/authn"
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/config"
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/store"
 )
@@ -304,10 +307,25 @@ func main() {
 			log.Fatalf("database: %v", err)
 		}
 		defer pool.Close()
-		// Identity is anonymous until the OIDC flow is wired (M3): the read path
-		// is public, writes return 401 until then.
-		commentsAPI = api.New(store.New(pool), api.Anonymous{})
-		log.Printf("comments enabled (database configured)")
+
+		// OIDC login is optional: with no AUTH_CLIENT_ID, oidc.New returns nil
+		// and comments stay public-read-only (anonymous identity rejects writes).
+		var id api.Identity = api.Anonymous{}
+		var routes *api.AuthRoutes
+		if client := oidc.New(oidc.LoadConfig()); client != nil {
+			secure := os.Getenv("AUTH_INSECURE_COOKIES") != "true"
+			id = authn.New(client, secure)
+			routes = &api.AuthRoutes{
+				Login:        client.HandleLogin,
+				Callback:     client.HandleCallback,
+				Logout:       client.HandleLogout,
+				LogoutNotify: client.HandleLogoutNotify,
+			}
+			log.Printf("comments enabled with OIDC login")
+		} else {
+			log.Printf("comments enabled (read-only: OIDC not configured)")
+		}
+		commentsAPI = api.New(store.New(pool), id, routes)
 	}
 
 	addr := cfg.ListenAddr

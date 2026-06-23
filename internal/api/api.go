@@ -29,6 +29,9 @@ type User struct {
 type Identity interface {
 	// User returns the current user, or nil when the request is anonymous.
 	User(w http.ResponseWriter, r *http.Request) *User
+	// EnsureCSRF issues (and sets, if absent) the double-submit CSRF token,
+	// returning it so /api/me can hand it to the client.
+	EnsureCSRF(w http.ResponseWriter, r *http.Request) string
 	// CheckCSRF reports whether a state-changing request carries a valid token.
 	CheckCSRF(r *http.Request) bool
 }
@@ -36,8 +39,19 @@ type Identity interface {
 // Anonymous is an Identity that never authenticates; writes are rejected.
 type Anonymous struct{}
 
-func (Anonymous) User(http.ResponseWriter, *http.Request) *User { return nil }
-func (Anonymous) CheckCSRF(*http.Request) bool                  { return false }
+func (Anonymous) User(http.ResponseWriter, *http.Request) *User        { return nil }
+func (Anonymous) EnsureCSRF(http.ResponseWriter, *http.Request) string { return "" }
+func (Anonymous) CheckCSRF(*http.Request) bool                         { return false }
+
+// AuthRoutes are the OIDC login-flow handlers main.go wires in (nil when auth is
+// not configured). The API mux mounts them so all dynamic routes share one
+// dispatch and Owns() set.
+type AuthRoutes struct {
+	Login        http.HandlerFunc
+	Callback     http.HandlerFunc
+	Logout       http.HandlerFunc
+	LogoutNotify http.HandlerFunc
+}
 
 // store-shaped dependency, narrowed so tests can fake it.
 type commentStore interface {
@@ -55,6 +69,7 @@ type Handler struct {
 	store commentStore
 	id    Identity
 	mux   *http.ServeMux
+	auth  bool // whether OIDC login routes are mounted
 }
 
 const (
@@ -69,8 +84,9 @@ var reactionEmoji = map[string]bool{
 	"👍": true, "👎": true, "❤️": true, "🎉": true, "😄": true, "😕": true, "🚀": true, "👀": true,
 }
 
-// New builds the API handler over a store and an identity provider.
-func New(s commentStore, id Identity) *Handler {
+// New builds the API handler over a store, an identity provider, and (optionally)
+// the OIDC login routes. Pass auth=nil to run without login (read-only).
+func New(s commentStore, id Identity, auth *AuthRoutes) *Handler {
 	h := &Handler{store: s, id: id}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/me", h.me)
@@ -79,6 +95,13 @@ func New(s commentStore, id Identity) *Handler {
 	mux.HandleFunc("PATCH /api/comments/{id}", h.update)
 	mux.HandleFunc("DELETE /api/comments/{id}", h.delete)
 	mux.HandleFunc("PUT /api/comments/{id}/reactions/{emoji}", h.react)
+	if auth != nil {
+		mux.HandleFunc("GET /login", auth.Login)
+		mux.HandleFunc("GET /callback", auth.Callback)
+		mux.HandleFunc("GET /logout", auth.Logout)
+		mux.HandleFunc("GET /logout/notify", auth.LogoutNotify)
+		h.auth = true
+	}
 	h.mux = mux
 	return h
 }
@@ -87,8 +110,18 @@ func New(s commentStore, id Identity) *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
 
 // Owns reports whether the API (vs the static file server) should handle a path.
-// The OIDC login routes added in M3 extend this set.
-func (h *Handler) Owns(path string) bool { return strings.HasPrefix(path, "/api/") }
+func (h *Handler) Owns(path string) bool {
+	if strings.HasPrefix(path, "/api/") {
+		return true
+	}
+	if h.auth {
+		switch path {
+		case "/login", "/callback", "/logout", "/logout/notify":
+			return true
+		}
+	}
+	return false
+}
 
 func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	u := h.id.User(w, r)
@@ -96,7 +129,10 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sub": u.Sub, "name": u.Name, "avatar": u.Avatar, "admin": u.IsSuperadmin})
+	csrf := h.id.EnsureCSRF(w, r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sub": u.Sub, "name": u.Name, "avatar": u.Avatar, "admin": u.IsSuperadmin, "csrf": csrf,
+	})
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
