@@ -356,7 +356,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/02-scalable-oversight-control.qmd",
-      ["人类判断之上的对齐有一个保质期", "弱教师", "强模型", "危害设定上界", "能力差距"],
+      ["人类判断之上的对齐有一个有效期限", "弱教师", "强模型", "危害设定上界", "能力差距"],
     ],
     [
       "en/safety/03-security-authorization.qmd",
@@ -372,7 +372,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/04-runtime-safety.qmd",
-      ["已对齐模型自己的拒绝必要但不充分", "输入与输出要分开筛", "由策略条件化的分类器", "间接@gls-prompt-injection", "流式决定会反伸上来"],
+      ["已对齐模型自己的拒绝必要但不充分", "输入与输出要分开筛", "由策略条件化的分类器", "间接@gls-prompt-injection", "流式决策会反过来约束护栏设计"],
     ],
     [
       "en/safety/05-adversarial-robustness.qmd",
@@ -388,7 +388,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/06-privacy-provenance-unlearning.qmd",
-      ["训练集的一次有损压缩", "服务时泄露它在训练时吸收的内容", "上游或一次重训练里，而不是输出端", "@gls-machine-unlearning能承诺什么、不能承诺什么", "记忆不是叠在学习之上的 bug"],
+      ["训练集的一次有损压缩", "服务时泄露它在训练时吸收的内容", "上游或一次重训练里，而不是输出端", "@gls-machine-unlearning能承诺什么、不能承诺什么", "记忆不是学习之外额外叠上的 bug"],
     ],
     [
       "en/safety/07-law-regulation-policy.qmd",
@@ -396,7 +396,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/07-law-regulation-policy.qmd",
-      ["欧盟的风险分级", "发布如今在法律上要求哪些文档", "版权为什么是每一份预训练语料底下尚未夯实的地基", "监管者写下的规则改写"],
+      ["欧盟的风险分级", "发布如今在法律上要求哪些文档", "版权为什么仍是每一份预训练语料下面不稳定的基础", "监管者写下的规则改写"],
     ],
     [
       "en/safety/index.qmd",
