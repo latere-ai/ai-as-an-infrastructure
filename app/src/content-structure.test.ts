@@ -83,6 +83,16 @@ test("operating contracts are tracked in top-level book surfaces", () => {
 });
 
 test("ecosystem and economics is a full six-chapter part in both languages", () => {
+  expect(src("CONTENT-GAPS.md")).toContain("# Content Gap Ledger");
+  expect(src("CONTENT-GAPS.md")).not.toContain("# Content TODOs");
+  expect(src("CONTENT-GAPS.md")).toContain("- [x] **Ecosystem and economics depth**");
+
+  const expansionRecord = src("zh/ecosystem/EXPANSION-RECORD.md");
+  expect(expansionRecord).toContain("第十部分现在由六章组成");
+  expect(expansionRecord).toContain("不再作为待办计划使用");
+  expect(expansionRecord).not.toContain("第十部分现在有三章");
+  expect(expansionRecord).not.toContain("更新 `zh/book.yml`");
+
   const expected = [
     "ecosystem/01-model-landscape.qmd",
     "ecosystem/02-tooling-ecosystem.qmd",

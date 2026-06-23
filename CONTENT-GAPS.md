@@ -1,6 +1,6 @@
-# Content TODOs
+# Content Gap Ledger
 
-## Open goals
+## Completed goals
 
 - [x] **Mid-training bridge**
 
