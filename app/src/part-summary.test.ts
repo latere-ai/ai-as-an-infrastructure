@@ -41,6 +41,7 @@ test("part summaries are standalone narrative pages, not intro checklists", () =
     expect(enSummary).not.toContain("**Covered:**");
     expect(enSummary).not.toMatch(/^- \*\*/m);
     expect(paragraphs(enSummary).length, `en/${summary} should be narrative prose`).toBeGreaterThanOrEqual(2);
+    expect(paragraphs(enSummary).length, `en/${summary} should stay concise`).toBeLessThanOrEqual(3);
 
     const zhYml = src("zh/book.yml");
     expect(zhYml.indexOf(summary), `zh/${summary} missing from book.yml`).toBeGreaterThan(zhYml.indexOf(lastSubstantiveChapter));
@@ -51,17 +52,34 @@ test("part summaries are standalone narrative pages, not intro checklists", () =
     expect(zhSummary).not.toContain("**覆盖内容：**");
     expect(zhSummary).not.toMatch(/^- \*\*/m);
     expect(paragraphs(zhSummary).length, `zh/${summary} should be narrative prose`).toBeGreaterThanOrEqual(2);
+    expect(paragraphs(zhSummary).length, `zh/${summary} should stay concise`).toBeLessThanOrEqual(3);
   }
 });
 
-test("foundations summary hands off to generative and multimodal architectures", () => {
-  const enSummary = src("en/foundations/summary.qmd");
-  expect(enSummary).toContain("Part II");
-  expect(enSummary).toContain("image, a sound, a video");
-  expect(enSummary).toContain("do not arrive as natural strings");
+test("part summaries hand off to the next structural question", () => {
+  const handoffs: Array<[string, string[], string[]]> = [
+    ["orientation", ["Part I turns that map into material choices"], ["第一部分会把这张地图落到真实支出上"]],
+    ["foundations", ["Part II steps sideways", "do not arrive as natural strings"], ["第二部分会暂时离开", "不是「文本之后还有多模态」"]],
+    ["generative", ["Part III returns to behavior"], ["第三部分会回到行为本身"]],
+    ["adaptation", ["Part IV asks what can be left to inference time"], ["第四部分要问的是"]],
+    ["reasoning", ["Part V turns that routing problem into serving machinery"], ["第五部分会把这个路由问题落到服务机器上"]],
+    ["inference", ["Part VI begins when a served model is asked to do work"], ["第六部分从这里开始"]],
+    ["orchestration", ["Part VII supplies that instrument layer"], ["第七部分要补上的正是这层仪器"]],
+    ["evaluation", ["Part VIII starts from that dependency on evidence"], ["第八部分接着问"]],
+    ["safety", ["Part IX moves below the policy surface"], ["第九部分会再往下走"]],
+    ["infrastructure", ["next part can turn to economics"], ["下一部分转向经济"]],
+    ["ecosystem", ["Part XI turns those market constraints into operating contracts"], ["第十一部分会把这些市场约束变成运营契约"]],
+  ];
 
-  const zhSummary = src("zh/foundations/summary.qmd");
-  expect(zhSummary).toContain("第二部分");
-  expect(zhSummary).toContain("图像、声音、视频");
-  expect(zhSummary).toContain("不是「文本之后还有多模态」");
+  for (const [part, enPhrases, zhPhrases] of handoffs) {
+    const enSummary = src(`en/${part}/summary.qmd`);
+    for (const phrase of enPhrases) {
+      expect(enSummary, `en/${part}/summary.qmd missing handoff phrase: ${phrase}`).toContain(phrase);
+    }
+
+    const zhSummary = src(`zh/${part}/summary.qmd`);
+    for (const phrase of zhPhrases) {
+      expect(zhSummary, `zh/${part}/summary.qmd missing handoff phrase: ${phrase}`).toContain(phrase);
+    }
+  }
 });
