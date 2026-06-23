@@ -334,6 +334,33 @@ test("early-book glossary first uses are readable without leaving the page", () 
   }
 });
 
+test("generative adaptation and reasoning first uses define the method locally", () => {
+  const required = [
+    ["en/generative/01-diffusion-flow-matching.qmd", "@gls-diffusion, the train-by-adding-noise and generate-by-denoising recipe"],
+    ["zh/generative/01-diffusion-flow-matching.qmd", "@gls-diffusion，也就是训练时加噪、生成时去噪的配方"],
+    ["en/generative/01-diffusion-flow-matching.qmd", "@gls-ddpm, the original denoising-diffusion objective"],
+    ["zh/generative/01-diffusion-flow-matching.qmd", "@gls-ddpm这个早期去噪扩散目标"],
+    ["en/generative/04-multimodal-models.qmd", "@gls-clip is the paired image-text training recipe"],
+    ["zh/generative/04-multimodal-models.qmd", "@gls-clip是一种成对图文训练配方"],
+    ["en/generative/04-multimodal-models.qmd", "whatever patch sequence the @gls-vit emits"],
+    ["zh/generative/04-multimodal-models.qmd", "由 @gls-vit 输出的图块序列长度决定"],
+    ["en/adaptation/01-sft-peft.qmd", "@gls-qlora then attacked the remaining bottleneck by keeping the base model in 4-bit form"],
+    ["zh/adaptation/01-sft-peft.qmd", "@gls-qlora接着处理剩下的那个瓶颈：把冻结基座压到 4-bit"],
+    ["en/adaptation/03-rlhf-reward-modeling.qmd", "@gls-kl: how different the new token distribution is from the reference distribution"],
+    ["zh/adaptation/03-rlhf-reward-modeling.qmd", "@gls-kl来度量，也就是新词元分布与参考分布相差多少"],
+    ["en/adaptation/04-dpo-variants.qmd", "@gls-kto drops the paired-data requirement by learning from good/bad labels"],
+    ["zh/adaptation/04-dpo-variants.qmd", "@gls-kto改从好/坏标签学习，去掉成对数据要求"],
+    ["en/reasoning/01-eliciting-reasoning.qmd", "@gls-cot, a written chain of intermediate reasoning steps"],
+    ["zh/reasoning/01-eliciting-reasoning.qmd", "@gls-cot，也就是写出来的一串中间推理步骤"],
+    ["en/reasoning/05-training-to-reason.qmd", "@gls-rloo, policy-gradient variants that compute a baseline from sampled groups"],
+    ["zh/reasoning/05-training-to-reason.qmd", "@gls-rloo这两种从一组采样里计算基线的策略梯度变体"],
+  ];
+
+  for (const [path, snippet] of required) {
+    expect(flat(path), `${path} should define ${snippet} locally`).toContain(snippet);
+  }
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
