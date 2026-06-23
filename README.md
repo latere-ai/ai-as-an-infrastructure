@@ -6,8 +6,11 @@ A bilingual book that treats AI as an infrastructure and explains it
 design-first. It follows one continuous arc, the lifecycle of a capability,
 from raw compute to a deployed and governed behavior, asking at every step
 how each piece got its shape, what trade-offs that shape encodes, and the
-theory underneath. Released under [latere.ai](https://latere.ai), to be
-served at [aaai.latere.ai](https://aaai.latere.ai).
+theory underneath. It is not a replacement for dedicated scaling, distributed
+training, or serving playbooks; those layers are covered because they set the
+constraints that shape adaptation, reasoning, evaluation, agents, safety, and
+economics. Released under [latere.ai](https://latere.ai), to be served at
+[aaai.latere.ai](https://aaai.latere.ai).
 
 ## Structure
 
