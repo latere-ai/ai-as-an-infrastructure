@@ -44,16 +44,26 @@ test("scatter labels sit top-right by default and only flip left on overflow", (
   expect(landscape).toMatch(/text-anchor: end;[^>]*>闭源前沿/);
 });
 
-test("figure 2.2 (field-map-stack) is a graphviz figure with all 11 substantive parts", () => {
+test("figure 2.2 (field-map-stack) is an inline SVG with all 11 substantive parts", () => {
   for (const lang of ["en", "zh"]) {
     const qmd = readFileSync(join(repoRoot, lang, "orientation", "02-field-map.qmd"), "utf8");
-    // Migrated to a {dot} block (auto-laid-out, selectable text), not a static
-    // SVG image and not mermaid.
-    expect(qmd).toMatch(/```\{dot\}\n\/\/\| label: fig-field-map-stack/);
+    // A fixed inline SVG keeps labels selectable while avoiding Graphviz's
+    // overlapping edge labels in this dense cross-layer map.
+    expect(qmd).toMatch(/```\{=html\}\n<figure id="fig-field-map-stack">/);
+    expect(qmd).toContain('<svg class="field-map-stack-svg"');
+    const figure = qmd.match(/<figure id="fig-field-map-stack">[\s\S]*?<\/figure>/)?.[0] ?? "";
+    // Blank lines terminate Markdown HTML blocks, which made markdown-it wrap
+    // later SVG children in <p> tags and broke the inline figure.
+    expect(figure).not.toMatch(/\n\s*\n/);
     expect(qmd).not.toContain("/figures/field-map-stack.svg");
-    // Part XI must be present (it was missing from the old mermaid diagram).
-    expect(qmd).toContain("PXI");
-    expect(qmd).toMatch(/PVI -> PXI/);
+    expect(qmd).not.toMatch(/```\{dot\}\n\/\/\| label: fig-field-map-stack/);
+    // Part XI must be present (it was missing from the old mermaid diagram),
+    // and every substantive part should have an addressable SVG group.
+    for (const id of ["PIX", "PI", "PII", "PIII", "PIV", "PV", "PVI", "PVII", "PVIII", "PX", "PXI"]) {
+      expect(qmd).toContain(`id="fm-${id}"`);
+    }
+    expect(qmd).toContain("fm-dashed");
+    expect(qmd).not.toMatch(/style=dashed,\s*label=/);
   }
   // The matplotlib renderer/spec for this figure was fully removed.
   const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");

@@ -269,8 +269,10 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("README.md")).toContain("Part I, Base Model Formation");
   expect(src("en/index.qmd")).toContain("Part I, Base Model Formation");
   expect(src("zh/index.qmd")).toContain("第一部分，基座模型的形成");
-  expect(src("en/orientation/02-field-map.qmd")).toContain("Part I\\nBase Model Formation");
-  expect(src("zh/orientation/02-field-map.qmd")).toContain("第一部分\\n基座模型的形成");
+  expect(src("en/orientation/02-field-map.qmd")).toContain('id="fm-PI"');
+  expect(src("en/orientation/02-field-map.qmd")).toContain(">Base Model Formation</tspan>");
+  expect(src("zh/orientation/02-field-map.qmd")).toContain('id="fm-PI"');
+  expect(src("zh/orientation/02-field-map.qmd")).toContain(">基座模型的形成</tspan>");
   expect(src("en/orientation/index.qmd")).toContain("base-model formation, adaptation");
   expect(src("zh/orientation/index.qmd")).toContain("经过基座模型形成和适配");
   expect(src("en/orientation/01-whole-stack.qmd")).toContain("Station two: base-model formation");
