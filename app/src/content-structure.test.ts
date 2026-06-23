@@ -385,6 +385,38 @@ test("serving retrieval and evaluation first uses explain operational terms loca
   }
 });
 
+test("safety infrastructure and practice first uses explain operational terms locally", () => {
+  const required = [
+    ["en/safety/03-security-authorization.qmd", "@gls-prompt-injection, an instruction hidden in untrusted content"],
+    ["zh/safety/03-security-authorization.qmd", "@gls-prompt-injection，也就是藏在不可信内容里的指令"],
+    ["en/safety/05-adversarial-robustness.qmd", "@gls-jailbreak attacks, prompts designed to bypass refusal"],
+    ["zh/safety/04-runtime-safety.qmd", "用@gls-jailbreak，也就是绕过拒绝边界的提示"],
+    ["zh/safety/05-adversarial-robustness.qmd", "@gls-jailbreak攻击，也就是绕过拒绝边界的提示"],
+    ["en/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning, approximate removal of a learned fact from trained weights"],
+    ["zh/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning，也就是近似地从已训练权重里移除某个已学事实"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, which lets one machine move bytes into another's memory"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-rdma，也就是绕过 CPU 直接读写远端内存"],
+    ["en/infrastructure/03-the-compute-frontier.qmd", "@gls-cowos package: an advanced package that places compute chiplets and HBM"],
+    ["zh/infrastructure/03-the-compute-frontier.qmd", "@gls-cowos这种把计算小芯片与 HBM 放到同一块硅中介层上的先进封装"],
+    ["en/infrastructure/05-powering-it.qmd", "@gls-pue, the ratio of total facility power to IT equipment power"],
+    ["zh/infrastructure/05-powering-it.qmd", "@gls-pue，也就是数据中心总耗电除以 IT 设备耗电的比值"],
+    ["en/infrastructure/06-the-machine-that-breaks.qmd", "@gls-mtbf, the expected interval between failures for the whole job"],
+    ["zh/infrastructure/06-the-machine-that-breaks.qmd", "@gls-mtbf，也就是平均故障间隔"],
+    ["en/orchestration/06-rag-retrieval.qmd", "@gls-rag puts a live, queryable corpus next to the model"],
+    ["zh/orchestration/06-rag-retrieval.qmd", "@gls-rag的做法，就是在模型旁边放一份实时、可查询的语料"],
+    ["en/ecosystem/02-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model], a common protocol for connecting models to tool servers"],
+    ["zh/ecosystem/02-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model] 这种连接模型与工具服务器的公共协议"],
+    ["en/practice/01-choosing-a-model.qmd", "@gls-gateway, a routing and policy layer for model calls"],
+    ["zh/practice/01-choosing-a-model.qmd", "@gls-gateway，也就是模型调用的路由与策略层"],
+    ["en/practice/06-retrieval-and-documents.qmd", "@gls-vlm, a model that reads page images and text together"],
+    ["zh/practice/06-retrieval-and-documents.qmd", "@gls-vlm（用图像和文本一起解析页面的模型）"],
+  ];
+
+  for (const [path, snippet] of required) {
+    expect(flat(path), `${path} should define ${snippet} locally`).toContain(snippet);
+  }
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
