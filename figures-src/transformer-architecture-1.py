@@ -31,8 +31,9 @@ weights = 1.0  # model weights, the flat reference, in the same relative units
 
 fig, ax = plt.subplots(figsize=(5, 3))
 
-# Small vertical nudges keep the closely spaced MQA and MLA end labels apart.
-label_dy = {"MHA": 0.0, "GQA": 0.0, "MQA": 4.0, "MLA": -4.0}
+# Small vertical nudges keep end labels off each other and off the dashed
+# model-weights line: GQA ends right at y=1, so lift its label clear of it.
+label_dy = {"MHA": 0.0, "GQA": 11.0, "MQA": 4.0, "MLA": -4.0}
 
 for name in ["MHA", "GQA", "MQA", "MLA"]:
     cache = slopes[name] * seq
