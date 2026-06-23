@@ -45,6 +45,15 @@ test("zh introductory prose avoids abrupt bridges and stiff commitment framing",
   expect(preface).not.toContain("能不能被信任、负担");
   expect(orientation).toContain("为了让这种读法不散，每章都会提供三类路标");
   expect(orientation).not.toContain("三个习惯让这种读法成立");
+
+  const zhText = qmdFiles(zhRoot)
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+  expect(zhText).not.toContain("三个事实让这套在实践中成立");
+  expect(zhText).not.toContain("三份契约重要，是因为");
+  expect(zhText).not.toContain("这点重要，是因为");
+  expect(zhText).not.toContain("这个问题重要，是因为");
+  expect(zhText).not.toContain("训练和服务在这里重要，是因为");
 });
 
 test("polished chapter openings preserve key source theses", () => {
