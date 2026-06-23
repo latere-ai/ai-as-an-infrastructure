@@ -361,6 +361,30 @@ test("generative adaptation and reasoning first uses define the method locally",
   }
 });
 
+test("serving retrieval and evaluation first uses explain operational terms locally", () => {
+  const required = [
+    ["zh/inference/01-serving-problem.qmd", "@gls-mqa（多查询注意力，让多个查询头共享同一套键/值头）"],
+    ["en/inference/05-structured-long-context.qmd", "@gls-fsm, a finite-state machine that tracks which grammar state"],
+    ["zh/inference/05-structured-long-context.qmd", "@gls-fsm，也就是记录部分输出走到哪个语法状态的有限状态机"],
+    ["en/inference/05-structured-long-context.qmd", "@gls-attention-sink behavior where early tokens keep attracting attention"],
+    ["zh/inference/05-structured-long-context.qmd", "@gls-attention-sink 这种开头词元持续吸引注意力的现象"],
+    ["en/inference/05-structured-long-context.qmd", "@gls-constrained-decoding, the grammar-checked decode loop"],
+    ["zh/inference/05-structured-long-context.qmd", "@gls-constrained-decoding，也就是带语法检查的解码循环"],
+    ["en/orchestration/06-rag-retrieval.qmd", "@gls-bm25 lexical baseline, a sparse keyword-scoring method"],
+    ["zh/orchestration/06-rag-retrieval.qmd", "@gls-bm25 词法基线，也就是一种稀疏关键词打分方法"],
+    ["en/evaluation/01-benchmarks.qmd", "@gls-held-out set is data deliberately kept out of every training stage"],
+    ["zh/evaluation/01-benchmarks.qmd", "@gls-held-out 指从每个训练阶段都排除在外的数据集"],
+    ["en/evaluation/01-benchmarks.qmd", "@gls-membership-inference, tests that ask whether a specific example looks trained-on"],
+    ["zh/evaluation/01-benchmarks.qmd", "@gls-membership-inference，也就是判断某个具体样本是否像被训练过的测试"],
+    ["en/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge, a model used as the grader"],
+    ["zh/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge，也就是用模型当评分器"],
+  ];
+
+  for (const [path, snippet] of required) {
+    expect(flat(path), `${path} should define ${snippet} locally`).toContain(snippet);
+  }
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
