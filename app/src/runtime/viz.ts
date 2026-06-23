@@ -1939,6 +1939,13 @@
     function humanOnly(x) {
       return 0.24 - 0.11 * x;
     }
+    // Fraction of the candidate-vs-accepted gap that is unsafe rather than just
+    // deferred: weaker oversight and thinner formalization push more of the gap
+    // into the risk band. Independent of x, so the chart's red band and the side
+    // bar's risk proportion stay in lockstep.
+    function unsafeFrac() {
+      return 0.18 + 0.48 * (1 - oversight) * (1 - formal * 0.45);
+    }
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
       var left = 50 * cv.dpr, right = 112 * cv.dpr, top = 24 * cv.dpr, bottom = 52 * cv.dpr;
@@ -1954,17 +1961,29 @@
       ctx.stroke();
       ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(left, H - bottom); ctx.lineTo(W - right, H - bottom); ctx.moveTo(left, top); ctx.lineTo(left, H - bottom); ctx.stroke();
 
-      // Deferred gap between candidate claims and accepted capacity.
+      // The gap between candidate claims (top) and accepted capacity (bottom)
+      // splits into a deferred band (lower, orange) and a risk band (upper, red,
+      // against the claim curve), matching the side-bar legend. The split height
+      // at each x is split(x) = claim - unsafeFrac * (claim - accepted).
+      var uf = unsafeFrac();
+      function accAt(x) { return Math.min(claim(x), capacity(x)); }
+      function splitAt(x) { var c = claim(x); return c - uf * (c - accAt(x)); }
+      // Risk band: between the split line and the claim curve.
       ctx.beginPath();
       for (var j = 0; j <= 140; j++) {
-        var x = j / 140, c = claim(x), a = Math.min(c, capacity(x));
-        if (j === 0) ctx.moveTo(X(x), Y(c)); else ctx.lineTo(X(x), Y(c));
+        var x = j / 140;
+        if (j === 0) ctx.moveTo(X(x), Y(claim(x))); else ctx.lineTo(X(x), Y(claim(x)));
       }
-      for (var k = 140; k >= 0; k--) {
-        var xr = k / 140, cr = claim(xr), ar = Math.min(cr, capacity(xr));
-        ctx.lineTo(X(xr), Y(ar));
+      for (var k = 140; k >= 0; k--) { var xr = k / 140; ctx.lineTo(X(xr), Y(splitAt(xr))); }
+      ctx.closePath(); ctx.fillStyle = 'rgba(165,70,70,0.32)'; ctx.fill();
+      // Deferred band: between the accepted curve and the split line.
+      ctx.beginPath();
+      for (var jd = 0; jd <= 140; jd++) {
+        var xd = jd / 140;
+        if (jd === 0) ctx.moveTo(X(xd), Y(splitAt(xd))); else ctx.lineTo(X(xd), Y(splitAt(xd)));
       }
-      ctx.closePath(); ctx.fillStyle = 'rgba(224,147,107,0.15)'; ctx.fill();
+      for (var kd = 140; kd >= 0; kd--) { var xrd = kd / 140; ctx.lineTo(X(xrd), Y(accAt(xrd))); }
+      ctx.closePath(); ctx.fillStyle = 'rgba(224,147,107,0.28)'; ctx.fill();
 
       function line(fn, col, dash) {
         ctx.strokeStyle = col; ctx.lineWidth = 2 * cv.dpr; ctx.setLineDash(dash ? [6 * cv.dpr, 5 * cv.dpr] : []);
@@ -1980,7 +1999,7 @@
       line(humanOnly, t.accent2, true);
 
       var at = 0.78, c0 = claim(at), a0 = Math.min(c0, capacity(at)), gap = Math.max(0, c0 - a0);
-      var unsafe = gap * (0.18 + 0.48 * (1 - oversight) * (1 - formal * 0.45));
+      var unsafe = gap * uf;
       var deferred = Math.max(0, gap - unsafe);
       var bx = W - right + 34 * cv.dpr, by = top + 20 * cv.dpr, bw = 28 * cv.dpr, bh = 170 * cv.dpr;
       ctx.strokeStyle = t.grid; ctx.strokeRect(bx, by, bw, bh);
