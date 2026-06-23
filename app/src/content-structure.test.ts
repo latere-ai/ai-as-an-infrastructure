@@ -417,6 +417,30 @@ test("safety infrastructure and practice first uses explain operational terms lo
   }
 });
 
+test("audited leftover first uses define the role of the term in place", () => {
+  const required = [
+    ["en/foundations/02-data-curation.qmd", "**@gls-decontamination report**, the audit showing which benchmark overlaps were removed"],
+    ["zh/foundations/02-data-curation.qmd", "**@gls-decontamination报告**，也就是说明哪些基准重叠已从训练语料中移除"],
+    ["zh/foundations/03-tokenization.qmd", "@gls-bpe是这套构造的主力：它反复合并语料中最常见的相邻符号"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod is Google's accelerator cluster counterpart"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-ici, the pod's internal inter-chip interconnect"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-gpu cluster, a cluster of graphics processors used as accelerators"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod 是 Google 加速器集群一侧的对应物"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-ici，也就是 pod 内部的芯片间互连"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-gpu 集群，也就是用图形处理器作加速器的集群"],
+    ["en/infrastructure/02-orchestration-data-infra.qmd", "@gls-sdc lets the run continue while producing subtly wrong numbers without an explicit crash"],
+    ["zh/infrastructure/02-orchestration-data-infra.qmd", "@gls-sdc，也就是不崩溃却悄悄写出错误数字的静默数据损坏"],
+    ["en/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped substitute for a provider key"],
+    ["zh/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key，也就是短时效、限范围的模型密钥替身"],
+    ["en/practice/10-reliability-nondeterministic.qmd", "@gls-sli, the metric that decides whether served events count as valid"],
+    ["zh/practice/10-reliability-nondeterministic.qmd", "@gls-sli，也就是判断服务事件是否有效的指标"],
+  ];
+
+  for (const [path, snippet] of required) {
+    expect(flat(path), `${path} should define ${snippet} locally`).toContain(snippet);
+  }
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
