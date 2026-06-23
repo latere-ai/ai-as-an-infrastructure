@@ -475,6 +475,19 @@ test("zh practice prose avoids literal or note-like formulations", () => {
   expect(practiceText).not.toContain("下面的交互曲线展示这项权衡");
 });
 
+test("zh closing prose avoids reader-instruction formulations", () => {
+  const summary = readFileSync(join(repoRoot, "zh/summary.qmd"), "utf8");
+
+  expect(summary).not.toContain("读完全书，应该留下一个习惯");
+  expect(summary).not.toContain("它也应该留下一种更耐心的进步观");
+  expect(summary).not.toContain("这里也有一层问题变化");
+  expect(summary).not.toContain("整套栈才真正读得懂");
+  expect(summary).not.toContain("让这张地图继续更新");
+  expect(summary).not.toContain("给身边的系统建立观测");
+  expect(summary).not.toContain("继续处理争议");
+  expect(summary).not.toContain("最后，人的位置不能从图上消失");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
