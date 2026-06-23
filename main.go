@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"latere.ai/x/pkg/oidc"
 
@@ -44,6 +45,9 @@ import (
 // exactly like the static-only book (so the routing tests, which call serve
 // directly, are unaffected).
 var commentsAPI *api.Handler
+
+// dbPing, when set (comments enabled), gates /readyz on database reachability.
+var dbPing func(context.Context) error
 
 //go:embed all:_book
 var embedded embed.FS
@@ -117,8 +121,20 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
 
 	switch p {
-	case "/healthz", "/readyz":
+	case "/healthz":
 		w.Header().Set("Cache-Control", "no-store")
+		io.WriteString(w, "ok\n")
+		return
+	case "/readyz":
+		w.Header().Set("Cache-Control", "no-store")
+		if dbPing != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := dbPing(ctx); err != nil {
+				http.Error(w, "db unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		io.WriteString(w, "ok\n")
 		return
 	}
@@ -307,6 +323,7 @@ func main() {
 			log.Fatalf("database: %v", err)
 		}
 		defer pool.Close()
+		dbPing = pool.Ping
 
 		// OIDC login is optional: with no AUTH_CLIENT_ID, oidc.New returns nil
 		// and comments stay public-read-only (anonymous identity rejects writes).
