@@ -60,7 +60,8 @@ ax.tick_params(colors=INK, which="both")
 for lbl in ax.get_xticklabels() + ax.get_yticklabels():
     lbl.set_color(INK)
 
-leg = ax.legend(frameon=False, fontsize=7.5, loc="upper left")
+leg = ax.legend(frameon=False, fontsize=7.5, loc="lower right",
+                bbox_to_anchor=(1.0, 0.0))
 for txt in leg.get_texts():
     txt.set_color(INK)
 
