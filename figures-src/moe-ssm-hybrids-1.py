@@ -31,10 +31,12 @@ ax.set_ylabel("Sequence-mixing cost")
 ax.set_xlim(1.0, 8.0)
 ax.set_ylim(0, attention.max() * 1.05)
 
-# annotate the widening gap toward the long-context end
+# annotate the widening gap toward the long-context end.
+# keep the text low-right so it clears the upper-left legend; the
+# longer zh wording needs the extra room.
 ax.annotate("widening gap\nat long context",
-            xy=(7.0, 7.0 ** 2), xytext=(3.4, 50),
-            color=GRAY, fontsize=9,
+            xy=(7.0, 7.0 ** 2), xytext=(4.2, 12),
+            ha="left", color=GRAY, fontsize=9,
             arrowprops=dict(arrowstyle="->", color=GRAY, lw=1.0))
 
 ax.legend(frameon=False, loc="upper left", fontsize=9,
