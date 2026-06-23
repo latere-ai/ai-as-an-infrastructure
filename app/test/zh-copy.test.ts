@@ -107,6 +107,29 @@ test("zh foundation prose avoids literal or note-like formulations", () => {
   expect(foundationsText).not.toContain("数学底材");
 });
 
+test("zh generative prose avoids literal or note-like formulations", () => {
+  const generativeText = qmdFiles(join(zhRoot, "generative"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(generativeText).not.toContain("一条其长度即输出长度的串行链");
+  expect(generativeText).not.toContain("其化解是条件流匹配目标");
+  expect(generativeText).not.toContain("下面这些设计，在很大程度上就是对它的四种不同回答");
+  expect(generativeText).not.toContain("本章余下的，正是这个领域明确这层联系之后所发生的事");
+  expect(generativeText).not.toContain("应该谨慎来读");
+  expect(generativeText).not.toContain("应当谨慎读");
+  expect(generativeText).not.toContain("实时语音界面只有几百毫秒");
+  expect(generativeText).not.toContain("这些损失所坐落的编码器");
+  expect(generativeText).not.toContain("流匹配施于语音");
+  expect(generativeText).not.toContain("搭着文本模型的进步");
+  expect(generativeText).not.toContain("扩散模型条件在文本上");
+  expect(generativeText).not.toContain("自回归路线，则是");
+  expect(generativeText).not.toContain("世界模型是什么」的三个答案");
+  expect(generativeText).not.toContain("这个领域分化出三个架构上的答案");
+  expect(generativeText).not.toContain("第一个答案是继续生成世界");
+  expect(generativeText).not.toContain("读完这一部分，读者应");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
