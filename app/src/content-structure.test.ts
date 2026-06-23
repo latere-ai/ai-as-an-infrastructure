@@ -323,6 +323,17 @@ test("reasoning and test-time compute is a full seven-chapter part in both langu
       last = next;
     }
 
+    for (const chapter of expected) {
+      const chapterSrc = src(`${lang}/${chapter}`);
+      if (lang === "en") {
+        expect(chapterSrc, `${lang}/${chapter} should name contested claims`).toMatch(/^## .*contested/im);
+        expect(chapterSrc, `${lang}/${chapter} should name constraint arrows`).toMatch(/^## .*constraint arrow/im);
+      } else {
+        expect(chapterSrc, `${lang}/${chapter} should name contested claims`).toMatch(/^## .*争议/m);
+        expect(chapterSrc, `${lang}/${chapter} should name lower-layer constraints`).toMatch(/^## 下层约束/m);
+      }
+    }
+
     const intro = src(`${lang}/reasoning/index.qmd`);
     for (const section of [
       "@sec-eliciting-reasoning",
