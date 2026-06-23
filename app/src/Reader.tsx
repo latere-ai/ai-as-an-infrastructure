@@ -310,7 +310,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           </nav>
         )}
 
-        <div style={{ flex: "0 1 18px" }} />
+        <div style={{ flex: mobile ? "1 1 18px" : "0 1 18px" }} />
 
         {(!mobile || chapter.headings.length > 0) && (
           <button onClick={() => (mobile ? (setDrawer(false), setTocDrawer((d) => !d)) : set({ tocCollapsed: !s.tocCollapsed }))}
