@@ -1,0 +1,88 @@
+# 作为搜索的结构化推理 {#sec-structured-reasoning-search}
+
+一旦模型可以写出中间工作，下一件事就是决定怎样在这些工作之间移动。链式推理只承诺一条路径。树把备选路径留在手上。图允许局部结果被合并、修订和复用。搜索这组方法，把推理从「生成下一个词元」改写成「选择哪个局部状态值得得到下一份算力」。它仍然是在冻结模型上的推断时工作，属于 @sec-eliciting-reasoning 的延伸，但控制问题已经显式化。
+
+![推理搜索的示意图。固定提示可以解码成一条链，扩展成一棵树，重连成一张图，也可以由价值模型引导。真正有用的预算，是花在通过选择后仍留下的状态上的那部分。](/figures/structured-reasoning-search-1.svg){#fig-structured-reasoning-search-1}
+
+## 一个 thought 背后的状态空间
+
+把一条推理轨迹看作穿过局部状态的路径。提示是 $x$。经过 $t$ 个推理步骤后，状态是 $s_t = (x, z_1, \ldots, z_t)$，其中每个 $z_t$ 可以是一段短 thought、一个子目标、一段程序片段、一个证明步骤，或一次工具结果。模型用策略 $p_\theta(z_{t+1} \mid s_t)$ 提出下一步。某个打分器 $v(s_t)$ 估计这个局部状态是否有前途，终端验证器 $V(s_T)$ 判断一个完成状态是否正确。搜索问题可以写成：
+
+$$
+\hat{s} = \arg\max_{s_T \in \mathcal{S}_B(x)} V(s_T),
+$$
+
+其中 $\mathcal{S}_B(x)$ 是预算 $B$ 下能到达的终端状态集合。这个记号有意写得很宽。自一致性里，$\mathcal{S}_B(x)$ 是一袋相互独立的链，$V$ 往往是多数投票。Tree of Thoughts 里，这个集合由扩展和剪枝得到 [@yao2023tree]。AlphaZero 式解码里，$v$ 或一个学到的价值模型负责决定下一次 rollout 花在哪里 [@feng2023alphazero]。
+
+预算核算简单，但很要紧：
+
+$$
+C \approx N_{\text{gen}} C_{\text{decode}} + N_{\text{score}} C_{\text{score}}
+    + N_{\text{verify}} C_{\text{verify}}.
+$$
+
+其中 $N_{\text{gen}}$ 计数生成了多少状态，$N_{\text{score}}$ 计数评估了多少局部状态，$N_{\text{verify}}$ 计数做了多少终端检查。这些常数不能互相替代。一个 Python 单元测试可能很便宜，一个模型写出的评分可能又是一整次解码，一个形式化检查器运行起来便宜，但编写成本很高。因此 @sec-verifiers-process-supervision 里的验证器阶梯不只是训练细节。它直接设定搜索的经济性。
+
+## 链、束、树与图
+
+链是退化情形。它的分支因子是一，也不保留备选。它的成本随 thought 数线性增长，失败模式是过早承诺。束搜索在每一步后保留 $w$ 个状态。当局部得分有意义时，它很有用；当得分看不见延迟收益时，它就脆弱。树搜索进一步打开设计空间：扩展 $b$ 个子节点，为它们打分，保留一个 frontier，并允许回溯。Tree of Thoughts 把这个模式做成了具体方法：让模型提出并自评估中间 thought，再在这些 thought 上做宽度优先或深度优先搜索 [@yao2023tree]。
+
+图搜索去掉了树里的一个隐含假设。树要求每个局部状态只有一个父节点。许多推理任务并不是这样。证明可以复用引理。规划问题可以把两个等价状态合并。数据分析问题可以先算两个统计量，再把它们组合起来。Graph of Thoughts 把这些中间单元建成顶点，把依赖、聚合、精炼和反馈表示成边，于是后一步可以消费多个早先 thought，而不只能接在一个父节点后面 [@besta2023graph]。收益是复用与组合。代价是记账：系统必须判断两个 thought 何时兼容、何时重复、何时相互矛盾。
+
+```python
+# 一个最小的验证器引导树搜索。具体实现会变，但控制问题稳定：
+# 生成候选，为局部状态打分，保留 frontier，只在完成状态上花验证预算。
+def search(prompt, budget, width, expand, score, verify):
+    frontier = [State(prompt)]
+    finished = []
+    while budget.remaining() and frontier:
+        candidates = []
+        for state in frontier:
+            for child in expand(state):
+                budget.charge_decode(child)
+                if child.is_terminal():
+                    budget.charge_verify(child)
+                    if verify(child):
+                        finished.append(child)
+                else:
+                    budget.charge_score(child)
+                    child.value = score(child)
+                    candidates.append(child)
+        frontier = sorted(candidates, key=lambda s: s.value, reverse=True)[:width]
+    return select_best(finished, frontier)
+```
+
+这段草图也说明，搜索不是提示工程上方一层免费的装饰。如果 `score` 有噪声，frontier 里留下的是看起来好、而不一定真的好的状态。如果 `expand` 提出许多近重复候选，宽度就浪费在重复上。如果没有 `verify`，搜索会退回到学出来的奖励模型，并继承 @sec-rlhf 里的过度优化问题。
+
+<figure id="fig-reasoning-search-budget">
+<div class="viz" data-viz="reasoning-search-budget" data-lang="zh"></div>
+<figcaption>搜索预算分配。增加分支和深度会把更多算力花在生成上；提高验证器质量，才能看到额外覆盖率何时转化为有用结果。图中曲线是示意性的，不是实测基准数字。</figcaption>
+</figure>
+
+## 价值引导与棋盘游戏类比
+
+棋盘游戏搜索这个类比有用，但很容易被读过头。AlphaZero 能工作，是因为游戏状态紧凑、合法动作可枚举、模拟器精确，并且胜负最终已知。语言推理并不同时拥有这四件事。状态是一段文本前缀，动作空间是词表或自由形式 thought，转移又是一次模型解码，终端正确性还可能不可得。因此许多 LLM 搜索系统采用 AlphaZero 的形状，却不能照搬完整的 AlphaZero 设定。
+
+真正值得借来的，是 proposal 与 value 的分离。proposal policy 回答「下一步可能是什么」。value model 回答「哪个局部状态值得再 rollout」。自评估引导的束搜索让模型为自己的中间步骤打分 [@xie2023selfeval]。AlphaZero 式树搜索学习一个价值函数，并用它引导解码和后续训练 [@feng2023alphazero]。两者都在赌同一件事：为局部状态打分，比完整扩展它更便宜，而且足够准确，能避免树的大部分浪费。
+
+这笔赌注会在几个清楚的区域失效。价值模型看不出隐藏错误时，搜索会放大那个错误。验证器只能检查最终答案时，局部剪枝就是猜测。问题没有有用分支结构时，一棵树只是用更多开销包装了自一致性。搜索之所以值得，是因为局部状态在最终答案之前已经有可分辨的价值差异，并且系统能把那种差异量得足够好。
+
+## 搜索层属于哪里
+
+本书余下部分会用三种方式读搜索。
+
+- **作为引出。** 固定模型已经包含有用解路径，搜索是找出并选择它们的方法。这是 @sec-eliciting-reasoning 的视角，也是 @sec-training-to-reason 里 RLVR 争论中「放大潜在能力」那一边的视角。
+- **作为验证基础设施。** 搜索的强度由循环里的打分器或检查器决定。这直接连接到 @sec-verifiers-process-supervision，也连接到 @sec-judging-holistic 对模型评判者的警惕。
+- **作为智能体控制。** 一旦状态里包含工具结果、记忆和动作，同一个循环就变成智能体 harness。ReAct 把推理轨迹与环境动作交错起来 [@yao2022react]；@sec-the-harness 稍后会把这个循环当作生产软件，而不只是提示技巧。
+
+::: {.callout-important}
+## 仍有争议之处
+什么时候结构化搜索胜过更简单的采样，领域还没有稳定答案。Tree of Thoughts 在 Game of 24 这类显式分支任务上报告了大幅收益 [@yao2023tree]。Graph of Thoughts 在中间结果可合并、可精炼的任务上报告了收益 [@besta2023graph]。但许多基准上，更便宜的配方也很强：采更多独立样本，让验证器去选。比较常被验证器质量、提示工程、温度和任务选择搅在一起。把「搜索有助于推理」理解为关于任务状态结构与检查器的主张，而不是语言模型的普遍属性。
+:::
+
+搜索让中间层显出来。它的下方是模型 proposal 与服务成本。它的上方是验证器、智能体和产品延迟预算。下一章改动的是状态本身：不再让每一步推理都只能是一段自然语言 thought，而是让模型把一部分工作交给程序、求解器或证明检查器。
+
+## 延伸阅读
+
+::: {#further-reading}
+:::
