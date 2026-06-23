@@ -43,6 +43,16 @@
     window.addEventListener('resize', size);
     return { c: c, ctx: c.getContext('2d'), dpr: dpr };
   }
+  function watchTheme(host, draw) {
+    if (!window.MutationObserver) return;
+    var raf = 0;
+    var obs = new MutationObserver(function () {
+      if (!host.isConnected) { obs.disconnect(); return; }
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(function () { raf = 0; draw(); });
+    });
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette'] });
+  }
 
   var R = {};
 
@@ -175,20 +185,62 @@
       for (i = 0; i < XS.length; i++) { var yv = f(XS[i], pv); if (yv < ymin) ymin = yv; if (yv > ymax) ymax = yv; }
     }
     if (!(ymax > ymin)) ymax = ymin + 1;
+    function formatTick(v) {
+      var a = Math.abs(v);
+      if (a >= 10000 || (a > 0 && a < 0.01)) return v.toExponential(0).replace('+', '');
+      if (a >= 100) return String(Math.round(v));
+      if (a >= 10) return (Math.round(v * 10) / 10).toString();
+      if (a >= 1) return (Math.round(v * 100) / 100).toString();
+      return (Math.round(v * 1000) / 1000).toString();
+    }
+    function linearTicks(min, max) {
+      var out = [];
+      for (var j = 0; j <= 4; j++) out.push(min + (max - min) * j / 4);
+      return out;
+    }
+    function logTicks(min, max) {
+      var lo = Math.max(min, 1e-9), hi = Math.max(max, lo * 1.001), out = [];
+      var start = Math.floor(Math.log(lo) / Math.LN10), end = Math.ceil(Math.log(hi) / Math.LN10);
+      for (var e = start; e <= end; e++) {
+        var v = Math.pow(10, e);
+        if (v >= lo * 0.999 && v <= hi * 1.001) out.push(v);
+      }
+      if (out.length >= 3) return out;
+      out = [];
+      for (var j = 0; j <= 4; j++) out.push(Math.exp(Math.log(lo) + (Math.log(hi) - Math.log(lo)) * j / 4));
+      return out;
+    }
+    function axisScaleLabel(label, isLog) {
+      if (!isLog || /log|对数/i.test(label)) return label;
+      if (/[\u3400-\u9fff]/.test(label)) return /）$/.test(label) ? label.replace(/）$/, '，对数）') : label + '（对数）';
+      return /\)$/.test(label) ? label.replace(/\)$/, ', log scale)') : label + ' (log scale)';
+    }
     function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 46 * cv.dpr;
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
+      var left = 60 * cv.dpr, right = 28 * cv.dpr, top = 22 * cv.dpr, bottom = 52 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
-      function X(x) { var u = logx ? (Math.log(x) - Math.log(xmin)) / (Math.log(xmax) - Math.log(xmin)) : (x - xmin) / (xmax - xmin); return pd + u * (W - 2 * pd); }
-      function Y(y) { var yc = Math.min(ymax, Math.max(ymin, y)); var u = logy ? (Math.log(Math.max(yc, 1e-9)) - Math.log(Math.max(ymin, 1e-9))) / (Math.log(Math.max(ymax, 1e-9)) - Math.log(Math.max(ymin, 1e-9))) : (yc - ymin) / (ymax - ymin); return H - pd - u * (H - 2 * pd); }
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
+      function X(x) { var u = logx ? (Math.log(x) - Math.log(xmin)) / (Math.log(xmax) - Math.log(xmin)) : (x - xmin) / (xmax - xmin); return left + u * (W - left - right); }
+      function Y(y) { var yc = Math.min(ymax, Math.max(ymin, y)); var u = logy ? (Math.log(Math.max(yc, 1e-9)) - Math.log(Math.max(ymin, 1e-9))) / (Math.log(Math.max(ymax, 1e-9)) - Math.log(Math.max(ymin, 1e-9))) : (yc - ymin) / (ymax - ymin); return H - bottom - u * (H - top - bottom); }
+      var xTicks = logx ? logTicks(xmin, xmax) : linearTicks(xmin, xmax);
+      var yTicks = logy ? logTicks(ymin, ymax) : linearTicks(ymin, ymax);
+      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr; ctx.beginPath();
+      xTicks.forEach(function (v) { var x = X(v); ctx.moveTo(x, top); ctx.lineTo(x, H - bottom + 4 * cv.dpr); });
+      yTicks.forEach(function (v) { var y = Y(v); ctx.moveTo(left - 4 * cv.dpr, y); ctx.lineTo(W - right, y); });
+      ctx.stroke();
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(left, H - bottom); ctx.lineTo(W - right, H - bottom); ctx.moveTo(left, top); ctx.lineTo(left, H - bottom); ctx.stroke();
       ctx.strokeStyle = t.accent; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
       XS.forEach(function (xx, i) { var px = X(xx), py = Y(f(xx, p)); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); }); ctx.stroke();
-      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(xlabel, W / 2, H - pd + 26 * cv.dpr);
-      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(ylabel, 0, 0); ctx.restore();
+      ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      xTicks.forEach(function (v) { ctx.fillText(formatTick(v), X(v), H - bottom + 7 * cv.dpr); });
+      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      yTicks.forEach(function (v) { ctx.fillText(formatTick(v), left - 8 * cv.dpr, Y(v)); });
+      ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.fillText(axisScaleLabel(xlabel, logx), W / 2, H - bottom + 36 * cv.dpr);
+      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(axisScaleLabel(ylabel, logy), 0, 0); ctx.restore();
     }
     host.appendChild(slider(plabel, pmin, pmax, (pmax - pmin) / 100, p, function (v) { p = v; draw(); }).wrap);
     draw();
+    watchTheme(host, draw);
   };
 
   // Attention-weight matrix: rows are queries, columns are keys; click a row to
@@ -1432,6 +1484,323 @@
     }
     host.appendChild(slider('cost weight', 0, 0.8, 0.01, cw, function (v) { cw = v; draw(); }).wrap);
     host.appendChild(slider('latency weight', 0, 0.8, 0.01, lw, function (v) { lw = v; draw(); }).wrap);
+    draw();
+  };
+
+  // Reasoning search budget: branching and depth buy coverage, but only a
+  // verifier turns coverage into useful selected states. The numbers are
+  // deliberately synthetic; the component shows the trade-off shape.
+  R['reasoning-search-budget'] = function (host) {
+    var lang = host.getAttribute('data-lang') === 'zh' ? 'zh' : 'en';
+    var L = lang === 'zh' ? {
+      branching: '分支数', depth: '深度', verifier: '验证器质量',
+      coverage: '状态覆盖', useful: '有效工作', wasted: '浪费工作',
+      gen: '生成', score: '评分', verify: '验证', states: '状态数'
+    } : {
+      branching: 'branching', depth: 'depth', verifier: 'verifier quality',
+      coverage: 'state coverage', useful: 'useful work', wasted: 'wasted work',
+      gen: 'generation', score: 'scoring', verify: 'verification', states: 'states'
+    };
+    var branching = 3, depth = 4, verifier = 0.65;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 285);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var states = 0, frontier = 1;
+      for (var d = 0; d < depth; d++) { frontier *= branching; states += frontier; }
+      var coverage = 1 - Math.exp(-states / 75);
+      var duplicate = Math.min(0.38, 0.05 * (branching - 1) + 0.025 * depth);
+      var useful = Math.max(0, coverage * (0.25 + 0.75 * verifier) * (1 - duplicate));
+      var wasted = Math.min(1, coverage - useful + duplicate * 0.35);
+      var genCost = Math.min(1, states / 300);
+      var scoreCost = Math.min(1, states * (0.25 + 0.25 * (1 - verifier)) / 260);
+      var verifyCost = Math.min(1, frontier / 250 * (0.35 + verifier));
+      function X(i) { return pd + (i + 0.5) * (W - 2 * pd) / 3; }
+      function Y(v) { return H - pd - v * (H - 2 * pd); }
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
+      [
+        { n: L.coverage, v: coverage, c: 'rgba(128,128,128,0.45)' },
+        { n: L.useful, v: useful, c: t.accent },
+        { n: L.wasted, v: wasted, c: t.accent2 }
+      ].forEach(function (b, i) {
+        var x = X(i), bw = 58 * cv.dpr, y = Y(b.v);
+        ctx.fillStyle = b.c; ctx.fillRect(x - bw / 2, y, bw, H - pd - y);
+        ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(b.n, x, H - pd + 20 * cv.dpr);
+        ctx.fillText(Math.round(b.v * 100) + '%', x, y - 8 * cv.dpr);
+      });
+      var sx = pd + 10 * cv.dpr, sy = pd + 8 * cv.dpr, sw = 96 * cv.dpr, sh = 11 * cv.dpr;
+      [
+        [L.gen, genCost, t.accent],
+        [L.score, scoreCost, 'rgba(128,128,128,0.55)'],
+        [L.verify, verifyCost, t.accent2]
+      ].forEach(function (r, i) {
+        ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(r[0], sx, sy + i * 20 * cv.dpr);
+        ctx.fillStyle = t.grid; ctx.fillRect(sx + 58 * cv.dpr, sy - 9 * cv.dpr + i * 20 * cv.dpr, sw, sh);
+        ctx.fillStyle = r[2]; ctx.fillRect(sx + 58 * cv.dpr, sy - 9 * cv.dpr + i * 20 * cv.dpr, sw * r[1], sh);
+      });
+      read.textContent = L.states + '=' + states + ' · ' + L.useful + '=' + Math.round(useful * 100) + '%';
+    }
+    host.appendChild(slider(L.branching, 1, 6, 1, branching, function (v) { branching = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider(L.depth, 1, 7, 1, depth, function (v) { depth = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider(L.verifier, 0, 1, 0.01, verifier, function (v) { verifier = v; draw(); }).wrap);
+    draw();
+  };
+
+  // RLVR boundary explorer: pass@k can improve because RL concentrates mass on
+  // known-good paths, because it expands support, or both. CoT-pass@k is drawn
+  // lower when path correctness is stricter than answer correctness.
+  R['rlvr-boundary'] = function (host) {
+    var lang = host.getAttribute('data-lang') === 'zh' ? 'zh' : 'en';
+    var L = lang === 'zh' ? {
+      coverage: '基座覆盖', sharp: 'RL 集中度', strict: '链路严格度',
+      base: '基座 pass@k', rl: 'RLVR pass@k', cot: 'CoT-pass@k',
+      k: '样本数 k', pass: '通过概率'
+    } : {
+      coverage: 'base coverage', sharp: 'RL concentration', strict: 'CoT strictness',
+      base: 'base pass@k', rl: 'RLVR pass@k', cot: 'CoT-pass@k',
+      k: 'samples k', pass: 'pass probability'
+    };
+    var coverage = 0.72, sharp = 0.62, strict = 0.35;
+    var cv = canvas(host, 300);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 48 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var xs = [], i;
+      for (i = 0; i <= 180; i++) xs.push(Math.exp(Math.log(1) + (Math.log(256) - Math.log(1)) * i / 180));
+      var baseCap = 0.48 + 0.48 * coverage;
+      var baseP = 0.01 + 0.08 * coverage;
+      var rlP = baseP * (1.8 + 4.4 * sharp);
+      var rlCap = Math.min(0.99, baseCap * (1.04 - 0.30 * sharp) + 0.08 * (1 - sharp));
+      function pass(p, cap, k) { return cap * (1 - Math.pow(1 - Math.min(0.95, p), k)); }
+      function cotPenalty(k) { return 1 - strict * (0.12 + 0.30 * (1 - Math.exp(-Math.log(k + 1) / 2.2))); }
+      function X(k) { return pd + Math.log(k) / Math.log(256) * (W - 2 * pd); }
+      function Y(v) { return H - pd - v * (H - 2 * pd); }
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
+      function line(fn, color, dash) {
+        if (dash) ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); else ctx.setLineDash([]);
+        ctx.strokeStyle = color; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
+        xs.forEach(function (k, i) { var x = X(k), y = Y(fn(k)); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+      line(function (k) { return pass(baseP, baseCap, k); }, t.ink, true);
+      line(function (k) { return pass(rlP, rlCap, k); }, t.accent, false);
+      line(function (k) { return pass(rlP, rlCap, k) * cotPenalty(k); }, t.accent2, true);
+      var leg = [[L.base, t.ink, true], [L.rl, t.accent, false], [L.cot, t.accent2, true]];
+      leg.forEach(function (r, i) {
+        var x = pd + 10 * cv.dpr, y = pd + 16 * cv.dpr + i * 18 * cv.dpr;
+        ctx.strokeStyle = r[1]; ctx.lineWidth = 2 * cv.dpr; if (r[2]) ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); else ctx.setLineDash([]);
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 24 * cv.dpr, y); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(r[0], x + 30 * cv.dpr, y + 4 * cv.dpr);
+      });
+      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(L.k, W / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.pass, 0, 0); ctx.restore();
+    }
+    host.appendChild(slider(L.coverage, 0.2, 1, 0.01, coverage, function (v) { coverage = v; draw(); }).wrap);
+    host.appendChild(slider(L.sharp, 0, 1, 0.01, sharp, function (v) { sharp = v; draw(); }).wrap);
+    host.appendChild(slider(L.strict, 0, 1, 0.01, strict, function (v) { strict = v; draw(); }).wrap);
+    draw();
+  };
+
+  // Adaptive test-time compute: hard prompts need longer useful thinking, while
+  // easy prompts hit the overthinking side earlier. The marker chooses the
+  // synthetic utility optimum after a small latency penalty.
+  R['ttc-budget'] = function (host) {
+    var lang = host.getAttribute('data-lang') === 'zh' ? 'zh' : 'en';
+    var L = lang === 'zh' ? {
+      difficulty: '难度', tokens: '推理词元', accuracy: '准确率',
+      optimum: '预算', window: '有效窗口', over: '过度思考'
+    } : {
+      difficulty: 'difficulty', tokens: 'reasoning tokens', accuracy: 'accuracy',
+      optimum: 'budget', window: 'useful window', over: 'overthinking'
+    };
+    var diff = 0.55;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 285);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 45 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var xs = [], i, bestK = 1, bestU = -1;
+      for (i = 0; i <= 180; i++) xs.push(Math.exp(Math.log(4) + (Math.log(1024) - Math.log(4)) * i / 180));
+      var scale = 12 + 130 * diff;
+      var threshold = 1.15 + 1.25 * diff;
+      function acc(k) {
+        var lx = Math.log(k) / Math.log(10);
+        var base = 0.32 + 0.18 * (1 - diff);
+        var gain = (0.38 + 0.28 * diff) * (1 - Math.exp(-k / scale));
+        var penalty = 0.055 * Math.pow(Math.max(0, lx - threshold), 2.1);
+        return Math.max(0, Math.min(0.98, base + gain - penalty));
+      }
+      xs.forEach(function (k) {
+        var utility = acc(k) - 0.10 * Math.log(k / 4) / Math.log(1024 / 4);
+        if (utility > bestU) { bestU = utility; bestK = k; }
+      });
+      function X(k) { return pd + (Math.log(k) - Math.log(4)) / (Math.log(1024) - Math.log(4)) * (W - 2 * pd); }
+      function Y(v) { return H - pd - v * (H - 2 * pd); }
+      var win0 = Math.max(4, scale * 0.7), win1 = Math.min(1024, Math.exp(threshold * Math.log(10)));
+      ctx.fillStyle = 'rgba(59,130,246,0.09)'; ctx.fillRect(X(win0), pd, Math.max(0, X(win1) - X(win0)), H - 2 * pd);
+      ctx.fillStyle = 'rgba(224,147,107,0.11)'; ctx.fillRect(X(win1), pd, W - pd - X(win1), H - 2 * pd);
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
+      ctx.strokeStyle = t.accent; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
+      xs.forEach(function (k, i) { var x = X(k), y = Y(acc(k)); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+      ctx.stroke();
+      ctx.strokeStyle = t.accent2; ctx.lineWidth = 1.5 * cv.dpr; ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); ctx.beginPath();
+      xs.forEach(function (k, i) { var x = X(k), y = Y(0.18 + 0.72 * (Math.log(k) - Math.log(4)) / (Math.log(1024) - Math.log(4))); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+      ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(X(bestK), Y(acc(bestK)), 5 * cv.dpr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(L.window, (X(win0) + X(win1)) / 2, pd + 16 * cv.dpr);
+      ctx.fillText(L.over, (X(win1) + W - pd) / 2, pd + 34 * cv.dpr);
+      ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.fillText(L.tokens, W / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(13 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.accuracy, 0, 0); ctx.restore();
+      read.textContent = L.optimum + '≈' + Math.round(bestK) + ' · ' + L.accuracy + '=' + Math.round(acc(bestK) * 100) + '%';
+    }
+    host.appendChild(slider(L.difficulty, 0, 1, 0.01, diff, function (v) { diff = v; draw(); }).wrap);
+    draw();
+  };
+
+  // Preference-signal mixer: a pairwise preference label is a weighted
+  // multi-attribute judgment. Change the implicit rubric weights and the chosen
+  // answer can flip even though the candidate responses do not move.
+  R['preference-signal-mixer'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh';
+    var labels = zh
+      ? { read: '当前偏好', a: 'A：简洁、准确', b: 'B：谨慎、详细', score: '加权分数',
+          attrs: ['正确性', '有用性', '安全性', '简洁性'] }
+      : { read: 'current preference', a: 'A: concise, correct', b: 'B: cautious, detailed', score: 'weighted score',
+          attrs: ['correctness', 'helpfulness', 'safety', 'brevity'] };
+    var scores = [
+      [0.92, 0.64, 0.72, 0.90],
+      [0.78, 0.88, 0.95, 0.48]
+    ];
+    var weights = [0.38, 0.25, 0.25, 0.12];
+    var colors = ['#3b82f6', '#e0936b', '#4b9f6b', '#8b6bb8'];
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 270);
+    function normWeights() {
+      var s = weights.reduce(function (a, b) { return a + b; }, 0) || 1;
+      return weights.map(function (w) { return w / s; });
+    }
+    function total(row, w) {
+      return row.reduce(function (a, v, i) { return a + v * w[i]; }, 0);
+    }
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var w = normWeights(), ta = total(scores[0], w), tb = total(scores[1], w);
+      var rows = [[labels.a, scores[0], ta], [labels.b, scores[1], tb]];
+      var maxWidth = W - 2 * pd - 92 * cv.dpr, rowH = 52 * cv.dpr, startY = pd + 18 * cv.dpr;
+      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left';
+      rows.forEach(function (r, ri) {
+        var x = pd + 88 * cv.dpr, y = startY + ri * rowH, acc = 0;
+        ctx.fillStyle = t.ink; ctx.textAlign = 'right'; ctx.fillText(r[0], x - 10 * cv.dpr, y + 16 * cv.dpr);
+        r[1].forEach(function (v, i) {
+          var seg = maxWidth * v * w[i];
+          ctx.fillStyle = colors[i]; ctx.globalAlpha = 0.82;
+          ctx.fillRect(x + acc, y, seg, 24 * cv.dpr);
+          acc += seg;
+        });
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = r[2] === Math.max(ta, tb) ? t.ink : t.grid; ctx.lineWidth = r[2] === Math.max(ta, tb) ? 2 * cv.dpr : cv.dpr;
+        ctx.strokeRect(x, y, maxWidth * r[2], 24 * cv.dpr);
+        ctx.fillStyle = t.ink; ctx.textAlign = 'left';
+        ctx.fillText(labels.score + ' ' + r[2].toFixed(2), x + maxWidth * r[2] + 8 * cv.dpr, y + 17 * cv.dpr);
+      });
+      var lx = pd, ly = H - 54 * cv.dpr;
+      labels.attrs.forEach(function (name, i) {
+        var x = lx + i * Math.max(92 * cv.dpr, (W - 2 * pd) / 4);
+        ctx.fillStyle = colors[i]; ctx.fillRect(x, ly, 12 * cv.dpr, 12 * cv.dpr);
+        ctx.fillStyle = t.ink; ctx.textAlign = 'left'; ctx.font = (11 * cv.dpr) + 'px sans-serif';
+        ctx.fillText(name + ' ' + Math.round(w[i] * 100) + '%', x + 17 * cv.dpr, ly + 11 * cv.dpr);
+      });
+      read.textContent = labels.read + ': ' + (ta >= tb ? labels.a : labels.b);
+    }
+    labels.attrs.forEach(function (name, i) {
+      host.appendChild(slider(name, 0, 1, 0.01, weights[i], function (v) { weights[i] = v; draw(); }).wrap);
+    });
+    draw();
+  };
+
+  // Verifier-threshold: best-of-N remains useful when the selector is reliable;
+  // with a weak proxy, more candidates increase the chance of finding an
+  // over-optimized false positive. The curves are qualitative.
+  R['verifier-threshold'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh';
+    var rel = 0.82;
+    var labels = zh
+      ? { rel: '选择器可靠性', x: '候选数 N', y: '期望真实质量', ideal: '可靠检查器', proxy: '当前选择器', peak: '峰值' }
+      : { rel: 'selector reliability', x: 'candidates N', y: 'expected true quality', ideal: 'reliable checker', proxy: 'current selector', peak: 'peak' };
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 270);
+    function ideal(n) { return 0.42 + 0.50 * (1 - Math.exp(-n / 16)); }
+    function proxy(n) {
+      var gain = 0.44 * (1 - Math.exp(-n * rel / 15));
+      var exploit = (1 - rel) * 0.095 * Math.pow(Math.log(n + 1), 1.7);
+      return 0.42 + gain - exploit;
+    }
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 44 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      function X(n) { return pd + (n - 1) / 63 * (W - 2 * pd); }
+      function Y(q) { return H - pd - (q - 0.25) / 0.75 * (H - 2 * pd); }
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
+      function line(fn, col, dash) {
+        ctx.strokeStyle = col; ctx.lineWidth = 2 * cv.dpr; ctx.setLineDash(dash ? [5 * cv.dpr, 4 * cv.dpr] : []); ctx.beginPath();
+        for (var n = 1; n <= 64; n++) { var x = X(n), y = Y(fn(n)); if (n === 1) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
+        ctx.stroke(); ctx.setLineDash([]);
+      }
+      line(ideal, '#4b9f6b', true); line(proxy, t.accent, false);
+      var bestN = 1, bestQ = -Infinity;
+      for (var n = 1; n <= 64; n++) { var q = proxy(n); if (q > bestQ) { bestQ = q; bestN = n; } }
+      ctx.fillStyle = t.accent; ctx.beginPath(); ctx.arc(X(bestN), Y(bestQ), 5 * cv.dpr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(labels.x, W / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(labels.y, 0, 0); ctx.restore();
+      ctx.textAlign = 'left'; ctx.fillText(labels.ideal, pd + 8 * cv.dpr, pd + 4 * cv.dpr);
+      ctx.fillStyle = t.accent; ctx.fillText(labels.proxy, pd + 8 * cv.dpr, pd + 22 * cv.dpr);
+      read.textContent = labels.rel + '=' + rel.toFixed(2) + ' · ' + labels.peak + ' N=' + bestN;
+    }
+    host.appendChild(slider(labels.rel, 0.55, 0.98, 0.01, rel, function (v) { rel = v; draw(); }).wrap);
+    draw();
+  };
+
+  // Safety frontier: threshold selection moves the operating point between
+  // unsafe answers and benign refusals. Better training moves the curve; a
+  // deployment still chooses a point on it.
+  R['safety-frontier'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh';
+    var th = 0.52;
+    var labels = zh
+      ? { th: '拒绝阈值', x: '无害请求被拒绝', y: '有害请求被放行', point: '工作点' }
+      : { th: 'refusal threshold', x: 'benign requests refused', y: 'harmful requests allowed', point: 'operating point' };
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 270);
+    function xy(s) {
+      return { x: 0.04 + 0.46 * Math.pow(1 - s, 2.05), y: 0.035 + 0.46 * Math.pow(s, 2.0) };
+    }
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 44 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      function X(v) { return pd + v / 0.55 * (W - 2 * pd); }
+      function Y(v) { return H - pd - v / 0.55 * (H - 2 * pd); }
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
+      ctx.strokeStyle = t.accent; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
+      for (var i = 0; i <= 100; i++) {
+        var p = xy(i / 100), x = X(p.x), y = Y(p.y);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+      var op = xy(th);
+      ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(X(op.x), Y(op.y), 6 * cv.dpr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(labels.x, W / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(labels.y, 0, 0); ctx.restore();
+      ctx.textAlign = 'left'; ctx.fillText(labels.point, X(op.x) + 8 * cv.dpr, Y(op.y) - 8 * cv.dpr);
+      read.textContent = labels.th + '=' + th.toFixed(2) + ' · ' + labels.x + ' ' + Math.round(op.x * 100) + '% · ' + labels.y + ' ' + Math.round(op.y * 100) + '%';
+    }
+    host.appendChild(slider(labels.th, 0.05, 0.95, 0.01, th, function (v) { th = v; draw(); }).wrap);
     draw();
   };
 

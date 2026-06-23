@@ -106,3 +106,87 @@ test("the expanded evaluation part is tracked in top-level book surfaces", () =>
   expect(src("README.md").replace(/\s+/g, " ")).toContain("operational governance");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Evaluation depth and governance**");
 });
+
+test("post-training adaptation is a full seven-chapter part in both languages", () => {
+  const expected = [
+    "adaptation/01-sft-peft.qmd",
+    "adaptation/02-behavior-specs-preference-data.qmd",
+    "adaptation/03-rlhf-reward-modeling.qmd",
+    "adaptation/04-dpo-variants.qmd",
+    "adaptation/05-verifiable-rewards-reasoning.qmd",
+    "adaptation/06-safety-tuning-instruction-hierarchy.qmd",
+    "adaptation/07-synthetic-data-self-improvement.qmd",
+  ];
+
+  for (const lang of ["en", "zh"]) {
+    const yml = src(`${lang}/book.yml`);
+    let last = -1;
+    for (const chapter of expected) {
+      const next = yml.indexOf(chapter);
+      expect(next, `${lang}/${chapter} missing from book.yml`).toBeGreaterThan(last);
+      last = next;
+    }
+
+    const intro = src(`${lang}/adaptation/index.qmd`);
+    for (const section of [
+      "@sec-sft-peft",
+      "@sec-behavior-specs",
+      "@sec-rlhf",
+      "@sec-dpo-variants",
+      "@sec-verifiable-rewards",
+      "@sec-safety-tuning",
+      "@sec-synthetic-data",
+    ]) {
+      expect(intro).toContain(section);
+    }
+  }
+});
+
+test("the expanded adaptation part is tracked in top-level book surfaces", () => {
+  expect(src("README.md")).toContain("behavior specifications");
+  expect(src("README.md")).toContain("verifiable rewards");
+  expect(src("README.md")).toContain("instruction hierarchy");
+  expect(src("CONTENT-GAPS.md")).toContain("- [x] **Post-training adaptation and alignment depth**");
+});
+
+test("reasoning and test-time compute is a full seven-chapter part in both languages", () => {
+  const expected = [
+    "reasoning/01-eliciting-reasoning.qmd",
+    "reasoning/02-structured-reasoning-search.qmd",
+    "reasoning/03-programs-solvers-symbolic.qmd",
+    "reasoning/04-verifiers-process-supervision.qmd",
+    "reasoning/05-training-to-reason.qmd",
+    "reasoning/06-reasoning-data-distillation.qmd",
+    "reasoning/07-inference-time-scaling.qmd",
+  ];
+
+  for (const lang of ["en", "zh"]) {
+    const yml = src(`${lang}/book.yml`);
+    let last = -1;
+    for (const chapter of expected) {
+      const next = yml.indexOf(chapter);
+      expect(next, `${lang}/${chapter} missing from book.yml`).toBeGreaterThan(last);
+      last = next;
+    }
+
+    const intro = src(`${lang}/reasoning/index.qmd`);
+    for (const section of [
+      "@sec-eliciting-reasoning",
+      "@sec-structured-reasoning-search",
+      "@sec-programs-solvers-symbolic",
+      "@sec-verifiers-process-supervision",
+      "@sec-training-to-reason",
+      "@sec-reasoning-data-distillation",
+      "@sec-inference-time-scaling",
+    ]) {
+      expect(intro).toContain(section);
+    }
+  }
+});
+
+test("the expanded reasoning part is tracked in top-level book surfaces", () => {
+  expect(src("README.md")).toContain("structured search");
+  expect(src("README.md")).toContain("verifiers");
+  expect(src("README.md")).toContain("reasoning data");
+  expect(src("CONTENT-GAPS.md")).toContain("- [x] **Reasoning and test-time compute depth**");
+});

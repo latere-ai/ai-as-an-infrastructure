@@ -2,6 +2,26 @@
 
 ## Open goals
 
+- [x] **Post-training adaptation and alignment depth**
+
+  Expanded Part III from a four-chapter sketch of fine-tuning, RLHF, DPO, and
+  self-improvement into a full post-training layer: SFT and PEFT, behavior
+  specifications and preference data, reward modeling, direct preference
+  methods, verifiable rewards, safety tuning and instruction hierarchy, and
+  synthetic-data flywheels. The part now includes source-backed references,
+  static figures, interactive visualizations, updated cross-links to reasoning,
+  evaluation, safety, operations, and top-level book surfaces.
+
+- [x] **Reasoning and test-time compute depth**
+
+  Expanded Part IV from a three-chapter bridge into a seven-chapter reasoning
+  layer: elicitation, structured search, program and solver delegation,
+  verifiers and process supervision, RLVR training, reasoning data and
+  distillation, and production test-time compute. The part now includes
+  source-backed references, static figures, interactive visualizations, updated
+  social cards, and cross-links to adaptation, serving, orchestration,
+  evaluation, safety, infrastructure, and operations.
+
 - [x] **Evaluation depth and governance**
 
   Expanded Part VII from a three-chapter treatment of benchmarks, judges, and

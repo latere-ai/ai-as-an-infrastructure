@@ -1,0 +1,210 @@
+# Behavior Specifications and Preference Data {#sec-behavior-specs}
+
+@sec-sft-peft showed how a base model becomes an assistant-shaped model by
+imitating demonstrations. The next question comes before RLHF, DPO, or any
+optimizer: who decided what the demonstration or preference is trying to
+express? A pairwise label that says response A is better than response B is not
+raw human intent. It is the output of a policy document, a rubric, a sampling
+procedure, an annotator pool, and a data filter. Post-training starts there.
+
+This chapter treats preference data as an engineered measurement system. A
+behavior specification states the intended behavior; a rubric turns that
+specification into judgments; annotators or AI judges apply the rubric; and the
+resulting comparisons become the training signal. If that chain is vague, the
+model learns the vagueness. If it rewards length, agreement, or confident tone,
+the optimizer will find those handles.
+
+## Before the loss, a policy
+
+The alignment literature often begins with the loss. The operational pipeline
+begins with a written specification. Anthropic's Constitutional AI made this
+explicit by replacing much human harmlessness labeling with critique and
+revision against a short list of principles [@bai2022constitutional]. Anthropic's
+public description of Claude's constitution frames those principles as a way to
+make values inspectable and editable rather than hidden in a pile of labels
+[@anthropic2023constitution]. OpenAI's Model Spec makes the same move in a more
+product-facing form: it defines intended behavior, separates it from usage
+policy and safety systems, and orders instruction authority from root and system
+messages down to developer, user, and guideline-level instructions
+[@openai2025modelspec].
+
+Those documents are not decorations around training. They are upstream training
+artifacts. A labeler asked to prefer "helpful and harmless" behavior still needs
+to know whether a correct but blunt answer beats a warm but vague one, whether a
+medical request should be answered with caution or refused, and whether a user
+instruction can override a tool message. The written specification is where
+those choices become stable enough to label.
+
+```{dot}
+//| label: fig-behavior-specs-supply-chain
+//| fig-cap: "Preference data is a supply chain. A behavior specification becomes a rubric, the rubric guides judgments over sampled responses, and the resulting labels feed post-training. The optimizer never sees the policy directly; it sees the labels produced by this chain."
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  spec [label="Behavior specification\nconstitution, model spec, policy"];
+  rubric [label="Rubric\ncriteria, examples, edge cases"];
+  sample [label="Sample responses\nfrom current or candidate models"];
+  judge [label="Judgment\nhuman, AI, or hybrid"];
+  data [label="Preference data\npairs, rankings, attributes"];
+  train [label="Post-training loss\nRLHF, DPO, SFT, filtering"];
+  eval [label="Audit and eval\nbias, disagreement, drift"];
+
+  spec -> rubric;
+  rubric -> judge;
+  sample -> judge;
+  judge -> data;
+  data -> train;
+  train -> eval;
+  eval -> spec [style=dashed, label="revise"];
+  eval -> rubric [style=dashed];
+}
+```
+
+The formal object is a utility, even when nobody writes one down. Suppose a
+response $y$ to prompt $x$ is scored on attributes. Here
+$a(x,y) \in \mathbb{R}^k$: correctness, helpfulness, safety, calibration,
+concision, style, or whatever the rubric names. A simple utility is
+
+$$
+u(x,y) = w^\top a(x,y),
+$$
+
+where $w$ is the weight vector implied by the specification. This equation is
+not a claim that human value is linear. It is a discipline for reading labels:
+when a pair is marked preferred, some implicit weight vector made that trade.
+Changing the weights changes which answer wins, even if the two answers and
+their factual content are unchanged.
+
+```{=html}
+<figure id="fig-behavior-specs-preference-signal">
+<div class="viz" data-viz="preference-signal-mixer"></div>
+<figcaption>A preference label is a weighted judgment. Adjust the attribute weights and the preferred answer can flip, even when the candidate responses stay fixed. Real rubrics are not linear, but every rubric encodes trade-offs.</figcaption>
+</figure>
+```
+
+## Pairwise labels and what they can say
+
+The simplest scalable label is a pairwise comparison. Given a prompt $x$, where
+$y_w$ is the preferred response and $y_l$ is the rejected response, the
+Bradley-Terry model used by reward modeling writes the preference probability as
+
+$$
+P(y_w \succ y_l \mid x) =
+\sigma\!\left(r(x,y_w) - r(x,y_l)\right).
+$$
+
+Here $r(\cdot)$ is the learned reward score.
+This is the reason pairwise data flows naturally into @sec-rlhf and
+@sec-dpo-variants. It asks a question people can answer more reliably than
+"write the ideal response": which of these two is better? But the same
+simplicity is a limitation. A pairwise label says the winner is better than the
+loser under the current rubric. It does not say why. It does not separate
+correctness from tone. It does not reveal whether annotators agreed. And it is
+sensitive to the candidate set: a response can win because it is good, or
+because the alternative is worse.
+
+That is why modern feedback datasets often add structure around the pair.
+OpenAssistant Conversations collected conversation trees, message ratings, and
+multi-lingual human feedback at community scale [@kopf2023openassistant].
+HelpSteer decomposed judgments into attributes such as helpfulness, correctness,
+coherence, complexity, and verbosity, explicitly making the reward less
+dependent on a single scalar [@wang2023helpsteer]. UltraFeedback used GPT-4 to
+produce large-scale AI feedback across hundreds of thousands of conversations,
+then emphasized diversity and bias mitigation because scale alone would only
+scale the judge's artifacts [@cui2023ultrafeedback].
+
+The design choice is not "pairwise or scalar." It is how much of the judgment to
+preserve. Pairwise labels are cheap and robust. Rankings extract more
+information from a sampled set. Attribute labels make the trade-offs auditable.
+Free-form critiques are expensive to parse but useful for data repair and
+constitutional revision. The more structure is preserved, the easier it is to
+find out later whether a model improved because it became more correct, more
+verbose, more deferential, or simply better at satisfying the judge.
+
+## Annotators are part of the model
+
+Preference labels are often described as "human feedback," as if the human were
+a single, stable source of truth. In practice the annotator pool is part of the
+modeling assumption. Labelers differ in domain knowledge, risk tolerance,
+language, political culture, patience, and susceptibility to confident prose.
+If a task requires expert knowledge and the annotator pool is non-expert, the
+resulting reward model learns non-expert preference. If the guidelines collapse
+helpfulness and agreement, the model learns sycophancy. If long answers often
+look more careful, a reward trained on those judgments learns verbosity bias.
+
+Three quantities matter operationally.
+
+- **Disagreement.** The disagreement rate is the noise floor. When two trained
+  annotators cannot agree under the same rubric, no reward model should be
+  expected to learn a sharper boundary without adding another signal.
+- **Coverage.** The prompt distribution and candidate models define what the
+  annotators ever see. A reward model trained on safe, ordinary responses has
+  little reason to understand adversarial prompts or rare policy boundaries.
+- **Provenance.** Labels need versioned guidelines, annotator metadata, model
+  versions, and sampling settings. Without them, a later behavior change cannot
+  be traced to the model, the data, or the rubric.
+
+@sec-human-evaluation-rubrics treats human evaluation as an instrument. The same
+principle applies here, except the instrument is upstream of training rather
+than downstream of release. A reward model is a frozen copy of that instrument.
+Once it is optimized against, its biases are no longer measurement error. They
+become behavior.
+
+## AI feedback scales the labeler and inherits its risks
+
+RLAIF and constitutional pipelines replace part of the human labeling process
+with a model judge [@bai2022constitutional]. The gain is clear: AI judges are
+cheap, consistent, multilingual, and available at the volume needed for repeated
+post-training. They can also carry the written specification more directly into
+the data by critiquing and revising responses against named principles. This is
+why constitutional methods are more than a cheaper RLHF. They make the
+specification a first-class artifact in the loop.
+
+The risk is just as direct. A model judge is itself a model, with its own
+training distribution, refusal habits, cultural priors, and blind spots. It may
+prefer fluent explanations over correct ones, reward the surface form of safety
+over calibrated risk reduction, or import the policy of its provider into a
+system that intended a different policy. Worse, once the target model is trained
+to satisfy that judge, it may learn judge-specific artifacts. This is the same
+Goodhart pressure that appears later in @sec-rlhf, now moved upstream into the
+data supply.
+
+The practical answer is hybrid supervision. Humans write and audit the
+specification, inspect samples where the model judge is uncertain, measure judge
+bias against held-out human panels, and keep a small stream of fresh human
+labels to detect drift. AI feedback buys scale. It does not remove the need for
+accountability over what the feedback means.
+
+## The operational form
+
+A usable preference dataset is therefore not just a JSONL file of chosen and
+rejected responses. It is a versioned bundle:
+
+- the behavior specification and policy version;
+- the rubric, including positive and negative examples;
+- the prompt source and sampling strategy;
+- the candidate model versions and decoding settings;
+- the annotator or judge identity class, not necessarily personal identity;
+- disagreement, adjudication, and quality-control records;
+- known biases, excluded domains, and intended training use.
+
+This metadata is not paperwork around the model. It is how post-training
+remains reproducible. Without it, the later optimizer can be perfect and still
+optimize the wrong thing.
+
+::: {.callout-important}
+## What's contested
+Written behavior specifications make values inspectable, but they do not make
+them complete. Some policy boundaries are genuinely under-specified; some
+cultures and users disagree; some harms only appear after deployment. The best
+specification is therefore not the final answer to alignment. It is a stable
+object that can be audited, amended, tested, and connected to the labels that
+actually trained the model.
+:::
+
+::: {#further-reading}
+:::

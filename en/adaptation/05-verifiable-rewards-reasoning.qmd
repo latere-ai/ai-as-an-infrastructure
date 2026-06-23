@@ -1,0 +1,176 @@
+# Verifiable Rewards and Reasoning Transfer {#sec-verifiable-rewards}
+
+The previous chapters treated reward as a learned proxy for preference. That is
+the right tool for open-ended behavior: helpfulness, taste, tone, refusal
+calibration, and many forms of judgment. But some domains contain a different
+kind of signal. A code solution passes the tests or it does not. A math answer
+matches the checker or it does not. A proof is accepted by a verifier or it is
+not. In those domains, post-training can train against an outcome rather than a
+person's estimate of quality.
+
+That distinction is the hinge between this part and Part IV. Here the question
+is what kind of reward source enters the post-training loop. @sec-training-to-reason
+then follows the algorithms that exploit that reward to train reasoning behavior.
+
+## A reward that is not a judge
+
+A learned reward model estimates a preference:
+
+$$
+r_\phi(x,y) \approx \text{human or AI judgment of } y \text{ for } x.
+$$
+
+Here, by contrast, a verifiable reward is a predicate:
+
+$$
+R_{\text{ver}}(x,y) =
+\mathbf{1}\{\operatorname{check}(x,y)=\text{pass}\}.
+$$
+
+Here $R_{\text{ver}}$ is one when the task checker passes and zero otherwise.
+The difference looks small in notation and large in practice. A learned reward
+can be wrong because it liked the style, missed the factual error, or never saw
+that region of the response distribution. A verifier can still be incomplete or
+mis-specified, but where it is sound it does not care whether the answer sounds
+confident. The model either satisfies the check or it does not.
+
+```{dot}
+//| label: fig-verifiable-rewards-map
+//| fig-cap: "Two reward sources in post-training. Learned rewards cover open-ended behavior but are proxy signals; verifiable rewards are narrower but give direct pass/fail supervision. Mixed systems often use both."
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  prompt [label="Prompt x"];
+  sample [label="Sample responses y_1 ... y_n"];
+  learned [label="Learned reward\npreference proxy", fillcolor="#f2c2c2"];
+  verifier [label="Verifier\nunit test, answer check,\nproof checker", fillcolor="#bfe3c0"];
+  pref [label="Preference training\nRLHF, DPO, filtering"];
+  rlvr [label="RL with verifiable rewards\nRLVR / rejection sampling"];
+  eval [label="Held-out evaluation\nhuman and checker"];
+
+  prompt -> sample;
+  sample -> learned;
+  sample -> verifier;
+  learned -> pref;
+  verifier -> rlvr;
+  pref -> eval;
+  rlvr -> eval;
+}
+```
+
+This is why verifiable domains have become the proving ground for reasoning
+post-training. The expensive part of reasoning data is not merely the trace. It
+is knowing whether the trace got to a correct endpoint. Where a checker exists,
+the model can generate many candidates, the system can keep only those that pass,
+and training can move probability mass toward behavior the model already
+occasionally produced.
+
+```{=html}
+<figure id="fig-verifiable-rewards-threshold">
+<div class="viz" data-viz="verifier-threshold"></div>
+<figcaption>More selection pressure helps when the selector is reliable and can hurt when the selector is a proxy. Increase the selector reliability and the best-of-N curve stays useful longer; lower it and over-optimization appears earlier. Idealized.</figcaption>
+</figure>
+```
+
+## From selection to training
+
+The first step is selection. Cobbe et al. showed that sampling many reasoning
+solutions and using a trained verifier to choose among them could substantially
+improve math word-problem performance [@cobbe2021verifiers]. The mechanism is
+simple: if a model has a nonzero chance of producing a correct solution, then
+best-of-$n$ can expose that latent capability, provided the selector can find it.
+@sec-eliciting-reasoning describes the inference-time version of that idea.
+
+The second step is to train on the selected behavior. Rejection sampling
+fine-tunes on candidates that pass a scorer or verifier, which @sec-synthetic-data
+treats as a data flywheel. Reinforcement learning with verifiable rewards,
+@gls-rlvr, goes further: sample on-policy completions, assign rewards from the
+checker, and update the policy. DeepSeekMath introduced GRPO as a lighter
+policy-gradient method for this setting [@shao2024deepseekmath], and DeepSeek-R1
+made the broader recipe visible at scale: a base or cold-started model generates
+reasoning traces, receives rewards from answer checkers, and acquires longer
+deliberative behavior through RL [@guo2025deepseek]. Tülu 3 later positioned
+RLVR as one component of an open post-training recipe alongside SFT and DPO
+[@lambert2024tulu].
+
+The object being optimized can be sparse. A final answer checker gives a single
+bit at the end of a long trace. If the model never stumbles into a correct
+answer, no gradient can teach it where to go. If it sometimes gets there, the
+reward can amplify those paths. This is why cold-start data, curriculum, and
+prompt distributions matter. They place the policy close enough to successful
+trajectories that the verifier can begin selecting them.
+
+## Outcome rewards and process rewards
+
+Outcome rewards score only the final answer. Process rewards score steps. For a
+trace $z_1, \ldots, z_T$ ending in answer $y$, an outcome reward is
+
+$$
+R_{\text{out}}(x,z_{1:T},y) = \mathbf{1}\{\operatorname{check}(x,y)=\text{pass}\}.
+$$
+
+Here the outcome reward ignores the intermediate path except for its final
+answer. A process reward is denser:
+
+$$
+R_{\text{proc}}(x,z_{1:T},y) = \sum_{t=1}^{T} \gamma^{t-1} r_t(x,z_{\le t}).
+$$
+
+Here $r_t$ scores a prefix step and $\gamma$ discounts later step scores.
+Lightman et al.'s "Let's Verify Step by Step" showed that process supervision
+can outperform outcome supervision on math reasoning, and released PRM800K,
+roughly 800,000 step-level labels [@lightman2023lets]. The appeal is obvious:
+the model gets a training signal before the final answer. The cost is just as
+important. Step labels are harder to define, harder to collect, and more likely
+to encode a style of reasoning rather than correctness itself. A learned PRM is
+also a reward model, so it can reintroduce the proxy failures that verifiable
+outcome rewards tried to avoid. @sec-verifiers-process-supervision covers that
+boundary in more detail.
+
+The practical rule is to separate the source of truth from the density of the
+signal. An exact final checker is sparse but grounded. A learned process model
+is dense but fallible. A strong system may use both: a verifier to anchor final
+correctness and a process model to guide search or credit assignment, with
+held-out checks to make sure the dense signal has not become the target.
+
+## What verifiers buy, and what they do not
+
+Verifiers buy four things.
+
+- **Less reward hacking.** A unit test or exact answer checker is harder to
+  flatter than a learned judge. It can still be incomplete, but it is not
+  impressed by style.
+- **Cheaper data.** Correct traces can be discovered by sampling and filtering
+  rather than written by humans.
+- **On-policy improvement.** The model trains on its own successful samples,
+  not only on a teacher's distribution.
+- **A bridge to inference.** The same checker can train the policy, select
+  among samples at inference, and evaluate held-out performance.
+
+They do not buy universality. Many important tasks are not checkable. A helpful
+legal explanation, a nuanced research synthesis, and a product-support answer
+do not have a single executable truth predicate. Even in code, tests can be weak
+or leaked. Even in math, a final answer can be right for the wrong reason.
+Recent work on CoT-Pass@K makes this point directly: ordinary pass@K can count a
+sample as successful when the final answer is right but the reasoning path is
+not [@wen2025cotpass].
+
+The result is a mixed post-training stack. Use verifiable rewards where the
+world supplies a checker. Use learned rewards where it does not. Keep the
+boundary explicit, because the failure mode changes when the reward changes.
+
+::: {.callout-important}
+## What's contested
+Verifiable rewards are sometimes described as if they solve alignment by
+removing the human from the loop. They solve a narrower problem: how to train on
+tasks with checkable outcomes. The moment the task asks for judgment, taste,
+policy, or harm reduction, the system returns to specifications, rubrics,
+human labels, AI judges, and the proxy failures of the earlier chapters.
+:::
+
+::: {#further-reading}
+:::

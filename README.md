@@ -18,9 +18,13 @@ The spine is the lifecycle of a capability, read as a stack.
   architecture, training at scale.
 - **Part II, Generative and Multimodal Architectures.** Diffusion and flow
   matching, diffusion language models, speech, multimodal fusion.
-- **Part III, Adaptation and Alignment.** Fine-tuning, RLHF, preference
-  optimization, self-improvement.
-- **Part IV, Reasoning and Test-Time Compute.**
+- **Part III, Post-Training: Adaptation, Preference, and Alignment.**
+  Fine-tuning, behavior specifications, preference data, RLHF, direct
+  preference optimization, verifiable rewards, instruction hierarchy, and
+  self-improvement.
+- **Part IV, Reasoning and Test-Time Compute.** Elicitation, structured search,
+  programs and solvers, verifiers, RLVR training, reasoning data and
+  distillation, and production test-time compute.
 - **Part V, Inference and Serving.**
 - **Part VI, Orchestration.** Training agents to act, memory, the harness,
   multi-agent, retrieval, context.

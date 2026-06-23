@@ -148,6 +148,25 @@ test("ch09 sft-peft uses lora-lowrank and task-arithmetic in both languages", ()
   }
 });
 
+test("the viz runtime registers the post-training adaptation components", () => {
+  for (const name of ["preference-signal-mixer", "verifier-threshold", "safety-frontier"]) {
+    expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
+  }
+});
+
+test("expanded adaptation chapters use the post-training visualizations in both languages", () => {
+  const uses: [string, string][] = [
+    ["adaptation/02-behavior-specs-preference-data", "preference-signal-mixer"],
+    ["adaptation/05-verifiable-rewards-reasoning", "verifier-threshold"],
+    ["adaptation/06-safety-tuning-instruction-hierarchy", "safety-frontier"],
+  ];
+  for (const [path, viz] of uses) {
+    for (const lang of ["en", "zh"]) {
+      expect(src(`${lang}/${path}.qmd`)).toContain(`data-viz="${viz}"`);
+    }
+  }
+});
+
 // Wave 5: the deep-catalog tail of bespoke components.
 test("the viz runtime registers the wave-5 components", () => {
   for (const name of ["grpo-advantage", "ssm-vs-attention", "rl-timeline", "rrf-fusion", "decision-tree", "float-bits", "pipeline-bubble"]) {
@@ -157,7 +176,7 @@ test("the viz runtime registers the wave-5 components", () => {
 
 test("wave-5 components are used in their chapters, both languages", () => {
   const uses: [string, string][] = [
-    ["reasoning/02-training-to-reason", "grpo-advantage"],
+    ["reasoning/05-training-to-reason", "grpo-advantage"],
     ["foundations/05-moe-ssm-hybrids", "ssm-vs-attention"],
     ["orchestration/01-training-agents-to-act", "rl-timeline"],
     ["orchestration/06-rag-retrieval", "rrf-fusion"],
@@ -191,5 +210,24 @@ test("expanded evaluation chapters use the new interactive visualizations in bot
   for (const lang of ["en", "zh"]) {
     expect(src(`${lang}/evaluation/02-statistical-reliability.qmd`)).toContain('data-viz="eval-power"');
     expect(src(`${lang}/evaluation/07-operational-evaluation.qmd`)).toContain('data-viz="eval-frontier"');
+  }
+});
+
+test("the viz runtime registers expanded reasoning components", () => {
+  for (const name of ["reasoning-search-budget", "rlvr-boundary", "ttc-budget"]) {
+    expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
+  }
+});
+
+test("expanded reasoning chapters use the new interactive visualizations in both languages", () => {
+  const uses: [string, string][] = [
+    ["reasoning/02-structured-reasoning-search", "reasoning-search-budget"],
+    ["reasoning/05-training-to-reason", "rlvr-boundary"],
+    ["reasoning/07-inference-time-scaling", "ttc-budget"],
+  ];
+  for (const [path, viz] of uses) {
+    for (const lang of ["en", "zh"]) {
+      expect(src(`${lang}/${path}.qmd`)).toContain(`data-viz="${viz}"`);
+    }
   }
 });
