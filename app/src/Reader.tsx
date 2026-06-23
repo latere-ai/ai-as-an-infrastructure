@@ -338,11 +338,16 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
       {/* ===== BODY (only this row scrolls; header stays put) ===== */}
       <div style={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}>
-        {showSidebar && <SidebarTree t={t} chapter={chapter} width={s.navW} onOpenSearch={() => setSearchOpen(true)} />}
-        {showSidebar && (
-          <div onPointerDown={(e) => startDrag("nav", e)} title={t.resize} className="rdr-resize"
-            style={{ flex: "none", width: 7, marginLeft: -1, cursor: "col-resize", zIndex: 6 }} />
-        )}
+        {/* Desktop nav. Wrapped so a CSS media query can hide it on mobile before
+            JS hydrates (mobile starts false in SSR, so these would otherwise flash
+            open on phones until the matchMedia effect runs). */}
+        <div className="rdr-desktop-aside">
+          {showSidebar && <SidebarTree t={t} chapter={chapter} width={s.navW} onOpenSearch={() => setSearchOpen(true)} />}
+          {showSidebar && (
+            <div onPointerDown={(e) => startDrag("nav", e)} title={t.resize} className="rdr-resize"
+              style={{ flex: "none", width: 7, marginLeft: -1, cursor: "col-resize", zIndex: 6 }} />
+          )}
+        </div>
 
         <main ref={mainRef} style={{ flex: 1, minWidth: 0, overflowY: "auto", overscrollBehavior: "none", scrollBehavior: "smooth" }}>
           <article style={{
@@ -357,10 +362,12 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           </article>
         </main>
 
-        {showMiniToc && (
-          <MiniToc t={t} chapter={chapter} activeId={activeId} width={s.tocW}
-            onStartDrag={(e) => startDrag("toc", e)} onClose={() => set({ tocCollapsed: true })} />
-        )}
+        <div className="rdr-desktop-aside">
+          {showMiniToc && (
+            <MiniToc t={t} chapter={chapter} activeId={activeId} width={s.tocW}
+              onStartDrag={(e) => startDrag("toc", e)} onClose={() => set({ tocCollapsed: true })} />
+          )}
+        </div>
       </div>
 
       {/* mobile nav drawer */}
