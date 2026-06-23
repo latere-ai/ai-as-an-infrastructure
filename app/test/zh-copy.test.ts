@@ -307,6 +307,39 @@ test("zh evaluation prose avoids literal or note-like formulations", () => {
   expect(evaluationText).not.toContain("那正是真正需要人来判断");
 });
 
+test("zh safety prose avoids literal or note-like formulations", () => {
+  const safetyText = qmdFiles(join(zhRoot, "safety"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(safetyText).not.toContain("出事后谁负责");
+  expect(safetyText).not.toContain("真正要看的，是");
+  expect(safetyText).not.toContain("走到这一步，领域才真正面对那个公开问题");
+  expect(safetyText).not.toContain("这条路线从手工追踪");
+  expect(safetyText).not.toContain("## 稀疏自编码器的审判");
+  expect(safetyText).not.toContain("这轮方法演进");
+  expect(safetyText).not.toContain("那场审判");
+  expect(safetyText).not.toContain("一个问题的两种哲学");
+  expect(safetyText).not.toContain("这条分界决定了后面的顺序");
+  expect(safetyText).not.toContain("给问题命名的那次入侵");
+  expect(safetyText).not.toContain("这句话给问题定了形");
+  expect(safetyText).not.toContain("每一个都是这样一处地方");
+  expect(safetyText).not.toContain("真正回答「这个调用方可否");
+  expect(safetyText).not.toContain("这条脉络从粗陋走向可编程");
+  expect(safetyText).not.toContain("那个决定性的转变");
+  expect(safetyText).not.toContain("运行时安全最难的那一例");
+  expect(safetyText).not.toContain("危险的那一例是间接注入");
+  expect(safetyText).not.toContain("那个输出分类器");
+  expect(safetyText).not.toContain("这一时期令人不安的发现是");
+  expect(safetyText).not.toContain("这个指标是攻击成功率");
+  expect(safetyText).not.toContain("那个判定何为有害的裁判");
+  expect(safetyText).not.toContain("自动化所做的，是");
+  expect(safetyText).not.toContain("也受这件事限制");
+  expect(safetyText).not.toContain("那个有动机的对手");
+  expect(safetyText).not.toContain("信任才是全部要点");
+  expect(safetyText).not.toContain("这一层令人不适的论点是");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
