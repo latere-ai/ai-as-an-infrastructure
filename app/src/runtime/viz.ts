@@ -672,8 +672,6 @@
     }
     btn.addEventListener('click', function () { mode = mode === 'balanced' ? 'collapsed' : 'balanced'; reset(); draw(); });
     function restart() { if (timer) clearInterval(timer); timer = setInterval(tick, 130); }
-    host.addEventListener('mouseenter', function () { if (timer) { clearInterval(timer); timer = null; } });
-    host.addEventListener('mouseleave', restart);
     draw(); restart();
   };
 
