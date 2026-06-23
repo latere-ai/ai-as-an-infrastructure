@@ -229,6 +229,48 @@ test("zh inference prose avoids literal or note-like formulations", () => {
   expect(inferenceText).not.toContain("读完这一部分");
 });
 
+test("zh orchestration prose avoids literal or note-like formulations", () => {
+  const orchestrationText = qmdFiles(join(zhRoot, "orchestration"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(orchestrationText).not.toContain("有三条约束，会左右对这道缝隙给出的任何答案");
+  expect(orchestrationText).not.toContain("这里管架构，那里管工程");
+  expect(orchestrationText).not.toContain("把工具使用定了性");
+  expect(orchestrationText).not.toContain("推理这一侧也在长进");
+  expect(orchestrationText).not.toContain("挪到了循环底下");
+  expect(orchestrationText).not.toContain("工具就那么精挑的几个");
+  expect(orchestrationText).not.toContain("所有的难处，都藏在");
+  expect(orchestrationText).not.toContain("半点不饶人");
+  expect(orchestrationText).not.toContain("对着这个问题排开来看");
+  expect(orchestrationText).not.toContain("小契约横跨这三者");
+  expect(orchestrationText).not.toContain("远谈不上统一的状态形态");
+  expect(orchestrationText).not.toContain("分支在对话上分得便宜");
+  expect(orchestrationText).not.toContain("记忆拒绝保证什么");
+  expect(orchestrationText).not.toContain("痛苦的那个情形");
+  expect(orchestrationText).not.toContain("稀松平常");
+  expect(orchestrationText).not.toContain("最具分量的那个机制");
+  expect(orchestrationText).not.toContain("只是作戏");
+  expect(orchestrationText).not.toContain("锁有两个直接来自锁定文献的坑");
+  expect(orchestrationText).not.toContain("为何承重");
+  expect(orchestrationText).not.toContain("从运行框架的座位上看");
+  expect(orchestrationText).not.toContain("承重的问题");
+  expect(orchestrationText).not.toContain("把编排整个颠倒了过来");
+  expect(orchestrationText).not.toContain("这条演化线索从汇集走向结构");
+  expect(orchestrationText).not.toContain("这条弧线的现代终点");
+  expect(orchestrationText).not.toContain("源材料对那些尚未定论之处不加掩饰的地方");
+  expect(orchestrationText).not.toContain("由此落出的协议很小");
+  expect(orchestrationText).not.toContain("第三步是对第二步的推广");
+  expect(orchestrationText).not.toContain("上下文窗口涨向");
+  expect(orchestrationText).not.toContain("要紧地估出");
+  expect(orchestrationText).not.toContain("同一个控制参数还在与自己较劲");
+  expect(orchestrationText).not.toContain("这堵墙");
+  expect(orchestrationText).not.toContain("ColBERT 占着中间");
+  expect(orchestrationText).not.toContain("本事在于推开什么");
+  expect(orchestrationText).not.toContain("收成一个由提示参数化的模型");
+  expect(orchestrationText).not.toContain("跨着这些线索是一致的");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
