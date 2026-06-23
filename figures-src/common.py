@@ -42,6 +42,26 @@ WARN = "#f59e0b"
 MUTED = "#9ca3af"
 
 ZH_TEXT = {
+    # Reasoning-data distillation pipeline labels.
+    "trace pool": "轨迹池",
+    "checker": "检查器",
+    "rejected traces": "被拒绝轨迹",
+    "long teacher": "长链教师",
+    "long-to-short": "长转短",
+    "short student": "短链学生",
+    # Verifier-ladder labels.
+    "heuristic judge": "启发式评判器",
+    "outcome RM": "结果奖励模型",
+    "unit tests": "单元测试",
+    "answer checker": "答案检查器",
+    "process RM": "过程奖励模型",
+    "formal checker": "形式检查器",
+    "broad coverage": "覆盖广",
+    "narrow scope": "范围窄",
+    "spoofable": "易欺骗",
+    "proof kernel": "证明内核",
+    "coverage": "覆盖范围",
+    "integrity / hard to spoof": "完整性 / 难欺骗",
     "95% confidence half-width (pp)": "95% 置信半宽（百分点）",
     "400-point gap,": "400 分差距，",
     "4 stages": "4 个阶段",
