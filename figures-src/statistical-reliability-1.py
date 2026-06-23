@@ -21,7 +21,7 @@ ax.axhspan((means[0] - half[0]) * 100, (means[1] + half[1]) * 100, color=INK, al
 ax.scatter([2], [means[2] * 100], s=70, facecolors="none", edgecolors=ACCENT, linewidths=1.8, zorder=3)
 ax.annotate(
     "visible gap, weak evidence",
-    xy=(0.5, 72.2),
+    xy=(1.0, (means[1] + half[1]) * 100),
     xytext=(0.22, 75.8),
     fontsize=8.5,
     color=INK,

@@ -1,6 +1,7 @@
 import sys
 
 import numpy as np
+from matplotlib.ticker import MaxNLocator
 
 from common import ACCENT, DATA, INK, MUTED, WARN, finish, new_fig
 
@@ -25,6 +26,9 @@ def _line(name, spec):
         ax.set_xscale("log")
     if spec.get("logy"):
         ax.set_yscale("log")
+    if spec.get("xint"):
+        # Integer-only x ticks (e.g. calendar years): no 2022.5 half-steps.
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
     ax.set_xlabel(spec["xlabel"], color=INK)
     ax.set_ylabel(spec["ylabel"], color=INK)
     if "xlim" in spec:
@@ -358,11 +362,11 @@ SPECS = {
     "embeddings-representation-1": {
         "type": "scatter",
         "points": [
-            {"label": "cat", "x": 0.22, "y": 0.72, "color": DATA},
-            {"label": "kitten", "x": 0.30, "y": 0.78, "color": DATA},
-            {"label": "invoice", "x": 0.72, "y": 0.28, "color": ACCENT},
-            {"label": "receipt", "x": 0.80, "y": 0.34, "color": ACCENT},
-            {"label": "hard negative", "x": 0.52, "y": 0.56, "color": WARN},
+            {"label": "cat", "x": 0.22, "y": 0.72, "color": DATA, "dx": -0.03, "dy": -0.01, "ha": "right"},
+            {"label": "kitten", "x": 0.30, "y": 0.78, "color": DATA, "dx": 0.03, "dy": 0.03},
+            {"label": "invoice", "x": 0.72, "y": 0.28, "color": ACCENT, "dx": -0.03, "dy": -0.04, "ha": "right"},
+            {"label": "receipt", "x": 0.80, "y": 0.34, "color": ACCENT, "dx": 0.03, "dy": 0.03},
+            {"label": "hard negative", "x": 0.52, "y": 0.56, "color": WARN, "dx": 0.03, "dy": 0.02},
         ],
         "xlabel": "embedding dimension 1",
         "ylabel": "embedding dimension 2",
@@ -457,6 +461,7 @@ SPECS = {
         "xlabel": "year",
         "ylabel": "relative pace",
         "ylim": (0.15, 0.95),
+        "xint": True,
     },
     "orchestration-data-infra-1": {
         "type": "line",
@@ -546,8 +551,8 @@ SPECS = {
             {"label": "unsafe to accept", "values": [0.06, 0.10, 0.20, 0.36, 0.60], "color": MUTED},
         ],
         "ylabel": "relative claim flow",
-        "ylim": (0, 2.10),
-        "legend": "upper right",
+        "ylim": (0, 2.35),
+        "legend": "upper left",
     },
     "model-landscape-1": {
         "type": "scatter",

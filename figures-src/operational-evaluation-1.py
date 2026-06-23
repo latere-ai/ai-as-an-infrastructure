@@ -21,10 +21,26 @@ colors = [DATA, ACCENT, WARN, "#9ca3af", "#9ca3af"]
 ax.scatter(cost, quality * 100, s=sizes, color=colors, alpha=0.86, edgecolor="white", linewidth=0.8)
 frontier = [0, 1, 2]
 ax.plot(cost[frontier], quality[frontier] * 100, color=ACCENT, lw=1.6)
+# Offset each label clear of its bubble. The bubble radius scales with sqrt of
+# the marker area (s), so larger bubbles need a larger horizontal gap; convert
+# the radius from points to data units via the axis scale so labels never sit
+# on top of their own dot.
+label_offsets = {
+    # name: (dx_extra, dy, ha)
+    "small": (0.0, 0.0, "left"),
+    "routed": (0.0, 0.0, "left"),
+    "frontier": (0.0, 0.0, "left"),
+    "slow giant": (0.0, 0.0, "right"),
+    "cheap weak": (0.0, 0.0, "left"),
+}
+fig.canvas.draw()
+x_per_pt = (ax.get_xlim()[1] - ax.get_xlim()[0]) / (ax.get_window_extent().width)
 for i, name in enumerate(names):
-    dx = 0.04 if i != 3 else -0.08
-    ha = "left" if i != 3 else "right"
-    ax.text(cost[i] + dx, quality[i] * 100 + 0.6, name, fontsize=8.5, color=INK, ha=ha)
+    radius_pt = np.sqrt(sizes[i] / np.pi)
+    gap = radius_pt * x_per_pt + 0.03
+    dx_extra, dy, ha = label_offsets[name]
+    dx = (gap if ha == "left" else -gap) + dx_extra
+    ax.text(cost[i] + dx, quality[i] * 100 + dy, name, fontsize=8.5, color=INK, ha=ha, va="center")
 ax.annotate(
     "dominated: more cost\nwithout useful quality",
     xy=(2.2, 86.5),
