@@ -1049,11 +1049,16 @@
     var B = 6;
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 250);
-    function bucketOf(c, i) { return (c < 3) ? (c * 5) % B : ((c * 5 + i * 3) % B); }
+    // One bucket per document, keyed only by its cluster id, so near-duplicates
+    // (same cluster) always share a bucket. A spreading hash keeps distinct
+    // clusters apart without the (c*5)%B aliasing that collapsed several
+    // clusters into one giant bucket at small B; candidate pairs now fall
+    // monotonically toward the true near-duplicate pairs as buckets increase.
+    function bucketOf(c) { return (c * 97 + 13) % B; }
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
-      var bins = {}; clusters.forEach(function (c, i) { var b = bucketOf(c, i); (bins[b] = bins[b] || []).push(c); });
+      var bins = {}; clusters.forEach(function (c) { var b = bucketOf(c); (bins[b] = bins[b] || []).push(c); });
       var bw = (W - 2 * pd) / B, cand = 0;
       for (var b = 0; b < B; b++) {
         var x = pd + b * bw, ds = bins[b] || [];
