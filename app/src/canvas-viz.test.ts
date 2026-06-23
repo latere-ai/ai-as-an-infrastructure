@@ -263,3 +263,37 @@ test("verification frontier chapter uses the interactive visualization in both l
   expect(src("zh/infrastructure/09-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
   expect(src("zh/infrastructure/09-verification-frontier.qmd")).toContain('data-lang="zh"');
 });
+
+// Regression: the RRF "constant k" slider re-ranked nothing because the synthetic
+// dense/sparse lists made the fused order invariant to k over the whole slider
+// range. The data must produce a fused top-1 flip inside the slider's k range.
+test("rrf-fusion default data makes the fused top-1 flip as k moves in range", () => {
+  // Mirror the component's scoring on its default (rot = 0) state.
+  const names = ["A", "B", "C", "D", "E"];
+  const dense = [0, 1, 2, 3, 4];
+  // SB is the base sparse order the component ships (rot = 0 picks it as-is).
+  const sbMatch = rt.match(/var SB = \[([0-9, ]+)\];/);
+  expect(sbMatch).not.toBeNull();
+  const sp = sbMatch![1].split(",").map((s) => Number(s.trim()));
+  // The slider's min/max define the in-range k values the user can reach.
+  const slMatch = rt.match(/slider\('RRF constant k', (\d+), (\d+),/);
+  expect(slMatch).not.toBeNull();
+  const kMin = Number(slMatch![1]);
+  const kMax = Number(slMatch![2]);
+  const rankOf = (order: number[], d: number) => order.indexOf(d) + 1;
+  const topAt = (k: number) => {
+    const score = names.map((_, d) => 1 / (k + rankOf(dense, d)) + 1 / (k + rankOf(sp, d)));
+    const fused = names.map((_, d) => d).sort((a, b) => score[b] - score[a]);
+    return fused[0];
+  };
+  expect(topAt(kMin)).not.toBe(topAt(kMax));
+});
+
+// Regression: the infonce-field "temperature" slider changed nothing visible
+// because draw() used tau only for the loss readout; the negatives' line widths
+// and dot emphasis were keyed off raw similarity. They must depend on tau.
+test("infonce-field draws negatives with a tau-dependent emphasis", () => {
+  const body = rt.slice(rt.indexOf("R['infonce-field']"), rt.indexOf("R['comparison-explorer']"));
+  // Emphasis is exp((s - maxs) / tau): a softmax sharpening that tau controls.
+  expect(body).toMatch(/Math\.exp\(\(o\.s - maxs\) \/ tau\)/);
+});

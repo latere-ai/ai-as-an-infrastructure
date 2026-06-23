@@ -22,12 +22,21 @@
              grid: 'rgba(128,128,128,0.18)', accent: '#3b82f6', accent2: '#e0936b' };
   }
   function el(tag, cls) { var e = document.createElement(tag); if (cls) e.className = cls; return e; }
+  // Format a slider value for the readout. Whole numbers print without a
+  // trailing ".00"; large values get thousands separators so a price like
+  // 2000000 reads as "2,000,000" instead of "2000000.00"; everything else keeps
+  // two decimals for the small fractional sliders most viz use.
+  function fmtVal(n) {
+    if (Number.isInteger(n)) return n.toLocaleString('en-US');
+    if (Math.abs(n) >= 1000) return Math.round(n).toLocaleString('en-US');
+    return n.toFixed(2);
+  }
   function slider(label, min, max, step, val, on) {
     var w = el('label', 'viz-slider');
     var s = el('span'); s.textContent = label;
     var i = document.createElement('input'); i.type = 'range'; i.min = min; i.max = max; i.step = step; i.value = val;
-    var v = el('span', 'viz-val'); v.textContent = (+val).toFixed(2);
-    i.addEventListener('input', function () { v.textContent = (+i.value).toFixed(2); on(+i.value); });
+    var v = el('span', 'viz-val'); v.textContent = fmtVal(+val);
+    i.addEventListener('input', function () { v.textContent = fmtVal(+i.value); on(+i.value); });
     w.appendChild(s); w.appendChild(i); w.appendChild(v);
     return { wrap: w, input: i };
   }
@@ -760,14 +769,18 @@
       var sp = sim(pos), denom = Math.exp(sp / tau), maxs = 0;
       var nc = negs.map(function (n) { var c = curNeg(n); var s = sim(c); denom += Math.exp(s / tau); if (s > maxs) maxs = s; return { c: c, s: s }; });
       var loss = -Math.log(Math.exp(sp / tau) / denom);
+      // Temperature sharpens the softmax: rel is each negative's pull relative to
+      // the hardest one, so a low tau concentrates emphasis on the single hardest
+      // negative and a high tau spreads it evenly.
       nc.forEach(function (o) {
-        ctx.strokeStyle = t.grid; ctx.lineWidth = (0.4 + o.s * 3) * cv.dpr;
+        var rel = Math.exp((o.s - maxs) / tau);
+        ctx.strokeStyle = t.grid; ctx.lineWidth = (0.4 + rel * 3) * cv.dpr;
         ctx.beginPath(); ctx.moveTo(X(q.x), Y(q.y)); ctx.lineTo(X(o.c.x), Y(o.c.y)); ctx.stroke();
       });
       ctx.strokeStyle = '#3dbd8a'; ctx.lineWidth = 2.4 * cv.dpr;
       ctx.beginPath(); ctx.moveTo(X(q.x), Y(q.y)); ctx.lineTo(X(pos.x), Y(pos.y)); ctx.stroke();
       nc.forEach(function (o) {
-        var h = o.s;
+        var h = Math.exp((o.s - maxs) / tau);
         ctx.fillStyle = 'rgba(' + Math.round(150 + 90 * h) + ',' + Math.round(110 - 72 * h) + ',' + Math.round(112 - 74 * h) + ',' + (0.42 + 0.5 * h) + ')';
         ctx.beginPath(); ctx.arc(X(o.c.x), Y(o.c.y), (4 + 3 * h) * cv.dpr, 0, 7); ctx.fill();
       });
@@ -1271,7 +1284,7 @@
   // ranked first by only one. Shuffle the sparse list or change k and watch the
   // fused order recompute; the winner is often high in neither list alone.
   R['rrf-fusion'] = function (host) {
-    var k = 60, names = ['A', 'B', 'C', 'D', 'E'];
+    var k = 2, names = ['A', 'B', 'C', 'D', 'E'];
     var dense = [0, 1, 2, 3, 4], rot = 0;
     var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
     bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
@@ -1280,7 +1293,11 @@
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
-      var SB = [4, 2, 3, 1, 0]; var sp = SB.map(function (_, i) { return SB[(i + rot) % 5]; });
+      // dense = ABCDE, base sparse = DBCAE: doc A is rank 1 in dense but 4 in
+      // sparse (spiky), doc B is rank 2 in both (balanced). At small k the spike
+      // wins; as k grows the balanced doc overtakes it, so the fused top flips
+      // A -> B inside the slider's range.
+      var SB = [3, 1, 2, 0, 4]; var sp = SB.map(function (_, i) { return SB[(i + rot) % 5]; });
       var score = names.map(function (_, d) { return 1 / (k + rankOf(dense, d)) + 1 / (k + rankOf(sp, d)); });
       var fused = names.map(function (_, d) { return d; }).sort(function (a, b) { return score[b] - score[a]; });
       var cols = [['dense', dense], ['sparse', sp], ['fused', fused]];
@@ -1300,7 +1317,7 @@
     }
     btn.addEventListener('click', function () { rot = (rot + 1) % 5; draw(); });
     btn.textContent = 'shuffle sparse list';
-    host.appendChild(slider('RRF constant k', 5, 100, 1, k, function (v) { k = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider('RRF constant k', 1, 100, 1, k, function (v) { k = Math.round(v); draw(); }).wrap);
     draw();
   };
 
