@@ -33,7 +33,7 @@ for label, x, y, color in points:
 
 ax.text(0.82, 0.06, "broad coverage", color=INK, fontsize=8, ha="center")
 ax.text(0.18, 0.06, "narrow scope", color=INK, fontsize=8, ha="center")
-ax.text(0.82, 0.30, "spoofable", color=INK, fontsize=8, ha="right")
+ax.text(0.86, 0.46, "spoofable", color=INK, fontsize=8, ha="center")
 ax.text(0.20, 0.96, "proof kernel", color=INK, fontsize=8, ha="left")
 
 ax.set_xlabel("coverage", color=INK)
