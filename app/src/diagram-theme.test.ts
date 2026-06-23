@@ -58,6 +58,17 @@ test("graphviz diagram text uses the UI font so cluster labels are not serif", (
   expect(css).toMatch(/\.rdr-diagram svg text \{[^}]*font-family:\s*var\(--font-ui\)\s*!important/);
 });
 
+test("graphviz diagrams keep their intrinsic width inside horizontal scroll", () => {
+  // Wide DOT figures were made unreadable on narrow screens because the global
+  // responsive SVG rule shrank them before the .rdr-diagram scroller could work.
+  const diagramRule = css.match(/\.rdr-diagram \{[^}]*\}/)?.[0] ?? "";
+  const graphvizSvgRule = css.match(/\.rdr-diagram svg \{[^}]*\}/)?.[0] ?? "";
+  expect(diagramRule).toContain("overflow-x: auto");
+  expect(graphvizSvgRule).toContain("flex: none");
+  expect(graphvizSvgRule).toContain("max-width: none");
+  expect(graphvizSvgRule).not.toContain("max-width: 100%");
+});
+
 test("dark mode remaps Graphviz inline SVG light fills and muted strokes", () => {
   expect(css).toContain(':root[data-theme="dark"] .rdr-diagram svg [fill="#f1ece1"]');
   expect(css).toContain(':root[data-theme="dark"] .rdr-diagram svg [fill="#ffffff"]');
