@@ -271,6 +271,42 @@ test("zh orchestration prose avoids literal or note-like formulations", () => {
   expect(orchestrationText).not.toContain("跨着这些线索是一致的");
 });
 
+test("zh evaluation prose avoids literal or note-like formulations", () => {
+  const evaluationText = qmdFiles(join(zhRoot, "evaluation"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(evaluationText).not.toContain("这条演进线索，从");
+  expect(evaluationText).not.toContain("从这条线索里引出两个权衡");
+  expect(evaluationText).not.toContain("这里真正关键的是「审计」");
+  expect(evaluationText).not.toContain("凡此种种，正是为什么");
+  expect(evaluationText).not.toContain("测量的那件事");
+  expect(evaluationText).not.toContain("单独隔离出来的那件事");
+  expect(evaluationText).not.toContain("评判者提示就是被编码成评测程序");
+  expect(evaluationText).not.toContain("没有哪种格式天然是金标准");
+  expect(evaluationText).not.toContain("格式只相对于它支撑的主张成立");
+  expect(evaluationText).not.toContain("可信的单位不是");
+  expect(evaluationText).not.toContain("这份真值里人的那一侧");
+  expect(evaluationText).not.toContain("把这件事推到了开放规模");
+  expect(evaluationText).not.toContain("它的输入新鲜");
+  expect(evaluationText).not.toContain("这条教训把留出原则");
+  expect(evaluationText).not.toContain("## 选择立足之处");
+  expect(evaluationText).not.toContain("第三，就是那笔退款本身");
+  expect(evaluationText).not.toContain("这里要紧的是它们的共同点");
+  expect(evaluationText).not.toContain("多模态评测位在这条边界上");
+  expect(evaluationText).not.toContain("这个判断有名字");
+  expect(evaluationText).not.toContain("第一直觉是多跑几个再聚合");
+  expect(evaluationText).not.toContain("更深的一步，是不要再把分歧当噪声");
+  expect(evaluationText).not.toContain("这跟评判智能体的结果而非路径是同一个形状");
+  expect(evaluationText).not.toContain("那条下层事实，即共享权重意味着相关失败");
+  expect(evaluationText).not.toContain("在评估层不是偏好问题");
+  expect(evaluationText).not.toContain("就是全部论证所在");
+  expect(evaluationText).not.toContain("这个乘积是小组能达到的最好情形");
+  expect(evaluationText).not.toContain("这个乘积只有在");
+  expect(evaluationText).not.toContain("分道之处");
+  expect(evaluationText).not.toContain("那正是真正需要人来判断");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
