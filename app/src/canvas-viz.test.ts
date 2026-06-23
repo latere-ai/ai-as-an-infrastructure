@@ -140,6 +140,14 @@ test("the viz runtime registers lora-lowrank and task-arithmetic", () => {
   expect(rt).toMatch(/R\['task-arithmetic'\]\s*=\s*function/);
 });
 
+test("lora-lowrank clamps reconstruction rank to available components", () => {
+  // Regression: the rank slider can exceed the synthetic update's intrinsic
+  // rank. Reading past sv[] produced NaN colors, so the right heatmap inherited
+  // the previous dark fill style and turned black.
+  expect(rt).toContain("var eff = Math.min(rank, RANK);");
+  expect(rt).toContain("k < eff");
+});
+
 test("ch09 sft-peft uses lora-lowrank and task-arithmetic in both languages", () => {
   for (const lang of ["en", "zh"]) {
     const t = src(`${lang}/adaptation/01-sft-peft.qmd`);

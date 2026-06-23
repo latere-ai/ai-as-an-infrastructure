@@ -1101,7 +1101,7 @@
     function uk(k, i) { return Math.sin(1.3 + k * 2.1 + i * 0.7) * Math.cos(0.5 + k * 1.1); }
     function vk(k, j) { return Math.cos(0.9 + k * 1.7 + j * 0.6) * Math.sin(0.3 + k * 0.9); }
     var sv = []; for (var k = 0; k < RANK; k++) sv.push(Math.exp(-k / 2.4));
-    function val(i, j, rank) { var s = 0; for (var k = 0; k < rank; k++) s += sv[k] * uk(k, i) * vk(k, j); return s; }
+    function val(i, j, rank) { var eff = Math.min(rank, RANK); var s = 0; for (var k = 0; k < eff; k++) s += sv[k] * uk(k, i) * vk(k, j); return s; }
     var mx = 0; for (var i = 0; i < d; i++) for (var j = 0; j < d; j++) { var v = Math.abs(val(i, j, RANK)); if (v > mx) mx = v; }
     function color(v) { var u = Math.max(-1, Math.min(1, v / mx)); return u >= 0 ? 'rgba(45,99,168,' + (0.12 + 0.85 * u) + ')' : 'rgba(224,147,107,' + (0.12 + 0.85 * (-u)) + ')'; }
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
