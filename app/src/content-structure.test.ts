@@ -331,3 +331,34 @@ test("the infrastructure arc explicitly hands off to ecosystem and practice", ()
   expect(zhPractice).toContain("第十部分则说明");
   expect(zhPractice).toContain("这里开始问");
 });
+
+test("each part intro carries a compact reflection summary", () => {
+  const parts = [
+    "orientation",
+    "foundations",
+    "generative",
+    "adaptation",
+    "reasoning",
+    "inference",
+    "orchestration",
+    "evaluation",
+    "safety",
+    "infrastructure",
+    "ecosystem",
+    "practice",
+  ];
+
+  for (const part of parts) {
+    const en = src(`en/${part}/index.qmd`);
+    expect(en).toContain("## Part reflection");
+    for (const label of ["**Covered:**", "**Main concern:**", "**Takeaway:**", "**Open question:**"]) {
+      expect(en, `en/${part}/index.qmd missing ${label}`).toContain(label);
+    }
+
+    const zh = src(`zh/${part}/index.qmd`);
+    expect(zh).toContain("## 本部分小结");
+    for (const label of ["**覆盖内容：**", "**主要担忧：**", "**带走的判断：**", "**未解问题：**"]) {
+      expect(zh, `zh/${part}/index.qmd missing ${label}`).toContain(label);
+    }
+  }
+});
