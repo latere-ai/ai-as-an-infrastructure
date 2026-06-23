@@ -17,7 +17,7 @@ const homes: [string, string][] = [
   ["en/practice/10-reliability-nondeterministic.qmd", "pow-base"],
   ["en/infrastructure/08-the-capability-horizon.qmd", "logistic"],
   ["en/orchestration/08-context-engineering.qmd", "u-shape"],
-  ["en/evaluation/02-judging-holistic.qmd", "elo"],
+  ["en/evaluation/04-judging-holistic.qmd", "elo"],
 ];
 
 test("each curve-reuse home uses its family in both languages", () => {
