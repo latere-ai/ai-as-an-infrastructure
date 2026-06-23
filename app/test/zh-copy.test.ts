@@ -436,7 +436,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/05-structured-long-context.qmd",
-      ["拿 logits 对照一台@gls-fsm做掩码", "预计算索引和跳跃式前向", "滑动窗口、@gls-attention-sink 与重击者驱逐", "查询感知策略"],
+      ["用@gls-fsm给 logits 做掩码", "预计算索引和跳跃式前向", "滑动窗口、@gls-attention-sink 与重击者驱逐", "查询感知策略"],
     ],
     [
       "en/inference/06-serving-multimodal.qmd",
@@ -452,7 +452,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/index.qmd",
-      ["不是训练的缩小版", "预填充和解码有不同胃口", "能力变成可重复交付"],
+      ["不是训练阶段的简化版本", "预填充与解码占用的资源不同", "能力变成可重复交付"],
     ],
     [
       "en/infrastructure/01-accelerators-networking.qmd",
