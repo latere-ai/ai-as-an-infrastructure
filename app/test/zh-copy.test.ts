@@ -373,6 +373,51 @@ test("zh ecosystem prose avoids literal or note-like formulations", () => {
   expect(ecosystemText).not.toContain("真正有用的答案是");
 });
 
+test("zh infrastructure prose avoids literal or note-like formulations", () => {
+  const infrastructureText = qmdFiles(join(zhRoot, "infrastructure"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(infrastructureText).not.toContain("挑一个写入成本、一个故障率");
+  expect(infrastructureText).not.toContain("## 这一层是怎么组装出来的");
+  expect(infrastructureText).not.toContain("下面是这份契约的一份草图");
+  expect(infrastructureText).not.toContain("这是全书收尾部分的第一章");
+  expect(infrastructureText).not.toContain("规格表年年突出同一个数字，却不是最稀缺的那个");
+  expect(infrastructureText).not.toContain("读者有权知道哪是哪");
+  expect(infrastructureText).not.toContain("最反向的那一端");
+  expect(infrastructureText).not.toContain("有四场争论真正在进行");
+  expect(infrastructureText).not.toContain("从硅那几章一路上来的读者最意外");
+  expect(infrastructureText).not.toContain("走到电表后面去");
+  expect(infrastructureText).not.toContain("真正要紧的，是把它放在时间线上的正确位置");
+  expect(infrastructureText).not.toContain("最新的前沿，是早先那套框架完全错过的一个");
+  expect(infrastructureText).not.toContain("有多少，又怎么量");
+  expect(infrastructureText).not.toContain("真正运行它时");
+  expect(infrastructureText).not.toContain("前沿已经越过了那个临界点");
+  expect(infrastructureText).not.toContain("那本账本里数到的故障");
+  expect(infrastructureText).not.toContain("真正要命的损坏是那个貌似合理的错误答案");
+  expect(infrastructureText).not.toContain("推动它的与其说是");
+  expect(infrastructureText).not.toContain("服务有它自己的同一个故事版本");
+  expect(infrastructureText).not.toContain("逐步走一遍，就能看到");
+  expect(infrastructureText).not.toContain("它自己正在浮现的词汇");
+  expect(infrastructureText).not.toContain("这里的要点是");
+  expect(infrastructureText).not.toContain("这里的三个词");
+  expect(infrastructureText).not.toContain("那个无法从所见之物里学习的模型");
+  expect(infrastructureText).not.toContain("那个悬而未决的科学问题");
+  expect(infrastructureText).not.toContain("处在这场争论中心的那个度量");
+  expect(infrastructureText).not.toContain("当读者读到这里时");
+  expect(infrastructureText).not.toContain("所挑的那个率");
+  expect(infrastructureText).not.toContain("它自己那个有争议的问题");
+  expect(infrastructureText).not.toContain("拖动陡峭度，就能看到");
+  expect(infrastructureText).not.toContain("这把基础设施弧线带到");
+  expect(infrastructureText).not.toContain("这个问题还有另一面");
+  expect(infrastructureText).not.toContain("接下来的问题不是");
+  expect(infrastructureText).not.toContain("真正支配前沿的");
+  expect(infrastructureText).not.toContain("这个式子里的");
+  expect(infrastructureText).not.toContain("这些系统买到的不是");
+  expect(infrastructureText).not.toContain("这章和后面的交接也很直接");
+  expect(infrastructureText).not.toContain("真正的限制很少写在模型卡上");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
