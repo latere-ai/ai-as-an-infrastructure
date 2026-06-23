@@ -59,6 +59,22 @@ test("zh introductory prose avoids abrupt bridges and stiff commitment framing",
   expect(zhText).not.toContain("有三个约束让这个问题变难");
 });
 
+test("zh orientation prose avoids literal or note-like formulations", () => {
+  const orientationText = qmdFiles(join(zhRoot, "orientation"))
+    .map((path) => readFileSync(path, "utf8"))
+    .join("\n");
+
+  expect(orientationText).not.toContain("本书确实假设、而非从零教起的一个前提是");
+  expect(orientationText).not.toContain("不会从零教起的前提");
+  expect(orientationText).not.toContain("第一段大规模相位");
+  expect(orientationText).not.toContain("偏好下方的数据制度");
+  expect(orientationText).not.toContain("从图中看出这三种付费节奏");
+  expect(orientationText).not.toContain("用一个动作形式化了");
+  expect(orientationText).not.toContain("与源头的分岔精确且可定位");
+  expect(orientationText).not.toContain("把它们读作不止一幅图");
+  expect(orientationText).not.toContain("被症状没有点名的那一层");
+});
+
 test("polished chapter openings preserve key source theses", () => {
   const checks: Array<[string, string[]]> = [
     [
