@@ -54,6 +54,8 @@ test("zh introductory prose avoids abrupt bridges and stiff commitment framing",
   expect(zhText).not.toContain("这点重要，是因为");
   expect(zhText).not.toContain("这个问题重要，是因为");
   expect(zhText).not.toContain("训练和服务在这里重要，是因为");
+  expect(zhText).not.toContain("问题在于，当调用方变成智能体时");
+  expect(zhText).not.toContain("真正的问题是：既然算力是稀缺的输入");
 });
 
 test("polished chapter openings preserve key source theses", () => {
