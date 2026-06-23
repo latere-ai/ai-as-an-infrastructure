@@ -181,3 +181,15 @@ test("adoption-productivity uses ROI balance in both languages", () => {
   expect(src("zh/ecosystem/05-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
   expect(src("zh/ecosystem/05-adoption-productivity.qmd")).toContain('data-lang="zh"');
 });
+
+test("the viz runtime registers evaluation power and frontier components", () => {
+  expect(rt).toMatch(/R\['eval-power'\]\s*=\s*function/);
+  expect(rt).toMatch(/R\['eval-frontier'\]\s*=\s*function/);
+});
+
+test("expanded evaluation chapters use the new interactive visualizations in both languages", () => {
+  for (const lang of ["en", "zh"]) {
+    expect(src(`${lang}/evaluation/02-statistical-reliability.qmd`)).toContain('data-viz="eval-power"');
+    expect(src(`${lang}/evaluation/07-operational-evaluation.qmd`)).toContain('data-viz="eval-frontier"');
+  }
+});

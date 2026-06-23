@@ -104,5 +104,5 @@ test("the expanded ecosystem part is reflected in top-level book surfaces", () =
 test("the expanded evaluation part is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("statistical reliability");
   expect(src("README.md").replace(/\s+/g, " ")).toContain("operational governance");
-  expect(src("CONTENT-GAPS.md")).toContain("- [ ] **Evaluation depth and governance**");
+  expect(src("CONTENT-GAPS.md")).toContain("- [x] **Evaluation depth and governance**");
 });

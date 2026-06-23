@@ -4,8 +4,129 @@ Offline evaluation tells a team what a model did on a controlled set. Production
 
 This chapter closes Part VII by turning measurement into an operating discipline. It does not repeat the tool wiring in @sec-eval-practice. Instead, it defines the release gates, private suites, drift checks, cost-quality frontiers, documentation, and governance contracts that make those tools meaningful.
 
+![Quality, cost, and latency form an operational frontier. The best operating point is rarely the model with the highest raw benchmark score; dominated choices cost more or run slower without enough quality gain. Schematic, not measured data.](/figures/operational-evaluation-1.svg){#fig-operational-evaluation-1}
+
+## The Release Gate Is a Policy
+
+An operational evaluation suite has a different job from a research benchmark. A research benchmark asks which system is better under a public protocol. A release gate asks whether this particular system version is allowed to affect users. That makes the gate a policy, not a chart.
+
+The policy needs four fields:
+
+- **Scope.** Which model, prompt, retrieval index, tool set, guardrail, and routing rule are under test.
+- **Threshold.** Which metrics must improve, which must not regress, and how uncertainty is handled.
+- **Authority.** Who can override the gate, and what evidence must be recorded.
+- **Fallback.** What happens if the gate fails: rollback, shadowing, human review, narrower traffic, or more data.
+
+This is the operational counterpart of @sec-statistical-reliability. A number with no decision rule produces debate after every run. A decision rule with no uncertainty produces brittle automation. A gate needs both.
+
+```{dot}
+//| label: fig-operational-evaluation-gates
+//| fig-cap: "Operational evaluation moves through progressively more realistic gates. Each gate has a different blast radius and a different kind of evidence: offline regression catches known failures, shadow traffic catches integration failures, canary catches user-distribution failures, and production monitoring catches drift."
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.35; ranksep=0.45;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  CI [label="offline CI\nregression suite"];
+  SH [label="shadow traffic\nno user effect"];
+  CA [label="canary\nsmall blast radius"];
+  PR [label="production\nmonitoring"];
+  RB [label="rollback or\nhuman review"];
+  DS [label="new failure\nenters suite"];
+  CI -> SH -> CA -> PR;
+  CI -> RB [label="fail", style=dashed];
+  SH -> RB [label="fail", style=dashed];
+  CA -> RB [label="fail", style=dashed];
+  PR -> DS [label="sampled failure"];
+  DS -> CI;
+}
+```
+
+The four gates should not all use the same metric. Offline regression suites are good at known failures. Shadow traffic is good at integration problems: missing tools, bad schema, latency surprises, broken retrieval. Canary is good at discovering distribution shift with a small blast radius. Production monitoring is good at drift and long-tail failures. Treating one of these as a substitute for the rest creates the familiar false comfort: a system passed the test it was easiest to pass.
+
+## The Private Suite Is an Asset
+
+The most valuable evaluation set in a production system is often the one that cannot be published. Public benchmarks make work comparable, but they decay through saturation and contamination. A private suite is less useful for public ranking, but more useful for release decisions, because it can contain the organization's own failures, policies, customer edge cases, and business costs.
+
+That suite needs lifecycle management:
+
+```text
+PrivateEvalSuite:
+  source             # incident, support ticket, red-team run, expert case, synthetic probe
+  owner              # team responsible for the failure mode
+  label_protocol     # human, executable, judge, state check
+  severity           # release-blocking, guardrail, exploratory
+  exposure           # who has seen the item or answer
+  version            # immutable item version
+  rotation_policy    # when to retire, refresh, or hide
+```
+
+This is where operational evaluation inherits the lesson from @sec-benchmarks. A suite is not merely a folder of prompts. It is an asset whose integrity can be spent. Every time answers leak into training data, every time a prompt is pasted into a public issue, every time a model is tuned against the same item, the suite loses some ability to surprise the next model. Rotation is not bureaucracy. It is how the gate stays alive.
+
+Sculley et al.'s hidden technical debt argument applies directly here: the evaluation harness, data dependencies, and undocumented consumers around a model can become the system's largest maintenance burden [@sculley2015debt]. Breck et al.'s ML Test Score made the same point operationally by treating tests across data, model, infrastructure, and monitoring as production-readiness criteria [@breck2017mltestscore].
+
+## Drift Is Not One Thing
+
+Production drift is often named as one phenomenon, but the useful debugging split is finer.
+
+- **Input drift.** User requests change. A prompt distribution shifts from casual questions to high-stakes workflows.
+- **Context drift.** The retrieval corpus, index, ranking model, or document parser changes.
+- **Model drift.** A hosted model version changes, or a routing policy changes which model sees which tasks.
+- **Policy drift.** The allowed behavior changes because the product, law, or safety policy changes.
+- **Metric drift.** The judge, rubric, or telemetry schema changes.
+
+D'Amour et al. call attention to underspecification: many predictors can have similar held-out performance yet behave differently in deployment [@damour2020underspecification]. LLM systems inherit that problem and add more moving parts. Two versions can tie offline and diverge online because the prompt template routes users into different behavior, or because the retriever changed the evidence distribution.
+
+Operational evaluation therefore needs provenance for every score. A trace should say not only which model answered, but which prompt template, model gateway route, tool schema, retriever index, judge version, and policy version participated. OpenTelemetry's GenAI conventions are one attempt to make such traces portable across tools and vendors [@otel2026genai44]. @sec-eval-practice discusses the concrete wiring; here the principle is that a score without provenance cannot be audited.
+
+## Quality Is Not the Only Axis
+
+The best model by raw quality may be the wrong production choice. Users experience latency, the finance team sees cost, safety teams see risk, and operators see failure rate. Evaluation must therefore report frontiers rather than single winners.
+
+```{=html}
+<figure id="fig-operational-evaluation-frontier">
+<div class="viz" data-viz="eval-frontier"></div>
+<figcaption>Quality, cost, and latency define an operating frontier. Drag the penalty weights: the model with the highest raw quality stops being the best choice once cost or latency carries enough operational weight.</figcaption>
+</figure>
+```
+
+One practical scalar is a utility score,
+
+$$
+U(m) = Q(m) - \lambda_c C(m) - \lambda_l L(m) - \lambda_r R(m),
+$$
+
+where $Q$ is task quality, $C$ is cost per task, $L$ is latency, $R$ is risk or expected review burden, and the $\lambda$ values express the product's operating priorities. The formula is not a universal metric. It is a forcing function: it makes the trade-off explicit. A customer-support bot and a code-repair agent should not use the same weights.
+
+This is the bridge to @sec-economics. Price changes can move a model onto or off the frontier without any capability change. Faster serving in @sec-serving-stack can make a slightly weaker model the better operating point. A better human review surface in @sec-human-interface-oversight can lower $R(m)$ by catching uncertain cases before they cause harm.
+
+## Governance Turns Evidence into Memory
+
+Evaluation evidence becomes governance when it is written down in forms that survive the release meeting. Model cards report intended uses, evaluation procedures, and disaggregated performance [@mitchell2019modelcards]. Datasheets for Datasets do the same for the data that evaluation and training depend on [@gebru2021datasheets]. NIST's AI Risk Management Framework makes "measure" one of the core functions alongside govern, map, and manage [@nist2023airmf].
+
+These documents are sometimes treated as compliance paperwork. For a production AI system, they are more useful when treated as operational memory:
+
+- which evals blocked the last release;
+- which slices are known weak;
+- which private suites must not enter training;
+- which human review gates are mandatory;
+- which benchmark claims are public, private, or deprecated;
+- which incidents created which regression tests.
+
+The final bullet is the most important. Every serious production failure should become either a regression test or an explicitly accepted risk. If neither happens, the organization has not learned from the failure. It has only recovered from it.
+
+::: {.callout-important}
+## What's contested
+The hard boundary is how much release authority should be automated. Fully manual review is slow and inconsistent. Fully automatic gates can overfit to stale suites and block improvements for the wrong reason. The workable middle is tiered authority: automatic gates for deterministic assertions and high-confidence regressions, human review for ambiguous or high-impact changes, and explicit override records when a business owner accepts risk. This is less elegant than a single score, but production systems rarely fail along one metric.
+:::
+
+::: {.callout-tip}
+## Lower-layer constraint
+Operational evaluation is constrained by the deployment lifecycle. If @sec-deployment-lifecycle cannot route a new version to shadow or canary traffic, the evaluation layer has only offline evidence. If @sec-wiring-stack bypasses the model gateway, judge calls and application calls cannot be compared under the same routing, budget, and trace scheme. Release gates are only as real as the platform primitives underneath them.
+:::
+
 ## Further reading
 
 ::: {#further-reading}
 :::
-

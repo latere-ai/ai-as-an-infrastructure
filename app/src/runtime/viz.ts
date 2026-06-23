@@ -1361,6 +1361,80 @@
     draw();
   };
 
+  // Evaluation power: an accuracy gap only becomes decision-grade when the
+  // confidence half-width shrinks below the gap. Slide the sample size and the
+  // target gap to see why small private evals are good tripwires but poor rankers.
+  R['eval-power'] = function (host) {
+    var n = 500, gap = 2.0, p = 0.72;
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 250);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      var half = 1.96 * Math.sqrt(p * (1 - p) / n) * 100;
+      var maxY = Math.max(10, gap * 2.2, half * 1.6);
+      function X(v) { return pd + (Math.log(v) - Math.log(50)) / (Math.log(10000) - Math.log(50)) * (W - 2 * pd); }
+      function Y(v) { return H - pd - v / maxY * (H - 2 * pd); }
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
+      ctx.strokeStyle = t.accent; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
+      for (var i = 0; i <= 160; i++) {
+        var nn = Math.exp(Math.log(50) + (Math.log(10000) - Math.log(50)) * i / 160);
+        var hw = 1.96 * Math.sqrt(p * (1 - p) / nn) * 100;
+        if (i === 0) ctx.moveTo(X(nn), Y(hw)); else ctx.lineTo(X(nn), Y(hw));
+      }
+      ctx.stroke();
+      ctx.strokeStyle = t.accent2; ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); ctx.beginPath(); ctx.moveTo(pd, Y(gap)); ctx.lineTo(W - pd, Y(gap)); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle = half < gap ? t.accent : t.accent2; ctx.beginPath(); ctx.arc(X(n), Y(half), 5 * cv.dpr, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('held-out examples (log)', W / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(13 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('95% half-width, percentage points', 0, 0); ctx.restore();
+      read.textContent = 'n=' + Math.round(n) + ' · gap=' + gap.toFixed(1) + ' pp · half-width=' + half.toFixed(1) + ' pp · ' + (half < gap ? 'decision-grade' : 'investigate only');
+    }
+    host.appendChild(slider('sample size n', 50, 10000, 50, n, function (v) { n = v; draw(); }).wrap);
+    host.appendChild(slider('target gap (pp)', 0.5, 8, 0.1, gap, function (v) { gap = v; draw(); }).wrap);
+    draw();
+  };
+
+  // Operational frontier: quality alone is not the production decision. A
+  // model can be dominated once cost and latency count. Weight the two penalties
+  // and see which point survives as the operating choice.
+  R['eval-frontier'] = function (host) {
+    var cw = 0.25, lw = 0.15;
+    var pts = [
+      { n: 'small', q: 0.68, c: 0.22, l: 0.18 },
+      { n: 'routed', q: 0.80, c: 0.55, l: 0.32 },
+      { n: 'frontier', q: 0.87, c: 1.35, l: 0.72 },
+      { n: 'slow giant', q: 0.875, c: 2.25, l: 1.2 },
+      { n: 'cheap weak', q: 0.55, c: 0.12, l: 0.12 }
+    ];
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 260);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      function X(c) { return pd + c / 2.5 * (W - 2 * pd); }
+      function Y(q) { return H - pd - (q - 0.5) / 0.42 * (H - 2 * pd); }
+      var best = 0, bestU = -Infinity;
+      pts.forEach(function (p, i) { var u = p.q - cw * p.c - lw * p.l; if (u > bestU) { bestU = u; best = i; } });
+      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
+      ctx.strokeStyle = t.accent; ctx.lineWidth = 1.5 * cv.dpr; ctx.beginPath(); [0, 1, 2].forEach(function (i, k) { var p = pts[i]; if (k === 0) ctx.moveTo(X(p.c), Y(p.q)); else ctx.lineTo(X(p.c), Y(p.q)); }); ctx.stroke();
+      pts.forEach(function (p, i) {
+        var r = (7 + 10 * p.l) * cv.dpr;
+        ctx.fillStyle = i === best ? t.accent : 'rgba(128,128,128,0.33)';
+        ctx.beginPath(); ctx.arc(X(p.c), Y(p.q), r, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = i === best ? '#fff' : t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(p.n, X(p.c), Y(p.q) + 3 * cv.dpr);
+      });
+      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('relative cost per task', W / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('task quality', 0, 0); ctx.restore();
+      read.textContent = 'cost weight=' + cw.toFixed(2) + ' · latency weight=' + lw.toFixed(2) + ' · chosen: ' + pts[best].n;
+    }
+    host.appendChild(slider('cost weight', 0, 0.8, 0.01, cw, function (v) { cw = v; draw(); }).wrap);
+    host.appendChild(slider('latency weight', 0, 0.8, 0.01, lw, function (v) { lw = v; draw(); }).wrap);
+    draw();
+  };
+
   function init(host) {
     var name = host.getAttribute('data-viz');
     // The wrapping <figure class="figure"> is inline-block (Bootstrap), which

@@ -4,8 +4,136 @@
 
 本章把评测接到 @sec-rag-retrieval、@sec-context-engineering、@sec-learning-limits 与 @sec-eval-practice。测量单位不只是回答本身，而是被拆成 claim、连到来源、再对照来源内容逐一判断的回答。
 
+## 四个词不能混成一个
+
+事实性评测里有几个词常被混用。
+
+- **Truthfulness** 问的是模型是否避免复述常见错误观念。TruthfulQA 正是围绕那些模仿人类文本反而会给出错误答案的问题构造的 [@lin2021truthfulqa]。
+- **Factuality** 问的是回答里的陈述，在世界中或某份约定参考中是否为真。
+- **Faithfulness** 问的是回答是否忠实于给定来源，即便那份来源不完整或本身有错。
+- **Attribution** 问的是每个需要支持的 claim，是否有一条真正蕴含它的来源。
+
+这些轴可以彼此冲突。模型可以忠实于一段误导性检索材料，因此并不 factual。它可以说出一个真的 claim，却引用了一条并不支持该 claim 的来源。它也可以给出受偏好的回答，却压掉不确定性。因此，评分前必须先选清楚要测哪一根轴。
+
+这就是事实性需要单独成章的原因。@sec-judging-holistic 可以告诉读者哪个回答更受偏好，@sec-benchmarks 可以告诉读者模型答对了哪些封闭题。它们都不足以处理这样一段生成文本：十二个 claim 里，九个被来源支持，两个无支持，一个被来源反驳。
+
+## 从回答到 claim
+
+长文本事实性只有在回答被拆开之后才容易测量。FActScore 明确做了这件事：把生成文本拆成原子事实，再计算其中被可靠来源支持的比例 [@min2023factscore]。示意地写：
+
+$$
+\operatorname{FActScore}(y) =
+\frac{1}{m}\sum_{i=1}^{m} \mathbf{1}[\operatorname{supported}(c_i, E_i)],
+$$
+
+其中 $y$ 是回答，$c_i$ 是第 $i$ 个原子 claim，$E_i$ 是为该 claim 检索或指定的证据，$m$ 是被抽取出的 claim 数量。
+
+```{dot}
+//| label: fig-factuality-claim-graph
+//| fig-cap: "claim 级事实性。回答先被拆成原子 claim；每个 claim 再对照证据检查。引用只有在被引用来源支持它所附着的具体 claim 时才有用。"
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.35; ranksep=0.45;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  A [label="生成\n回答"];
+  C1 [label="claim 1"];
+  C2 [label="claim 2"];
+  C3 [label="claim 3"];
+  E1 [label="来源片段\n支持"];
+  E2 [label="没有支持\n来源"];
+  E3 [label="来源片段\n反驳"];
+  S1 [label="被支持", color="#14b8a6", fontcolor="#14b8a6"];
+  S2 [label="无支持", color="#f59e0b", fontcolor="#f59e0b"];
+  S3 [label="被反驳", color="#ef4444", fontcolor="#ef4444"];
+  A -> C1; A -> C2; A -> C3;
+  C1 -> E1 -> S1;
+  C2 -> E2 -> S2;
+  C3 -> E3 -> S3;
+}
+```
+
+这个单位变化很重要。回答级二元分数会把大体正确但混有错误的回答，和完全编造的回答一起惩罚；也可能因为一段回答大多读着顺，就放过其中的假 claim。claim 级评分保留了梯度，也产生更好的调试数据：无支持 claim 往往指向检索失败，被反驳 claim 往往指向综合失败，过度自信 claim 则指向校准失败。
+
+代价是，claim 抽取本身也是模型介导的一步。系统可能漏掉 claim，把一个 claim 切成几个更容易过关的小 claim，或让证据搜索过于宽松。因此，人类审计不仅要审生成器，也要审评分器。
+
+## 短答案与弃答
+
+短事实问答有用，是因为它去掉了许多自由度。SimpleQA 刻意使用只有单一明确答案的问题，并把回答标成正确、错误或不作答 [@wei2024simpleqa]。第三个标签正是设计重点。一个少答一些题、但避免错误 claim 的模型，可能比一个自信乱猜的模型更安全。
+
+这把事实性接回校准。系统有两个旋钮：它是否知道答案，以及它是否尝试回答。产品风险常常来自那个非对角位置：它不知道，却仍然回答。TruthfulQA 在更早一代模型上暴露了相近的失败：规模提升会改善许多 NLP 任务，但模仿式训练的大模型也可能更容易复现流行错误观念 [@lin2021truthfulqa]。
+
+因此，一套事实性评测至少应报告三个率：
+
+- **正确率。** 正确回答的问题占比。
+- **错误率。** 错误回答的问题占比。
+- **尝试率。** 未弃答的问题占比。
+
+只看第一个不够。模型可以通过什么都答来提高正确率，同时抬高有害错误率；也可以通过什么都拒答来降低错误率。运营点是一项策略选择，不是单一分数。
+
+## 检索系统里的 grounding
+
+RAG 改变了失效面。检索可能没找到正确证据；上下文打包器可能把它丢掉；生成器可能忽略它；引用层可能指向错误片段。RAGAS 因此把评测拆成检索和生成维度，例如上下文相关性、上下文召回、忠实度和答案相关性 [@es2023ragas]。ALCE 则把引用质量明确拉出来，检查生成答案的引用是否真正支持文本 [@gao2023alce]。
+
+```{dot}
+//| label: fig-factuality-rag-failure
+//| fig-cap: "grounded generation 有彼此独立的失效面。检索、上下文选择、综合与引用绑定都可能单独失败，因此单一回答分数无法说明事实性错误从哪里来。"
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.35; ranksep=0.45;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  Q [label="问题"];
+  R [label="检索候选\n片段"];
+  K [label="打包上下文\n并排序片段"];
+  G [label="生成\n回答"];
+  C [label="绑定\n引用"];
+  E [label="claim 级\n评测"];
+  Q -> R -> K -> G -> C -> E;
+  R -> F1 [label="漏检", style=dashed];
+  K -> F2 [label="丢失", style=dashed];
+  G -> F3 [label="编造", style=dashed];
+  C -> F4 [label="错引", style=dashed];
+  F1 [label="检索失败"];
+  F2 [label="上下文失败"];
+  F3 [label="综合失败"];
+  F4 [label="归因失败"];
+}
+```
+
+关键区别在于来源是否可用。闭卷事实性问模型从参数里知道什么；检索 grounded 事实性问系统能否使用给定证据。一个基准如果混掉这一区别，结果就难以行动。闭卷失败可能需要弃答或检索；grounded 失败可能需要更好的检索、分块、重排、上下文预算或引用评分。
+
+FEVER 的历史价值在于，它把事实核查组织成 claim、证据和标签，而不是单独看答案文本 [@thorne2018fever]。同一个形状回到 RAG 评测里：一个 claim 被检索证据支持、反驳，或证据不足。区别在于，LLM 应用需要在凌乱的生成回答上持续运行这套协议，而不只是在数据集 claim 上运行。
+
+## 弱信号及其边界
+
+有些事实性信号不需要标准证据。SelfCheckGPT 对黑盒模型多次采样，并检查回答之间的矛盾：如果模型知道某个事实，多次采样应当一致；如果它在幻觉，采样之间更可能分岔 [@manakul2023selfcheckgpt]。这是一种便宜预警，但不是真相。许多采样可以一致地复述同一个错误，尤其当这个错误在训练数据里很常见时。
+
+同样，引用数量不是引用支持。一个带五条引用的回答，可以比只带一条来源的回答更差，只要那五条引用只是装饰。来源标题可能与回答主张方向相反；检索片段可能真实，却并不关于这个 claim。评分器要检查 claim 与证据之间的蕴含关系，而不是 URL 是否存在。
+
+## 它在栈中的位置
+
+事实性评测向全书其他部分输出三类信号。
+
+第一，它服务 @sec-context-engineering。如果系统反复因为证据处在长上下文中部而被忽略，产生无支持 claim，那么问题是上下文摆放，而不只是模型质量。
+
+第二，它服务 @sec-rag-retrieval。如果 claim 失败是因为证据从未被检索到，失败归属在索引、检索、重排或文档解析。
+
+第三，它服务 @sec-operational-evaluation。在生产中，高置信的无支持 claim 应该进入回归套件。如果失败来自缺失证据，回归样本必须带上检索器状态；如果失败来自综合，样本必须带上检索片段和模型输出。否则下一次运行无法复现错误。
+
+::: {.callout-important}
+## 争议所在
+领域内还没有统一的事实性指标。claim 级指标诊断性更好，却依赖 claim 抽取和证据检索；短事实基准标签更干净，却测不到长文档综合；RAG 指标可以少依赖人工参考，但常常又依赖模型评判者，重新引入评判者偏差。比较耐久的教训更窄：报告正在测的那根轴。Truthfulness、factuality、faithfulness 与 attribution 相关，但不能互相替代。把其中一项偷换成另一项，正是流畅回答带着装饰性引用被误认为 grounded 的方式。
+:::
+
+::: {.callout-tip}
+## 下层约束
+Grounding 质量在生成器开口之前，就已经受检索和上下文约束。如果 @sec-rag-retrieval 返回了错误片段，或 @sec-context-engineering 丢掉了正确片段，任何事实性评分器都无法事后恢复一个 grounded 回答。评测层能揭示失败，并把它路由给正确 owner，但不能让缺失证据凭空出现在上下文窗口里。
+:::
+
 ## 延伸阅读
 
 ::: {#further-reading}
 :::
-
