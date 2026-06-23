@@ -277,6 +277,24 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
   }
 });
 
+test("specialized practice terms get local definitions before use", () => {
+  const required = [
+    ["en/foundations/01-scaling-laws.qmd", "the @gls-compute-optimal $N$ and $D$: the pair with the lowest predicted loss"],
+    ["zh/foundations/01-scaling-laws.qmd", "@gls-compute-optimal的 $N$ 与 $D$，也就是预测损失最低的那组参数量与词元数"],
+    ["zh/foundations/07-mid-training.qmd", "**相对 @gls-continued-pretraining。** 继续预训练是把已有模型继续拿下一词元目标训练"],
+    ["en/practice/06-retrieval-and-documents.qmd", "**Classic CV and @gls-ocr pipelines.** Here OCR means recognizing text from pixels"],
+    ["zh/practice/06-retrieval-and-documents.qmd", "**经典 CV 与 @gls-ocr 流水线。** 这里的 OCR 是从像素里识别文字"],
+    ["en/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong generalization asks whether weak labels can elicit stronger latent capability"],
+    ["zh/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong泛化问的是：弱标注能否引出强模型里已经潜伏的能力"],
+    ["en/practice/05-agents-and-sandboxes.qmd", "a @gls-virtual-key issued by a @gls-gateway"],
+    ["zh/practice/05-agents-and-sandboxes.qmd", "模型走由@gls-gateway签发的@gls-virtual-key"],
+  ];
+
+  for (const [path, snippet] of required) {
+    expect(flat(path), `${path} should define ${snippet} locally`).toContain(snippet);
+  }
+});
+
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
