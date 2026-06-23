@@ -36,7 +36,7 @@ export interface PrevNext {
 
 export interface ChapterData {
   lang: Lang;
-  partLabel: string; // full part, e.g. "Part I: Foundations and Pretraining"
+  partLabel: string; // full part, e.g. "Part I: Base Model Formation"
   partShort: string; // short part, e.g. "Part I" / "第一部分"
   chapterNum: string; // "6" or ""
   isPartIntro: boolean; // true for unnumbered intro pages attached to a part

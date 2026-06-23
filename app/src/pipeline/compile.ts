@@ -45,7 +45,7 @@ function chapterWord(lang: string, num: string): string {
   return lang === "zh" ? `第 ${num} 章` : `Chapter ${num}`;
 }
 
-// "Part I: Foundations…" → "Part I"; "第一部分：基础…" → "第一部分"
+// "Part I: Base Model Formation" → "Part I"; "第一部分 · 基座模型的形成" → "第一部分"
 function shortPart(label: string): string {
   return label.split(/[:：]/)[0].trim();
 }

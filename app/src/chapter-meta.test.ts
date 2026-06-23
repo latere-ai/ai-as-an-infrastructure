@@ -6,13 +6,13 @@ import type { ChapterData } from "./types.ts";
 
 const chapter: ChapterData = {
   lang: "zh",
-  partLabel: "第一部分 · 基础与预训练",
-  partShort: "第一部分 · 基础与预训练",
+  partLabel: "第一部分 · 基座模型的形成",
+  partShort: "第一部分 · 基座模型的形成",
   chapterNum: "",
   isPartIntro: true,
-  eyebrow: "第一部分 · 基础与预训练",
+  eyebrow: "第一部分 · 基座模型的形成",
   crumbChapter: "第一部分",
-  title: "第一部分 · 基础与预训练",
+  title: "第一部分 · 基座模型的形成",
   author: "Changkun Ou",
   updated: "",
   readtime: "约 1 分钟",

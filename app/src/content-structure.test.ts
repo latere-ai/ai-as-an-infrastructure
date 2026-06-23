@@ -205,7 +205,7 @@ test("the expanded adaptation part is tracked in top-level book surfaces", () =>
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Post-training adaptation and alignment depth**");
 });
 
-test("foundations and pretraining ends with a mid-training bridge chapter", () => {
+test("base model formation ends with a mid-training bridge chapter", () => {
   const expected = [
     "foundations/01-scaling-laws.qmd",
     "foundations/02-data-curation.qmd",
@@ -249,6 +249,26 @@ test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(src("zh/orientation/01-whole-stack.qmd")).toContain("@sec-mid-training");
   expect(src("en/foundations/02-data-curation.qmd")).toContain("covered in @sec-mid-training");
   expect(src("zh/foundations/02-data-curation.qmd")).toContain("放在 @sec-mid-training 讨论");
+});
+
+test("part I is framed as base model formation, not only pretraining", () => {
+  expect(src("en/book.yml")).toContain('part: "Part I: Base Model Formation"');
+  expect(src("zh/book.yml")).toContain('part: "第一部分 · 基座模型的形成"');
+  expect(src("en/foundations/index.qmd")).toContain("# Part I: Base Model Formation");
+  expect(src("zh/foundations/index.qmd")).toContain("# 第一部分 · 基座模型的形成");
+  expect(src("README.md")).toContain("Part I, Base Model Formation");
+  expect(src("en/index.qmd")).toContain("Part I, Base Model Formation");
+  expect(src("zh/index.qmd")).toContain("第一部分，基座模型的形成");
+  expect(src("en/orientation/02-field-map.qmd")).toContain("Part I\\nBase Model Formation");
+  expect(src("zh/orientation/02-field-map.qmd")).toContain("第一部分\\n基座模型的形成");
+  expect(src("en/orientation/index.qmd")).toContain("base-model formation, adaptation");
+  expect(src("zh/orientation/index.qmd")).toContain("经过基座模型形成和适配");
+  expect(src("en/orientation/01-whole-stack.qmd")).toContain("Station two: base-model formation");
+  expect(src("zh/orientation/01-whole-stack.qmd")).toContain("环节二：基座模型形成");
+  expect(src("en/foundations/summary.qmd")).toContain("base-model formation is infrastructure");
+  expect(src("zh/foundations/summary.qmd")).toContain("基座模型形成不是背景知识");
+  expect(flat("en/summary.qmd")).toContain("We began with base-model formation");
+  expect(src("zh/summary.qmd")).toContain("我们从基座模型的形成开始");
 });
 
 test("reasoning and test-time compute is a full seven-chapter part in both languages", () => {

@@ -6,7 +6,7 @@ import type { ChapterData } from "./types.ts";
 
 const baseChapter: ChapterData = {
   lang: "en",
-  partLabel: "Part I: Foundations and Pretraining",
+  partLabel: "Part I: Base Model Formation",
   partShort: "Part I",
   chapterNum: "5",
   isPartIntro: false,
@@ -53,10 +53,10 @@ test("part intro breadcrumb stays compact", () => {
     chapterNum: "",
     isPartIntro: true,
     crumbChapter: "Overview",
-    title: "Part I: Foundations and Pretraining",
+    title: "Part I: Base Model Formation",
   });
 
   expect(crumb).toContain("Part I");
   expect(crumb).toContain("Overview");
-  expect(crumb).not.toContain("Part I: Foundations and Pretraining");
+  expect(crumb).not.toContain("Part I: Base Model Formation");
 });
