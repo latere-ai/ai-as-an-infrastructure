@@ -271,6 +271,28 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("zh/summary.qmd")).toContain("我们从基座模型的形成开始");
 });
 
+test("serving cost references are anchored to the inference and serving part", () => {
+  expect(src("en/inference/06-serving-multimodal.qmd")).not.toContain("Part IV built a serving stack");
+
+  const enEconomics = src("en/ecosystem/03-economics.qmd");
+  expect(enEconomics).not.toContain("Part VI levers");
+  expect(enEconomics).not.toContain("Every chapter in Part VI");
+  expect(enEconomics).not.toContain("every Part VI optimization");
+  expect(enEconomics).not.toContain("optimizations of Part VI");
+  expect(enEconomics).toContain("The serving chapters in Part V");
+  expect(enEconomics).toContain("Part V serving levers");
+  expect(enEconomics).toContain("serving optimizations in Part V");
+
+  const zhEconomics = src("zh/ecosystem/03-economics.qmd");
+  expect(zhEconomics).not.toContain("第六部分的每一章");
+  expect(zhEconomics).not.toContain("第六部分每一项优化");
+  expect(zhEconomics).not.toContain("第六部分的手段");
+  expect(zhEconomics).not.toContain("第六部分的优化为什么能直接回本");
+  expect(zhEconomics).toContain("第五部分的服务章节");
+  expect(zhEconomics).toContain("第五部分的服务手段");
+  expect(zhEconomics).toContain("第五部分的服务优化为什么能直接回本");
+});
+
 test("reasoning and test-time compute is a full seven-chapter part in both languages", () => {
   const expected = [
     "reasoning/01-eliciting-reasoning.qmd",
