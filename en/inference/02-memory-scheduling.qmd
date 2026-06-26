@@ -14,7 +14,7 @@ problem, seen from two sides.
 
 @sec-serving-problem named the two phases of generation and their opposite shapes. Prefill reads the whole prompt in one compute-bound pass and produces the first token. Decode then emits one token per forward pass, each step reading the entire key-value cache for one new query, so decode is memory-bandwidth-bound and runs at batch size one per request unless the engine batches across requests. The memory cost and the scheduling cost of those two phases are not separate concerns. They are two faces of one resource problem, and treating them together is what this chapter is for.
 
-The memory fact is that the key-value cache is large, per-request, and grows by one slot per layer per generated token. For a request of length $L$, the cache holds $2 \cdot L \cdot n_{\text{layers}} \cdot n_{\text{kv}} \cdot d_{\text{head}}$ values, the factor of two for keys and values. On a model with billions of parameters the weights are fixed, but the cache for a few dozen concurrent long-context requests can exceed the weights, and it appears and disappears as requests arrive and finish. A naive engine reserves the maximum possible length for every request up front, which wastes most of the reservation for requests that finish early and caps the batch size far below what the hardware could hold.
+The memory fact is that the key-value cache is large, per-request, and grows by one slot per layer per generated token. For a request of length $T$, the cache holds $2 \cdot T \cdot L \cdot n_{\text{kv}} \cdot d_{\text{head}}$ values, the factor of two for keys and values. On a model with billions of parameters the weights are fixed, but the cache for a few dozen concurrent long-context requests can exceed the weights, and it appears and disappears as requests arrive and finish. A naive engine reserves the maximum possible length for every request up front, which wastes most of the reservation for requests that finish early and caps the batch size far below what the hardware could hold.
 
 The scheduling fact is that requests do not share a length. In a batch of generations, one request may stop at twenty tokens and another run to two thousand. If the engine schedules a batch and waits for every member to finish before admitting the next, the short requests sit idle inside a padded batch while the longest one decodes, and newly arrived requests wait behind the whole batch. Throughput collapses to the pace of the slowest member, and latency for a new arrival is the tail of the batch in front of it.
 
@@ -181,24 +181,24 @@ The cascade buys four benefits, and each comes with a named cost.
 
 ![Schematic of the block-size trade-off in paged attention, after Kwon et al. (2023). Internal fragmentation, the partial final block, grows with block size, while indirection overhead, the block-table entries and the gather through them, falls as roughly one over the block size. Their sum is a U-curve with an interior optimum, which is why the block size is a tuning knob. Idealized synthetic data, not measured.](/figures/memory-scheduling-2.svg){#fig-memory-scheduling-2}
 
-  Try changing `L`, the typical sequence length, and watch the optimal block size move with it, matching the square-root formula.
+  Try changing `T`, the typical sequence length, and watch the optimal block size move with it, matching the square-root formula.
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
-L = 512            # typical sequence length, in tokens
+T = 512            # typical sequence length, in tokens
 w_frag = 1.0       # cost per wasted token in the partial final block
 w_indir = 4.0      # cost of one block-table entry and its gather
 b = np.arange(1, 257)
 frag = w_frag * (b / 2)          # waste grows with block size
-indir = w_indir * (L / b)        # indirection falls as 1/block
+indir = w_indir * (T / b)        # indirection falls as 1/block
 total = frag + indir
 b_star = b[np.argmin(total)]
-b_formula = np.sqrt(2 * w_indir * L / w_frag)
+b_formula = np.sqrt(2 * w_indir * T / w_frag)
 print("argmin block size:", b_star, "  sqrt formula:", round(b_formula, 1))
 plt.plot(b, frag, "--", label="fragmentation (b/2)")
-plt.plot(b, indir, "--", label="indirection (L/b)")
+plt.plot(b, indir, "--", label="indirection (T/b)")
 plt.plot(b, total, label="total")
 plt.axvline(b_star, color="k", lw=0.8)
 plt.xlabel("block size (tokens)"); plt.ylabel("cost"); plt.legend(); plt.show()
