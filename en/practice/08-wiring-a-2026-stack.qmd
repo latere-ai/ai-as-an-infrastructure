@@ -91,14 +91,14 @@ performance numbers are not independently verified here.
 
 | Name | What it is | License / model | Best for |
 | --- | --- | --- | --- |
-| **LiteLLM** | Python SDK + self-hostable proxy translating 100+ providers to OpenAI format; virtual keys, budgets, spend logs, UI | Open source (MIT-style core) + paid Enterprise | Teams with DevOps wanting the broadest provider coverage, self-hosted, in a Python stack. The de facto OSS default |
+| **LiteLLM** | Python SDK + self-hostable proxy translating 100+ providers to OpenAI format; virtual keys, budgets, spend logs, UI | Open source (MIT-style core) + paid Enterprise | Teams wanting the broadest provider coverage, self-hosted, in a Python stack, at low-to-moderate traffic. Long the de facto OSS default; a Python proxy, so throughput is its ceiling under load (see below) |
 | **OpenRouter** | Managed SaaS aggregator: one endpoint, prepaid credits, 300+ models, BYOK | Hosted SaaS; ~5.5% fee on credit purchase | Solo devs and small teams wanting zero-setup access to a huge catalog |
 | **Portkey** | AI gateway with guardrails, virtual keys, fallbacks, caching, prompt management, observability | OSS core + managed SaaS; self-host on enterprise | Enterprises needing governance: PII redaction, jailbreak detection, audit, compliance |
 | **agentgateway** | Rust data plane for HTTP/gRPC *and* AI-native protocols: LLM + MCP + A2A gateway in one | Apache 2.0; Linux Foundation (Agentic AI Foundation) | Platform teams wanting one proxy for LLM, tool (MCP), and agent (A2A) traffic |
 | **Envoy AI Gateway** | Kubernetes-native gateway on Envoy + Gateway API; LLM routing, token rate limiting, cost tracking, InferencePool | Open source (Envoy/CNCF ecosystem) | Platform teams already on Envoy/Istio/Gateway API wanting in-cluster control |
 | **Cloudflare AI Gateway** | Platform-native gateway: observability, caching, rate limiting, cost tracking; Unified Billing | Hosted SaaS; core features free | Teams already on Cloudflare/Workers wanting no infra to run |
 | **Bifrost** (Maxim AI) | Go LLM gateway: adaptive load balancing, cluster mode, guardrails, 1000+ models | Open source + commercial | Teams wanting a high-throughput, low-overhead self-hosted LiteLLM alternative |
-| **Lux** (latere.ai) | The author's own gateway: one address to OpenAI, Anthropic, Gemini, OpenRouter, Ollama; sealed credentials, virtual keys, spend caps, hooks, audit | Latere product family | The Latere stack, and a worked example in this book. *Disclosed as the author's own infrastructure; illustrative, not a neutral recommendation* |
+| **Lux** (latere.ai) | The author's own gateway (Go, compiled): one address to OpenAI, Anthropic, Gemini, OpenRouter, Ollama; sealed credentials, virtual keys, spend caps, hooks, audit | Latere product family | The Latere stack, and the worked example this book wires (@sec-tooling-ecosystem). *Disclosed as the author's own infrastructure; illustrative, not a neutral recommendation; ties agentgateway as benchmark leader, not ahead of it* |
 
 How to choose splits on two axes that matter more than feature checklists:
 **managed vs self-hosted**, then **plain-LLM vs agent-native**.
@@ -114,17 +114,31 @@ How to choose splits on two axes that matter more than feature checklists:
   tool calls and agent-to-agent traffic under the same policy point as token
   traffic, instead of bolting agent governance onto a chat-only proxy later.
 
-On performance: vendors publish dramatic latency numbers ("50x faster",
+On performance, vendors publish dramatic latency numbers ("50x faster",
 "sub-millisecond overhead"), measured under inconsistent conditions and not
 verified here. For almost all workloads, provider and model latency dominate
-gateway overhead by orders of magnitude. Benchmark on your own traffic before you
-let overhead break a tie.
+gateway overhead by orders of magnitude, so per-request overhead rarely breaks a
+tie. What breaks a tie under agent load is the throughput ceiling, and there the
+implementation language shows. A controlled benchmark by the author, comparing
+the gateways in a stateless passthrough configuration at an equal CPU budget,
+found the Python proxy (LiteLLM) saturating between roughly 100 and 500 requests
+per second and falling over near 1000, while the compiled gateways (agentgateway
+in Rust, Lux in Go) stayed flat through 1000 with added first-byte latency in the
+low single-digit milliseconds. The two compiled gateways were statistically
+indistinguishable from each other: the gap that mattered was Python versus
+compiled, not one product against the field. That is the bare-forwarding tier,
+not a feature-parity test, since a production gateway also authenticates, meters,
+and applies policy, so benchmark your own configuration before you let it decide.
 
-The sensible default for a team that wants control of its keys and costs without a
-large platform investment is to **self-host LiteLLM and pair it with an
-observability layer**, because it has the broadest coverage and almost everything
-else interoperates with it. (The author's own stack uses Lux; it appears here as a
-worked example of these patterns, not as a neutral pick over the options above.)
+The sensible default for a team that wants control of its keys and costs is
+therefore a **performant compiled gateway paired with an observability layer**.
+Two lead the benchmark above: agentgateway (Rust, Apache-2.0, Linux Foundation),
+the neutral choice, and Lux (Go), the author's own gateway and the stack the rest
+of this book wires (@sec-tooling-ecosystem). LiteLLM keeps a real place for the
+broadest provider coverage and for low-traffic or prototype work, where its
+ecosystem reach outweighs its throughput ceiling. (Lux appears throughout as a
+worked example because the author built it, not as a neutral pick over
+agentgateway, with which the benchmark ties it.)
 
 ## The reference architecture
 
@@ -330,7 +344,7 @@ read down it. These are starting points to adapt, dated mid-2026, not rankings.
 | Layer | Lean / managed | Regulated / self-hosted | Cloud-native K8s |
 | --- | --- | --- | --- |
 | **Model** | Hosted frontier API (Claude / GPT-5 / Gemini), pinned IDs | Hosted for hard steps + self-hosted open weights for bulk | Same, plus in-cluster open-weight models |
-| **Gateway** | OpenRouter or Cloudflare AI Gateway (managed) | LiteLLM self-hosted, virtual keys + budgets | Envoy AI Gateway or agentgateway (in-cluster) |
+| **Gateway** | OpenRouter or Cloudflare AI Gateway (managed) | agentgateway or Lux self-hosted (compiled), virtual keys + budgets | Envoy AI Gateway or agentgateway (in-cluster) |
 | **Serving** | None you operate (the API is the server) | vLLM behind OpenAI-compatible endpoint, FP8 + prefix caching | vLLM / SGLang on the cluster, KV-aware routing at scale |
 | **Agent** | OpenAI Agents SDK or Claude Agent SDK | LangGraph (durable, checkpointed) or Pydantic AI | LangGraph + checkpointer in Postgres |
 | **Sandbox** | E2B (hosted microVM) | Self-host on Firecracker, default-deny egress | Sandboxes on the same cluster, scoped tokens |
@@ -352,32 +366,36 @@ handful of lines that make the layers interchangeable. Two snippets show the loa
 bearing pattern: a gateway config that unifies a hosted and a self-hosted model
 with a fallback, and an agent that points at that one address with a virtual key.
 
-First, the gateway. This LiteLLM proxy config exposes one alias, `smart`, that
-load-balances or fails over between a hosted and a self-hosted model. The
-application never learns which one served the request (sketch; see LiteLLM docs for
-the exact schema).
+First, the gateway. The config below exposes one alias, `smart`, that
+load-balances or fails over between a hosted and a self-hosted model, so the
+application never learns which one served the request. The shape is illustrative,
+not any one product's schema: LiteLLM expresses it as a static YAML `model_list`,
+while agentgateway and Lux bind the routing strategy (weighted, least-latency,
+round-robin, or fallback) to a virtual key through an API or dashboard rather than
+a file (@sec-tooling-ecosystem). The seam the application sees is the same either
+way.
 
 ```yaml
-# litellm proxy config: one alias, hosted primary with a self-hosted fallback
-model_list:
-  - model_name: smart                          # the name the app requests
-    litellm_params:
-      model: anthropic/claude-opus-4-8
-      api_key: os.environ/ANTHROPIC_API_KEY    # provider secret stays server-side
-  - model_name: smart                          # same alias, fallback target
-    litellm_params:
-      model: openai/gpt-5.5
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: local                          # self-hosted, behind the same seam
-    litellm_params:
-      model: hosted_vllm/your-open-weight-model
-      api_base: http://vllm-svc:8000/v1
+# Illustrative gateway config: one alias, hosted primary with a self-hosted fallback.
+# Each gateway has its own schema; this shows the shape, not a product's exact keys.
+models:
+  - alias: smart                  # the name the app requests
+    target: anthropic/claude-opus-4-8
+    api_key: ${ANTHROPIC_API_KEY} # provider secret stays server-side
+  - alias: smart                  # same alias, fallback target
+    target: openai/gpt-5.5
+    api_key: ${OPENAI_API_KEY}
+  - alias: local                  # self-hosted, behind the same seam
+    target: vllm/your-open-weight-model
+    base_url: http://vllm-svc:8000/v1
 
-litellm_settings:
-  fallbacks: [{ "smart": ["local"] }]          # if hosted "smart" fails, use local
-  num_retries: 2
-# virtual keys, team budgets, and spend caps are minted via the /key/generate
-# API and the proxy UI, not this file.
+routing:
+  smart:
+    strategy: fallback            # if the hosted target fails, use the next
+    fallback: [local]
+    retries: 2
+# Virtual keys, team budgets, and spend caps are minted out of band,
+# through an admin API or dashboard, not in this file.
 ```
 
 Second, the agent. It holds a gateway virtual key, not a provider secret. It
