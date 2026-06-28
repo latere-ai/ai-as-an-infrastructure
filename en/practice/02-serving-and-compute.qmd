@@ -181,7 +181,7 @@ harness work in @sec-agents-practice and the authorization model in
 
 | Gateway | What it is | Hosting | Best for |
 | --- | --- | --- | --- |
-| **LiteLLM** | Python SDK + self-hostable proxy translating 100+ providers to OpenAI format; virtual keys, budgets, spend logs, UI. | Self-host (OSS core) + Enterprise tier | Broadest provider coverage, Python stack, DevOps in place |
+| **LiteLLM** | Python SDK + self-hostable proxy translating 100+ providers to OpenAI format; virtual keys, budgets, spend logs, UI. | Self-host (OSS core) + Enterprise tier | Broadest provider coverage, Python stack, DevOps in place; a Python proxy, so throughput is its ceiling under load (@sec-wiring-stack) |
 | **OpenRouter** | Managed aggregator: one endpoint, prepaid credits, 300+ models, BYOK. | Managed SaaS | Solo devs and small teams wanting zero-setup catalog access |
 | **Portkey** | Gateway with guardrails, virtual keys, fallbacks, caching, prompt management, observability. | OSS core + managed | Enterprises needing governance: PII redaction, audit, compliance |
 | **agentgateway** | Rust data plane for HTTP/gRPC and AI-native protocols: LLM + MCP + A2A in one. | Self-host (Apache-2.0, Linux Foundation) | Platform teams wanting one proxy for LLM, tool, and agent traffic |
@@ -199,7 +199,10 @@ verified. The durable point: compiled-language gateways (Go/Rust: Bifrost,
 agentgateway, Helicone, Envoy) generally claim lower proxy overhead than the
 Python LiteLLM proxy, but for most workloads provider and model latency
 dominate gateway overhead by orders of magnitude. Benchmark on your own traffic
-before treating overhead as a tiebreaker.
+before treating overhead as a tiebreaker. A controlled benchmark in
+@sec-wiring-stack sharpens where the gap actually shows: not per-request overhead
+but throughput, with the Python proxy saturating at a few hundred RPS while the
+compiled gateways stay flat through 1000.
 
 ### How to choose a gateway
 
@@ -209,7 +212,8 @@ agent-native.
 - **Pick OpenRouter** when you are a solo dev or small team and want the
   largest catalog with no infra and no contracts.
 - **Pick LiteLLM** when you want a self-hosted, broadly compatible gateway and
-  have the DevOps to run it, especially on a Python stack.
+  have the DevOps to run it, especially on a Python stack, at low-to-moderate
+  traffic where its provider coverage matters more than its throughput ceiling.
 - **Pick Portkey** (or Kong if you already run Kong) when governance,
   guardrails, and compliance are requirements, not nice-to-haves.
 - **Pick agentgateway** when your roadmap is agentic and you need LLM, MCP, and
@@ -221,14 +225,15 @@ agent-native.
   third party. Move to self-hosted when key custody, audit, or compliance
   forces it.
 
-**Sensible default (mid-2026):** self-host LiteLLM as the gateway, paired with
-an observability layer (Helicone or LiteLLM's own dashboard) for spend and
-request analytics. It gives you the broadest provider coverage, virtual keys
-with budgets, spend tracking, and fallbacks, all open source and in your own
-environment, and almost everything else in the ecosystem interoperates with it.
-If your roadmap is agent-heavy, evaluate agentgateway early so LLM, tool, and
-agent traffic share one policy point instead of bolting agent concerns onto a
-chat-only proxy later.
+**Sensible default (mid-2026):** self-host a performant compiled gateway,
+agentgateway (Rust, Apache-2.0, neutral) or Lux (Go, this book's worked example),
+paired with an observability layer for spend and request analytics. It gives you
+virtual keys with budgets, spend tracking, and fallbacks in your own environment,
+and stays flat under agent load where a Python proxy saturates (@sec-wiring-stack).
+LiteLLM stays a reasonable pick for the broadest provider coverage at
+low-to-moderate traffic, where its ecosystem reach outweighs its throughput
+ceiling. agentgateway also puts LLM, tool, and agent traffic under one policy
+point, which matters once the roadmap is agent-heavy.
 
 ::: {.callout-note}
 Disclosure: the author's own stack uses **Lux** as its gateway. It appears here
@@ -236,30 +241,30 @@ as a worked example of these patterns, not as a neutral recommendation over the
 options above.
 :::
 
-A minimal LiteLLM config that unifies a hosted and a self-hosted model behind
-one name and adds a fallback:
+A minimal gateway config that unifies a hosted and a self-hosted model behind
+one name and adds a fallback. The shape is illustrative, not one product's
+schema:
 
 ```yaml
-model_list:
-  - model_name: smart            # the name your app requests
-    litellm_params:
-      model: anthropic/claude-opus-4
-      api_key: os.environ/ANTHROPIC_API_KEY
-  - model_name: smart            # same alias, load-balanced / fallback target
-    litellm_params:
-      model: openai/gpt-5
-      api_key: os.environ/OPENAI_API_KEY
-  - model_name: local
-    litellm_params:
-      model: openai/<model-id>   # your vLLM, OpenAI-compatible
-      api_base: http://vllm-svc:8000/v1
+# Each gateway has its own schema; this shows the shape, not a product's exact keys.
+models:
+  - alias: smart                 # the name your app requests
+    target: anthropic/claude-opus-4
+    api_key: ${ANTHROPIC_API_KEY}
+  - alias: smart                 # same alias, load-balanced / fallback target
+    target: openai/gpt-5
+    api_key: ${OPENAI_API_KEY}
+  - alias: local
+    target: vllm/<model-id>      # your vLLM, OpenAI-compatible
+    base_url: http://vllm-svc:8000/v1
 
-litellm_settings:
-  fallbacks: [{ "smart": ["local"] }]   # if hosted "smart" fails, use local
-  num_retries: 2
-
-# virtual keys, team budgets, and spend caps are issued via the
-# /key/generate API and the proxy UI, not this file.
+routing:
+  smart:
+    strategy: fallback           # if the hosted target fails, use the next
+    fallback: [local]
+    retries: 2
+# Virtual keys, team budgets, and spend caps are minted out of band,
+# through an admin API or dashboard, not in this file.
 ```
 
 The application then points a standard OpenAI client at the proxy and requests
@@ -277,7 +282,8 @@ resp = client.chat.completions.create(
 )
 ```
 
-Schema drifts between LiteLLM versions; check the docs for the exact keys.
+Each gateway has its own schema and it drifts between versions; check its docs
+for the exact keys.
 
 ## Layer 3: the compute under it
 
@@ -418,7 +424,7 @@ digraph {
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
   edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
   app [label="App / Agent runtime"];
-  gw [label="Gateway (LiteLLM / Lux)"];
+  gw [label="Gateway (agentgateway / Lux)"];
   eval [label="Eval harness"];
   api [label="Hosted APIs"];
   orch [label="Orchestrator (fleet scale)\nDynamo / llm-d"];
