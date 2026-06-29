@@ -24,6 +24,57 @@ In this book the arc carries the engineering-to-theory motion inside each
 chapter: the practice is established first, then the foundations that
 explain it.
 
+## The reader and the on-ramp
+
+The book assumes one reader and holds that level steady: a strong software
+engineer who is new to machine learning. They know systems, complexity, and
+distributed computing, but not ML-specific vocabulary. This assumption is what
+keeps the difficulty even. A chapter that quietly assumes the reader already
+knows what loss, a policy, or an embedding matrix is reads as steep; a chapter
+that re-explains systems basics reads as slow. Write for this reader in every
+chapter, including the late ones.
+
+Four rules follow from that, and they are the most common readability defects
+the book has had:
+
+1. **Introduce before use. A glossary link is not an introduction.** The first
+   time a chapter leans on a term a SWE-new-to-ML would not know, give it a
+   one-clause plain-language gloss in the prose itself. A linear reader does not
+   click `@gls-...` away mid-sentence, so a glossary entry does not discharge the
+   debt. The test: read the chapter top to bottom assuming zero outside
+   knowledge and no clicking; every term must be defined at or before its first
+   load-bearing use. This bites hardest on the *protagonist* term, the one the
+   chapter's payoff depends on (loss in scaling, the policy in RLHF, the
+   embedding matrix in tokenization): define that one first and plainly.
+
+2. **Openers orient, they do not roll-call.** The lead paragraph names the
+   problem and the through-line, not every mechanism the chapter will cover. A
+   reader cannot hold ten undefined nouns at once. Signpost the order (the
+   memory-scheduling chapter's "the mechanisms form a dependency chain ..." is
+   the model), then let each section introduce its own terms when it needs them.
+
+3. **Keep the gradient even. On-ramp before every cliff.** Roughly one new idea
+   per paragraph. Put an intuition or a concrete picture *before* a dense formula
+   or a compressed derivation, never after. Where a passage is optional depth
+   (an alternative derivation, a frontier aside), mark it as skippable so the
+   floor does not drop out without warning. The failure pattern is a gentle
+   paragraph followed immediately by a wall of stacked unknowns.
+
+4. **No paragraph out of nowhere.** Every paragraph connects to the one before
+   it. When the subject shifts, a forward-pointer or a scope-fence says why
+   ("this chapter handles learned rewards; checkable rewards are in @sec-..."),
+   so a switch reads as structure rather than a digression. If a chapter's
+   paragraphs could be reordered without a reader noticing, its joints are
+   under-specified.
+
+One more, against the opposite failure: **do not over-repeat.** An example or a
+figure earns one representation, not three. Restating the same thesis four times
+or walking the same toy example as stepper, diagram, and code makes the gradient
+flat and the chapter feel padded. Say it once, well.
+
+These apply to both language trees. The ZH twin mirrors the EN concept order, so
+an on-ramp added in EN is ported to ZH, not re-invented.
+
 ## Code and citation
 
 - Prefer pseudocode and minimal sketches. Show ten lines that convey the
