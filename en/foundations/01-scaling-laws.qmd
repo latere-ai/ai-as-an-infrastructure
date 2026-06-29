@@ -1,90 +1,121 @@
 # Scaling Laws and Compute Allocation {#sec-scaling-laws}
 
-The first irreversible choice in the stack is the training run itself. A fixed
-architecture and a fixed data mixture are committed to a cluster, and weeks of
-FLOPs are converted into a base model by minimizing next-token loss. This
-chapter follows that spend from forecast to execution: the objective that makes
-it measurable, the @gls-scaling-law that sizes it, and the optimizer, schedule,
-batch size, and stability machinery that keep the bet from wasting itself. It
-also explains why the sizing answer moved from the Kaplan-era parameter-heavy
-recipe to Chinchilla-style data allocation and then to inference-aware
-over-training.
+The first irreversible choice in the stack is the training run itself. A model's
+architecture and its mixture of training data are committed to a cluster, and
+weeks of computation turn into a finished base model. You cannot run the whole
+thing twice to see which choice was better, so the entire problem is to decide,
+before booking the cluster, how large to make the model and how much text to
+train it on. This chapter is about how that decision is made and then carried
+out.
+
+Four quantities run through everything below, so it helps to fix them in plain
+terms first. A *parameter* is one of the adjustable numbers inside the model, set
+during training; model size means how many of them there are, usually billions. A
+*token* is a small chunk of text, roughly a short word or a word-piece, and a
+model learns by reading a long stream of them. *Loss* is a single number that
+measures how badly the model predicts the next token, averaged over all the text
+it reads: lower is better, and pushing it down is the whole point of the run.
+*Compute* is the total arithmetic the run costs, measured in FLOPs
+(floating-point operations); for a transformer it is close to six times the
+parameter count times the number of training tokens. With those in hand the
+chapter's question is simple to state: spend a fixed compute budget so the final
+loss is as low as it can be, and know roughly what that loss will be before
+committing.
 
 ## The irreversible bet
 
-A pre-training run commits a cluster for weeks and a budget you cannot
-refund. Before it starts you must choose a parameter count, a token budget,
-a learning-rate schedule, and a batch size, and you must choose them from
-small experiments because you cannot afford to try them at full scale.
-Everything that follows is a way of answering the same question before the
-cluster is booked: how to spend a fixed compute budget so the final loss is as
-low as it can be, and how to know that before committing.
+A pre-training run commits a cluster for weeks and a budget you cannot refund.
+Before it starts you must choose how many parameters the model will have, how
+many tokens it will read, and the settings that govern the optimization (the
+learning-rate schedule and the batch size, both defined later in this chapter).
+You must choose them from small experiments, because you cannot afford to try
+them once at full scale. Everything that follows is a way of answering that same
+question from cheap runs, before the cluster is booked and the bet is locked in.
 
-The reason the question is answerable at all is that the spend has a
-predictable shape. The autoregressive objective is what makes it both
-possible and measurable. @gls-next-token-prediction is maximum likelihood over a
-token stream; @gls-cross-entropy is the loss on the shifted sequence under a causal mask, so
-every position is a training example and the corpus is its own supervision.
-The loss this produces, in nats or bits per token, is the quantity scaling
-laws predict; @gls-perplexity is just its exponential. That single scalar, the
-loss, is what you are buying with the run, and it is what the rest of the
-chapter learns to forecast and then to minimize per dollar.
+The question is answerable because the loss has a predictable shape, and it has
+that shape because of how the model is trained. The model is trained to predict
+the next token in a stream of text, one token at a time, each prediction
+conditioned on the tokens before it; this is @gls-next-token-prediction. Every
+position in the text is therefore its own training example, with the right answer
+being simply the token that actually came next, so the text supervises the model
+for free and at enormous scale. The loss is the average surprise of those
+predictions: formally it is @gls-cross-entropy, the number of bits, or *nats* if
+measured in natural-log units, the model spends to encode each true next token,
+and @gls-perplexity is just its exponential. That single scalar, the loss, is
+what the run buys, and the rest of the chapter learns to forecast it and then to
+minimize it per dollar.
 
 ## A law you can extrapolate
 
-The decision that dominates everything else is sizing, and sizing is
-tractable because the loss is smooth. A scaling law fit on a ladder of small
-runs predicts the loss of a large run as a power law in parameters, data,
-and compute [@kaplan2020scaling]. The form that is actually fit pairs two
-power-law terms with an irreducible floor $E$, the loss no amount of scale
-removes [@rosenfeld2020constructive; @hoffmann2022chinchilla]:
+The decision that dominates everything else is sizing: how to split the budget
+between parameters and tokens. It is tractable because the loss falls in a
+regular way as either one grows, a *power law*. A power law is a relationship
+where the loss drops by a constant factor each time the input grows by a constant
+factor, which is exactly the relationship that plots as a straight line when both
+axes are logarithmic. A scaling law fits that line on a ladder of small,
+affordable runs and reads off where it goes for a run you can only afford once
+[@kaplan2020scaling]. The form that is actually fit pairs two power-law terms
+with an irreducible floor $E$, the loss that no amount of scale removes
+[@rosenfeld2020constructive; @hoffmann2022chinchilla]:
 
 $$
 L(N, D) = E + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}}
 $$
 
-where $N$ is the parameter count and $D$ is the number of
-@gls-training-tokens. You fit the constants on runs you can afford, then read
-off the @gls-compute-optimal $N$ and $D$: the pair with the lowest predicted
-loss for the budget you intend to spend.
-Here, training tokens are not vocabulary entries: they are token instances read
-after tokenization, so repeated passes over the same text count again. The law
-matters because it extrapolates. It lets a
-few cheap runs stand in for a run you will only ever do once.
-Because the loss is a power law in compute, those cheap runs fall on a
-straight line in log-log coordinates, and the line predicts the loss of the
-expensive run far to the right, as @fig-scaling-laws-1 sketches.
+Here $N$ is the parameter count and $D$ is the number of @gls-training-tokens.
+The two exponents $\alpha$ and $\beta$ set how fast loss falls as the model and
+the data grow, a larger exponent meaning a steeper return to scale, and $A$ and
+$B$ are scaling constants; all four are fit from the cheap runs. With them in hand
+you read off the @gls-compute-optimal $N$ and $D$: the pair with the lowest
+predicted loss for the budget you intend to spend. One subtlety: training tokens
+are token instances read during training, not distinct vocabulary entries, so a
+second pass over the same text counts again.
+
+The law matters because it extrapolates. A few cheap runs stand in for a run you
+will only ever do once: because the loss is a power law, those runs fall on a
+straight line in log-log coordinates, and the line predicts the loss far to its
+right, as @fig-scaling-laws-1 sketches. Compute here is the total spend, close to
+$6ND$, so the same straight line can be read against parameters, against tokens,
+or against the whole budget.
 
 ![Schematic illustration of power-law extrapolation: a ladder of cheap small runs fits a straight line in log-log coordinates, which forecasts the loss of one large run you can only afford once. Idealized data, after Kaplan et al. (2020) and Hoffmann et al. (2022).](/figures/scaling-laws-1.svg){#fig-scaling-laws-1}
 
-The same logic extends to the hyperparameters that the loss formula does
-not name. Maximal-update parametrization (muP) makes them transfer:
-parametrize the widths so the optimal learning rate and initialization are
-stable across model size, tune them on a small proxy, and carry them to
-full scale instead of sweeping at full cost [@yang2022mup]. Sizing and
-hyperparameters both become things you decide on small runs and trust at
+The same logic extends to the model's other tuning knobs, the *hyperparameters*
+that the loss formula does not name: settings like the learning rate (how big a
+step each update takes) and the initialization (the random values the parameters
+start from). These normally have to be re-tuned at every model size.
+Maximal-update parametrization (muP) removes that cost: it parametrizes the
+network's width (how many parameters sit side by side in each layer) so the best
+learning rate and initialization stay fixed as the model grows, which lets you
+tune them once on a small proxy and carry them to full scale [@yang2022mup].
+Sizing and tuning both become decisions you make on small runs and trust at
 large ones.
 
 ## Why a power law at all
 
-The law is an empirical regularity, not a theorem, so it is worth asking why
-loss falls so smoothly at all; the answer bounds how far to trust it. Two
-derivations reach it from different starts. One reads the slope off the
-data: if a model interpolates a target on a manifold of intrinsic dimension $d$,
-the loss scales as about $N^{-4/d}$, so a high-dimensional data manifold is what
-makes returns to scale slow [@sharma2020neural]. The other reads it off the
-skills: if competence decomposes into discrete units learned in order of
-decreasing frequency, and those frequencies are themselves power-law
-distributed, then learning them in order yields a smooth power-law loss out of
-strictly discrete acquisition [@michaud2023quantization]. A percolation argument
-on natural data recovers both as two regimes of one model [@brill2024rooted].
-None of this is settled, but the shared implication is concrete: the slope is a
-property of the data, not the architecture. The discrete reading also speaks to a
-debate the book returns to later. That learned skills are discrete is something
-@sec-interpretability makes concrete, as separable features recoverable from a
-trained model; whether their combined progress then looks like a smooth curve or
-a sudden "emergent" jump is largely a question of the metric, the reading
-@sec-borrowed-ideas leaves open.
+This section is optional theory. It explains why loss falls so smoothly, and can
+be skipped without losing the chapter's practical thread. The law is an empirical
+regularity, not a theorem, and asking where it comes from bounds how far to trust
+it. Two derivations reach it from different starts. One reads the slope off the
+data. Picture the data as points lying on a curved surface, a *manifold*, whose
+effective number of independent directions is its intrinsic dimension $d$; a model
+fitting that surface has loss that scales as about $N^{-4/d}$, so the more
+independent directions the data has, the slower scale pays off [@sharma2020neural].
+The other reads it off the skills: if competence decomposes into discrete units
+learned in order of decreasing frequency, and those frequencies are themselves
+power-law distributed, then learning them in order produces a smooth power-law
+loss out of strictly discrete steps [@michaud2023quantization]. A percolation
+argument on natural data recovers both as two regimes of one model
+[@brill2024rooted]. None of this is settled, but the shared implication is
+concrete: the slope is a property of the data, not the architecture.
+
+That discrete-skills reading connects to a debate the book returns to later. If
+skills are acquired in discrete steps, the overall loss curve can stay smooth
+while individual abilities switch on suddenly, and whether scaling then looks
+gradual or shows a sharp "emergent" jump turns largely on how you measure it.
+@sec-interpretability makes the discreteness concrete, as separable features
+recoverable from a trained model, and @sec-borrowed-ideas takes up the emergence
+question.
 
 ## Kaplan, then Chinchilla
 
@@ -98,13 +129,15 @@ compute-optimal, and the Kaplan-era recipe had been systematically
 under-training on data [@hoffmann2022chinchilla]. A Chinchilla-optimal model
 is smaller and reads more than the prior generation expected.
 
-That two careful teams disagreed at all is instructive, and the gap turned out
-to be mostly an accounting choice. Kaplan counted only non-embedding parameters,
-and at small scale embeddings are a large enough share of the total to tilt the
-optimal split toward parameters; count total parameters and let scale grow, and
-the exponent converges to Chinchilla's roughly equal split
-[@pearce2024reconciling]. The disagreement was never nature being ambiguous, but
-which quantity the curve was plotted against.
+That two careful teams disagreed at all is instructive, and the gap turned out to
+be mostly an accounting choice. Some of a model's parameters sit in its
+embeddings, the lookup table that maps each token to a vector, one row per
+vocabulary entry; the rest are the layers that do the actual computation. Kaplan
+counted only the non-embedding parameters, and at small scale the embeddings are
+a large enough share of the total to tilt the optimal split toward parameters.
+Count total parameters instead and let scale grow, and the exponent converges to
+Chinchilla's roughly equal split [@pearce2024reconciling]. The disagreement was
+never nature being ambiguous, but which quantity the curve was plotted against.
 
 The same compute budget, fixed by $C \approx 6ND$, splits very differently
 under each of these recipes. @fig-scaling-allocation contrasts the three
@@ -147,23 +180,24 @@ digraph allocation {
 <figcaption>At a fixed compute budget C ≈ 6ND, spending it on more parameters means fewer training tokens, and the reverse, so loss is U-shaped in the split. The minimum is the compute-optimal point, around twenty tokens per parameter; the curvature sets how steeply a wrong split is punished. Illustrative.</figcaption>
 </figure>
 
-The recipe did not stop at Chinchilla. When unique tokens run out,
-data-constrained scaling takes over: repeated data has decaying value, and
-past a few epochs adding parameters beats adding repetitions
+The recipe did not stop at Chinchilla. Chinchilla assumes you can always feed the
+model more fresh text, but the supply of high-quality unique text is finite, and
+a large run can exhaust it. Once that happens, data-constrained scaling takes
+over: re-reading the same text has decaying value, and past a few epochs (a few
+full passes over the data) adding parameters beats adding repetitions
 [@muennighoff2023scaling]. Later work sharpens the penalty rather than the
-schedule: an explicit overfitting term that grows with the ratio of capacity to
-unique data, so larger models exhaust repeated tokens faster, with strong weight
-decay buying part of it back [@lovelace2026prescriptive]. The power-law lens also
-travels beyond pretraining loss. The same forecast-from-cheap-runs logic now
-sizes test-time compute (@sec-inference-time-scaling), reduced precision
+schedule, adding an explicit overfitting term, where overfitting means the model
+starts memorizing the training text instead of learning patterns that
+generalize. That term grows with the ratio of model capacity to unique data, so
+larger models exhaust repeated tokens faster, with strong weight decay (a steady
+pull that keeps the parameters small and so discourages memorization) buying part
+of it back [@lovelace2026prescriptive]. The power-law lens also travels beyond
+pretraining loss. The same forecast-from-cheap-runs logic now sizes test-time
+compute (@sec-inference-time-scaling), reduced precision
 (@sec-quantization-kernels), and distillation (@sec-reasoning-data-distillation),
 each its own curve under its own budget, so reading scaling as a single
-pretraining decision understates how often the field makes this bet. The
-frontier of the recipe is still moving.
-Second-order and preconditioned optimizers, Shampoo and the newer Muon,
-claim better loss per FLOP by conditioning the update with curvature or
-orthogonalization [@jordan2024muon; @liu2025muon]. These are live options,
-not settled defaults.
+pretraining decision understates how often the field makes this bet. The frontier
+of the recipe is still moving.
 
 ## Test it yourself
 
@@ -237,14 +271,22 @@ lifetime.
 ## The rest of the recipe
 
 Once the sizing rule fixes $N$ and $D$, the problem shifts from forecasting the
-run to executing it. The scaling law does not say how the optimizer should walk
-to that loss, and those choices are a set of balances, each with a knee.
+run to executing it. The scaling law does not say how to actually walk the
+parameters down to that loss, and those choices are a set of balances, each with
+a knee.
 
-The optimizer is the first of them. @gls-adamw is the default, with decoupled
-weight decay and two moment estimates whose state is the dominant memory
-term, which is why @sec-training-at-scale shards it [@loshchilov2019decoupled].
-The learning-rate schedule that drives it has three parts: a linear warmup
-while the moment estimates are still cold, a stable high phase, and a decay.
+The optimizer is the first of them: the algorithm that turns each batch's
+gradient, the direction that would lower the loss, into a concrete update to the
+parameters. @gls-adamw is the default. It keeps two running averages per
+parameter (the moment estimates, tracking the recent mean and spread of the
+gradient), and that extra per-parameter state is the dominant memory term, which
+is why @sec-training-at-scale shards it across devices [@loshchilov2019decoupled].
+Second-order and preconditioned optimizers, Shampoo and the newer Muon, claim
+better loss per FLOP by using curvature information to condition the update
+[@jordan2024muon; @liu2025muon]; these are live options, not settled defaults.
+The learning-rate schedule that drives the optimizer has three parts: a linear
+warmup while the moment estimates are still cold, a stable high phase, and a
+decay.
 Cosine decay to a small floor is the well-understood default, but it locks
 the token budget at run start. @gls-warmup-stable-decay holds a constant rate on
 a plateau and decays only when you choose to stop, which makes one plateau
@@ -271,16 +313,21 @@ never see otherwise [@yang2022mup].
 
 ## Keeping the run alive
 
-The plan only matters if the run stays alive. Multi-week training therefore
-needs a small operational kit alongside the scaling rule. The stability techniques
-are @gls-z-loss, an auxiliary penalty on the log-partition that stops output logits
-from drifting [@chowdhery2022palm];
-@gls-qk-norm, normalizing query and key before the dot product to cap
-attention-logit growth; depth-scaled initialization; and global-norm
-@gls-gradient-clipping as the blunt safety net. Loss-spike recovery is a
-procedure, not a hyperparameter: detect the spike from grad-norm and loss
-telemetry, then skip and resume from a recent checkpoint, lower the rate,
-and reorder the data batches that triggered it [@deepseek2024deepseekv3].
+The plan only matters if the run stays alive. Multi-week training therefore needs
+a small operational kit alongside the scaling rule. A few of these techniques
+reach into the internals of the transformer, covered in
+@sec-transformer-architecture; the point here is only that each one guards against
+a specific way a long run can blow up. @gls-z-loss adds a small penalty that keeps
+the model's raw output scores, the logits that get turned into next-token
+probabilities, from drifting ever larger [@chowdhery2022palm]. @gls-qk-norm
+normalizes two of the internal vectors in the attention mechanism, the query and
+the key, before they are multiplied together, to stop their product from growing
+without bound. Depth-scaled initialization sets the starting parameter values
+with the model's depth in mind, and global-norm @gls-gradient-clipping caps the
+size of any single update as a blunt safety net. Loss-spike recovery is a
+procedure, not a hyperparameter: detect the spike from gradient-norm and loss
+telemetry, then skip and resume from a recent checkpoint, lower the rate, and
+reorder the data batches that triggered it [@deepseek2024deepseekv3].
 @fig-loss-spike-recovery traces that loop.
 
 ```{dot}
