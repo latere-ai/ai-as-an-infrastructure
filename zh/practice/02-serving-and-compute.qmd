@@ -43,7 +43,7 @@ digraph {
 
 服务引擎把一组权重变成一项服务：它把模型加载到加速器上，对请求做批处理，运行前向传播，管理键值缓存，并把 token 流式返回。大部分可控成本与大部分用户可感知延迟都在这里。同一组权重在两个引擎下、或在同一引擎的两套配置下，每秒 token 数与尾延迟可以相差一个数量级。
 
-两个阶段驱动了每一个设计决策（@sec-serving-problem）。**Prefill** 并行处理整个提示词，是计算受限的。**Decode** 每次只产出一个 token，每一步都要重读缓存，是内存带宽受限的。关键特性都在回应二者之间的取舍：**连续批处理**（continuous batching，每步加入与退出请求，2026 年的入门标配）、**PagedAttention**（把缓存存为非连续的页，避免内存碎片）、**前缀缓存 / KV 复用**（共享的前导前缀只算一次，是智能体与 RAG 的主导收益，被 SGLang 的 RadixAttention 推广为基数树）、**量化**（@sec-quantization-kernels：FP8、FP4、经由 AWQ/GPTQ 的 INT4、GGUF K-quants）、**投机解码**（@sec-faster-decoding）、**结构化输出**（经 XGrammar 的语法约束解码），以及 **prefill/decode 解耦**（两个阶段各用独立的 worker 池，2026 年数据中心的招牌模式）。
+两个阶段驱动了每一个设计决策（@sec-serving-problem）。**Prefill** 并行处理整个提示词，是计算受限的。**Decode** 每次只产出一个 token，每一步都要重读缓存，是内存带宽受限的。关键特性都在回应二者之间的取舍，其中多数会在 @sec-memory-scheduling 与 @sec-faster-decoding 中展开，这里先给出简版。**连续批处理**（continuous batching）每步加入与退出请求，是 2026 年的入门标配。**PagedAttention** 把缓存存为非连续的页，避免内存碎片。**前缀缓存 / KV 复用**把共享的前导前缀只算一次，是智能体与 RAG 的主导收益，并被 SGLang 的 **RadixAttention** 推广为基数树（一棵以 token 前缀为键的字典树）。**量化**（@sec-quantization-kernels）把权重压到更少的比特：FP8、FP4、经由 AWQ/GPTQ 的 INT4、GGUF K-quants。**投机解码**（@sec-faster-decoding）先草拟廉价的 token，再用一遍验证它们。**结构化输出**是经 XGrammar 的语法约束解码，好让工具调用与抽取出的数据能被解析。**prefill/decode 解耦**把两个阶段放到各自独立的 worker 池上，是 2026 年数据中心的招牌模式。
 
 ### 玩家
 
@@ -54,7 +54,7 @@ digraph {
 | **vLLM** | 常见的开源默认。PagedAttention 的发源地，模型与特性覆盖最广，「V1」内核重构以降低开销。 | Apache-2.0，GPU | 通用 GPU 服务；稳妥默认 |
 | **SGLang** | 基于 RadixAttention（基数树前缀复用）的高性能引擎，外加用于结构化 LLM 程序的前端。 | Apache-2.0，GPU | 前缀密集流量（智能体、RAG、多轮）、大型 MoE |
 | **TensorRT-LLM** | NVIDIA 的优化引擎；编译核加上现为默认的 PyTorch 后端，可免构建步骤加载 HF 权重。 | Apache-2.0，仅 NVIDIA | 在 Hopper/Blackwell 上压榨吞吐/延迟，FP8/FP4 |
-| **LMDeploy** | InternLM/OpenMMLab 引擎，带 C++ TurboMind 后端与激进的内建 w4a16 量化。 | Apache-2.0，GPU | 低 TTFT 量化服务，INT4 70B 级 |
+| **LMDeploy** | InternLM/OpenMMLab 引擎，带 C++ TurboMind 后端与激进的内建 w4a16 量化（权重 4 比特、激活 16 比特）。 | Apache-2.0，GPU | 低 TTFT（首词元延迟，time to first token）量化服务，INT4 70B 级 |
 | **llama.cpp** | 面向 GGUF 量化模型的可移植 C/C++ 引擎。可跑在 CPU、CUDA、ROCm、Vulkan、Metal 上。 | MIT，可移植 | 本地 / 边缘 / CPU / 混合厂商；最大可移植性 |
 | **Ollama** | 对开发者友好的封装（registry + CLI + OpenAI API），基于 llama.cpp；在 Apple Silicon 上转向 MLX 后端（预览）。 | MIT，可移植 | 本地开发、笔记本、最快上 localhost |
 | **MLX / mlx-lm** | Apple 面向 Apple Silicon 的框架（统一内存、零拷贝）。 | MIT，仅 Apple | Mac 上最快的单流 |
@@ -228,7 +228,7 @@ plt.legend(); plt.title("GPU 成本：serverless vs 预留"); plt.show()
 
 一旦掌控了一个资源池，就由一个控制平面决定放置。三个主导者及其分工：
 
-- **Slurm**，当主导负载是大型多节点训练与批处理：启动、跑数小时、做检查点、退出的作业。gang 调度是原生且简单的。代价是没有原生的服务、入口或自动伸缩。
+- **Slurm**，当主导负载是大型多节点训练与批处理：启动、跑数小时、做检查点、退出的作业。gang 调度（一个作业的所有 worker 要么一起调度，要么都不调度）是原生且简单的。代价是没有原生的服务、入口或自动伸缩。
 - **Kubernetes**，当要运行推断服务、混合负载或与 AI 并列的微服务、并想要自动伸缩、入口与服务网格生态时。加 **Volcano** 或 **NVIDIA KAI Scheduler** 做 gang 调度，加 **Kueue** 做多团队配额与准入，加 **DRA** 做细粒度 GPU/MIG 分配。
 - **Ray（在 KubeRay 上）**，当团队是 Python 原生、想在一个框架里同时做分布式训练、RL、数据与服务、跑在 K8s 之上时。
 
