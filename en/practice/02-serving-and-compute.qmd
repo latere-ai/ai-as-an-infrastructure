@@ -67,15 +67,19 @@ Two phases drive every design decision (@sec-serving-problem). **Prefill**
 processes the whole prompt in parallel and is compute-bound. **Decode** emits
 one token at a time, each step re-reading the cache, and is
 memory-bandwidth-bound. The features that matter are answers to the tension
-between them: **continuous batching** (add and retire requests every step,
-table stakes by 2026), **PagedAttention** (store the cache in non-contiguous
-pages so memory is not fragmented), **prefix caching / KV reuse** (compute a
-shared leading prefix once, the dominant win for agents and RAG, generalized to
-a radix tree by SGLang's RadixAttention), **quantization** (@sec-quantization-kernels:
-FP8, FP4, INT4 via AWQ/GPTQ, GGUF K-quants), **speculative decoding**
-(@sec-faster-decoding), **structured output** (grammar-constrained decoding via
-XGrammar), and **prefill/decode disaggregation** (separate worker pools for the
-two phases, the headline datacenter pattern of 2026).
+between them, and most are developed in @sec-memory-scheduling and
+@sec-faster-decoding; the short version follows. **Continuous batching** adds
+and retires requests every step, table stakes by 2026. **PagedAttention**
+stores the cache in non-contiguous pages so memory is not fragmented. **Prefix
+caching / KV reuse** computes a shared leading prefix once, the dominant win for
+agents and RAG, generalized to a radix tree (a trie keyed by token prefixes) by
+SGLang's **RadixAttention**. **Quantization** (@sec-quantization-kernels)
+shrinks weights to fewer bits: FP8, FP4, INT4 via AWQ/GPTQ, GGUF K-quants.
+**Speculative decoding** (@sec-faster-decoding) drafts cheap tokens and verifies
+them in one pass. **Structured output** is grammar-constrained decoding via
+XGrammar, so tool calls and extracted data parse. **Prefill/decode
+disaggregation** puts the two phases on separate worker pools, the headline
+datacenter pattern of 2026.
 
 ### The players
 
@@ -87,7 +91,7 @@ the benchmark notes are third-party and workload-specific.
 | **vLLM** | The de-facto open-source default. Origin of PagedAttention, broadest model and feature coverage, "V1" core re-architected for lower overhead. | Apache-2.0, GPU | General-purpose GPU serving; the safe default |
 | **SGLang** | High-performance engine built on RadixAttention (radix-tree prefix reuse) plus a frontend for structured LLM programs. | Apache-2.0, GPU | Prefix-heavy traffic (agents, RAG, multi-turn), large MoE |
 | **TensorRT-LLM** | NVIDIA's optimized engine; compiled kernels plus a now-default PyTorch backend that loads HF weights without a build step. | Apache-2.0, NVIDIA only | Max throughput/latency on Hopper/Blackwell, FP8/FP4 |
-| **LMDeploy** | InternLM/OpenMMLab engine with a C++ TurboMind backend and aggressive built-in w4a16 quantization. | Apache-2.0, GPU | Low-TTFT quantized serving, INT4 70B-class |
+| **LMDeploy** | InternLM/OpenMMLab engine with a C++ TurboMind backend and aggressive built-in w4a16 quantization (weights in 4-bit, activations in 16-bit). | Apache-2.0, GPU | Low-TTFT (time to first token) quantized serving, INT4 70B-class |
 | **llama.cpp** | Portable C/C++ engine for GGUF quantized models. Runs on CPU, CUDA, ROCm, Vulkan, Metal. | MIT, portable | Local / edge / CPU / mixed-vendor; max portability |
 | **Ollama** | Developer-friendly wrapper (registry + CLI + OpenAI API) over llama.cpp; moving to an MLX backend on Apple Silicon (preview). | MIT, portable | Local dev, laptops, fastest path to localhost |
 | **MLX / mlx-lm** | Apple's framework for Apple Silicon (unified memory, zero-copy). | MIT, Apple only | Fastest single stream on Macs |
@@ -374,8 +378,8 @@ Once you control a pool, a control plane decides placement. The three dominant
 ones, and how they split:
 
 - **Slurm** when the dominant workload is large multi-node training and batch:
-  jobs that start, run for hours, checkpoint, and exit. Gang scheduling is
-  native and simple. The cost is no native services, ingress, or autoscaling.
+  jobs that start, run for hours, checkpoint, and exit. Gang scheduling (all of a
+  job's workers scheduled together or not at all) is native and simple. The cost is no native services, ingress, or autoscaling.
 - **Kubernetes** when you run inference serving, mixed workloads, or
   microservices alongside AI, and want the autoscaling, ingress, and
   service-mesh ecosystem. Add **Volcano** or **NVIDIA KAI Scheduler** for gang
