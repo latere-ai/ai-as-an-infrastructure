@@ -161,10 +161,25 @@ the normalizations, residual adds, and the attention softmax, stay in higher
 precision. Pushed too far, fp8 does not crash; it quietly costs quality, which
 is what makes it hard to use well.
 
+That boundary has since moved. DeepSeek-V3 trained at frontier scale with fp8
+matmuls in late 2024, which settled that the format can carry a full
+pre-training run [@deepseek2024deepseekv3]. The live edge is now four bits.
+fp4 formats such as NVFP4 and MXFP4 are microscaling formats: values are
+stored in four bits, and each small block of them, sixteen or thirty-two
+values, carries its own scale factor to recover locally the range four bits
+cannot hold, with Blackwell-class hardware running the four-bit matmul
+natively. NVIDIA has trained a 12B model over ten trillion tokens in NVFP4 to
+match an fp8 baseline, leaning on Hadamard transforms and stochastic rounding
+to keep the narrow format unbiased [@nvidia2025nvfp4], and the design space of
+what makes four-bit training hold together is being mapped systematically
+[@hu2025fp4]. The hardware side of this bet, why the compute frontier wants
+fewer operand bytes at all, is @sec-compute-frontier's subject.
+
 @fig-training-precision shows why the exponent bits matter. bf16 keeps fp32's
 eight exponent bits, so it spans the same dynamic range and never needed fp16's
 loss scaling; fp8 spends its few bits on a tradeoff between range (E5M2) and
-precision (E4M3).
+precision (E4M3). fp4's E2M1 layout is the floor: one mantissa bit, two
+exponent bits, and the per-block scale factor carrying the rest.
 
 ```{=html}
 <figure id="fig-training-at-scale-float-bits">
@@ -175,7 +190,7 @@ precision (E4M3).
 
 ```{dot}
 //| label: fig-training-precision
-//| fig-cap: "Bit layouts of the training precisions. Sign, exponent, and mantissa fields drawn to width. bf16 inherits fp32's eight exponent bits, which is why it spans the same range without loss scaling."
+//| fig-cap: "Bit layouts of the training precisions. Sign, exponent, and mantissa fields drawn to width. bf16 inherits fp32's eight exponent bits, which is why it spans the same range without loss scaling. fp4's E2M1 keeps almost none, which is why the microscaling formats attach a scale factor to each small block of values."
 digraph precision {
   bgcolor="transparent";
   rankdir=LR;
@@ -188,6 +203,7 @@ digraph precision {
       <tr><td bgcolor="#f1ece1"><b>bf16</b></td><td>1</td><td bgcolor="#dbeafe">8 bits</td><td>7 bits</td></tr>
       <tr><td bgcolor="#f1ece1"><b>fp8 E4M3</b></td><td>1</td><td bgcolor="#dbeafe">4 bits</td><td>3 bits</td></tr>
       <tr><td bgcolor="#f1ece1"><b>fp8 E5M2</b></td><td>1</td><td bgcolor="#dbeafe">5 bits</td><td>2 bits</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>fp4 E2M1</b></td><td>1</td><td bgcolor="#dbeafe">2 bits</td><td>1 bit</td></tr>
     </table>
   >];
 }
@@ -222,16 +238,19 @@ since every cut and every precision choice ends up scored here.
 
 ::: {.callout-important}
 ## What's contested
-How far fp8 can be pushed in frontier pre-training is unsettled. bf16 is the
-agreed safe default, and fp8 plainly buys throughput and memory on
-Hopper-class hardware [@micikevicius2022fp8]. The disagreement is over the
-boundary: which operations can move to fp8, how fine the scaling must be, and
-how many trillions of tokens a run can sustain in fp8 before the narrowed range
-costs final quality. The failure mode is what makes this hard to settle
-empirically: fp8 pushed too far does not crash, it quietly degrades the model,
-so the cost is invisible until a late evaluation. Treat the fp8 boundary as a
-per-operation, per-recipe choice that must be validated, not a setting you can
-copy.
+How low training precision can go is unsettled, but the question's frontier
+has moved. bf16 is the conservative default; fp8 became the workhorse once
+DeepSeek-V3 carried it through a frontier-scale run [@micikevicius2022fp8;
+@deepseek2024deepseekv3]; and the live boundary is now fp4, where NVFP4-class
+microscaling and Blackwell's native four-bit matmuls make the throughput case
+but the recipes are young [@nvidia2025nvfp4; @hu2025fp4]. The disagreement is
+the same at every rung: which operations can move down, how fine the scaling
+must be, and how many trillions of tokens a run can sustain before the
+narrowed range costs final quality. The failure mode is what makes this hard
+to settle empirically: precision pushed too far does not crash, it quietly
+degrades the model, so the cost is invisible until a late evaluation. Treat
+the boundary as a per-operation, per-recipe choice that must be validated, not
+a setting you can copy.
 :::
 
 ::: {.callout-tip}
@@ -306,10 +325,12 @@ plt.show()
   MFU when recompute is on.
 - **Precision versus stability.** bf16 is the safe default, and fp32 master
   weights are non-negotiable for the optimizer [@micikevicius2017mixed]. fp8
-  buys throughput and memory but narrows range, so it is applied per-tensor
-  with scaling and kept away from the sensitive operations
-  [@micikevicius2022fp8]. Pushed too far it produces silent quality loss, not
-  a crash.
+  is the proven workhorse: it buys throughput and memory but narrows range, so
+  it is applied with per-tensor or finer scaling and kept away from the
+  sensitive operations [@micikevicius2022fp8; @deepseek2024deepseekv3]. fp4 is
+  the live boundary, affordable only with per-block scaling and the newest
+  hardware [@nvidia2025nvfp4]. Pushed too far, any of them produces silent
+  quality loss, not a crash.
 - **Checkpoint cadence.** Frequent checkpoints shrink the work lost per
   failure but tax storage bandwidth and can stall the run. Asynchronous and
   sharded checkpointing is what makes a short cadence affordable, and the
