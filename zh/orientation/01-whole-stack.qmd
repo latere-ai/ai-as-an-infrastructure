@@ -4,7 +4,7 @@
 
 ![整个栈五个环节及其暴露的三类压力示意图。能力压力主导训练，效率压力主导服务；当循环通过工具行动时，信任压力变得更重。理想化相对权重，非实测。](/figures/whole-stack-1.svg){#fig-whole-stack-1}
 
-为此，我们只围绕一个任务展开：*一个用户请求助手在一个小型仓库里找出 bug、提出修复，再解释一遍。* 这一个请求，触及本书覆盖的每一层。与其抽象地逐层介绍，不如跟着它走一遍，把它经过的每一层都看成一个环节；这样更容易看清这套栈为何形成现在的形状。还有两个模型贯穿这条线索，选它们，是因为它们用相反的工程回答了同样的问题：Llama 3 是稠密 Transformer（也就是那套标准的模型架构，详见 @sec-transformer-architecture）[@grattafiori2024llama]，DeepSeek-V3 是@gls-moe模型，也就是每个词元只激活少数专家子网络的模型 [@deepseek2024deepseekv3]。
+为此，我们只围绕一个任务展开：*一个用户请求助手在一个小型仓库里找出 bug、提出修复，再解释一遍。* 这一个请求，触及本书覆盖的每一层。与其抽象地逐层介绍，不如跟着它走一遍，把它经过的每一层都看成一个环节；这样更容易看清这套栈为何形成现在的形状。还有两个模型贯穿这条线索，选它们，是因为它们用相反的工程回答了同样的问题：Llama 3 是稠密 Transformer（也就是那套标准的模型架构，详见 @sec-transformer-architecture）[@grattafiori2024llama]，DeepSeek-V3 是@gls-moe模型，也就是每个词元只激活少数专家子网络的模型 [@deepseek2024deepseekv3]。两条谱系后来都归到了稀疏一侧：Meta 的第一个混合专家家族 Llama 4 于 2025 年 4 月发布 [@meta2025llama4]，DeepSeek-V4 也在 2026 年 4 月跟进 [@deepseek2026v4]；这一归并本身，就是本章后面那条下层约束给出的裁决。
 
 ## 环节一：从网络字节到词元
 
@@ -113,26 +113,26 @@ digraph {
 最清晰的例子就出现在最底下那一层。预训练的经济账看上去是说：给定一个固定的训练预算，挑那个让损失最小的模型规模 [@hoffmann2022chinchilla]。可一个一生要服务数十亿词元的模型，反而应当做得更小、再刻意过度训练，因为推断循环要永远付费，训练循环只付一次。@sec-serving-problem 里的服务成本会沿栈向上影响一个看上去纯属预训练的决策，也就是 @sec-scaling-laws 的主题。DeepSeek-V3 的混合专家设计，是把同一条约束写进硬件：每个词元只在 671B 里激活 37B，让推断循环保持便宜，代价则改用训练和服务的复杂度来付 [@deepseek2024deepseekv3]。按顺序读这套栈，才看得清这些约束关系。
 :::
 
-试着把这条约束关系落到实处：给每个设计算一次训练 FLOPs（算术运算的次数），再按服务出去的每个词元算一次推断 FLOPs，然后看随着服务的词元越来越多，哪个更便宜。
+试着把这条约束关系落到实处：给每个设计算一次训练 FLOPs（算术运算的次数），再按服务出去的每个词元算一次推断 FLOPs。两笔账都随激活参数走，所以无论服务量多大，稀疏设计在两个循环里都更便宜；这里记给 DeepSeek-V3 的约 $3.3\times10^{24}$ 训练 FLOPs，与环节二提到的 278.8 万 H800 GPU 小时正好对得上。MoE 付出的不是 FLOPs，而是内存、路由与通信：671B 参数要全部驻留在加速器内存里，每个词元才能从中激活自己的 37B，也就是上面框注点出的那种复杂度。
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 # 两种能力相当的设计，各自的生命周期 FLOPs。
-# 训练约为 6*N*D_train（只付一次）；推断约为每服务一个 token 2*N_active。
+# 两个循环都随激活参数走：训练约为 6*N_act*D（只付一次）；
+# 推断约为每服务一个 token 2*N_act。总参数 N 决定的是内存账单
+# 而非 FLOPs 账单：所有专家都必须驻留。
 designs = {
     "Llama 3 405B dense":  dict(N=405e9, N_act=405e9, D=15.6e12),
     "DeepSeek-V3 MoE 37B": dict(N=671e9, N_act=37e9,  D=14.8e12),
 }
 served = np.logspace(11, 16, 200)
 for name, d in designs.items():
-    total = 6*d["N"]*d["D"] + 2*d["N_act"]*served
-    plt.plot(served, total, label=name)
-a, b = designs.values()
-cross = 6*(b["N"]*b["D"] - a["N"]*a["D"]) / (2*(a["N_act"] - b["N_act"]))
-plt.axvline(cross, ls="--", color="gray")
-print(f"交叉点约为 {cross:.2e} 个服务 token")
+    train = 6*d["N_act"]*d["D"]
+    plt.plot(served, train + 2*d["N_act"]*served, label=name)
+    print(f"{name}: 训练约 {train:.1e} FLOPs，"
+          f"服务约 {2*d['N_act']:.1e} FLOPs/token")
 plt.xscale("log"); plt.yscale("log")
 plt.xlabel("生命周期内服务 token 数"); plt.ylabel("总 FLOPs")
 plt.legend(); plt.tight_layout(); plt.show()
