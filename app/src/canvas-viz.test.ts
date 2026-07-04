@@ -89,8 +89,8 @@ test("ch30 accelerators-networking uses bandwidth-tiers in both languages", () =
 
 // Wave 2: steppers + curve reuses authored on existing components, both langs.
 test("ch48 machine-that-breaks adds a prefill/decode stepper in both languages", () => {
-  expect(src("en/infrastructure/06-the-machine-that-breaks.qmd")).toContain('data-chip="PREFILL"');
-  expect(src("zh/infrastructure/06-the-machine-that-breaks.qmd")).toContain('data-chip="PREFILL"');
+  expect(src("en/infrastructure/08-the-machine-that-breaks.qmd")).toContain('data-chip="PREFILL"');
+  expect(src("zh/infrastructure/08-the-machine-that-breaks.qmd")).toContain('data-chip="PREFILL"');
 });
 
 test("human-interface oversight adds an approval stepper in both languages", () => {
@@ -259,9 +259,9 @@ test("the viz runtime registers the verification frontier component", () => {
 });
 
 test("verification frontier chapter uses the interactive visualization in both languages", () => {
-  expect(src("en/infrastructure/09-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
-  expect(src("zh/infrastructure/09-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
-  expect(src("zh/infrastructure/09-verification-frontier.qmd")).toContain('data-lang="zh"');
+  expect(src("en/infrastructure/11-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
+  expect(src("zh/infrastructure/11-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
+  expect(src("zh/infrastructure/11-verification-frontier.qmd")).toContain('data-lang="zh"');
 });
 
 // Regression: the RRF "constant k" slider re-ranked nothing because the synthetic

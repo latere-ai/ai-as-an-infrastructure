@@ -16,7 +16,7 @@ test("the curve runtime registers the pow-base, u-shape, and elo families", () =
 const homes: [string, string][] = [
   ["en/practice/10-reliability-nondeterministic.qmd", "pow-base"],
   ["en/practice/13-operating-contracts.qmd", "exp-decay"],
-  ["en/infrastructure/08-the-capability-horizon.qmd", "logistic"],
+  ["en/infrastructure/10-the-capability-horizon.qmd", "logistic"],
   ["en/orchestration/08-context-engineering.qmd", "u-shape"],
   ["en/evaluation/04-judging-holistic.qmd", "elo"],
 ];

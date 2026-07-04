@@ -107,7 +107,7 @@ both `en/` and `zh/` at the line below, then a guard test in
    Sweep dictionary size m (≫ d) and top-k; polysemantic neurons resolve to monosemantic features,
    then over-split (feature splitting) when m too large; dead latents waste capacity [@gao2024scaling].
 
-6. **`time-to-power`** — `infrastructure/05-powering-it`.
+6. **`time-to-power`** — `infrastructure/07-powering-it`.
    Section "The chips arrive in months, the megawatts in years"
    (en L18 / zh L7 「芯片以月计到货，兆瓦以年计到货」).
    Insert after mermaid `fig-powering-queues` (en after L56 / zh after L26); bare `<figure>`.
@@ -115,7 +115,7 @@ both `en/` and `zh/` at the line below, then a guard test in
    large power transformer ~128 weeks; gas turbines backlog ~80 GW sold out through 2030. Energized
    date = the critical path (snaps to the slowest bar).
 
-7. **`cross-datacenter`** — `infrastructure/06-the-machine-that-breaks`.
+7. **`cross-datacenter`** — `infrastructure/08-the-machine-that-breaks`.
    Section "The latency hierarchy is a wall" (en L93 / zh L37 「延迟层级是一道墙」).
    Insert at end of the latency section (en after L120 / zh after L42), before "The decode wall…"; bare `<figure>`.
    (Existing prefill/decode stepper at en L150 / zh L66 — do not collide.)

@@ -23,7 +23,7 @@ const parts: Array<[string, string]> = [
   ["orchestration", "orchestration/08-context-engineering.qmd"],
   ["evaluation", "evaluation/07-operational-evaluation.qmd"],
   ["safety", "safety/07-law-regulation-policy.qmd"],
-  ["infrastructure", "infrastructure/08-the-capability-horizon.qmd"],
+  ["infrastructure", "infrastructure/10-the-capability-horizon.qmd"],
   ["ecosystem", "ecosystem/06-data-rights-economics.qmd"],
   ["practice", "practice/13-operating-contracts.qmd"],
 ];

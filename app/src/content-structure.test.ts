@@ -396,12 +396,12 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["zh/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning，也就是近似地从已训练权重里移除某个已学事实"],
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, which lets one machine move bytes into another's memory"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-rdma，也就是绕过 CPU 直接读写远端内存"],
-    ["en/infrastructure/03-the-compute-frontier.qmd", "@gls-cowos package: an advanced package that places compute chiplets and HBM"],
-    ["zh/infrastructure/03-the-compute-frontier.qmd", "@gls-cowos这种把计算小芯片与 HBM 放到同一块硅中介层上的先进封装"],
-    ["en/infrastructure/05-powering-it.qmd", "@gls-pue, the ratio of total facility power to IT equipment power"],
-    ["zh/infrastructure/05-powering-it.qmd", "@gls-pue，也就是数据中心总耗电除以 IT 设备耗电的比值"],
-    ["en/infrastructure/06-the-machine-that-breaks.qmd", "@gls-mtbf, the expected interval between failures for the whole job"],
-    ["zh/infrastructure/06-the-machine-that-breaks.qmd", "@gls-mtbf，也就是平均故障间隔"],
+    ["en/infrastructure/05-the-compute-frontier.qmd", "@gls-cowos package: an advanced package that places compute chiplets and HBM"],
+    ["zh/infrastructure/05-the-compute-frontier.qmd", "@gls-cowos这种把计算小芯片与 HBM 放到同一块硅中介层上的先进封装"],
+    ["en/infrastructure/07-powering-it.qmd", "@gls-pue, the ratio of total facility power to IT equipment power"],
+    ["zh/infrastructure/07-powering-it.qmd", "@gls-pue，也就是数据中心总耗电除以 IT 设备耗电的比值"],
+    ["en/infrastructure/08-the-machine-that-breaks.qmd", "@gls-mtbf, the expected interval between failures for the whole job"],
+    ["zh/infrastructure/08-the-machine-that-breaks.qmd", "@gls-mtbf，也就是平均故障间隔"],
     ["en/orchestration/06-rag-retrieval.qmd", "@gls-rag puts a live, queryable corpus next to the model"],
     ["zh/orchestration/06-rag-retrieval.qmd", "@gls-rag的做法，就是在模型旁边放一份实时、可查询的语料"],
     ["en/ecosystem/02-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model], a common protocol for connecting models to tool servers"],
@@ -428,8 +428,8 @@ test("audited leftover first uses define the role of the term in place", () => {
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod 是 Google 加速器集群一侧的对应物"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-ici，也就是 pod 内部的芯片间互连"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-gpu 集群，也就是用图形处理器作加速器的集群"],
-    ["en/infrastructure/02-orchestration-data-infra.qmd", "@gls-sdc lets the run continue while producing subtly wrong numbers without an explicit crash"],
-    ["zh/infrastructure/02-orchestration-data-infra.qmd", "@gls-sdc，也就是不崩溃却悄悄写出错误数字的静默数据损坏"],
+    ["en/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc lets the run continue while producing subtly wrong numbers without an explicit crash"],
+    ["zh/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc，也就是不崩溃却悄悄写出错误数字的静默数据损坏"],
     ["en/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped substitute for a provider key"],
     ["zh/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key，也就是短时效、限范围的模型密钥替身"],
     ["en/practice/10-reliability-nondeterministic.qmd", "@gls-sli, the metric that decides whether served events count as valid"],
@@ -580,14 +580,14 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
 test("infrastructure closes capability measurement with verification frontier", () => {
   const expected = [
     "infrastructure/01-accelerators-networking.qmd",
-    "infrastructure/02-orchestration-data-infra.qmd",
-    "infrastructure/03-the-compute-frontier.qmd",
-    "infrastructure/04-making-the-silicon.qmd",
-    "infrastructure/05-powering-it.qmd",
-    "infrastructure/06-the-machine-that-breaks.qmd",
-    "infrastructure/07-where-learning-hits-limits.qmd",
-    "infrastructure/08-the-capability-horizon.qmd",
-    "infrastructure/09-verification-frontier.qmd",
+    "infrastructure/04-orchestration-data-infra.qmd",
+    "infrastructure/05-the-compute-frontier.qmd",
+    "infrastructure/06-making-the-silicon.qmd",
+    "infrastructure/07-powering-it.qmd",
+    "infrastructure/08-the-machine-that-breaks.qmd",
+    "infrastructure/09-where-learning-hits-limits.qmd",
+    "infrastructure/10-the-capability-horizon.qmd",
+    "infrastructure/11-verification-frontier.qmd",
     "infrastructure/summary.qmd",
   ];
 
@@ -601,7 +601,7 @@ test("infrastructure closes capability measurement with verification frontier", 
     }
 
     expect(src(`${lang}/infrastructure/index.qmd`)).toContain("@sec-verification-frontier");
-    expect(src(`${lang}/infrastructure/09-verification-frontier.qmd`)).toContain("{#sec-verification-frontier}");
+    expect(src(`${lang}/infrastructure/11-verification-frontier.qmd`)).toContain("{#sec-verification-frontier}");
   }
 
   expect(src("README.md")).toContain("compute, capability, and verification frontiers");
@@ -626,18 +626,18 @@ test("mid-book handoffs do not signal that the whole book has ended", () => {
 });
 
 test("the infrastructure arc explicitly hands off to ecosystem and practice", () => {
-  const enHorizon = src("en/infrastructure/08-the-capability-horizon.qmd");
+  const enHorizon = src("en/infrastructure/10-the-capability-horizon.qmd");
   expect(enHorizon).toContain("@sec-verification-frontier takes the next step");
 
-  const zhHorizon = src("zh/infrastructure/08-the-capability-horizon.qmd");
+  const zhHorizon = src("zh/infrastructure/10-the-capability-horizon.qmd");
   expect(zhHorizon).toContain("@sec-verification-frontier 会往前再走一步");
 
-  const enVerification = src("en/infrastructure/09-verification-frontier.qmd");
+  const enVerification = src("en/infrastructure/11-verification-frontier.qmd");
   expect(enVerification).toContain("Part X asks how these constraints");
   expect(enVerification).toContain("Part XI asks how to operate systems");
   expect(enVerification).toContain("operating contracts");
 
-  const zhVerification = src("zh/infrastructure/09-verification-frontier.qmd");
+  const zhVerification = src("zh/infrastructure/11-verification-frontier.qmd");
   expect(zhVerification).toContain("第十部分会问");
   expect(zhVerification).toContain("第十一部分会问");
   expect(zhVerification).toContain("运营契约");
