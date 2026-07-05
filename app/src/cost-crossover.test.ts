@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 
 const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
 const homes = [
-  "en/ecosystem/03-economics.qmd",
+  "en/ecosystem/04-economics.qmd",
   "en/practice/01-choosing-a-model.qmd",
   "en/practice/04-training-finetuning-practice.qmd",
   "en/practice/08-wiring-a-2026-stack.qmd",

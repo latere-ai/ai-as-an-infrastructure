@@ -95,11 +95,11 @@ test("ecosystem and economics is a full six-chapter part in both languages", () 
 
   const expected = [
     "ecosystem/01-model-landscape.qmd",
-    "ecosystem/02-tooling-ecosystem.qmd",
-    "ecosystem/03-economics.qmd",
-    "ecosystem/04-market-structure.qmd",
-    "ecosystem/05-adoption-productivity.qmd",
-    "ecosystem/06-data-rights-economics.qmd",
+    "ecosystem/03-tooling-ecosystem.qmd",
+    "ecosystem/04-economics.qmd",
+    "ecosystem/05-market-structure.qmd",
+    "ecosystem/06-adoption-productivity.qmd",
+    "ecosystem/07-data-rights-economics.qmd",
   ];
 
   for (const lang of ["en", "zh"]) {
@@ -262,8 +262,8 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
     ["en/foundations/04-transformer-architecture.qmd", "The first pass is **@gls-prefill**: it reads the entire prompt"],
     ["zh/foundations/04-transformer-architecture.qmd", "第一遍就是 **@gls-prefill** 阶段：它一次读完整个提示词"],
     ["zh/foundations/06-training-at-scale.qmd", "*@gls-tp*先切开单层内部的矩阵乘法"],
-    ["en/ecosystem/03-economics.qmd", "Training is a @gls-capex: a capital-style, one-time spend"],
-    ["zh/ecosystem/03-economics.qmd", "训练是一笔@gls-capex：像资本开支一样一次性付出"],
+    ["en/ecosystem/04-economics.qmd", "Training is a @gls-capex: a capital-style, one-time spend"],
+    ["zh/ecosystem/04-economics.qmd", "训练是一笔@gls-capex：像资本开支一样一次性付出"],
     ["en/safety/01-mechanistic-interpretability.qmd", "The hypothesis is @gls-superposition: a model represents more features than it has dimensions"],
     ["zh/safety/01-mechanistic-interpretability.qmd", "这个假说叫@gls-superposition：模型表示的特征多于它的维度"],
     ["en/safety/02-scalable-oversight-control.qmd", "The answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training"],
@@ -404,8 +404,8 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["zh/infrastructure/08-the-machine-that-breaks.qmd", "@gls-mtbf，也就是平均故障间隔"],
     ["en/orchestration/08-rag-retrieval.qmd", "@gls-rag puts a live, queryable corpus next to the model"],
     ["zh/orchestration/08-rag-retrieval.qmd", "@gls-rag的做法，就是在模型旁边放一份实时、可查询的语料"],
-    ["en/ecosystem/02-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model], a common protocol for connecting models to tool servers"],
-    ["zh/ecosystem/02-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model] 这种连接模型与工具服务器的公共协议"],
+    ["en/ecosystem/03-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model], a common protocol for connecting models to tool servers"],
+    ["zh/ecosystem/03-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model] 这种连接模型与工具服务器的公共协议"],
     ["en/practice/01-choosing-a-model.qmd", "@gls-gateway, a routing and policy layer for model calls"],
     ["zh/practice/01-choosing-a-model.qmd", "@gls-gateway，也就是模型调用的路由与策略层"],
     ["en/practice/06-retrieval-and-documents.qmd", "@gls-vlm, a model that reads page images and text together"],
@@ -477,7 +477,7 @@ test("part I is framed as base model formation, not only pretraining", () => {
 test("serving cost references are anchored to the inference and serving part", () => {
   expect(src("en/inference/06-serving-multimodal.qmd")).not.toContain("Part IV built a serving stack");
 
-  const enEconomics = src("en/ecosystem/03-economics.qmd");
+  const enEconomics = src("en/ecosystem/04-economics.qmd");
   expect(enEconomics).not.toContain("Part VI levers");
   expect(enEconomics).not.toContain("Every chapter in Part VI");
   expect(enEconomics).not.toContain("every Part VI optimization");
@@ -486,7 +486,7 @@ test("serving cost references are anchored to the inference and serving part", (
   expect(enEconomics).toContain("Part V serving levers");
   expect(enEconomics).toContain("serving optimizations in Part V");
 
-  const zhEconomics = src("zh/ecosystem/03-economics.qmd");
+  const zhEconomics = src("zh/ecosystem/04-economics.qmd");
   expect(zhEconomics).not.toContain("第六部分的每一章");
   expect(zhEconomics).not.toContain("第六部分每一项优化");
   expect(zhEconomics).not.toContain("第六部分的手段");

@@ -216,9 +216,9 @@ test("the viz runtime registers the ROI balance component", () => {
 });
 
 test("adoption-productivity uses ROI balance in both languages", () => {
-  expect(src("en/ecosystem/05-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
-  expect(src("zh/ecosystem/05-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
-  expect(src("zh/ecosystem/05-adoption-productivity.qmd")).toContain('data-lang="zh"');
+  expect(src("en/ecosystem/06-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
+  expect(src("zh/ecosystem/06-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
+  expect(src("zh/ecosystem/06-adoption-productivity.qmd")).toContain('data-lang="zh"');
 });
 
 test("the viz runtime registers evaluation power and frontier components", () => {

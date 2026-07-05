@@ -24,7 +24,7 @@ const parts: Array<[string, string]> = [
   ["evaluation", "evaluation/07-operational-evaluation.qmd"],
   ["safety", "safety/08-law-regulation-policy.qmd"],
   ["infrastructure", "infrastructure/10-the-capability-horizon.qmd"],
-  ["ecosystem", "ecosystem/06-data-rights-economics.qmd"],
+  ["ecosystem", "ecosystem/07-data-rights-economics.qmd"],
   ["practice", "practice/13-operating-contracts.qmd"],
 ];
 
