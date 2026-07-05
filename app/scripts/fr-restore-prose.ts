@@ -10,10 +10,10 @@ const intros: [string, string][] = [
   ["zh/practice/01-choosing-a-model.qmd", "一手来源优先。"],
   ["en/practice/04-training-finetuning-practice.qmd", "First-hand sources first."],
   ["zh/practice/04-training-finetuning-practice.qmd", "一手来源放前面。"],
-  ["en/orchestration/04-the-harness.qmd", "Cited sources appear on the book's References page. One item is referenced\ninline only as an attribution and is listed here for the reader who wants the\nprimary artifact."],
-  ["zh/orchestration/04-the-harness.qmd", "被引用的来源会出现在本书的参考文献页。下面这一项仅在正文里作为出处被提及，为想要原始材料的读者列在此处。"],
-  ["en/orchestration/08-context-engineering.qmd", "The sources cited inline above appear on the book's References page. The\nsurvey below is a fuller map of the field for a reader who wants the broader\nlandscape."],
-  ["zh/orchestration/08-context-engineering.qmd", "上面正文中引用的来源会出现在本书的参考文献页。下面这篇综述为想了解更广阔图景的读者提供了该领域更完整的地图。"],
+  ["en/orchestration/05-the-harness.qmd", "Cited sources appear on the book's References page. One item is referenced\ninline only as an attribution and is listed here for the reader who wants the\nprimary artifact."],
+  ["zh/orchestration/05-the-harness.qmd", "被引用的来源会出现在本书的参考文献页。下面这一项仅在正文里作为出处被提及，为想要原始材料的读者列在此处。"],
+  ["en/orchestration/10-context-engineering.qmd", "The sources cited inline above appear on the book's References page. The\nsurvey below is a fuller map of the field for a reader who wants the broader\nlandscape."],
+  ["zh/orchestration/10-context-engineering.qmd", "上面正文中引用的来源会出现在本书的参考文献页。下面这篇综述为想了解更广阔图景的读者提供了该领域更完整的地图。"],
 ];
 for (const [f, prose] of intros) {
   let s = readFileSync(f, "utf8");

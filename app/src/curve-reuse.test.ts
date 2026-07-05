@@ -17,7 +17,7 @@ const homes: [string, string][] = [
   ["en/practice/10-reliability-nondeterministic.qmd", "pow-base"],
   ["en/practice/13-operating-contracts.qmd", "exp-decay"],
   ["en/infrastructure/10-the-capability-horizon.qmd", "logistic"],
-  ["en/orchestration/08-context-engineering.qmd", "u-shape"],
+  ["en/orchestration/10-context-engineering.qmd", "u-shape"],
   ["en/evaluation/04-judging-holistic.qmd", "elo"],
 ];
 

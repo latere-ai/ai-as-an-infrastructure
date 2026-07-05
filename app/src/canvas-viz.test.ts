@@ -57,8 +57,8 @@ test("the viz runtime registers the infonce-field component", () => {
 });
 
 test("ch27 embeddings-representation uses infonce-field in both languages", () => {
-  expect(src("en/orchestration/07-embeddings-representation.qmd")).toContain('data-viz="infonce-field"');
-  expect(src("zh/orchestration/07-embeddings-representation.qmd")).toContain('data-viz="infonce-field"');
+  expect(src("en/orchestration/09-embeddings-representation.qmd")).toContain('data-viz="infonce-field"');
+  expect(src("zh/orchestration/09-embeddings-representation.qmd")).toContain('data-viz="infonce-field"');
 });
 
 test("the viz runtime registers the comparison-explorer component with both datasets", () => {
@@ -199,7 +199,7 @@ test("wave-5 components are used in their chapters, both languages", () => {
     ["reasoning/05-training-to-reason", "grpo-advantage"],
     ["foundations/05-moe-ssm-hybrids", "ssm-vs-attention"],
     ["orchestration/01-training-agents-to-act", "rl-timeline"],
-    ["orchestration/06-rag-retrieval", "rrf-fusion"],
+    ["orchestration/08-rag-retrieval", "rrf-fusion"],
     ["practice/01-choosing-a-model", "decision-tree"],
     ["foundations/06-training-at-scale", "float-bits"],
     ["foundations/06-training-at-scale", "pipeline-bubble"],

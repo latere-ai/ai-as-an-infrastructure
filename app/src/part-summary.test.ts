@@ -20,7 +20,7 @@ const parts: Array<[string, string]> = [
   ["adaptation", "adaptation/07-synthetic-data-self-improvement.qmd"],
   ["reasoning", "reasoning/07-inference-time-scaling.qmd"],
   ["inference", "inference/06-serving-multimodal.qmd"],
-  ["orchestration", "orchestration/08-context-engineering.qmd"],
+  ["orchestration", "orchestration/10-context-engineering.qmd"],
   ["evaluation", "evaluation/07-operational-evaluation.qmd"],
   ["safety", "safety/08-law-regulation-policy.qmd"],
   ["infrastructure", "infrastructure/10-the-capability-horizon.qmd"],

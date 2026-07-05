@@ -93,7 +93,7 @@ both `en/` and `zh/` at the line below, then a guard test in
    Toggle static-cohort (fixed batch, all wait for the longest, padding) vs continuous/iteration-level
    (sliding window, finished leave at their stop token, slots refill each step; Orca). Throughput readout diverges.
 
-4. **`rag-interaction`** — `orchestration/06-rag-retrieval`.
+4. **`rag-interaction`** — `orchestration/08-rag-retrieval`.
    Section "Reranking" (en L126 / zh L58 「重排」), three-way contrast at en L151 / zh L69.
    Insert after the reranking curve (en after L149 / zh after L67), before mermaid `fig-rag-interaction`; `{=html}` fence.
    (Existing `rrf-fusion` en L119, reranking curve en L144 — do not collide.)
