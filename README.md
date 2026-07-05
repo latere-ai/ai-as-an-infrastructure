@@ -42,9 +42,11 @@ The spine is the lifecycle of a capability, read as a stack.
   networking, the software substrate (frameworks, autodiff, compilers, kernels,
   the CUDA moat), data infrastructure, silicon, power, geography, failure, and
   the compute, capability, and verification frontiers.
-- **Part X, Ecosystem and Economics.** Model openness, tooling standards,
-  compute markets, market structure, adoption and productivity, data rights, and
-  the agent economy (identity, delegation, machine payments).
+- **Part X, Ecosystem and Economics.** Model openness, the model as a
+  supply-chain artifact (formats, distribution, poisoning), tooling standards,
+  compute markets and their capital layer, market structure, adoption and
+  productivity, data rights, and the agent economy (identity, delegation,
+  machine payments).
 - **Part XI, Practice and Operations.** The hands-on 2026 stack, plus
   deployment, reliability, human oversight surfaces, the production data engine,
   and operating contracts for SLOs, cost governance, incidents, and multi-tenancy.
