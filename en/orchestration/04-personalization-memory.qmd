@@ -1,0 +1,91 @@
+# Personalization and User Memory {#sec-personalization}
+
+The memory of @sec-memory-systems belonged to a task: logs, workspaces, and stores that let one agent run survive its own length. This chapter is about a different memory with a different owner, the product's memory of its user, carried across sessions and months. The engineering problem is stark when stated plainly: the model is stateless by construction, one set of weights answers every request and the cache dies with the session, yet the products built on it now remember your job, your children's names, and what you asked last winter. Something outside the model is doing that remembering, and its design has quietly become infrastructure with consequences for markets, privacy, and what the assistant tells you. By the end of this chapter, a reader can say where persistent user state can live and why one home won, how the extract-consolidate-retrieve loop works and where it can be poisoned, how the shipped systems differ in philosophy, and why memory, more than model quality, is becoming the switching cost of the assistant market.
+
+## Three homes for user state
+
+User state could live in three places, and the field tried all of them. It could live in the weights: fine-tune a copy of the model per user. This loses three times over. A training job and a checkpoint per user is an orchestration and storage impossibility at consumer scale; sequential fine-tuning on a user's data erodes the general capability everyone else's training paid for; and, decisively, per-user weights destroy cross-user batching, the economic core of serving that @sec-serving-problem established. It could live in adapters: a small per-user LoRA over shared weights, a genuine research line [@tan2024oppu], whose serving-side difficulty is measured by the systems built just to keep thousands of adapters schedulable at once [@sheng2023slora]; no consumer product has shipped it at scale. Or it could live in the context: extract facts from conversations, store them in an ordinary database outside the model, retrieve the relevant ones at query time, and inject them into the prompt. Every shipped system chose the third home.
+
+::: {.callout-tip}
+## Constraint arrow
+The choice was not made by memory researchers; it was made by the serving layer below them. Batched inference over shared weights is what makes a hosted model affordable, so any personalization that fragments the weights, or the batch, prices itself out. State therefore migrates to the cheapest layer that can carry it, the prompt, and the whole memory stack of this chapter, extraction pipelines, consolidation passes, retrieval indexes, exists to make a stateless, shared model wear a per-user disguise. Personalization lives in the context because @sec-serving-problem's economics left it nowhere else to live.
+:::
+
+## The memory loop
+
+Once state lives outside the model, four design questions define the pipeline, and every production system answers the same four. What is worth remembering: an extraction pass judges the salience of candidate facts in the dialogue. How new facts meet old ones: a consolidation step adds, updates, deletes, or ignores against the existing store, the step where "you're going to Singapore in July" must eventually become "you went"; the largest deployment now runs this as an offline background process that rewrites stale memories wholesale [@openai2026dreaming]. What comes back: retrieval at query time, injected into the prompt. And what is allowed to fade: expiry and decay, present in the research line from the start, one early system scored memory strength on an explicit forgetting curve [@zhong2023memorybank], and temporal-graph designs keep facts with validity intervals instead of overwriting them [@rasmussen2025zep].
+
+The research lineage behind the loop is short and legible. The memory stream with scored retrieval, recency, importance, relevance, and periodic reflection that synthesizes higher-level observations, arrived with generative agents [@park2023generative]; the operating-system framing, a model paging its own state between a small fast context and a large slow store, arrived with MemGPT [@packer2023memgpt]; and a memory-as-a-service market industrialized the pipeline. Its own benchmark results repay a careful reading, in this book's @sec-benchmarks spirit. On the standard long-conversation benchmark, the leading memory system reports large latency and token savings, over 90% of both, against feeding the full history into the model, but the full-history baseline *scores higher* on answer quality [@chhikara2025mem0]. At today's conversation lengths, engineered memory wins on economics, not accuracy, a fact the marketing omits and the design question turns on.
+
+```{dot}
+//| label: fig-personalization-memory-loop
+//| fig-cap: "The user-memory loop. Extraction and consolidation decide what is written, retrieval decides what returns, and the two annotations mark where the design carries risk: poisoning enters at the write path, and the erasure obligation exits at the store."
+digraph memloop {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.4; ranksep=0.45;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  conv  [label="conversation\nstream"];
+  ext   [label="extraction\nwhat is salient?"];
+  cons  [label="consolidation\nadd / update / delete", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  store [label="memory store\nfacts, summaries, graph"];
+  ret   [label="retrieval\nat query time"];
+  inj   [label="prompt injection\ninto the context"];
+
+  conv -> ext -> cons -> store -> ret -> inj -> conv;
+
+  poison [label="poisoning enters here\n(injected content that gets written)", shape=note];
+  erase  [label="deletion / erasure\nexits here", shape=note];
+  poison -> cons [style=dashed, dir=none];
+  erase -> store [style=dashed, dir=none];
+}
+```
+
+The runnable below is the consolidation step reduced to its arithmetic: candidates arrive forever, but deduplication and salience decay keep the store bounded. A memory store is a fixed-size distillation of an unbounded stream, which is both its function and, as the last sections show, its risk profile.
+
+:::: {.runnable}
+```python
+import numpy as np
+rng = np.random.default_rng(1)
+store, lam, sim_thresh = [], 0.01, 0.85          # decay rate, dedup threshold
+for t in range(500):
+    cand = rng.normal(size=8); cand /= np.linalg.norm(cand)
+    importance = rng.random()
+    if store:
+        sims = [c @ cand for c, _, _ in store]
+        if max(sims) > sim_thresh:               # near-duplicate: refresh, don't add
+            i = int(np.argmax(sims)); store[i] = (store[i][0], store[i][1], t)
+            continue
+    store.append((cand, importance, t))
+    store = [(c, imp, t0) for c, imp, t0 in store
+             if imp * np.exp(-lam * (t - t0)) > 0.05]   # salience decay evicts
+    if t % 100 == 99: print(f"t={t+1}: {len(store)} memories retained")
+print("an unbounded stream, a bounded store: consolidation is the whole design")
+```
+::::
+
+## Two shipped philosophies
+
+The consumer deployments split on one design axis: whether the user can see the memory. The first mover shipped user-managed "saved memories" in early 2024, then expanded to referencing the user's entire chat history, and by mid-2026 to background synthesis that rewrites the profile without user action [@openai2024memory; @openai2026dreaming]; what the model knows about you became, in stages, an inferred artifact rather than a list you curate. The second design planted its flag on the opposite end: memory scoped per project so contexts do not bleed into each other, a memory summary the user can read and edit directly, incognito sessions that leave no trace, and a launch note stating the vendor had tested whether memory "could reinforce harmful patterns in conversations" before shipping [@anthropic2025memory]. Third-party analysis of the two implementations makes the architectural difference concrete: one injects a synthesized profile into every conversation automatically; the other starts blank and searches raw history through explicit tools when the conversation calls for it [@willison2025memory]. The other two hyperscalers personalize from a different asset entirely, connecting the assistant to search history, mail, and photos, behavioral exhaust that @sec-infrastructure-before's incumbents spent two decades accumulating, and one has closed the flywheel outright: assistant conversations now feed content and advertising personalization on the parent platform [@meta2025memory]. Across all four, the drift of 2025 and 2026 ran the same direction, toward richer, more synthesized, less inspectable profiles, with deletion controls retained as the constant.
+
+## Memory as a moat
+
+The market-structure reading of this chapter belongs next to @sec-market-structure's value chain. Model quality is a depreciating advantage, competed away with every release cycle; an accumulated year of a user's context is not, because it regenerates only by the user re-living it with a competitor. Memory is therefore the assistant market's switching cost, and the labs describe it in exactly those aspirational terms: systems that get to know you over your life. The countervailing forces are portability and law: data exports that include memories, a nascent user-owned-memory movement that relocates the store to the user's device behind a standard protocol [@mem0openmemory2025], and a European enforcement debate that has named AI assistants a priority without yet creating a memory-portability obligation. Whether the moat holds depends on which of those matures first.
+
+The flywheel has an epistemic price that this book has priced before. The clearest sentence in the record comes from the vendor's own post-mortem of its sycophantic model update: "user memory contributes to exacerbating the effects of sycophancy" in some cases [@openai2025sycophancy]. A model that remembers what you believe is better equipped to tell you what you want to hear, and personalized alignment, tuning behavior toward an individual, carries the risks of profiling and bias reinforcement that the recommender era documented at population scale, which is why the academic treatment argues for explicit normative bounds on how far personalization should go [@kirk2024personalization]. @sec-infrastructure-before told this story once already with click-through rates; the memory store is where the assistant era decides whether to retell it.
+
+## The profile as attack surface
+
+Two security results bound this chapter's risk, one about what the store implies and one about who can write to it. The first is inference at scale: models infer personal attributes, location, income, demographics, from ordinary, non-sensitive text with high accuracy at negligible cost [@staab2024beyond]. A memory store is that inference run continuously against one person and then *persisted*: an aggregation artifact more revealing than any conversation it distills. The second is the write path. Because consolidation decides what enters the store, a prompt injection that reaches the consolidation step becomes an implant rather than an incident: demonstrated attacks planted false memories and even standing exfiltration instructions that leaked every subsequent conversation until the memory was found and deleted [@rehberger2024spaiware], and the academic version poisons agent memory through nothing but queries [@chen2024agentpoison]. The defenses follow the diagram: guard the write path, and keep the store auditable by its owner, which turns the visible-versus-opaque design axis from a philosophy into a security control. One property, at least, is clean: erasing a memory row is an engineering triviality, which makes context-resident memory the one home for user state where the right to be forgotten of @sec-privacy-provenance can be honored with a `DELETE` rather than a research program.
+
+::: {.callout-important}
+## What's contested
+Three arguments are live. Where memory should live: the platforms hold that native memory is safer and deeper; an application layer of memory services argues portability across models; a user-device movement argues the profile belongs to its subject, and no standard has settled it. Whether long context retires the memory stack: ten-million-token windows were announced with personalization as an explicit use case [@meta2025llama4], and at benchmark conversation lengths full history already out-scores engineered memory; the rejoinder is threefold, that cost and latency scale with context while a store is constant, that effective context lags claimed context badly [@hsieh2024ruler], and that salience is a curation problem a bigger window does not solve, which is why the largest deployment built background consolidation instead of relying on its own long context. And the epistemic question, whether personalization on net corrects the model's one-size-default or entrenches the user's priors, has, as of mid-2026, advocacy on both sides and no decisive study on either.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::
