@@ -1,0 +1,86 @@
+# Confidential Inference: Trusted Execution and Private Serving {#sec-confidential-inference}
+
+The previous chapter asked what the weights remember and how to make them forget; this one asks a colder question about the serving path itself. When an enterprise sends prompts to a hosted model, "we don't train on your data" is a promise written in a contract, audited after the fact, and enforced by nothing in the machine. Every mechanism between the user's TLS connection and the GPU leaves the prompt readable by whoever operates the machine. Confidential inference is the project of replacing that promise with a mechanism: hardware that can prove what software is running and keep even its own operator out. This chapter works through the threat model, the trusted-execution lineage from CPU enclaves to GPU-wide boundaries, the deployed designs worth studying, why the cryptographic alternatives lose on cost by orders of magnitude, and what the hardware boundary still cannot hold. By the end, a reader can say what a confidential serving stack actually protects, against whom, at what overhead, and where the trust ends up residing instead.
+
+## A promise is not a mechanism
+
+Start by naming the adversaries, because "private" means nothing until you say from whom. A hosted inference stack has at least five parties who could read a prompt without the mechanism this chapter builds. The cloud operator controls the hypervisor beneath the serving VM. An insider holds credentials that ordinary operations grant. A co-tenant shares the physical machine and its microarchitectural surfaces. The AI provider itself operates the serving software, which is why its privacy claims are self-attestations. And whatever the provider can read, a subpoena can compel. Contractual controls, zero-retention agreements and compliance audits, address all five by promise; none of them by construction.
+
+The problem is also symmetric, which is easy to miss. The user's prompts need protection from the infrastructure, and the provider's weights need protection from the same infrastructure: a frontier model deployed onto rented or customer-controlled hardware is a theft target measured in training cost. Published design work on confidential inference treats both directions in one architecture, weights released only to an environment that has proven its identity, prompts encrypted to that same proven environment [@anthropic2025confidential]. Keep the two flows in mind; the same mechanism carries both.
+
+## Hardware that can keep a secret
+
+The mechanism is the trusted execution environment, and its core idea is attestation: hardware measures the software it loads, hashing each stage of the boot and launch chain into registers rooted in a key fused into the silicon, and can later sign a quote of those measurements that a remote party verifies against expected values before releasing anything sensitive. Trust stops being "the operator says so" and becomes "the silicon signed for exactly this software stack." What the field spent fifteen years learning is where to draw the boundary around that guarantee.
+
+The first draw was tight. Intel's SGX, shipped in 2015, protected a single process's enclave against everything else on the machine, including the operating system [@costan2016sgx]. For machine learning it was the wrong shape three times over: protected memory was initially measured in megabytes against models measured in gigabytes, applications had to be rewritten into an enclave half and an untrusted half, and no GPU could participate at all. It also supplied the field's humbling lessons: transient-execution attacks extracted SGX's own attestation keys, establishing that attested silicon still leaks through microarchitectural side channels and that the boundary is an engineering artifact, not a proof [@vanbulck2018foreshadow]. The second draw learned from both failures. AMD's SEV-SNP and Intel's TDX encrypt and integrity-protect an entire virtual machine, so an unmodified serving stack, inference engine, drivers, and all, runs inside a confidential VM whose memory the hypervisor cannot read or undetectably tamper with [@amd2020sevsnp; @cheng2024tdx]. The retrospective by SEV's architect is candid that reaching even this took a decade of patched designs [@kaplan2023vmisolation]. Arm's counterpart, formally verified before shipping, remains the field's cleanest paper design still waiting for volume hardware [@li2022armcca].
+
+```{dot}
+//| label: fig-confidential-inference-attestation
+//| fig-cap: "The attestation chain of a confidential serving stack. Each link is measured by the one below it and verified by the client's policy before any secret flows; the chain's anchor is a key fused into a vendor's silicon, which is where the trust finally resides."
+digraph attestation {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.5; ranksep=0.35;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  silicon [label="silicon root of trust\nkey fused at manufacture", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  boot    [label="measured boot chain\nfirmware, kernel hashes"];
+  cvm     [label="confidential VM launch\nSEV-SNP / TDX measurement"];
+  gpu     [label="GPU attestation\ndriver and firmware state"];
+  quote   [label="signed quote"];
+  verify  [label="verifier checks quote\nagainst expected measurements"];
+  key     [label="client releases session key\nprompt (or weights) flows in"];
+
+  silicon -> boot -> cvm -> gpu -> quote -> verify -> key;
+}
+```
+
+## Extending the boundary to the GPU
+
+A confidential VM without a confidential GPU protects everything except the part that matters, so the consequential move came when NVIDIA's Hopper generation gave the accelerator its own root of trust. In confidential-computing mode, the GPU attests its firmware alongside the CVM's report, and traffic between CPU and GPU crosses the PCIe bus encrypted, staged through bounce buffers in the protected VM. Inside the package, the model, the @gls-kv-cache, and the activations live in HBM guarded by hardware access control rather than bulk memory encryption; the plaintext islands are the two silicon packages, and everything on the wires between them is ciphertext.
+
+What this costs turned out to be the result that moved the industry: for large-language-model serving, almost nothing. Measurement on H100s found the overhead concentrated entirely in the encrypted CPU-to-GPU transfers, below 5% of throughput for typical LLM workloads and approaching zero as models grow and batches lengthen, because the compute time that dominates large-model inference amortizes a fixed per-byte transfer tax [@zhu2024h100benchmark]. The runnable below reproduces the shape of that finding from the cost model alone. The remaining boundary gap, GPU-to-GPU traffic in multi-accelerator serving, closed with Blackwell's protected NVLink, extending one attested boundary across the whole serving node, with near-parity throughput claimed by the vendor.
+
+:::: {.runnable}
+```python
+# per-request time = compute + transfer * (1 + tax): the tax hits only the PCIe leg
+compute_per_tok, xfer_per_req, tax = 8e-3, 6e-3, 0.35   # seconds, seconds, CC-mode overhead
+for batch in [1, 4, 16, 64, 256]:
+    plain  = compute_per_tok * batch + xfer_per_req
+    cc     = compute_per_tok * batch + xfer_per_req * (1 + tax)
+    print(f"batch {batch:4d}: confidential-mode slowdown "
+          f"{(cc/plain - 1)*100:4.1f}%")
+print("a fixed per-transfer tax vanishes under compute: chatty small batches pay,")
+print("large-model large-batch serving amortizes it toward zero")
+```
+::::
+
+## Designs in production
+
+By 2026 the design space has real, shipped exemplars, and reading them together shows an industry converging on one shape from three directions.
+
+Apple's Private Cloud Compute, published in 2024 when Apple began offloading assistant queries to its datacenters, remains the most complete stated design, and its five requirements are worth internalizing as the field's checklist: stateless computation, user data never persisted beyond the request; enforceable guarantees, properties that follow from mechanism rather than policy; no privileged runtime access, no shell or debug path even for incident response; non-targetability, no way to route a chosen user to a compromised node, enforced partly by third-party relays; and verifiable transparency, every production software image published to a cryptographic log that client devices check before sending anything, so a silently modified server cannot receive traffic [@apple2024pcc]. Apple built it on its own silicon; the requirements, not the chip, are the export. Meta's Private Processing for WhatsApp rebuilt the same requirements on commodity parts, SEV-SNP confidential VMs plus NVIDIA's GPU mode, with anonymous relays for non-targetability [@meta2025privateprocessing], and Google's Private AI Compute answered with a third silicon path, running Gemini models inside TPU enclaves under the same nobody-including-us claim [@google2025privateai]. Below these designed-for-privacy systems, the hyperscalers sell the raw material: confidential H100 instances on Azure and Google Cloud pair a CVM with GPU attestation off the shelf. AWS's Nitro Enclaves deserve a careful footnote rather than a slot in the same list: they isolate by architecture and attest what they run, but do not encrypt memory against the platform itself, so the operator excluded by design is the customer's own administrator, with AWS remaining inside the trust boundary [@trailofbits2024nitro]. Reading the fine print of what each system defends against, and for whom, is most of the literacy this chapter can teach.
+
+## The alternatives lose on cost
+
+A reader with a cryptography background will have been waiting for the objection: trusted hardware is trust relocated, not trust removed, and cryptography offers guarantees that do not depend on anyone's silicon. The objection is correct and, for now, unaffordable. Fully homomorphic encryption, computing directly on encrypted data, remains minutes-per-token territory for even small transformers, in part because no current FHE scheme can efficiently reuse a KV cache, so autoregressive decoding forfeits the one optimization serving depends on. Secure multi-party computation fares an order better and is still hopeless for interactive use: the landmark result generated LLaMA-7B tokens in about five minutes each across three cooperating parties [@dong2023puma]. Two neighboring techniques are worth positioning precisely because they are so often miscited as solutions to this chapter's problem. Differential privacy bounds what a trained model can leak about its training examples [@abadi2016dpsgd]; it says nothing about who can read an inference-time prompt. Zero-knowledge proofs of inference let a provider prove it ran the model it claims, but the prover sees the data in plaintext: integrity, not confidentiality. Plot all of these on one axis of overhead and the market's choice explains itself: plaintext at 1.0x, TEEs at roughly 1.05x, MPC near 10^4x, FHE beyond 10^5x. TEEs are the only point on the curve compatible with production serving, and their price is not paid in throughput but in trust: the guarantee is only as good as the silicon vendor's design, keys, and firmware.
+
+## What the boundary cannot hold
+
+The limits deserve equal weight, because a boundary oversold is a boundary that fails in deployment. First, encrypted streams still have a shape. A measurement study showed that the token-by-token packet sizes of streaming assistant responses let a network observer reconstruct 29% of responses exactly and infer the topic of over half, with no decryption anywhere [@weiss2024keylogging]; the fix is padding and batching, a latency trade no TEE can make for you. Second, the microarchitectural record from SGX onward says side channels are managed, never abolished. Third, the boundary is around the computation, not the behavior inside it: a model with tool access can be prompt-injected into exfiltrating the very context the hardware protects, which is @sec-security-authorization's problem and does not go away here. Fourth, attestation centralizes trust: every quote chains to Intel, AMD, NVIDIA, or Apple, and the verification services are as centralized as the vendors. Transparency logs, PCC's answer, mitigate the operator's discretion but not the anchor's location. That location is also a sovereignty fact: every shipping root of trust belongs to a US company, so a government buying confidential inference has traded trusting a US cloud for trusting US silicon.
+
+::: {.callout-tip}
+## Constraint arrow
+What the silicon can attest sets the ceiling on what the layers above can promise. A privacy commitment backed by a confidential-computing boundary can be verified by a client before data flows; a commitment that exceeds the attestable boundary, about side channels, about what the model does with what it reads, about jurisdictions, can only be contractual. When @sec-law-policy examines regimes that demand demonstrable data protection, the line between what deployments can prove and what they can only promise was drawn down here, in which links of the chain a fused key actually signs for.
+:::
+
+::: {.callout-important}
+## What's contested
+Three arguments run through this young layer. Whether confidential inference becomes the enterprise default or stays a regulated-industry niche: the near-zero overhead and off-the-shelf cloud offerings argue for default; years of accepted contractual zero-retention, and the operational cost of running services no operator can inspect, argue for niche. Whether verification requires transparency, Apple's public image logs that clients enforce, or attestation against vendor-published measurements suffices: the PCC camp holds that unlogged attestation just moves the promise, while deployments without client-side enforcement answer that a signed quote is already a categorical improvement on a contract. And whether open weights dissolve the problem: running a downloaded model on premises removes the hosted-prompt question entirely, but the frontier models enterprises most want are not downloadable, and the provider-side problem, protecting weights on infrastructure the provider does not own, gets harder, not easier, in a world of capable open weights. The production evidence for every position is younger than this book.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::

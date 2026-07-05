@@ -907,11 +907,11 @@ test("polished chapter openings preserve key source theses", () => {
       ["训练集的一次有损压缩", "服务时泄露它在训练时吸收的内容", "上游或一次重训练里，而不是输出端", "@gls-machine-unlearning能承诺什么、不能承诺什么", "记忆不是学习之外额外叠上的 bug"],
     ],
     [
-      "en/safety/07-law-regulation-policy.qmd",
+      "en/safety/08-law-regulation-policy.qmd",
       ["European Union's risk tiers", "documents a release now legally requires", "copyright is the unsettled ground", "rule written by a regulator rewrite a data-curation decision"],
     ],
     [
-      "zh/safety/07-law-regulation-policy.qmd",
+      "zh/safety/08-law-regulation-policy.qmd",
       ["欧盟的风险分级", "发布如今在法律上要求哪些文档", "版权为什么仍是每一份预训练语料下面不稳定的基础", "监管者写下的规则改写"],
     ],
     [
@@ -1295,7 +1295,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "en/safety/04-runtime-safety.qmd",
     "en/safety/05-adversarial-robustness.qmd",
     "en/safety/06-privacy-provenance-unlearning.qmd",
-    "en/safety/07-law-regulation-policy.qmd",
+    "en/safety/08-law-regulation-policy.qmd",
     "en/ecosystem/01-model-landscape.qmd",
     "en/ecosystem/02-tooling-ecosystem.qmd",
     "en/ecosystem/03-economics.qmd",
@@ -1390,7 +1390,7 @@ test("polished chapter openings avoid reader-promise templates", () => {
     "zh/safety/04-runtime-safety.qmd",
     "zh/safety/05-adversarial-robustness.qmd",
     "zh/safety/06-privacy-provenance-unlearning.qmd",
-    "zh/safety/07-law-regulation-policy.qmd",
+    "zh/safety/08-law-regulation-policy.qmd",
     "zh/ecosystem/01-model-landscape.qmd",
     "zh/ecosystem/02-tooling-ecosystem.qmd",
     "zh/ecosystem/03-economics.qmd",
