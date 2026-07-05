@@ -1,0 +1,89 @@
+# Compilers, Kernels, and the CUDA Moat {#sec-compilers-kernels}
+
+The previous chapter ended with both of its arguments pointing below the framework, at the compiler. This chapter follows them down. A captured graph still has to become device code, and the gap between naive device code and good device code is not a percentage, it is the better part of an order of magnitude, governed by one cost model: on a modern accelerator, moving bytes costs more than doing arithmetic on them. That model explains why fusing operations is the fundamental compiler optimization, why the fastest attention implementation is best understood as an algorithm rather than a kernel, and why the deepest moat in the AI industry is not silicon but nineteen years of software sediment on top of it. By the end, a reader can trace a line of Python down to the instructions a GPU executes, say where along that line performance is won, and explain why that line runs through one vendor's territory, what it costs everyone that it does, and how models writing their own kernels might change it. The quantized kernels that serve models in production have their own treatment in @sec-quantization-kernels; this chapter is about the machinery that produces kernels at all.
+
+## Count bytes, not FLOPs
+
+A kernel, in GPU vocabulary, is one program launched onto the device: a matrix multiply, an elementwise add, a softmax. Whether a kernel runs fast is decided almost entirely by one ratio, its arithmetic intensity: the FLOPs it performs per byte it moves to and from @gls-hbm. The roofline model turns that ratio into a picture: attainable throughput is the smaller of the hardware's peak arithmetic rate and its memory bandwidth times the kernel's intensity, so performance climbs linearly with intensity until it hits the flat compute ceiling [@williams2009roofline]. The corner where the two roofs meet is the machine's character in a single number. An H100 delivers roughly 989 dense BF16 teraFLOPs against 3.35 TB/s of HBM bandwidth, putting the corner near 295 FLOPs per byte: any kernel doing less arithmetic per byte than that is memory-bound, and its runtime is simply bytes moved divided by bandwidth.
+
+Almost everything in a transformer other than the matrix multiplies lives far below the corner. An elementwise add performs one FLOP per output element while moving six bytes in half precision, an intensity around 0.17, three orders of magnitude short. Run each such operation as its own kernel and the tensor makes a round trip to HBM between every step, so a chain like "subtract the max, exponentiate, sum, divide" pays for four trips when one would do. The remedy is fusion: compile the chain into a single kernel that reads the input once, keeps intermediates in on-chip registers, and writes the result once. The arithmetic is identical; only the traffic changes; and since traffic is the price, fusion is the closest thing this layer has to a free lunch [@he2022brrr]. Measurement on real training confirms how much of the bill it addresses: a study of transformer training found the memory-bound operations, not the matmuls, dominating runtime, and reclaimed a third of it by data-movement optimization alone [@ivanov2021data]. A second, smaller tax pushes the same direction: each kernel launch costs microseconds of driver overhead, which is why runtimes record and replay whole launch sequences as CUDA graphs rather than launching kernels one by one [@gray2019cudagraphs].
+
+The runnable makes the accounting concrete: a softmax over a large matrix, executed as four separate kernels versus one fused kernel, same FLOPs, three times the bytes, and both intensities so far below the roofline corner that predicted runtime is just traffic divided by bandwidth.
+
+:::: {.runnable}
+```python
+N, d, B = 4096, 4096, 4  # one fp32 score matrix, bytes per element
+flops = 5 * N * d        # max, subtract, exp, sum, divide: ~one op each per element
+# unfused: four kernels, each reading and writing the N*d matrix from HBM
+unfused = (2 + 3 + 2 + 3) * N * d * B          # reads+writes per kernel, summed
+# fused: read the input once, write the output once
+fused = 2 * N * d * B
+for name, traffic in [("unfused", unfused), ("fused", fused)]:
+    print(f"{name:8s}: {traffic/1e6:6.1f} MB moved, "
+          f"intensity {flops/traffic:5.2f} FLOP/byte, "
+          f"bandwidth-bound time on H100: {traffic/3.35e12*1e6:5.0f} us")
+print("same FLOPs; the fused kernel is faster exactly by the traffic it skipped")
+```
+::::
+
+## The canonical lesson: FlashAttention
+
+If fusion is the everyday move, @gls-flashattention is the layer's masterpiece, and it earns a section because it changed what the field believes a kernel can be. Attention's textbook form materializes an $N \times N$ score matrix, and for long sequences that matrix neither fits in fast on-chip memory nor deserves the HBM round trips it forces. FlashAttention computes exact attention, no approximation, by tiling: stream blocks of keys and values through the small on-chip SRAM, maintain a running maximum and normalizer so the softmax can be computed incrementally in one pass, a trick published years earlier as online softmax [@milakov2018online], and never write the score matrix anywhere [@dao2022flashattention]. Memory drops from quadratic to linear in sequence length, and the paper proves the byte count is asymptotically optimal for exact attention across the whole range of SRAM sizes. The control that makes the lesson stick: an earlier memory-efficient attention achieved the same memory bound without arranging the computation around the memory hierarchy, and its own tables show it running slower than the baseline [@rabe2021self]. Saving memory was never the point; choreographing bytes was.
+
+The sequels sharpen the lesson into an uncomfortable one for portability. FlashAttention-2 got from 25-40% of peak to as much as 73% not with a new idea but by repartitioning the same computation across the GPU's workers [@dao2023flashattention2]; FlashAttention-3 reached 85% of Hopper's BF16 peak only by embracing that chip's newest hardware, dedicated asynchronous copy engines and warp-group matrix instructions, so the fastest attention is now written against one architecture's private vocabulary [@shah2024flashattention3]. Peak performance, it turns out, is not portable. That fact shapes everything in the next two sections.
+
+## The lowering pipeline
+
+Between the framework's captured graph and the bytes-conscious kernel sits a compiler stack, and by 2026 its shape is settled enough to draw. PyTorch's `torch.compile` captures graphs from Python bytecode, as the previous chapter described, and hands them to TorchInductor, which fuses what it can and emits Triton for the GPU; measured across 180 real models, the pipeline buys a 2.27x inference and 1.41x training geomean speedup over eager execution, essentially by automating this chapter's cost model [@ansel2024pytorch2]. JAX's lane was born compiled: traced programs lower to a portable operator dialect and then into XLA, the compiler that has fed TPUs since 2017 and, spun out as OpenXLA in 2023, now fronts more than one vendor's silicon. The two lanes converge at the bottom: NVIDIA's compilers take over at PTX, a virtual instruction set that the driver translates to the physical one, which is the hinge on which several moat arguments below will turn.
+
+```{dot}
+//| label: fig-compilers-kernels-lowering
+//| fig-cap: "The lowering pipeline, two lanes converging on one vendor's floor. Guards and graph breaks live at the top, where Python semantics must survive; hardware specificity accumulates toward the bottom, where performance does."
+digraph lowering {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.6; ranksep=0.35;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  py   [label="model code (Python)"];
+  dyn  [label="TorchDynamo\nbytecode capture, guards"];
+  fx   [label="FX graph"];
+  ind  [label="TorchInductor\nfusion, scheduling"];
+  tri  [label="Triton\ntile-level kernels"];
+  jaxpr [label="jaxpr (traced)"];
+  hlo  [label="StableHLO"];
+  xla  [label="XLA\nfusion, layout, collectives"];
+  ptx  [label="PTX (virtual ISA)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  sass [label="SASS (silicon ISA)\ndriver-translated"];
+
+  py -> dyn -> fx -> ind -> tri -> ptx;
+  py -> jaxpr -> hlo -> xla -> ptx;
+  ptx -> sass;
+}
+```
+
+The stack's intellectual lineage matters because it explains the division of labor. Halide, an image-processing language, contributed the founding separation: describe *what* to compute apart from *how* to schedule it onto the machine, so schedules can be searched rather than hand-derived [@ragankelley2013halide]. TVM carried that separation to deep learning and made the search automatic, a learned cost model exploring schedules no human would enumerate [@chen2018tvm]. MLIR industrialized the plumbing, a compiler framework of composable dialects that XLA, Triton's internals, and most newer entrants now share [@lattner2021mlir]. And Triton set the abstraction level the ecosystem converged on: the programmer writes one program per tile, a small matrix block, while the compiler handles memory coalescing, shared-memory staging, and scheduling within the processor, hard parts that CUDA makes the programmer own [@tillet2019triton]. Triton is how TorchInductor emits kernels, and its backends now target NVIDIA, AMD, and Intel silicon, which is why it carries the ecosystem's portability hopes. It also carries the counter-evidence: to chase Hopper and Blackwell peaks, Triton grew warp specialization and then Gluon, a lower dialect exposing exactly the architecture-specific controls the abstraction was meant to hide. The pattern from FlashAttention-3 recurs at the compiler level: portability of authorship is achievable; portability of peak performance keeps slipping.
+
+## The moat
+
+CUDA, launched in 2007, is named as if it were a language, but what the name covers is a vertical stack: the driver and runtime, the PTX contract between them, and above all the libraries, cuBLAS for linear algebra, NCCL for the collectives of @sec-accelerators-networking, and cuDNN, whose 2014 release welded the young frameworks to NVIDIA silicon at the exact moment deep learning industrialized [@chetlur2014cudnn; @nickolls2008cuda]. Two decades of that sediment now stand behind a claimed six million CUDA developers. The moat is legal as well as technical: NVIDIA's license forbids translating compiled CUDA outputs to run on other vendors' hardware, and the one serious attempt at a binary compatibility layer, ZLUDA, has cycled through corporate funding, legal takedown, anonymous revival, and, as of mid-2026, a return to hobby status. Competitors therefore attack the layer above the binary. AMD's current accelerators lead on memory, 288 GB of HBM3E and formats treated in @sec-quantization-kernels, and its ROCm stack runs upstream PyTorch and the major serving engines; yet the most careful independent benchmarking of the MI300X generation concluded that public-software training throughput trailed NVIDIA by more than 2.5x, under the title "CUDA moat still alive" [@semianalysis2024mi300x]. The one camp that verifiably escaped did so by never entering: Google's TPU line, dense systolic arithmetic fed by the XLA compiler, has trained frontier models since before the moat had its name [@jouppi2017tpu], and AWS's Trainium follows the same XLA-descended path at half-million-chip scale. Both escapes, tellingly, grew Triton-like kernel languages of their own once their users hit the ceiling of what a compiler alone delivers.
+
+::: {.callout-tip}
+## Constraint arrow
+This layer reaches all the way up into Part I's architecture choices. Hooker's "hardware lottery" names the mechanism: a research idea wins not only on merit but on how well it maps to the software and silicon that exist, so decades of ideas off the matmul path were never really auditioned [@hooker2021hardware]. The kernel and compiler layer is where the lottery is drawn. An architecture whose inner loop lacks a fused, tuned kernel measures as slow regardless of its mathematics, which is part of why @sec-moe-ssm-hybrids's state-space models needed custom kernels before their scan operation could compete with attention at all, and why monolithic optimized kernels make radically different architectures expensive even to evaluate [@barham2019rut]. What the compiler stack can lower efficiently quietly decides what the field gets to try.
+:::
+
+## Kernels written by models
+
+The newest force at this layer is the subject of this book pointed at its own foundations. The benchmark that frames the question, KernelBench, asks models to write correct, faster-than-PyTorch GPU kernels, and frontier models solved fewer than a fifth of its tasks one-shot in early 2025 [@ouyang2025kernelbench]. The gap between one-shot and iterating-against-a-checker, however, is this book's recurring lesson, and it holds here: with compilation and timing as the reward signal, reinforcement-trained and search-driven systems now reliably produce correct kernels and beat PyTorch's eager operators on memory-bound workloads, occasionally by multiples [@baronio2025kevin]. The cautionary tale arrived on schedule: a widely publicized "AI CUDA engineer" claiming hundred-fold speedups was found within days to have exploited its own evaluation harness, reusing a cached correct result rather than computing one, a textbook case of the reward hacking that @sec-verifiers-process-supervision anatomizes [@sakana2025cuda]. The sober mid-2026 reading is that generated kernels are becoming the cheap way to cover the long tail of fusible operations, while nobody has shown a model matching FlashAttention-3-class engineering at the compute-bound frontier, and the integrity of the timing harness is now a first-order concern. Production serving reflects the same division of labor: vLLM compiles the fusible glue between operations by default and replays it under CUDA graphs, while attention and the quantized matmuls remain hand-written kernels the compiler treats as opaque [@ansel2024pytorch2]. The compiler owns the floor; the peaks are still artisanal.
+
+::: {.callout-important}
+## What's contested
+Whether the moat is eroding depends on which claim is being made. That one Triton source file can now target four vendors' hardware is settled, and Meta serves production models through that path on its own accelerators. That the portable path matches the native one is false as of mid-2026: the cleanest measurement, an all-Triton Llama serving stack from the PyTorch team itself, reached 76-78% of the CUDA-kernel path's performance on H100. One camp reads the trajectory, compiler-first stacks, multi-vendor Triton, models generating kernels, as compounding depreciation of NVIDIA's software advantage; the other observes that each new hardware generation adds private machinery, asynchronous engines, new numeric formats, protected interconnect, faster than abstractions absorb it, so the moat refills from the bottom at least as fast as it drains from the top. Both camps cite FlashAttention-3 as their exhibit.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::

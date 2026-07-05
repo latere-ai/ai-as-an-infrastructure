@@ -1,0 +1,148 @@
+# The Software Substrate: Frameworks and Autodiff {#sec-frameworks-autodiff}
+
+Between the model's mathematics and the accelerators of @sec-accelerators-networking sits a layer this book has so far taken for granted. Every training recipe in Part I assumed that one line of code, `loss.backward()`, produces the gradient of a scalar loss with respect to billions of parameters, and produces it cheaply. That assumption rests on a theorem, an implementation technique, and two decades of framework design fighting over how to expose them. This chapter works through all three: why the gradient of a program costs only a small constant times the program itself, how frameworks record and replay the computation to collect it, how the field's decade-long argument between graph compilers and eager execution resolved, and what a framework has become now that sharding a model across a cluster is part of the programming interface. By the end, a reader can say what actually happens between typing a loss function and the hardware floor doing arithmetic, and why that path looks the way it does.
+
+## The one-liner the stack rests on
+
+Training, as Part I established, is gradient descent: compute the loss, compute its gradient with respect to every parameter, step downhill, repeat. The loss is easy; it is one forward run of the model. The gradient is the part that needs an idea, because a naive reading of "differentiate the model" suggests two approaches, and both fail at scale.
+
+The first is numerical differencing: nudge one parameter by a small $h$, rerun the model, and divide the change in loss by $h$. That costs one forward run per parameter, which for a billion parameters is a billion forward runs per step, and the answer is corrupted from both sides, by truncation error when $h$ is too large and by floating-point round-off when $h$ is too small [@baydin2018survey]. The second is symbolic differentiation, the computer-algebra move: manipulate the loss as a mathematical expression and emit a formula for its derivative. But the derivative formula of a composed expression can grow exponentially larger than the expression itself, a failure mode known as expression swell, and a formula cannot follow the branches and loops of an actual program [@baydin2018survey].
+
+@gls-autodiff takes a third route. Instead of differentiating a formula, it differentiates the execution: run the program, and at each elementary operation, a multiply, an add, a `sin`, apply the derivative rule for that one operation to the numerical values flowing through. The chain rule then composes those local derivatives into the exact gradient of whatever the program actually did, branches and loops included, correct to machine precision. There is no step size to tune and no expression to swell. What remains is the question of cost, and its answer is the founding theorem of this layer.
+
+## Reverse mode: one sweep for every weight
+
+Write the program's execution as a list of elementary steps, each producing an intermediate value $v_i$ from earlier ones. This linearized trace has a name older than the field: a Wengert list, after the two-page 1964 paper that introduced it [@wengert1964]. Differentiation then has a direction. Forward mode pushes a derivative alongside the values, answering "if this one input wiggles, how does everything downstream move?"; one pass yields the sensitivity to one input, so the gradient of a scalar loss with respect to $n$ parameters costs $n$ passes. Reverse mode runs the trace once forward, storing the intermediates, then sweeps backward from the output, asking of each intermediate "how much does the final loss care about you?" and accumulating the answer, conventionally written $\bar v_i = \partial L / \partial v_i$, called the adjoint of $v_i$. One forward pass plus one backward sweep yields the sensitivity of the single output to every input at once [@baydin2018survey].
+
+For training, the choice is not close. The loss is one scalar; the parameters number in the billions. Reverse mode gets the entire gradient for one forward and one backward sweep, and the cheap gradient principle makes the bound precise: counting multiplications, the gradient costs at most 3 times the function evaluation, a result of Baur and Strassen [@baur1983]; counting all operations, the conservative bound is 5, regardless of how many inputs the function has [@griewank2008; @griewank2012]. Backpropagation, rediscovered for layered networks and made famous in 1986 [@rumelhart1986], is exactly this reverse mode specialized to neural networks; the general form had been published for numerical programs a decade earlier [@linnainmaa1976; @speelpenning1980]. It is worth pausing on how strange the result is. Sensitivity to one input and sensitivity to a billion inputs cost the same small multiple of the forward run. Nothing comparable holds for full Jacobians, the matrix of every output's sensitivity to every input; the theorem is a property of the many-to-one shape of a loss function, and the whole economics of deep learning leans on it.
+
+```{dot}
+//| label: fig-frameworks-autodiff-tape
+//| fig-cap: "The Wengert list of z = x·y + sin(x), forward values on the way up, adjoints on the way back down. One reverse sweep charges the loss's sensitivity back through each recorded operation, and x, used twice, accumulates contributions from both consumers."
+digraph tape {
+  bgcolor="transparent";
+  rankdir=BT;
+  nodesep=0.5; ranksep=0.4;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  x  [label="x = 2.0\nx̄ = ȳ·(∂v₁/∂x) + z̄·(∂v₂/∂x)\n= y + cos(x)"];
+  y  [label="y = 3.0\nȳ = x"];
+  v1 [label="v₁ = x·y"];
+  v2 [label="v₂ = sin(x)"];
+  z  [label="z = v₁ + v₂\nz̄ = 1", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+
+  x -> v1; y -> v1; x -> v2;
+  v1 -> z; v2 -> z;
+}
+```
+
+The runnable below is a complete reverse-mode engine in about fifteen lines, and it is not a toy in principle: PyTorch's autograd is this exact design with an industrial op set. Each arithmetic operation records its parents and the local derivative of its output with respect to each parent; that record is the Wengert list, built by ordinary operator overloading as the forward pass runs. Calling `backward()` on the output walks the records in reverse, multiplying and accumulating adjoints. Note that `x` feeds two operations, so its gradient arrives in two pieces and must be summed, which is why the field's tapes accumulate into `.grad` rather than assign, and why PyTorch programs call `zero_grad()` every step.
+
+:::: {.runnable}
+```python
+import math
+
+class Var:
+    def __init__(self, val, parents=()):
+        self.val, self.parents, self.grad = val, parents, 0.0
+    def __add__(self, o): return Var(self.val + o.val, [(self, 1.0), (o, 1.0)])
+    def __mul__(self, o): return Var(self.val * o.val, [(self, o.val), (o, self.val)])
+    def backward(self, seed=1.0):           # walk the tape in reverse
+        self.grad += seed                   # += : a value used twice gets two contributions
+        for parent, local in self.parents:
+            parent.backward(seed * local)
+
+def sin(v): return Var(math.sin(v.val), [(v, math.cos(v.val))])
+
+x, y = Var(2.0), Var(3.0)
+z = x * y + sin(x)          # the forward pass records the tape as a side effect
+z.backward()                # one sweep, every input's gradient
+print(x.grad, "== y + cos(x) =", 3.0 + math.cos(2.0))
+print(y.grad, "== x")
+```
+::::
+
+One caveat separates the sketch from a real engine: this version recurses along every path, so a value reachable by many routes is visited many times. Production tapes topologically sort the graph and visit each node once, but the arithmetic they perform is the same.
+
+## The price is a tape in memory
+
+The theorem bounds time, and it quietly sends the bill to memory. The backward sweep needs the intermediate values of the forward pass, the activations, so the tape's memory grows with the length of the computation. For a deep network, that is every layer's activations for the whole batch held live until the backward pass consumes them, and it is the reason training a model takes several times the memory of running it.
+
+The remedy is as old as the field and still in production. Griewank showed in 1992 that placing checkpoints along the trace and recomputing the segments between them during the backward sweep trades a logarithmic factor of extra compute for logarithmic memory [@griewank1992]. The deep-learning rediscovery, sublinear-memory training, made the trade concrete for layer-structured networks: keep activations only at $O(\sqrt{n})$ of the layers, recompute the rest on demand, and a thousand-layer network's training memory drops from 48 GB to 7 GB for roughly 30% more time [@chen2016sublinear]. Frameworks ship this as activation recomputation, and the reader has already seen its fingerprint from the hardware side.
+
+::: {.callout-tip}
+## Constraint arrow
+The gap between HFU and MFU in @sec-accelerators-networking is this chapter's theorem casting a shadow upward. Reverse mode's tape makes training memory proportional to computation length; recomputation buys that memory back by redoing forward work; and the redone work is the arithmetic that HFU counts and MFU refuses to. A profile in which HFU sits above MFU is the autodiff memory bill, paid in FLOPs, visible on a hardware dashboard two layers up.
+:::
+
+## From graphs to tape: the framework wars
+
+A framework is the industrialization of the machinery above, and the field needed a decade to agree on its shape. The argument was about one design decision: when does the framework see the program?
+
+The first camp answered "before it runs." Theano, from Bengio's lab in 2010, had the user build a symbolic expression graph, which the framework then optimized, differentiated as a graph transformation, and compiled to C++ or CUDA [@bergstra2010theano]. TensorFlow scaled the same define-and-run design to Google's fleet in 2015, with a session executing a static dataflow graph that could be partitioned across hundreds of machines [@abadi2016tensorflow]; its predecessor DistBelief had already trained billion-parameter networks on tens of thousands of CPU cores, but as a system configured rather than programmed [@dean2012]. The whole-graph view bought real things: the framework could fuse operations, plan memory, serialize the model, and place subgraphs on devices. What it cost was the programmer. A graph program is a program that builds a program, so a shape error surfaces far from the line that caused it, a debugger cannot step through what has not run yet, and a loop must be written as a graph operator rather than a `for` statement.
+
+The second camp answered "while it runs." Chainer named the alternative define-by-run in 2015: execute ordinary host-language code eagerly, record the operations as they happen, and differentiate the recorded tape, so the network's structure is just the trace of whatever Python did, branches, recursion, and all [@tokui2015chainer]. Torch7 had cultivated the same imperative culture in Lua for years [@collobert2011torch7], and the HIPS `autograd` project showed the tape could shadow plain NumPy [@maclaurin2015autograd]. PyTorch fused these lineages in January 2017, an eager tape with Torch's C libraries underneath, engineered so that Python stays off the hot path while usability stays in it [@paszke2019pytorch].
+
+Research voted with its feet, and the margin was measurable: by 2019, PyTorch accounted for 69% of framework-identified CVPR papers and strong majorities at the major NLP venues, with TensorFlow's research share flat or shrinking [@he2019state]; OpenAI standardized on PyTorch in January 2020 [@openai2020pytorch]. The graph camp conceded the interface in the same season: TensorFlow 2.0 made eager execution the default in 2019. The tape had won the argument over how a model is written. Whether it also won the argument over how a model is *run* is the next chapter's question, because the graph's optimizations were never the part that was wrong.
+
+```{dot}
+//| label: fig-frameworks-autodiff-familytree
+//| fig-cap: "The framework family tree. The define-and-run lane (left) and define-by-run lane (right) exchanged moves for a decade and converged on the same design point: eager semantics with graph capture underneath."
+digraph familytree {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.45; ranksep=0.4;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  theano  [label="Theano (2010)\nsymbolic graphs, ended 2017"];
+  db      [label="DistBelief (2012)"];
+  tf      [label="TensorFlow 1 (2015)\ndefine-and-run at fleet scale"];
+  tf2     [label="TensorFlow 2 (2019)\neager by default"];
+  torch7  [label="Torch7 (2011)\nimperative, Lua"];
+  chainer [label="Chainer (2015)\ndefine-by-run, ended 2019"];
+  hips    [label="HIPS autograd (2015)\ntape over NumPy"];
+  pytorch [label="PyTorch (2017)\neager + tape", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  pt2     [label="PyTorch 2 (2023)\ntorch.compile: graph capture"];
+  jax     [label="JAX (2018)\npure functions traced to XLA", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+
+  theano -> tf [label="idea"];
+  db -> tf [label="rebuilt as"];
+  tf -> tf2;
+  torch7 -> pytorch [label="C libraries"];
+  chainer -> pytorch [label="define-by-run"];
+  hips -> pytorch [label="tape design"];
+  hips -> jax [label="same authors"];
+  theano -> jax [label="trace-and-compile", style=dashed];
+  pytorch -> pt2;
+}
+```
+
+JAX, open-sourced by Google in December 2018, is the synthesis rather than a third camp. Its programs look eager, plain NumPy on arrays, but its transformations, `grad`, `jit`, `vmap`, work by tracing a pure function into a graph and handing it to the XLA compiler [@frostig2018jax]. The price of the synthesis is purity: side effects vanish under tracing, and data-dependent Python control flow must be written with structured combinators, the same concession TF1 asked for, now scoped to the compiled region. The descendants of HIPS `autograd` thus split the design space in two: PyTorch kept the host language and retrofits the compiler, JAX kept the compiler and disciplines the host language.
+
+## The convergence, and what it left unresolved
+
+Read as a single history, the war ended in a trade. Eager semantics won the programming model because researchers debug programs, not graphs; graph execution won the runtime because @sec-accelerators-networking's hardware floor rewards fused, planned, ahead-of-time-scheduled work. Every surviving stack is now some negotiation between the two. TensorFlow 2 runs eagerly and stages graphs through `tf.function`. JAX runs traced-pure functions under `jit`. PyTorch tried a static-language subset first, TorchScript, which its own retrospective describes as working on roughly half of real-world models because it demanded the whole program obey it; `torch.compile`, stable since March 2023, inverted the bet by capturing what it can and falling back to Python where it cannot, keeping eager semantics by construction [@ansel2024pytorch2]. How that capture works, and what the compiler under it does with the captured graph, is the subject of @sec-compilers-kernels.
+
+What the convergence did not settle is everything this bought and cost. An eager step pays Python dispatch per operation, tolerable when each operation is a large matrix multiply, ruinous when kernels are microseconds long; a captured graph amortizes dispatch but must detect when its assumptions break and recompile, so the trade returns as compile latency and cache misses. The chapter's earlier theorem is indifferent to the choice; the constant factors are not, and production systems live in the constant factors.
+
+## What a framework is now
+
+Strip the branding and a 2026 framework is five commitments layered on the autodiff core, and the last of them is new.
+
+The first is a tensor library with a stable operator surface, hundreds of mathematical operations with agreed shapes and dtypes. The second is the autodiff engine, the industrial Wengert list. The third is a dispatcher that routes each operation, by device, precision, and mode, to a concrete kernel, the mechanism that lets one program run on an NVIDIA GPU, a TPU, or a laptop by swapping the bottom of the stack. The fourth is a device runtime, and it is easy to underestimate: streams to keep the accelerator asynchronous from Python, and a caching memory allocator that exists because the vendor's own free routine can synchronize the entire device, so the framework must recycle GPU memory itself rather than return it [@paszke2019pytorch]. Every framework that reached production grew an allocator; its behavior under fragmentation is a recurring operational incident in @sec-serving-problem's world.
+
+The fifth commitment is the cluster. Distribution used to live outside the framework, in wrapper libraries and launcher scripts; it has moved inside the programming model as sharding, annotations declaring how a tensor is split across a device mesh, with the system inserting the communication. GSPMD demonstrated the design inside XLA, a few annotations propagated through the whole graph by the compiler [@xu2021gspmd], and it now surfaces as JAX's named shardings and `shard_map`, and as PyTorch's `DTensor` over a `DeviceMesh`, with FSDP as the packaged sharded-training recipe on top [@zhao2023pytorch]. The parallelism mathematics is @sec-training-at-scale's; what belongs to this chapter is the interface fact that the framework, not a script around it, is now where a run's layout is written down, which is precisely why the bandwidth tiers of @sec-accelerators-networking reach the programmer as a type signature rather than a deployment detail.
+
+Institutionally, the layer has stabilized the way infrastructure does: PyTorch moved from Meta into a Linux Foundation entity in 2022, which by 2025 also hosted vLLM and DeepSpeed, while JAX remains Google-led open source with its compiler substrate governed separately under OpenXLA. As of mid-2026 the stable lines are PyTorch 2.12 and JAX 0.10, with PyTorch's sharded-tensor machinery documented but still formally alpha, a fair snapshot of how young commitment number five remains.
+
+::: {.callout-important}
+## What's contested
+Two arguments run through this layer in 2026. The first is functional versus imperative at frontier scale. Google trains Gemini on JAX and Pathways, with a single Python process orchestrating the entire run [@gemini2023]; xAI's released Grok code is JAX; Anthropic has never published its training stack, though Google names it as a JAX user and its TPU and Trainium fleets point the same way. Meta and OpenAI train on PyTorch. Advocates of the functional side cite reproducibility, bitwise-deterministic restarts, and compiler leverage; the imperative side answers that ecosystem gravity, hiring, and the infrastructure seams decide real projects, and documented migrations off JAX over cluster-networking integration exist [@lechner2025jax]. The second argument is whether the framework layer is dissolving: with PyTorch lowering to a compiler and JAX born as one's front end, one camp reads frameworks as thinning veneers over a shared compiler-and-kernel substrate, while the other observes that the veneer, the API, its packaging, and its community, is exactly where every previous winner was decided. The next chapter's subject, the compiler underneath, is where both arguments now point.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::
