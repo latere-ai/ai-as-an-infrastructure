@@ -1,0 +1,117 @@
+# The Model as an Artifact: Formats, Distribution, and the Supply Chain {#sec-model-artifacts}
+
+The previous chapter treated a model as a capability delivered on one of two axes, weights or an API. This one treats it as a file: a multi-gigabyte object that has to be serialized, uploaded, versioned, downloaded, verified, and loaded into a process before any of that capability exists. That object is a link in a software supply chain, and the chain has the same failure modes every software supply chain has, plus one that is unique to learned artifacts. A checkpoint can carry code that runs when you load it. A registry can be a single point of policy for the whole open ecosystem. And a model whose every byte is clean and whose signature checks can still be backdoored in a way no scanner will ever catch, because the malice lives in the weights, not the file. This chapter works through the formats, the distribution layer, the attacks, and the provenance tooling that answers some of them, so a reader can say what "download the model" actually trusts, and where trusting the bytes stops being enough.
+
+## A checkpoint that runs code
+
+Start with the format, because the default one is dangerous in a way most engineers find surprising. PyTorch's `torch.save` serializes with Python's `pickle`, and pickle is not a data format; it is a small program format. The Python documentation says so at the top of the page: the module "is not secure," and "it is possible to construct malicious pickle data which will execute arbitrary code during unpickling" [@python2024pickle]. The mechanism is a serialization hook: an object can define what its own reconstruction does, returning a callable and its arguments that the *unpickler invokes* on load. Deserializing an untrusted checkpoint is therefore executing untrusted code, and the runnable shows the whole trick in a dozen lines with no machine learning in sight.
+
+:::: {.runnable}
+```python
+import pickle
+
+class Benign:                      # looks like an innocent object
+    def __reduce__(self):          # but this hook says how to "reconstruct" it
+        return (print, ("code ran during load: no torch needed",))
+
+blob = pickle.dumps(Benign())      # "saving a checkpoint"
+print("bytes written, nothing executed yet:", len(blob))
+pickle.loads(blob)                 # "loading the checkpoint" -> print() fires
+# swap print for os.system or a socket, and loading a model opens a reverse shell
+```
+::::
+
+This is not theoretical. A 2024 scan of the largest model hub found roughly a hundred models carrying genuine malicious payloads, including one whose reconstruction hook opened a reverse shell to an attacker's server on load [@jfrog2024malicious], and the scanners meant to catch these are defeatable: a 2025 finding evaded the hub's pickle scanner by compressing the payload in a format the scanner did not parse and placing it before a deliberately broken instruction, so the shell ran before deserialization even failed [@reversinglabs2025nullifai]. Scanning a program format for malice is a cat-and-mouse game, not a guarantee.
+
+The answer was to change the format so that loading cannot execute anything. Safetensors is a deliberately boring binary layout: a JSON header of tensor names, types, shapes, and byte offsets, followed by the raw tensor bytes, with no code path and no reconstruction hook, so a load is a bounds-checked parse and a memory-map, nothing more. The security claim is structural rather than reliant on a scanner, and it was checked: an external audit commissioned in 2023 found no arbitrary-code-execution path [@huggingface2023safetensors]. The ecosystem converted over the following year, the major library making safetensors the default save format and a bot opening pull requests to add safetensors weights to legacy pickle repositories. The local-inference world settled on its own single-file format, GGUF, which packs tensors, tokenizer, and metadata into one memory-mappable, quantization-aware file [@ggml2023gguf]. The lesson worth carrying up the stack is that format safety is a property of the format, not of the scanner watching it: safetensors closed the load-time code-execution vector by construction, which is the only kind of closing that holds.
+
+```{dot}
+//| label: fig-model-artifacts-loadpaths
+//| fig-cap: "Two load paths. The pickle path reconstructs objects by invoking callables the file names, so loading is code execution and safety depends on a scanner. The safetensors path parses a bounds-checked header and maps raw bytes, so there is no code path to exploit."
+digraph loadpaths {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.4; ranksep=0.4;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  subgraph cluster_pickle {
+    label="pickle (torch.save default)";
+    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    pf [label="file"];
+    pu [label="unpickler"];
+    pr [label="__reduce__ invokes\ncallable(args)", color="#b45454", fontcolor="#b45454", penwidth=1.4];
+    po [label="object"];
+    pf -> pu -> pr -> po;
+  }
+  subgraph cluster_st {
+    label="safetensors";
+    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    sf [label="file"];
+    sh [label="parse + bounds-check\nJSON header"];
+    sm [label="mmap raw tensor bytes\n(no code path)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+    st [label="tensors"];
+    sf -> sh -> sm -> st;
+  }
+}
+```
+
+## The hub is the registry
+
+Once a checkpoint is a safe file, it needs somewhere to live, and in practice that somewhere is one place. The dominant model hub hosts on the order of two million public models as of early 2026, roughly doubling year over year, and the concentration inside that number is the striking part: a vanishing fraction of models account for about half of all downloads, while half of all models are downloaded fewer than two hundred times [@huggingface2026stateofopen]. It functions as the field's de facto package registry, and it inherited a documentation convention older than itself: the model card, proposed in 2019 as a short standard document reporting a model's intended use, evaluation across conditions, and limitations, operationalized on the hub as a metadata-headed README [@mitchell2019modelcards]. The registry's integrity primitive is the same as any git host's: a download can pin a revision, and pinning a full commit hash rather than a branch or tag is what makes the artifact immutable, because a tag can be moved and a hash cannot.
+
+That centralization is the chapter's first systemic question. One registry is one point of policy, outage, and takedown for a large share of the open ecosystem, and the download concentration means a small number of repositories are load-bearing for the whole field. The counterweight is that the registry is, underneath, git plus HTTP plus a mirrorable protocol: the client libraries honor an endpoint override, alternative hubs exist (Alibaba's ModelScope launched in 2022 as a regional counterpart), and community mirrors serve the same content where the primary host is slow or blocked. The disagreement is whether an open, mirrorable protocol offsets a centralized default; pinning by hash at least makes any mirror verifiable, which is the technical fact that keeps the concentration from being fully load-bearing.
+
+## When the bytes are clean and the model is not
+
+Here the supply chain of a learned artifact departs from every other software supply chain, and it is the reason format safety and signing are necessary but not sufficient. A model can be a valid safetensors file, correctly signed, hash-pinned, and still be backdoored, because the malicious behavior is trained into the weights and nothing in the bytes reveals it. The clearest demonstration trained a model to write exploitable code when the prompt indicated one year and safe code otherwise, then showed the backdoor *survived* the full safety pipeline: supervised fine-tuning, reinforcement learning, and adversarial training did not remove it, and adversarial training sometimes taught the model to hide the trigger better [@hubinger2024sleeper]. The threat does not even require controlling the model producer, because the training data is an attack surface too. Poisoning web-scale corpora is cheap: a study showed that for about sixty dollars an attacker could have controlled a small fraction of a major image-text dataset by buying expired domains the crawler still trusted [@carlini2023poisoning], and a 2025 result sharpened the alarm by showing the number of poisoned documents needed to install a backdoor is roughly constant, around two hundred and fifty, independent of model and dataset size, which means poisoning gets *relatively easier* as models scale [@souly2025poisoning]. Attacks also ride the distribution layer directly: a 2023 demonstration edited specific facts into a model's weights and uploaded it under a name one letter off from a well-known lab, combining a weight edit with namespace typosquatting so the artifact looked authentic and behaved normally except on the poisoned facts [@mithril2023poisongpt].
+
+```{dot}
+//| label: fig-model-artifacts-attacksurface
+//| fig-cap: "The attack surface along the artifact's lifecycle, with defenses on the second track. Format safety, hashes, and signatures are byte-and-provenance guarantees at the file and registry stages; they do nothing for the poisoning and backdoor attacks at the data and training stages, where only behavioral evaluation applies."
+digraph attacksurface {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.35; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=8, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  data [label="web data"];
+  train [label="training"];
+  ckpt [label="checkpoint\n(file)"];
+  repo [label="hub repo"];
+  load [label="load"];
+  data -> train -> ckpt -> repo -> load;
+
+  a1 [label="poisoning\n(~250 docs, $60)", shape=note, fontcolor="#b45454", color="#b45454"];
+  a2 [label="trained backdoor\n(survives safety training)", shape=note, fontcolor="#b45454", color="#b45454"];
+  a3 [label="typosquat repo", shape=note, fontcolor="#b45454", color="#b45454"];
+  a4 [label="pickle payload", shape=note, fontcolor="#b45454", color="#b45454"];
+  a1 -> data [dir=none, style=dashed]; a2 -> train [dir=none, style=dashed];
+  a3 -> repo [dir=none, style=dashed]; a4 -> load [dir=none, style=dashed];
+
+  d1 [label="behavioral evals\n(the only scanner for weights)", shape=note, fontcolor="#3b82f6", color="#3b82f6"];
+  d2 [label="safetensors + hash + signature", shape=note, fontcolor="#3b82f6", color="#3b82f6"];
+  d1 -> train [dir=none, style=dotted]; d2 -> repo [dir=none, style=dotted];
+}
+```
+
+## Provenance answers a different question
+
+The tooling that grew up to secure the artifact answers "did this come, unmodified, from who I think, built how they say," and it is worth being precise that this is provenance, not safety. Model signing, standardized by an open-source security group in 2025, signs a model of any format and size and verifies it against a signer identity, with a transparency log so a signature cannot be quietly forged [@openssf2025modelsigning]. A machine-readable bill of materials, the ML extension of an existing software-BOM standard, lets a model ship an inventory of its components, datasets, and lineage [@owasp2024mlbom]. And build-provenance attestations can record who trained a model, with what code and parameters, which is exactly where this layer meets the attested hardware of @sec-confidential-inference: a trusted execution environment can attest that a specific training run happened in a measured enclave, and a signed provenance record can reference that attestation. What none of this does is tell you the model is safe. A signature proves origin; the origin is only as trustworthy as the pipeline behind it; and a signed, hash-pinned, safetensors model trained on a poisoned corpus is a perfectly authentic backdoor.
+
+::: {.callout-tip}
+## Constraint arrow
+
+The format the artifact ships in reaches up and rewrites what the layers above are allowed to assume. When pickle was the default, every model load was an execution of untrusted code, so a serving platform or an agent runtime could not treat a downloaded checkpoint as data, and the safe move was heavy sandboxing of the load itself. Safetensors removed the load-time code path, which lets @sec-serving-problem's serving stack and the agent harness of @sec-computer-use treat weight loading as the inert parse it should always have been, and moves the residual trust from the file to the training pipeline behind it. A serialization choice made for speed and safety at the bottom silently sets whether the layers above must defend against their own model files.
+:::
+
+::: {.callout-important}
+## What's contested
+Two questions stay open. Whether hub centralization is a systemic risk turns on whether an open, mirrorable protocol offsets a centralized default: one camp reads a single registry, through which a small fraction of repositories serve half of all downloads, as one policy decision or outage away from an ecosystem-wide incident; the other answers that content pinned by hash is verifiable from any mirror, and the endpoint is an environment variable away from being swapped, so the lock-in is softer than it looks. And whether scanning weights can ever be meaningful turns on the gap between bytes and behavior: since a byte-clean, signed model can be backdoored in ways no static analysis reveals, one position holds that the only real scanner is behavioral evaluation, itself incomplete because a secret trigger need never fire during testing, while the other holds that format safety and signing still raise the attacker's cost and answer the provenance question even if they leave the safety question open. The synthesis most of the field has reached is that signatures scan origin, evaluations scan behavior, and neither substitutes for the other, which is why a serious deployment does both and still cannot promise the weights are clean.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::
