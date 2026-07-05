@@ -16,7 +16,9 @@ economics. Released under [latere.ai](https://latere.ai), to be served at
 
 The spine is the lifecycle of a capability, read as a stack.
 
-- **Part 0, Orientation.** The whole stack in one pass, and how to read.
+- **Part 0, Orientation.** The whole stack in one pass, how to read, and the
+  boundary with the AI infrastructure that came before (ranking, recommendation,
+  classical ML).
 - **Part I, Base Model Formation.** Scaling, data, tokenization,
   architecture, training at scale, and mid-training bridges.
 - **Part II, Generative and Multimodal Architectures.** Diffusion and flow
@@ -29,17 +31,20 @@ The spine is the lifecycle of a capability, read as a stack.
   programs and solvers, verifiers, RLVR training, reasoning data and
   distillation, and production test-time compute.
 - **Part V, Inference and Serving.**
-- **Part VI, Orchestration.** Training agents to act, memory, the harness,
-  multi-agent, retrieval, context.
+- **Part VI, Orchestration.** Training agents to act, memory, personalization
+  and user memory, the harness, computer use, multi-agent, retrieval, context.
 - **Part VII, Evaluation.** Benchmarks, statistical reliability, human
   rubrics, model judges, factuality and grounding, agents, and operational
   governance.
-- **Part VIII, Safety, Interpretability, and Governance.**
+- **Part VIII, Safety, Interpretability, and Governance.** Including
+  confidential inference: attested hardware in place of contractual privacy.
 - **Part IX, Infrastructure, Compute, and Frontiers.** Accelerators,
-  networking, data infrastructure, silicon, power, geography, failure, and the
-  compute, capability, and verification frontiers.
+  networking, the software substrate (frameworks, autodiff, compilers, kernels,
+  the CUDA moat), data infrastructure, silicon, power, geography, failure, and
+  the compute, capability, and verification frontiers.
 - **Part X, Ecosystem and Economics.** Model openness, tooling standards,
-  compute markets, market structure, adoption and productivity, and data rights.
+  compute markets, market structure, adoption and productivity, data rights, and
+  the agent economy (identity, delegation, machine payments).
 - **Part XI, Practice and Operations.** The hands-on 2026 stack, plus
   deployment, reliability, human oversight surfaces, the production data engine,
   and operating contracts for SLOs, cost governance, incidents, and multi-tenancy.
