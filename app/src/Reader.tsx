@@ -277,10 +277,9 @@ export default function Reader({ chapter, initial }: ReaderProps) {
       }}
     >
       {/* ===== TOP BAR (fixed: the shell is fixed-height, only <main> scrolls) ===== */}
-      <header style={{
+      <header className="rdr-glass-edge" style={{
         zIndex: 50, flex: "none", height: 54, display: "flex",
         alignItems: "center", gap: 12, padding: "0 14px", borderBottom: "1px solid var(--border)",
-        background: "var(--bg-surface)",
       }}>
         <button onClick={() => (mobile ? (setTocDrawer(false), setDrawer((d) => !d)) : set({ navCollapsed: !s.navCollapsed }))}
           title={t.sidebar} aria-label={t.sidebar} style={iconBtn(mobile ? drawer : !s.navCollapsed)}>
@@ -374,7 +373,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
       {mobile && drawer && (
         <>
           <div onClick={() => setDrawer(false)} style={{ position: "fixed", inset: "54px 0 0", background: "rgba(0,0,0,.42)", zIndex: 60 }} />
-          <div style={{ position: "fixed", top: 54, bottom: 0, left: 0, width: 300, maxWidth: "84vw", zIndex: 61, background: "var(--bg-surface)", boxShadow: "var(--shadow-lg)", overflowY: "auto" }}>
+          <div className="rdr-glass" style={{ position: "fixed", top: 54, bottom: 0, left: 0, width: 300, maxWidth: "84vw", zIndex: 61, overflowY: "auto" }}>
             <SidebarTree t={t} chapter={chapter} embedded onNavigate={() => setDrawer(false)}
               onOpenSearch={() => { setDrawer(false); setSearchOpen(true); }} />
           </div>
@@ -385,8 +384,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
       {mobile && tocDrawer && (
         <>
           <div onClick={() => setTocDrawer(false)} style={{ position: "fixed", inset: "54px 0 0", background: "rgba(0,0,0,.42)", zIndex: 60 }} />
-          <div style={{ position: "fixed", top: 54, bottom: 0, right: 0, width: 300, maxWidth: "84vw", zIndex: 61, background: "var(--bg-surface)", boxShadow: "var(--shadow-lg)", overflowY: "auto", padding: "16px 18px 24px" }}>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--fg-3)", marginBottom: 12 }}>{t.onThisPage}</div>
+          <div className="rdr-glass" style={{ position: "fixed", top: 54, bottom: 0, right: 0, width: 300, maxWidth: "84vw", zIndex: 61, overflowY: "auto", padding: "16px 18px 24px" }}>
+            <div className="rdr-eyebrow" style={{ fontSize: 10, color: "var(--fg-3)", marginBottom: 12 }}>{t.onThisPage}</div>
             <nav style={{ display: "flex", flexDirection: "column", gap: 1 }}>
               {chapter.headings.map((h) => (
                 <a key={h.id} href={`#${h.id}`} onClick={() => setTocDrawer(false)} style={{
@@ -503,9 +502,9 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
       position: "fixed", inset: 0, zIndex: 80, display: "flex", justifyContent: "center", alignItems: "flex-start",
       padding: "12vh 16px 16px", background: "rgba(0,0,0,.42)", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)",
     }}>
-      <div onClick={(e) => e.stopPropagation()} onKeyDown={onKey} className="rd-rev" role="dialog" aria-modal="true" aria-label={t.search} style={{
+      <div onClick={(e) => e.stopPropagation()} onKeyDown={onKey} className="rd-rev rdr-glass" role="dialog" aria-modal="true" aria-label={t.search} style={{
         width: "100%", maxWidth: 600, maxHeight: "76vh", display: "flex", flexDirection: "column", overflow: "hidden",
-        background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-xl)", boxShadow: "var(--shadow-lg)",
+        borderRadius: "var(--radius-xl)",
       }}>
         <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--border)" }}>
           <span style={{ flex: "none", color: "var(--fg-3)" }}>
@@ -566,7 +565,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
     if (sc && el) sc.scrollTop = el.offsetTop;
   }, []);
   return (
-    <aside style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: "var(--bg-surface)", display: "flex", flexDirection: "column", paddingTop: 18, alignSelf: "stretch", minHeight: 0 }}>
+    <aside className={embedded ? undefined : "rdr-glass-edge"} style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: embedded ? "transparent" : undefined, display: "flex", flexDirection: "column", paddingTop: 18, alignSelf: "stretch", minHeight: 0 }}>
       <SearchTrigger t={t} onOpen={onOpenSearch} />
       <nav ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", paddingBottom: 60 }}>
         <SidebarExternalLinks t={t} />
@@ -587,8 +586,8 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
             minWidth: 0,
             fontFamily: "var(--font-mono)",
             fontSize: 11,
-            fontWeight: 600,
-            letterSpacing: ".06em",
+            fontWeight: 500,
+            letterSpacing: ".15em",
             textTransform: "uppercase",
             color: active ? "var(--accent)" : "var(--fg-2)",
             textDecoration: "none",
@@ -663,16 +662,14 @@ function SidebarExternalLinks({ t }: { t: Strings }) {
 
 function MiniToc({ t, chapter, activeId, onClose, width = 208, onStartDrag }: { t: Strings; chapter: ChapterData; activeId: string; onClose: () => void; width?: number; onStartDrag?: (e: React.PointerEvent) => void }) {
   return (
-    <aside style={{
+    <aside className="rdr-glass" style={{
       position: "absolute", top: 18, right: 18, width, maxHeight: "calc(100% - 36px)", overflowY: "auto", zIndex: 8,
-      background: "color-mix(in srgb, var(--bg-surface) 80%, transparent)", backdropFilter: "blur(16px) saturate(160%)",
-      WebkitBackdropFilter: "blur(16px) saturate(160%)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)",
-      boxShadow: "var(--shadow-md)", padding: "13px 15px 11px",
+      borderRadius: "var(--radius-lg)", padding: "13px 15px 11px",
     }}>
       {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize"
         style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 8, cursor: "col-resize", zIndex: 2, borderRadius: "var(--radius-lg) 0 0 var(--radius-lg)" }} />}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 11 }}>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".14em", textTransform: "uppercase", color: "var(--fg-3)" }}>{t.onThisPage}</span>
+        <span className="rdr-eyebrow" style={{ fontSize: 10, color: "var(--fg-3)" }}>{t.onThisPage}</span>
         <button onClick={onClose} aria-label="close" style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "none", background: "none", borderRadius: "var(--radius-sm)", cursor: "pointer", color: "var(--fg-3)" }}>
           <Icon d={<path d="M3 3l8 8M11 3l-8 8" strokeLinecap="round" />} size={13} />
         </button>
@@ -717,7 +714,7 @@ function PrevNextNav({ chapter, t }: { chapter: ChapterData; t: Strings }) {
 
 function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; set: (p: Partial<ReaderSettings>) => void; chapter: ChapterData }) {
   const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12 };
-  const label: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".12em", textTransform: "uppercase", color: "var(--fg-3)", flex: "none" };
+  const label: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".15em", textTransform: "uppercase", fontWeight: 500, color: "var(--fg-3)", flex: "none" };
   const seg: React.CSSProperties = { display: "flex", gap: 2, padding: 3, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)" };
   const langSeg: React.CSSProperties = { ...seg, width: 150, flex: "none" };
   const segBtn = (active: boolean): React.CSSProperties => ({
@@ -734,9 +731,9 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
     <div style={seg}>{opts.map((o) => <button key={o.v} style={segBtn(cur === o.v)} onClick={() => on(o.v)}>{o.l}</button>)}</div>
   );
   return (
-    <div role="dialog" aria-label={t.settings} style={{
+    <div className="rdr-glass" role="dialog" aria-label={t.settings} style={{
       position: "absolute", top: 42, right: 0, zIndex: 60, width: 264, padding: "14px 16px 16px",
-      background: "var(--bg-surface)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)", boxShadow: "var(--shadow-lg)",
+      borderRadius: "var(--radius-lg)",
     }}>
       <div style={{ ...row, marginTop: 0 }}><span style={label}>{t.language}</span><div style={langSeg}>{langChoice("en", "English")}{langChoice("zh", "中文")}</div></div>
       <div style={{ ...row, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
