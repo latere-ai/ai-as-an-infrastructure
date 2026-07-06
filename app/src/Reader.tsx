@@ -61,6 +61,16 @@ function LatereLogo() {
   );
 }
 
+// Cursor-following spotlight: write the pointer's position (relative to the
+// hovered item) into --mx/--my so the CSS radial-gradient hover tracks it. One
+// handler shared by every sidebar nav item; only the hovered element fires.
+function spotMove(e: React.PointerEvent<HTMLElement>) {
+  const el = e.currentTarget;
+  const r = el.getBoundingClientRect();
+  el.style.setProperty("--mx", `${e.clientX - r.left}px`);
+  el.style.setProperty("--my", `${e.clientY - r.top}px`);
+}
+
 function Icon({ d, size = 16 }: { d: React.ReactNode; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden>
@@ -598,7 +608,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
             return (
               <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
                 {part.chapters.map((ch) => (
-                  <a key={ch.href} href={ch.href} onClick={onNavigate} className="lq-nav-item" style={{ display: "block", padding: "7px 12px", borderRadius: 10, fontSize: 13.5, fontWeight: 500, color: ch.active ? "var(--accent)" : "var(--fg-2)", textDecoration: "none", background: ch.active ? "var(--accent-subtle)" : "transparent" }}>{ch.label}</a>
+                  <a key={ch.href} href={ch.href} onClick={onNavigate} className="lq-nav-item lq-spot" onPointerMove={spotMove} style={{ display: "block", padding: "7px 12px", borderRadius: 10, fontSize: 13.5, fontWeight: 500, color: ch.active ? "var(--accent)" : "var(--fg-2)", textDecoration: "none", background: ch.active ? "var(--accent-subtle)" : "transparent" }}>{ch.label}</a>
                 ))}
               </div>
             );
@@ -649,7 +659,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
                 </button>
               </div>
               {open && part.chapters.map((ch) => (
-                <a key={ch.href} href={ch.href} onClick={onNavigate} className="lq-nav-item" style={{
+                <a key={ch.href} href={ch.href} onClick={onNavigate} className="lq-nav-item lq-spot" onPointerMove={spotMove} style={{
                   display: "flex", gap: 9, padding: "6px 12px", margin: "1px 0", borderRadius: 10, textDecoration: "none",
                   background: ch.active ? "var(--accent-subtle)" : "transparent",
                 }}>
@@ -669,7 +679,7 @@ function SidebarExternalLinks({ t }: { t: Strings }) {
   return (
     <div style={{ margin: "0 0 10px", padding: "0 0 10px", borderBottom: "1px solid var(--border)" }}>
       {SIDEBAR_EXTERNAL_LINKS.map((link) => (
-        <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="lq-nav-item" style={{
+        <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="lq-nav-item lq-spot" onPointerMove={spotMove} style={{
           display: "block",
           padding: "7px 12px",
           borderRadius: 10,
