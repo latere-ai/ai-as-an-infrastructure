@@ -439,7 +439,7 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
       {me ? (
         <Composer t={t} busy={false} onSubmit={(b) => post(b)} />
       ) : (
-        <a href="/login" style={{ ...btn(true), display: "inline-block", textDecoration: "none" }}>{t.login}</a>
+        <a href="/login" className="lq-smoke-btn" style={{ display: "inline-flex", alignItems: "center", height: 38, padding: "0 18px", borderRadius: 999, border: "1px solid transparent", background: "var(--glass-smoke-strong)", color: "var(--glass-smoke-ink)", fontFamily: "var(--font-ui)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}>{t.login}</a>
       )}
 
       {orphans.length > 0 && (
