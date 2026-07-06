@@ -260,33 +260,44 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const bodyFont = s.serifBody ? "var(--font-cjk)" : "var(--font-ui)";
   const showBreadcrumbTitle = !chapter.isPartIntro && !!chapter.chapterNum && chapter.title !== chapter.crumbChapter;
 
+  // Round glass pill buttons in the floating header. The resting fill is inline
+  // (active vs idle); `.lq-iconbtn:hover` overrides it via !important in CSS.
   const iconBtn = (active: boolean): React.CSSProperties => ({
-    flex: "none", width: 34, height: 34, display: "inline-flex", alignItems: "center", justifyContent: "center",
-    border: "1px solid var(--border-strong)", background: active ? "var(--bg-raised)" : "var(--bg)",
-    borderRadius: "var(--radius-md)", color: "var(--fg-1)", cursor: "pointer",
+    flex: "none", width: 38, height: 38, display: "inline-flex", alignItems: "center", justifyContent: "center",
+    border: "1px solid var(--glass-border)", background: active ? "var(--glass-pill-fill)" : "var(--glass-ultrathin)",
+    borderRadius: 999, color: "var(--fg-1)", cursor: "pointer",
   });
+
+  // Header progress ring: an 8px-radius circle (circumference ~50.27) whose dash
+  // offset shrinks as the reader scrolls <main>.
+  const progressDash = (50.27 * (1 - progress)).toFixed(2);
+  const progressLabel = `${Math.round(progress * 100)}%`;
+  const articlePadding = mobile ? "28px 22px 48px" : "44px clamp(28px, 5vw, 60px) 56px";
 
   return (
     <div
-      className="reader"
+      className="reader lq-reader"
       data-layout="codex"
       style={{
-        height: "100%", overflow: "hidden", display: "flex", flexDirection: "column",
+        height: "100%", overflow: "hidden", position: "relative",
         background: "var(--bg)", color: "var(--fg-1)", fontFamily: "var(--font-ui)",
         fontSize: `calc(18px * ${fontScale})`,
       }}
     >
-      {/* ===== TOP BAR (fixed: the shell is fixed-height, only <main> scrolls) ===== */}
-      <header className="rdr-glass-edge" style={{
-        zIndex: 50, flex: "none", height: 54, display: "flex",
-        alignItems: "center", gap: 12, padding: "0 14px", borderBottom: "1px solid var(--border)",
+      {/* dotted-paper backdrop the glass diffuses */}
+      <div className="lq-bg" aria-hidden><div className="lq-dots" /></div>
+
+      {/* ===== FLOATING PILL HEADER (only <main> scrolls beneath it) ===== */}
+      <header className="glass-thin" style={{
+        position: "absolute", top: 12, left: 16, right: 16, height: 56, zIndex: 50,
+        borderRadius: 999, display: "flex", alignItems: "center", gap: 10, padding: "0 10px",
       }}>
         <button onClick={() => (mobile ? (setTocDrawer(false), setDrawer((d) => !d)) : set({ navCollapsed: !s.navCollapsed }))}
-          title={t.sidebar} aria-label={t.sidebar} style={iconBtn(mobile ? drawer : !s.navCollapsed)}>
-          <Icon d={<><rect x="2" y="3" width="12" height="10" rx="1.5" /><line x1="6.5" y1="3" x2="6.5" y2="13" /></>} />
+          title={t.sidebar} aria-label={t.sidebar} className="glass-ultrathin lq-iconbtn" style={iconBtn(mobile ? drawer : !s.navCollapsed)}>
+          <Icon d={<><rect x="2" y="3" width="12" height="10" rx="3" /><line x1="6.5" y1="3" x2="6.5" y2="13" /></>} />
         </button>
 
-        <a href={chapter.prefix || "./"} style={{ display: "flex", alignItems: "center", gap: 9, flex: "none", color: "var(--fg-1)", textDecoration: "none" }}>
+        <a href={chapter.prefix || "./"} style={{ display: "flex", alignItems: "center", gap: 9, flex: "none", padding: "0 6px", color: "var(--fg-1)", textDecoration: "none" }}>
           <LatereLogo />
           <span style={{ fontFamily: "var(--font-serif)", fontStyle: lang === "zh" ? "normal" : "italic", fontSize: 21, letterSpacing: "-.01em" }}>
             {lang === "zh" ? "AI 基建" : "AI Infra"}
@@ -295,8 +306,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
         {!mobile && (
           <nav aria-label="breadcrumb" style={{
-            display: "flex", alignItems: "center", gap: 9, flex: "1 1 auto", minWidth: 0, paddingLeft: 13, marginLeft: 2,
-            borderLeft: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: 11,
+            display: "flex", alignItems: "center", gap: 9, flex: "1 1 auto", minWidth: 0, paddingLeft: 14, marginLeft: 2,
+            borderLeft: "1px solid var(--border-strong)", fontFamily: "var(--font-mono)", fontSize: 11,
             letterSpacing: ".02em", color: "var(--fg-3)", whiteSpace: "nowrap", overflow: "hidden",
           }}>
             <span style={{ flex: "none", overflow: "hidden", textOverflow: "ellipsis" }}>{chapter.partShort}</span>
@@ -311,17 +322,31 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           </nav>
         )}
 
-        <div style={{ flex: mobile ? "1 1 18px" : "0 1 18px" }} />
+        <div style={{ flex: "1 1 10px" }} />
+
+        {!mobile && (
+          <div title={progressLabel} style={{
+            flex: "none", display: "inline-flex", alignItems: "center", gap: 7, height: 38, padding: "0 12px",
+            borderRadius: 999, border: "1px solid var(--glass-border)", background: "var(--glass-ultrathin)",
+          }}>
+            <svg width={16} height={16} viewBox="0 0 20 20" aria-hidden style={{ flex: "none", transform: "rotate(-90deg)" }}>
+              <circle cx="10" cy="10" r="8" fill="none" stroke="var(--border-strong)" strokeWidth={2.5} />
+              <circle cx="10" cy="10" r="8" fill="none" stroke="var(--accent)" strokeWidth={2.5} strokeLinecap="round"
+                strokeDasharray="50.27" strokeDashoffset={progressDash} style={{ transition: "stroke-dashoffset .15s linear" }} />
+            </svg>
+            <span style={{ flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".08em", color: "var(--fg-3)", minWidth: 26, textAlign: "right" }}>{progressLabel}</span>
+          </div>
+        )}
 
         {(!mobile || chapter.headings.length > 0) && (
           <button onClick={() => (mobile ? (setDrawer(false), setTocDrawer((d) => !d)) : set({ tocCollapsed: !s.tocCollapsed }))}
-            title={t.onThisPage} aria-label={t.onThisPage} style={iconBtn(mobile ? tocDrawer : !s.tocCollapsed)}>
-            <Icon d={<><rect x="2" y="3" width="12" height="10" rx="1.5" /><line x1="9.5" y1="3" x2="9.5" y2="13" /></>} />
+            title={t.onThisPage} aria-label={t.onThisPage} className="glass-ultrathin lq-iconbtn" style={iconBtn(mobile ? tocDrawer : !s.tocCollapsed)}>
+            <Icon d={<><rect x="2" y="3" width="12" height="10" rx="3" /><line x1="9.5" y1="3" x2="9.5" y2="13" /></>} />
           </button>
         )}
 
-        <div ref={settingsRef} style={{ position: "relative" }}>
-          <button onClick={() => setSettingsOpen((o) => !o)} title={t.settings} aria-label={t.settings} style={iconBtn(settingsOpen)}>
+        <div ref={settingsRef} style={{ position: "relative", flex: "none" }}>
+          <button onClick={() => setSettingsOpen((o) => !o)} title={t.settings} aria-label={t.settings} className="glass-ultrathin lq-iconbtn" style={iconBtn(settingsOpen)}>
             <Icon d={<><path d="M2 4.5h7M11 4.5h3M2 11.5h3M7 11.5h7" strokeLinecap="round" /><circle cx="10" cy="4.5" r="2" /><circle cx="5.5" cy="11.5" r="2" /></>} />
           </button>
           {settingsOpen && <SettingsPanel t={t} s={s} set={set} chapter={chapter} />}
@@ -330,13 +355,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
         <HeaderAuth lang={lang} />
       </header>
 
-      {/* reading progress */}
-      <div style={{ flex: "none", height: 2, position: "relative", zIndex: 49 }}>
-        <div style={{ height: "100%", background: "var(--accent)", width: `${(progress * 100).toFixed(2)}%`, transition: "width .12s linear" }} />
-      </div>
-
-      {/* ===== BODY (only this row scrolls; header stays put) ===== */}
-      <div style={{ flex: 1, minHeight: 0, display: "flex", position: "relative" }}>
+      {/* ===== BODY: floating glass panels over the backdrop; only <main> scrolls ===== */}
+      <div style={{ position: "absolute", inset: "80px 16px 16px", display: "flex", gap: 16, zIndex: 1 }}>
         {/* Desktop nav. Wrapped so a CSS media query can hide it on mobile before
             JS hydrates (mobile starts false in SSR, so these would otherwise flash
             open on phones until the matchMedia effect runs). */}
@@ -344,14 +364,17 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           {showSidebar && <SidebarTree t={t} chapter={chapter} width={s.navW} onOpenSearch={() => setSearchOpen(true)} />}
           {showSidebar && (
             <div onPointerDown={(e) => startDrag("nav", e)} title={t.resize} className="rdr-resize"
-              style={{ flex: "none", width: 7, marginLeft: -1, cursor: "col-resize", zIndex: 6 }} />
+              style={{ flex: "none", width: 8, margin: "0 -12px", cursor: "col-resize", zIndex: 6, borderRadius: 4 }} />
           )}
         </div>
 
-        <main ref={mainRef} style={{ flex: 1, minWidth: 0, overflowY: "auto", overscrollBehavior: "none", scrollBehavior: "smooth" }}>
-          <article style={{
-            maxWidth: "none", margin: 0,
-            padding: mobile ? "26px 18px 60px" : "40px 56px 80px",
+        {/* The mini-TOC floats absolutely over main's right edge, so reserve a
+            right gutter for it when shown; the article column then clears it
+            instead of running underneath. */}
+        <main ref={mainRef} style={{ flex: 1, minWidth: 0, overflowY: "auto", overscrollBehavior: "none", scrollBehavior: "smooth", borderRadius: 28, paddingRight: showMiniToc ? s.tocW + 24 : 0 }}>
+          <article className="lq-article-panel lq-rise" style={{
+            maxWidth: 940, margin: "4px auto 40px",
+            padding: articlePadding,
             fontFamily: bodyFont, lineHeight: 1.85, color: "var(--fg-2)",
           }}>
             <ChapterOpener chapter={chapter} t={t} />
@@ -372,8 +395,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
       {/* mobile nav drawer */}
       {mobile && drawer && (
         <>
-          <div onClick={() => setDrawer(false)} style={{ position: "fixed", inset: "54px 0 0", background: "rgba(0,0,0,.42)", zIndex: 60 }} />
-          <div className="rdr-glass" style={{ position: "fixed", top: 54, bottom: 0, left: 0, width: 300, maxWidth: "84vw", zIndex: 61, overflowY: "auto" }}>
+          <div onClick={() => setDrawer(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", zIndex: 60 }} />
+          <div className="glass-thick rdr-glass lq-rise" style={{ position: "fixed", top: 78, bottom: 14, left: 14, width: 300, maxWidth: "84vw", zIndex: 61, overflowY: "auto", borderRadius: 22, padding: "16px 8px 24px" }}>
             <SidebarTree t={t} chapter={chapter} embedded onNavigate={() => setDrawer(false)}
               onOpenSearch={() => { setDrawer(false); setSearchOpen(true); }} />
           </div>
@@ -383,16 +406,16 @@ export default function Reader({ chapter, initial }: ReaderProps) {
       {/* mobile "on this page" drawer */}
       {mobile && tocDrawer && (
         <>
-          <div onClick={() => setTocDrawer(false)} style={{ position: "fixed", inset: "54px 0 0", background: "rgba(0,0,0,.42)", zIndex: 60 }} />
-          <div className="rdr-glass" style={{ position: "fixed", top: 54, bottom: 0, right: 0, width: 300, maxWidth: "84vw", zIndex: 61, overflowY: "auto", padding: "16px 18px 24px" }}>
+          <div onClick={() => setTocDrawer(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", zIndex: 60 }} />
+          <div className="glass-thick rdr-glass lq-rise" style={{ position: "fixed", top: 78, bottom: 14, right: 14, width: 300, maxWidth: "84vw", zIndex: 61, overflowY: "auto", borderRadius: 22, padding: "16px 18px 24px" }}>
             <div className="rdr-eyebrow" style={{ fontSize: 10, color: "var(--fg-3)", marginBottom: 12 }}>{t.onThisPage}</div>
-            <nav style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
               {chapter.headings.map((h) => (
-                <a key={h.id} href={`#${h.id}`} onClick={() => setTocDrawer(false)} style={{
-                  display: "block", padding: "7px 0 7px 12px", textDecoration: "none",
-                  borderLeft: `2px solid ${activeId === h.id ? "var(--accent)" : "transparent"}`,
+                <a key={h.id} href={`#${h.id}`} onClick={() => setTocDrawer(false)} className="lq-nav-item" style={{
+                  display: "block", padding: "7px 10px", borderRadius: 9, textDecoration: "none",
                   marginLeft: h.level === 3 ? 12 : 0,
                   fontSize: 13.5, lineHeight: 1.4, color: activeId === h.id ? "var(--accent)" : "var(--fg-2)", fontWeight: activeId === h.id ? 600 : 400,
+                  background: activeId === h.id ? "var(--accent-subtle)" : "transparent",
                 }}>{h.text}</a>
               ))}
             </nav>
@@ -441,17 +464,17 @@ function ChapterOpener({ chapter, t }: { chapter: ChapterData; t: Strings }) {
 // home, reachable from the sidebar, the mobile drawer, and Cmd/Ctrl+K).
 function SearchTrigger({ t, onOpen }: { t: Strings; onOpen: () => void }) {
   return (
-    <div style={{ flex: "none", padding: "0 16px 14px" }}>
-      <button onClick={onOpen} aria-label={t.search} style={{
-        width: "100%", height: 36, padding: "0 10px 0 12px", display: "flex", alignItems: "center", gap: 8,
-        border: "1px solid var(--border-strong)", background: "var(--bg)", borderRadius: "var(--radius-md)",
+    <div style={{ flex: "none", padding: "0 14px 12px" }}>
+      <button onClick={onOpen} aria-label={t.search} className="glass-ultrathin lq-iconbtn" style={{
+        width: "100%", height: 38, padding: "0 12px 0 14px", display: "flex", alignItems: "center", gap: 8,
+        border: "1px solid var(--glass-border)", background: "var(--glass-ultrathin)", borderRadius: 999,
         color: "var(--fg-3)", cursor: "pointer", fontFamily: "var(--font-ui)", fontSize: 13, textAlign: "left",
       }}>
         <Icon d={<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" strokeLinecap="round" /></>} size={14} />
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.search}</span>
         <kbd style={{
           flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, letterSpacing: ".02em",
-          color: "var(--fg-3)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "1px 5px",
+          color: "var(--fg-3)", border: "1px solid var(--border-strong)", borderRadius: 6, padding: "1px 5px",
         }}>⌘K</kbd>
       </button>
     </div>
@@ -500,11 +523,11 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, zIndex: 80, display: "flex", justifyContent: "center", alignItems: "flex-start",
-      padding: "12vh 16px 16px", background: "rgba(0,0,0,.42)", backdropFilter: "blur(2px)", WebkitBackdropFilter: "blur(2px)",
+      padding: "12vh 16px 16px", background: "rgba(0,0,0,.3)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)",
     }}>
-      <div onClick={(e) => e.stopPropagation()} onKeyDown={onKey} className="rd-rev rdr-glass" role="dialog" aria-modal="true" aria-label={t.search} style={{
-        width: "100%", maxWidth: 600, maxHeight: "76vh", display: "flex", flexDirection: "column", overflow: "hidden",
-        borderRadius: "var(--radius-xl)",
+      <div onClick={(e) => e.stopPropagation()} onKeyDown={onKey} className="glass-thick rdr-glass lq-rise" role="dialog" aria-modal="true" aria-label={t.search} style={{
+        width: "100%", maxWidth: 620, maxHeight: "76vh", display: "flex", flexDirection: "column", overflow: "hidden",
+        borderRadius: 28,
       }}>
         <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--border)" }}>
           <span style={{ flex: "none", color: "var(--fg-3)" }}>
@@ -516,14 +539,14 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
           }} />
           <kbd style={{
             flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, color: "var(--fg-3)",
-            border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "2px 6px",
+            border: "1px solid var(--border-strong)", borderRadius: 999, padding: "3px 9px",
           }}>ESC</kbd>
         </div>
         {results.length > 0 && (
-          <div ref={listRef} style={{ overflowY: "auto", padding: 6 }}>
+          <div ref={listRef} style={{ overflowY: "auto", padding: 8 }}>
             {results.map(({ doc: d, snip }, i) => (
-              <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} style={{
-                display: "block", padding: "9px 12px", textDecoration: "none", borderRadius: "var(--radius-md)",
+              <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} className="lq-nav-item" style={{
+                display: "block", padding: "9px 14px", textDecoration: "none", borderRadius: 14,
                 color: "var(--fg-1)", background: i === sel ? "var(--accent-subtle)" : "transparent",
               }}>
                 <div style={{ fontSize: 13.5, fontWeight: 500 }}>
@@ -565,9 +588,9 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
     if (sc && el) sc.scrollTop = el.offsetTop;
   }, []);
   return (
-    <aside className={embedded ? undefined : "rdr-glass-edge"} style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, ...(embedded ? {} : { borderRight: "1px solid var(--border)" }), background: embedded ? "transparent" : undefined, display: "flex", flexDirection: "column", paddingTop: 18, alignSelf: "stretch", minHeight: 0 }}>
+    <aside className={embedded ? undefined : "glass-regular"} style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, borderRadius: embedded ? undefined : 22, background: embedded ? "transparent" : undefined, display: "flex", flexDirection: "column", paddingTop: 16, alignSelf: "stretch", minHeight: 0, overflow: "hidden" }}>
       <SearchTrigger t={t} onOpen={onOpenSearch} />
-      <nav ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", paddingBottom: 60 }}>
+      <nav ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", padding: "0 8px 50px" }}>
         <SidebarExternalLinks t={t} />
         {chapter.toc.map((part) => {
           const active = !!part.active || part.chapters.some((ch) => ch.active);
@@ -575,7 +598,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
             return (
               <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
                 {part.chapters.map((ch) => (
-                  <a key={ch.href} href={ch.href} onClick={onNavigate} style={{ display: "block", padding: "7px 18px", fontSize: 13.5, fontWeight: 500, color: ch.active ? "var(--accent)" : "var(--fg-2)", textDecoration: "none", borderLeft: `2px solid ${ch.active ? "var(--accent)" : "transparent"}` }}>{ch.label}</a>
+                  <a key={ch.href} href={ch.href} onClick={onNavigate} className="lq-nav-item" style={{ display: "block", padding: "7px 12px", borderRadius: 10, fontSize: 13.5, fontWeight: 500, color: ch.active ? "var(--accent)" : "var(--fg-2)", textDecoration: "none", background: ch.active ? "var(--accent-subtle)" : "transparent" }}>{ch.label}</a>
                 ))}
               </div>
             );
@@ -603,7 +626,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
             <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
               <div style={{
                 width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                padding: "9px 10px 6px 16px", textAlign: "left",
+                padding: "9px 4px 5px 12px", textAlign: "left",
               }}>
                 {part.href ? (
                   <a href={part.href} onClick={onNavigate} style={labelStyle}>{part.label}</a>
@@ -626,9 +649,9 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
                 </button>
               </div>
               {open && part.chapters.map((ch) => (
-                <a key={ch.href} href={ch.href} onClick={onNavigate} style={{
-                  display: "flex", gap: 9, padding: "6px 16px 6px 18px", textDecoration: "none",
-                  borderLeft: `2px solid ${ch.active ? "var(--accent)" : "transparent"}`, background: ch.active ? "var(--accent-subtle)" : "transparent",
+                <a key={ch.href} href={ch.href} onClick={onNavigate} className="lq-nav-item" style={{
+                  display: "flex", gap: 9, padding: "6px 12px", margin: "1px 0", borderRadius: 10, textDecoration: "none",
+                  background: ch.active ? "var(--accent-subtle)" : "transparent",
                 }}>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--fg-3)", flex: "none", minWidth: 15 }}>{ch.n}</span>
                   <span style={{ fontSize: 13.5, lineHeight: 1.35, color: ch.active ? "var(--accent)" : "var(--fg-2)", fontWeight: ch.active ? 600 : 400 }}>{ch.label}</span>
@@ -646,15 +669,15 @@ function SidebarExternalLinks({ t }: { t: Strings }) {
   return (
     <div style={{ margin: "0 0 10px", padding: "0 0 10px", borderBottom: "1px solid var(--border)" }}>
       {SIDEBAR_EXTERNAL_LINKS.map((link) => (
-        <a key={link.href} href={link.href} target="_blank" rel="noreferrer" style={{
+        <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="lq-nav-item" style={{
           display: "block",
-          padding: "7px 18px",
+          padding: "7px 12px",
+          borderRadius: 10,
           fontSize: 13.5,
           fontWeight: 500,
           color: "var(--fg-2)",
           textDecoration: "none",
-          borderLeft: "2px solid transparent",
-        }}>{t[link.labelKey]}</a>
+        }}>{t[link.labelKey]} ↗</a>
       ))}
     </div>
   );
@@ -662,25 +685,25 @@ function SidebarExternalLinks({ t }: { t: Strings }) {
 
 function MiniToc({ t, chapter, activeId, onClose, width = 208, onStartDrag }: { t: Strings; chapter: ChapterData; activeId: string; onClose: () => void; width?: number; onStartDrag?: (e: React.PointerEvent) => void }) {
   return (
-    <aside className="rdr-glass" style={{
-      position: "absolute", top: 18, right: 18, width, maxHeight: "calc(100% - 36px)", overflowY: "auto", zIndex: 8,
-      borderRadius: "var(--radius-lg)", padding: "13px 15px 11px",
+    <aside className="glass-regular" style={{
+      position: "absolute", top: 8, right: 0, width, maxHeight: "calc(100% - 24px)", overflowY: "auto", zIndex: 8,
+      borderRadius: 18, padding: "14px 16px 12px",
     }}>
       {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize"
-        style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 8, cursor: "col-resize", zIndex: 2, borderRadius: "var(--radius-lg) 0 0 var(--radius-lg)" }} />}
+        style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 8, cursor: "col-resize", zIndex: 2, borderRadius: "18px 0 0 18px" }} />}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 11 }}>
         <span className="rdr-eyebrow" style={{ fontSize: 10, color: "var(--fg-3)" }}>{t.onThisPage}</span>
         <button onClick={onClose} aria-label="close" style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "none", background: "none", borderRadius: "var(--radius-sm)", cursor: "pointer", color: "var(--fg-3)" }}>
           <Icon d={<path d="M3 3l8 8M11 3l-8 8" strokeLinecap="round" />} size={13} />
         </button>
       </div>
-      <nav style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {chapter.headings.map((h) => (
-          <a key={h.id} href={`#${h.id}`} style={{
-            display: "block", padding: "5px 0 5px 12px", textDecoration: "none",
-            borderLeft: `2px solid ${activeId === h.id ? "var(--accent)" : "transparent"}`,
+          <a key={h.id} href={`#${h.id}`} className="lq-nav-item" style={{
+            display: "block", padding: "5px 10px", borderRadius: 9, textDecoration: "none",
             marginLeft: h.level === 3 ? 12 : 0,
             fontSize: 12.5, lineHeight: 1.4, color: activeId === h.id ? "var(--accent)" : "var(--fg-2)", fontWeight: activeId === h.id ? 600 : 400,
+            background: activeId === h.id ? "var(--accent-subtle)" : "transparent",
           }}>{h.text}</a>
         ))}
       </nav>
@@ -690,20 +713,19 @@ function MiniToc({ t, chapter, activeId, onClose, width = 208, onStartDrag }: { 
 
 function PrevNextNav({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   const card: React.CSSProperties = {
-    flex: 1, minWidth: 200, padding: "16px 18px", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-lg)",
-    background: "var(--bg-surface)", textDecoration: "none",
+    flex: 1, minWidth: 200, padding: "16px 20px", borderRadius: 18, textDecoration: "none",
   };
   const kicker: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--fg-3)", marginBottom: 6 };
   return (
     <nav style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 48, paddingTop: 24, borderTop: "1px solid var(--border)" }}>
       {chapter.prev && (
-        <a href={chapter.prev.href} style={card}>
+        <a href={chapter.prev.href} className="glass-regular lq-card" style={card}>
           <div style={kicker}>← {t.prev}</div>
           <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--fg-1)" }}>{chapter.prev.label}</div>
         </a>
       )}
       {chapter.next && (
-        <a href={chapter.next.href} style={{ ...card, textAlign: "right" }}>
+        <a href={chapter.next.href} className="glass-regular lq-card" style={{ ...card, textAlign: "right" }}>
           <div style={kicker}>{t.next} →</div>
           <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--fg-1)" }}>{chapter.next.label}</div>
         </a>
@@ -713,13 +735,13 @@ function PrevNextNav({ chapter, t }: { chapter: ChapterData; t: Strings }) {
 }
 
 function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; set: (p: Partial<ReaderSettings>) => void; chapter: ChapterData }) {
-  const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12 };
+  const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 14 };
   const label: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".15em", textTransform: "uppercase", fontWeight: 500, color: "var(--fg-3)", flex: "none" };
-  const seg: React.CSSProperties = { display: "flex", gap: 2, padding: 3, background: "var(--bg-raised)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)" };
+  const seg: React.CSSProperties = { display: "flex", gap: 2, padding: 3, background: "var(--accent-subtle)", border: "1px solid var(--glass-border)", borderRadius: 999 };
   const langSeg: React.CSSProperties = { ...seg, width: 150, flex: "none" };
   const segBtn = (active: boolean): React.CSSProperties => ({
-    border: "none", cursor: "pointer", minWidth: 30, fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 500,
-    padding: "4px 11px", borderRadius: "var(--radius-sm)", color: active ? "var(--bg-surface)" : "var(--fg-2)", background: active ? "var(--accent)" : "transparent",
+    border: "none", cursor: "pointer", minWidth: 34, fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 500,
+    padding: "5px 12px", borderRadius: 999, color: active ? "var(--bg-surface)" : "var(--fg-2)", background: active ? "var(--accent)" : "transparent",
   });
   const langChoice = (value: Lang, text: string) => {
     const active = chapter.lang === value;
@@ -731,9 +753,9 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
     <div style={seg}>{opts.map((o) => <button key={o.v} style={segBtn(cur === o.v)} onClick={() => on(o.v)}>{o.l}</button>)}</div>
   );
   return (
-    <div className="rdr-glass" role="dialog" aria-label={t.settings} style={{
-      position: "absolute", top: 42, right: 0, zIndex: 60, width: 264, padding: "14px 16px 16px",
-      borderRadius: "var(--radius-lg)",
+    <div className="rdr-glass lq-rise" role="dialog" aria-label={t.settings} style={{
+      position: "absolute", top: 46, right: 0, zIndex: 60, width: 276, padding: "16px 18px 18px",
+      borderRadius: 22,
     }}>
       <div style={{ ...row, marginTop: 0 }}><span style={label}>{t.language}</span><div style={langSeg}>{langChoice("en", "English")}{langChoice("zh", "中文")}</div></div>
       <div style={{ ...row, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
