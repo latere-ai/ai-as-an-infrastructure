@@ -150,7 +150,7 @@ validate_image "$commit_image"
 validate_image "$main_image"
 
 log "Applying Kubernetes manifests from $MANIFEST_DIR"
-kubectl -n "$NAMESPACE" apply -f "$MANIFEST_DIR"
+kubectl -n "$NAMESPACE" apply -k "$MANIFEST_DIR"
 
 log "Restarting deployment/$DEPLOYMENT so Kubernetes pulls $main_image"
 kubectl -n "$NAMESPACE" rollout restart "deployment/$DEPLOYMENT"
