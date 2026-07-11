@@ -77,7 +77,9 @@ function makeApi(csrfRef: { current: string }) {
   return {
     me: () => fetch("/api/me").then(jsonOrNull) as Promise<Me | null>,
     list: (lang: string, path: string) =>
-      fetch(`/api/comments?lang=${lang}&path=${encodeURIComponent(path)}`).then(jsonOrNull) as Promise<Comment[]>,
+      fetch(`/api/comments?lang=${lang}&path=${encodeURIComponent(path)}`)
+        .then(jsonOrNull)
+        .then((d) => (Array.isArray(d) ? d : [])) as Promise<Comment[]>,
     create: (b: object) => write("POST", "/api/comments", b).then(async (r) => {
       if (!r.ok) throw new Error((await jsonOrNull(r))?.error || "failed");
       return jsonOrNull(r) as Promise<Comment>;
@@ -86,7 +88,9 @@ function makeApi(csrfRef: { current: string }) {
     del: (id: string) => write("DELETE", `/api/comments/${id}`),
     react: (id: string, emoji: string) => write("PUT", `/api/comments/${id}/reactions/${encodeURIComponent(emoji)}`),
     listNotes: (lang: string, path: string) =>
-      fetch(`/api/notes?lang=${lang}&path=${encodeURIComponent(path)}`).then(jsonOrNull) as Promise<Note[]>,
+      fetch(`/api/notes?lang=${lang}&path=${encodeURIComponent(path)}`)
+        .then(jsonOrNull)
+        .then((d) => (Array.isArray(d) ? d : [])) as Promise<Note[]>,
     createNote: (b: object) => write("POST", "/api/notes", b).then(jsonOrNull) as Promise<Note>,
     delNote: (id: string) => write("DELETE", `/api/notes/${id}`),
   };
@@ -535,6 +539,8 @@ function flashComment(id: string) {
   setTimeout(() => { el.style.background = ""; }, 1200);
 }
 
-function countAll(cs: Comment[]): number {
-  return cs.reduce((n, c) => n + 1 + (c.replies?.length ?? 0), 0);
+export function countAll(cs: Comment[]): number {
+  // Defensive: never let a non-array (e.g. an API error body that slipped
+  // through) crash the whole reader via `.reduce`.
+  return Array.isArray(cs) ? cs.reduce((n, c) => n + 1 + (c.replies?.length ?? 0), 0) : 0;
 }
