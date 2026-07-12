@@ -36,14 +36,23 @@ stable interface that lets you swap what is behind it without rewriting what is
 in front of it. The whole architecture is legible once you see that everything
 meets at these three seams.
 
-1. **Model calls speak the OpenAI-compatible HTTP shape.** `/v1/chat/completions`,
-   `/v1/responses`, `/v1/embeddings`. By 2026 every serving engine exposes it
-   (@sec-serving-stack), every hosted frontier API offers it or a near-twin, and
-   every gateway normalizes to it. This is what makes a self-hosted vLLM model
-   and a hosted Claude endpoint interchangeable behind one name.
-2. **Tool and agent traffic speaks MCP.** The Model Context Protocol is to tool
-   integration what the OpenAI shape is to model calls: the common interface that
-   lets one tool server be reused by every agent framework (@sec-agents-practice).
+1. **Model calls speak a small set of HTTP dialects, and the gateway translates
+   among them.** Three matter in mid-2026: OpenAI Chat Completions
+   (`/v1/chat/completions`), the shape the open-weights runtimes speak (vLLM,
+   Ollama, OpenRouter-served models; @sec-serving-stack); OpenAI Responses
+   (`/v1/responses`), which OpenAI's reasoning tiers require the moment
+   function tools or `reasoning_effort` are attached, since Chat Completions
+   rejects that combination; and Anthropic Messages, the native shape of Claude
+   and its harness. Harnesses are locked to their home dialect, Claude Code
+   emits Messages and Codex emits Responses, so driving one against a foreign
+   model runs through the gateway's translation, and a good gateway reports
+   what a translation dropped (a loss-report header, for example) rather than
+   approximating silently. This translating seam is what makes a self-hosted
+   vLLM model and a hosted Claude endpoint interchangeable behind one name.
+2. **Tool and agent traffic speaks MCP.** Tool integration converged where
+   model calls did not: the Model Context Protocol is the single common
+   interface that lets one tool server be reused by every agent framework
+   (@sec-agents-practice).
    By 2026 it is the default tool layer under almost every framework, and the
    stable spec is `2025-11-25` with a stateless revision in its validation window.
 3. **Telemetry speaks OpenTelemetry GenAI spans.** The `gen_ai.*` semantic
@@ -157,7 +166,7 @@ compute and orchestration layer is the floor everything stands on.
 
 ```{dot}
 //| label: fig-reference-arch
-//| fig-cap: "A 2026 end-to-end reference architecture. Everything that needs a model call routes through the gateway (the OpenAI-compatible seam); tool calls route through the MCP gateway; every component emits OpenTelemetry GenAI spans. Apps, agents, evals, and sandboxes hold scoped virtual keys, never raw provider credentials. The compute and orchestration layer is the floor the whole stack runs on."
+//| fig-cap: "A 2026 end-to-end reference architecture. Everything that needs a model call routes through the gateway (one address; the gateway translates among the model-API dialects); tool calls route through the MCP gateway; every component emits OpenTelemetry GenAI spans. Apps, agents, evals, and sandboxes hold scoped virtual keys, never raw provider credentials. The compute and orchestration layer is the floor the whole stack runs on."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
@@ -187,7 +196,7 @@ digraph {
   mcpgw -> tools;
   app -> sbx [label="create sandbox"];
 
-  app -> gw [label="OpenAI-compatible API\nvirtual key"];
+  app -> gw [label="model calls\nvirtual key"];
   rag -> gw [label="embed / rerank via gateway"];
   sbx -> gw [label="scoped token"];
 
@@ -206,7 +215,7 @@ digraph {
 Three things make this diagram hold up in production, and each is one of the
 contracts from the thesis:
 
-- **One base URL, OpenAI-shaped.** The app, the retriever (for embed and rerank),
+- **One base URL, dialects translated behind it.** The app, the retriever (for embed and rerank),
   the eval harness, and the judge all point at the same gateway address. Swapping a
   model or adding a fallback is configuration, not code. A self-hosted `bge-m3`
   embedder and a hosted Cohere reranker are addressable by name through the same
@@ -389,6 +398,7 @@ models:
   - alias: smart                  # same alias, fallback target
     target: openai/gpt-5.5
     api_key: ${OPENAI_API_KEY}
+    upstream_api: responses       # reasoning tiers reject tools on /chat/completions
   - alias: local                  # self-hosted, behind the same seam
     target: vllm/your-open-weight-model
     base_url: http://vllm-svc:8000/v1
@@ -439,6 +449,19 @@ as the judge, on its own budget-capped virtual key (@sec-eval-practice). Every s
 in the system, model calls, tool calls, retrieval, and judging, meets at the same
 two addresses (the model gateway and the MCP gateway) and emits the same span
 format. That is what makes the architecture one system rather than seven separate tools that merely sit side by side.
+
+One caution keeps this composability honest: integrations break at the seam's
+translation, and they break on small wire-level constraints, not on grand
+incompatibilities. The Responses API caps the `user` metadata field at 64
+characters while some harnesses send longer session ids, so the gateway must
+truncate. Anthropic's extended thinking migrated from a `budget_tokens` field
+to adaptive thinking with an output `effort` level; newer Claude models reject
+the old shape outright while older ones accept the new, so a gateway should
+emit the new shape uniformly. And under adaptive thinking, effort is a ceiling
+the model regulates itself within, not a quota it must spend: a request at high
+effort may legitimately use no reasoning tokens at all. The discipline that
+catches all of these is cheap: smoke-test every new model and harness pairing
+with one tool-bearing request before relying on it.
 
 ## Contracts that make the stack operable
 
