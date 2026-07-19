@@ -1524,3 +1524,49 @@ test("public prose avoids internal draft markers", () => {
     offenders.map((path) => path.replace(repoRoot + "/", "")),
   ).toEqual([]);
 });
+
+test("book openings avoid reader-promise templates tree-wide", () => {
+  const banned =
+    /By the end|reader can explain|reader can say|A reader should finish|The reader should|This chapter owns|This chapter is about|This chapter tells one story|读者读完|读完本章|读到本章末尾|读完这一章|读完这一部分|本章要讲清/;
+
+  const offenders = [...qmdFiles(enRoot), ...qmdFiles(zhRoot)].filter((path) => {
+    const opening = readFileSync(path, "utf8").split(/\n## /)[0] ?? "";
+    return banned.test(opening.replace(/\s+/g, " "));
+  });
+
+  expect(
+    offenders.map((path) => path.replace(repoRoot + "/", "")),
+  ).toEqual([]);
+});
+
+test("prose avoids non-genuine honest hedges and keep-honest idioms", () => {
+  const enBanned =
+    /\bkeeps? .{0,40}\bhonest\b|\bhonest reporting\b|\bhonest accounting\b|\bhonest default\b|\bhonest baseline\b/;
+  const zhBanned = /保持诚实|诚实的报告|诚实的基线|诚实的默认/;
+
+  const enOffenders = qmdFiles(enRoot).filter((path) =>
+    enBanned.test(readFileSync(path, "utf8")),
+  );
+  const zhOffenders = qmdFiles(zhRoot).filter((path) =>
+    zhBanned.test(readFileSync(path, "utf8")),
+  );
+
+  expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
+  expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
+});
+
+test("prose avoids canned takeaway and lesson-is-this scaffolds", () => {
+  const enBanned =
+    /\bThe takeaway is that\b|\bThe takeaway:\b|\bThe lesson is this:\b|\bThe failure modes are worth naming\b/;
+  const zhBanned = /几种失效模式值得逐一|这些失效模式值得逐一|失效模式值得逐一点名/;
+
+  const enOffenders = qmdFiles(enRoot).filter((path) =>
+    enBanned.test(readFileSync(path, "utf8")),
+  );
+  const zhOffenders = qmdFiles(zhRoot).filter((path) =>
+    zhBanned.test(readFileSync(path, "utf8")),
+  );
+
+  expect(enOffenders.map((path) => path.replace(enRoot + "/", ""))).toEqual([]);
+  expect(zhOffenders.map((path) => path.replace(zhRoot + "/", ""))).toEqual([]);
+});
