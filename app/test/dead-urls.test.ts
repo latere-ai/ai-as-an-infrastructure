@@ -48,10 +48,12 @@ function qmdFiles(): string[] {
   const out: string[] = [];
   for (const lang of ["en", "zh"]) {
     const root = join(repoRoot, lang);
-    for (const part of readdirSync(root)) {
-      let entries: string[];
-      try { entries = readdirSync(join(root, part)); } catch { continue; }
-      for (const f of entries) if (f.endsWith(".qmd")) out.push(join(root, part, f));
+    for (const e of readdirSync(root, { withFileTypes: true })) {
+      // top-level sources (index, preface, summary) count as chapters too
+      if (e.isFile()) { if (e.name.endsWith(".qmd")) out.push(join(root, e.name)); continue; }
+      for (const f of readdirSync(join(root, e.name))) {
+        if (f.endsWith(".qmd")) out.push(join(root, e.name, f));
+      }
     }
   }
   return out;
