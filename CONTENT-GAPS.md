@@ -86,3 +86,85 @@
   figure, a DOT regime diagram, an interactive verification-gap visualization,
   source-backed references, and cross-links into post-training, reasoning,
   evaluation, safety, ecosystem, and operations.
+
+## Open goals
+
+Found by a structural audit on 2026-07-26, ranked by value. Each is evidence
+backed; none has been decided or started. Sizing is the audit's estimate.
+
+- [ ] **Frontier safety frameworks** (one section, ~1,200-1,800 words, in
+  `safety/08-law-regulation-policy`)
+
+  The book names the frontier safety framework twice as an object other people
+  handle: SB 53's duty on large developers to publish one, and third-party
+  evaluators reporting on autonomy, deception, and dangerous capability. No
+  chapter opens one. Book-wide greps return zero hits for "capability
+  threshold", "frontier safety", "preparedness", "responsible scaling",
+  "dangerous capabilit", "safety case", "CBRN", and "system card". The lifecycle
+  spine ends at a deployed and governed behavior, and the gate that decides
+  whether a frontier model may be deployed at all is the one gate never
+  described. `evaluation/07`'s release gate is product-side; `safety/02`'s
+  control protocols are runtime containment; `infrastructure/11` is about
+  accepting a model's claims, not accepting the model. The shape to write: a
+  capability threshold, the evaluation suite that tests whether a model crossed
+  it, and the safeguard tier that attaches when it does, read off the published
+  frameworks, with Anthropic's ASL-3 activation as the case where a threshold
+  actually tripped.
+
+- [ ] **Retrieval authorization** (one section, ~500-700 words, in
+  `orchestration/08-rag-retrieval`)
+
+  The retrieval funnel has no permission stage. The chapter's only security
+  treatment runs the other way, retrieved text as untrusted input carrying
+  injected instructions. Whether the requesting user may read what the
+  retriever returned is answered only in `safety/03`, and only from the
+  authorization side (on-behalf-of token exchange, partition-at-write versus
+  filter-at-read). Missing is the retrieval-engineering version: document ACLs
+  carried into the index, a permission filter before or after the reranker and
+  what it costs recall, and the stale-entitlement window between a permission
+  change and a re-embed. For an enterprise deployment this is the stage that
+  decides whether the system ships.
+
+- [ ] **Part IX has grown into two parts under one name** (restructuring, no
+  new prose)
+
+  Eleven chapters against a four-to-eight norm, spanning hardware substrate,
+  software substrate, cluster and data plane, physical and economic substrate,
+  and epistemic frontier. The part's own summary opens "The infrastructure part
+  went below the model and then above it." Chapters 09-11 (where learning hits
+  limits, the capability horizon, the verification frontier) are limits on what
+  compute converts into, and the last two sit closer to Part VII. Splitting
+  them into their own part costs renumbering Parts X and XI, two part intros
+  and two summaries in both trees (the existing ones already contain both
+  halves and can be cut apart), and redirects for three chapters that change
+  part directory. A cheaper variant keeps the manifest and adds an explicit
+  hinge inside the part.
+
+- [ ] **Quality SLI is defined twice** (paragraph-level consolidation, four
+  files)
+
+  `practice/10-reliability-nondeterministic` introduces the sampled, judged
+  pass rate and the confidence-bound rule, citing `beyer2016sre`.
+  `practice/13-operating-contracts` introduces it again, cites the same source,
+  restates the rule, and then cross-references the chapter it duplicated. Keep
+  the definition where it is introduced and cut 13 down to what only the
+  contracts chapter can say.
+
+- [ ] **The epilogue skips Part II** (one clause, both trees)
+
+  `summary.qmd` retraces the parts in order and gives no clause to Generative
+  and Multimodal Architectures, the one part the book insists is not an
+  appendix.
+
+- [ ] **The preface roadmap's Part II bullet** (one clause, both trees)
+
+  The Part VI, VIII, IX and X bullets were resynced to `book.yml` on
+  2026-07-26. Part II's bullet still omits `beyond-text`, the chapter that
+  carries the argument to objects that do not arrive as strings.
+
+- [ ] **CoWoS capacity sourcing** (citation, `infrastructure/06`)
+
+  The wafers-per-month capacity figures are attached to a TrendForce piece that
+  carries the reticle roadmap and the eleven-fold AI wafer demand figure but no
+  capacity number. The numbers check out against other reporting; the citation
+  does not support them.
