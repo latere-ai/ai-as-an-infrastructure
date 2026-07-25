@@ -612,7 +612,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/adaptation/03-rlhf-reward-modeling.qmd",
-      ["train a reward model on human", "comparisons", "optimize a policy against that reward with @gls-ppo", "constitutional and @gls-rlaif variants", "learned reward needs a KL constraint"],
+      ["train a reward model on human", "comparisons", "optimize a *policy* (the model being trained) against that reward with @gls-ppo", "constitutional and @gls-rlaif variants", "learned reward needs a KL constraint"],
     ],
     [
       "zh/adaptation/03-rlhf-reward-modeling.qmd",
@@ -696,7 +696,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/05-training-to-reason.qmd",
-      ["可核查的真值", "移除了习得代理缺口", "丢掉了评论者", "没有步级监督也能产出长程推理", "重加权了基座模型本来就能采样到的路径"],
+      ["可核查的真值", "移除了习得代理缺口", "丢掉评论者", "没有步级监督也能产出长程推理", "重加权了基座模型本来就能采样到的路径"],
     ],
     [
       "en/reasoning/06-reasoning-data-distillation.qmd",
@@ -888,7 +888,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/04-runtime-safety.qmd",
-      ["已对齐模型自己的拒绝必要但不充分", "输入与输出要分开筛", "由策略条件化的分类器", "间接@gls-prompt-injection", "流式决策会反过来约束护栏设计"],
+      ["已对齐模型自己的拒绝必要但不充分", "输入与输出要分开筛", "以策略为条件的分类器", "间接@gls-prompt-injection", "流式决策会反过来约束护栏设计"],
     ],
     [
       "en/safety/05-adversarial-robustness.qmd",
@@ -936,7 +936,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/ecosystem/03-tooling-ecosystem.qmd",
-      ["训练框架、服务引擎、智能体框架", "彼此互通的标准", "控制点", "调用方不再是一个应用、而变成一个智能体", "拉回到该层自身"],
+      ["训练框架、服务引擎、智能体框架", "彼此互通的标准", "控制点", "调用方不再是一个应用，而变成一个智能体", "拉回到该层自身"],
     ],
     [
       "en/ecosystem/04-economics.qmd",
@@ -964,7 +964,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/inference/02-memory-scheduling.qmd",
-      ["Continuous batching removes static-batch waste", "PagedAttention removes fragmented cache", "Radix-tree prefix caching", "Phase splitting removes"],
+      ["Continuous batching removes static-batch waste", "PagedAttention removes fragmented cache", "radix-tree prefix caching", "phase splitting removes"],
     ],
     [
       "zh/inference/02-memory-scheduling.qmd",
@@ -1168,7 +1168,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/10-reliability-nondeterministic.qmd",
-      ["永远不会两次相同的输出", "@gls-sli 必须度量分布", "每一步都可靠的智能体", "追求确定性", "接纳采样并校验"],
+      ["永远不会两次相同的输出", "@gls-sli，也就是判断服务事件是否有效的指标，必须度量分布，而不是度量字节串", "每一步都可靠的智能体", "追求确定性", "接纳采样并校验"],
     ],
     [
       "en/practice/11-human-interface-oversight.qmd",
@@ -1176,7 +1176,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/11-human-interface-oversight.qmd",
-      ["承担控制面板的作用", "校准后的依赖", "批准门", "修正回路", "@gls-automation-bias"],
+      ["本身就是控制面", "校准后的依赖", "批准门", "修正回路", "@gls-automation-bias"],
     ],
     [
       "en/practice/12-production-data-engine.qmd",
