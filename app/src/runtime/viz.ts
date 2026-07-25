@@ -1346,7 +1346,7 @@
   // resets. Recommendations are the book's own, as of its 2026 snapshot.
   R['decision-tree'] = function (host) {
     var TASK = { q: 'Task shape?', opts: [
-      { a: 'Agentic coding', r: 'Claude Opus 4.8 / GPT-5.5' },
+      { a: 'Agentic coding', r: 'Claude Opus 4.8 / GPT-5.6 Sol' },
       { a: 'Heavy multimodal', r: 'Gemini 3.1 Pro' },
       { a: 'High-volume cheap', r: 'Grok 4.1 Fast, DeepSeek V3.2, Gemini Flash-Lite, Haiku 4.5' },
       { a: 'Enterprise RAG', r: 'Cohere Command A + Embed v4, frontier model on top' }
