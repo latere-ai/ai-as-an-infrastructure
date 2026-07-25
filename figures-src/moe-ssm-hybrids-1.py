@@ -4,10 +4,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Schematic: the cost of sequence mixing as context length grows.
-# Attention mixes every token with every other, so its per-step cost
-# (and the KV-cache it leaves behind) grows with the square of the
-# sequence length. A state-space recurrence keeps a fixed-size state
-# and updates it token by token, so its cost grows only linearly.
+# Attention mixes every token with every other, so its total mixing
+# cost grows with the square of the sequence length (the KV cache it
+# leaves behind grows only linearly). A state-space recurrence keeps a
+# fixed-size state and updates it token by token, so its cost grows
+# only linearly.
 # Idealized curves, normalized so both start at the same unit cost.
 
 GRAY = "#6b7280"

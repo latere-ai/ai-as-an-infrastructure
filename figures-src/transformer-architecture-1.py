@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # Schematic illustration of KV-cache memory growth versus context length.
-# The KV cache size is 2 * layers * heads * d_head * seq * batch * dtype,
+# The KV cache size is 2 * layers * n_kv * d_head * seq * batch * dtype,
 # so for a fixed model it grows linearly in sequence length with a slope set
 # entirely by the number of distinct KV heads each attention variant keeps.
 # MHA keeps one KV head per query head, GQA keeps one per group, MQA keeps a
