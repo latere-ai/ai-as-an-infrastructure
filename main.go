@@ -92,6 +92,11 @@ var redirects = []redirect{
 	// Exception: "Training Agents to Act" moved Reasoning -> Orchestration.
 	{regexp.MustCompile(`^/(en|zh)/p3-reasoning/(?:\d+-)?training-agents-to-act(?:\.html)?/?$`),
 		`/${1}/orchestration/training-agents-to-act`},
+	// Exception: the three frontier chapters moved Infrastructure -> Frontiers when
+	// Part IX was split. This rule covers both the current /infrastructure/ paths
+	// and the two legacy part dirs, so an old link takes one hop, not two.
+	{regexp.MustCompile(`^/(en|zh)/(?:infrastructure|p7-infrastructure|p11-frontiers)/(?:\d+-)?(where-learning-hits-limits|the-capability-horizon|verification-frontier)(?:\.html)?/?$`),
+		`/${1}/frontiers/${2}`},
 	// Exception: the generative/multimodal chapters (once in p11-frontiers) -> generative.
 	{regexp.MustCompile(`^/(en|zh)/p11-frontiers/(?:\d+-)?(beyond-text|diffusion-flow-matching|speech-and-voice|nar-diffusion-lms|multimodal-models)(?:\.html)?/?$`),
 		`/${1}/generative/${2}`},

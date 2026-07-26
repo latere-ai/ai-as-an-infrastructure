@@ -109,6 +109,15 @@ func TestRouting(t *testing.T) {
 	loc(t, nf, base, "/en/p11-frontiers/45-the-compute-frontier", "/en/infrastructure/the-compute-frontier", "")
 	loc(t, nf, base, "/zh/p13-operations/deployment-lifecycle", "/zh/practice/deployment-lifecycle", "")
 	loc(t, nf, base, "/en/p10-practical/38-choosing-a-model", "/en/practice/choosing-a-model", "")
+	// The Part IX split: three chapters moved infrastructure -> frontiers, and the
+	// two legacy part dirs reach the new home in one hop.
+	loc(t, nf, base, "/en/infrastructure/verification-frontier", "/en/frontiers/verification-frontier", "")
+	loc(t, nf, base, "/zh/infrastructure/the-capability-horizon", "/zh/frontiers/the-capability-horizon", "")
+	loc(t, nf, base, "/en/p7-infrastructure/47-where-learning-hits-limits", "/en/frontiers/where-learning-hits-limits", "")
+	loc(t, nf, base, "/zh/p11-frontiers/where-learning-hits-limits.html", "/zh/frontiers/where-learning-hits-limits", "")
+	noloop(t, follow, base, "/en/infrastructure/verification-frontier")
+	noloop(t, follow, base, "/en/p7-infrastructure/47-where-learning-hits-limits")
+	noloop(t, follow, base, "/zh/p11-frontiers/where-learning-hits-limits.html")
 	noloop(t, follow, base, "/en/p3-reasoning/16-training-agents-to-act")
 	noloop(t, follow, base, "/en/p11-frontiers/45-the-compute-frontier")
 	noloop(t, follow, base, "/zh/p13-operations/52-deployment-lifecycle")

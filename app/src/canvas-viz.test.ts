@@ -259,9 +259,9 @@ test("the viz runtime registers the verification frontier component", () => {
 });
 
 test("verification frontier chapter uses the interactive visualization in both languages", () => {
-  expect(src("en/infrastructure/11-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
-  expect(src("zh/infrastructure/11-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
-  expect(src("zh/infrastructure/11-verification-frontier.qmd")).toContain('data-lang="zh"');
+  expect(src("en/frontiers/03-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
+  expect(src("zh/frontiers/03-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
+  expect(src("zh/frontiers/03-verification-frontier.qmd")).toContain('data-lang="zh"');
 });
 
 // Regression: the RRF "constant k" slider re-ranked nothing because the synthetic

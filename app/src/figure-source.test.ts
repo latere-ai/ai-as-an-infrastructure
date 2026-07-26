@@ -44,7 +44,7 @@ test("scatter labels sit top-right by default and only flip left on overflow", (
   expect(landscape).toMatch(/text-anchor: end;[^>]*>闭源前沿/);
 });
 
-test("figure 2.2 (field-map-stack) is an inline SVG with all 11 substantive parts", () => {
+test("figure 2.2 (field-map-stack) is an inline SVG with all 12 substantive parts", () => {
   for (const lang of ["en", "zh"]) {
     const qmd = readFileSync(join(repoRoot, lang, "orientation", "02-field-map.qmd"), "utf8");
     // A fixed inline SVG keeps labels selectable while avoiding Graphviz's
@@ -57,9 +57,10 @@ test("figure 2.2 (field-map-stack) is an inline SVG with all 11 substantive part
     expect(figure).not.toMatch(/\n\s*\n/);
     expect(qmd).not.toContain("/figures/field-map-stack.svg");
     expect(qmd).not.toMatch(/```\{dot\}\n\/\/\| label: fig-field-map-stack/);
-    // Part XI must be present (it was missing from the old mermaid diagram),
+    // Part XII must be present (Part XI was missing from the old mermaid
+    // diagram, and Part X was added when Part IX was split),
     // and every substantive part should have an addressable SVG group.
-    for (const id of ["PIX", "PI", "PII", "PIII", "PIV", "PV", "PVI", "PVII", "PVIII", "PX", "PXI"]) {
+    for (const id of ["PIX", "PI", "PII", "PIII", "PIV", "PV", "PVI", "PVII", "PVIII", "PX", "PXI", "PXII"]) {
       expect(qmd).toContain(`id="fm-${id}"`);
     }
     expect(qmd).toContain("fm-dashed");
@@ -69,9 +70,9 @@ test("figure 2.2 (field-map-stack) is an inline SVG with all 11 substantive part
   const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
   expect(catalog).not.toContain("field-map-stack");
   expect(catalog).not.toContain("_layered");
-  // Heading reflects the real part count (was "ten parts").
-  expect(readFileSync(join(repoRoot, "en", "orientation", "02-field-map.qmd"), "utf8")).toContain("eleven parts");
-  expect(readFileSync(join(repoRoot, "zh", "orientation", "02-field-map.qmd"), "utf8")).toContain("十一个部分");
+  // Heading reflects the real part count (was "eleven parts" before the Part IX split).
+  expect(readFileSync(join(repoRoot, "en", "orientation", "02-field-map.qmd"), "utf8")).toContain("twelve parts");
+  expect(readFileSync(join(repoRoot, "zh", "orientation", "02-field-map.qmd"), "utf8")).toContain("十二个部分");
 });
 
 test("figure 1.3 nested-loop return arcs do not carry overlap-prone labels", () => {

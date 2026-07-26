@@ -38,16 +38,19 @@ The spine is the lifecycle of a capability, read as a stack.
   governance.
 - **Part VIII, Safety, Interpretability, and Governance.** Including
   confidential inference: attested hardware in place of contractual privacy.
-- **Part IX, Infrastructure, Compute, and Frontiers.** Accelerators,
-  networking, the software substrate (frameworks, autodiff, compilers, kernels,
-  the CUDA moat), data infrastructure, silicon, power, geography, failure, and
-  the compute, capability, and verification frontiers.
-- **Part X, Ecosystem and Economics.** Model openness, the model as a
+- **Part IX, Infrastructure and Compute.** Accelerators, networking, the
+  software substrate (frameworks, autodiff, compilers, kernels, the CUDA moat),
+  cluster orchestration and data infrastructure, and the compute frontier:
+  silicon, power, geography, and failure at scale.
+- **Part X, Frontiers and Limits.** What compute cannot buy: data and learning
+  signal running out, the capability horizon and how far a claim can be
+  measured, and the price of verifying a result before anyone accepts it.
+- **Part XI, Ecosystem and Economics.** Model openness, the model as a
   supply-chain artifact (formats, distribution, poisoning), tooling standards,
   compute markets and their capital layer, market structure, adoption and
   productivity, data rights, and the agent economy (identity, delegation,
   machine payments).
-- **Part XI, Practice and Operations.** The hands-on 2026 stack, plus
+- **Part XII, Practice and Operations.** The hands-on 2026 stack, plus
   deployment, reliability, human oversight surfaces, the production data engine,
   and operating contracts for SLOs, cost governance, incidents, and multi-tenancy.
 

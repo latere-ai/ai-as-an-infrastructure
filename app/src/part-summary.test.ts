@@ -23,7 +23,8 @@ const parts: Array<[string, string]> = [
   ["orchestration", "orchestration/10-context-engineering.qmd"],
   ["evaluation", "evaluation/07-operational-evaluation.qmd"],
   ["safety", "safety/08-law-regulation-policy.qmd"],
-  ["infrastructure", "infrastructure/10-the-capability-horizon.qmd"],
+  ["infrastructure", "infrastructure/08-the-machine-that-breaks.qmd"],
+  ["frontiers", "frontiers/03-verification-frontier.qmd"],
   ["ecosystem", "ecosystem/07-data-rights-economics.qmd"],
   ["practice", "practice/13-operating-contracts.qmd"],
 ];
@@ -38,8 +39,13 @@ const handoffs: Array<[string, string[], string[]]> = [
   ["orchestration", ["Part VII supplies that instrument layer"], ["第七部分补上的就是这层仪器"]],
   ["evaluation", ["Part VIII starts from that dependency on evidence"], ["第八部分接着问"]],
   ["safety", ["Part IX moves below the policy surface"], ["第九部分会再往下走"]],
-  ["infrastructure", ["next part can turn to economics"], ["下一部分转向经济"]],
-  ["ecosystem", ["Part XI turns those market constraints into operating contracts"], ["第十一部分会把这些市场约束变成运营契约"]],
+  // The substrate part now hands off to the frontier part (X) rather than
+  // straight to economics, and every part after it moved up one numeral. Only
+  // the numeral is pinned for the two summaries the split rewrote: their
+  // sentences are prose.
+  ["infrastructure", ["Part X"], ["第十部分"]],
+  ["frontiers", ["Part XI"], ["第十一部分"]],
+  ["ecosystem", ["Part XII turns those market constraints into operating contracts"], ["第十二部分会把这些市场约束变成运营契约"]],
 ];
 
 test("part summaries are standalone narrative pages, not intro checklists", () => {
@@ -75,7 +81,9 @@ test("every non-final part summary hands off to the next structural question", (
   for (const [part, enPhrases, zhPhrases] of handoffs) {
     const enSummary = src(`en/${part}/summary.qmd`);
     for (const phrase of enPhrases) {
-      expect(enSummary, `en/${part}/summary.qmd missing handoff phrase: ${phrase}`).toContain(phrase);
+      // Ends on a word boundary so "Part X" is not satisfied by "Part XI".
+      const re = new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b");
+      expect(re.test(enSummary), `en/${part}/summary.qmd missing handoff phrase: ${phrase}`).toBe(true);
     }
 
     const zhSummary = src(`zh/${part}/summary.qmd`);
@@ -88,9 +96,13 @@ test("every non-final part summary hands off to the next structural question", (
 test("final part summary closes the book instead of handing off", () => {
   const enSummary = src("en/practice/summary.qmd");
   expect(enSummary).toContain("The final takeaway");
-  expect(enSummary).not.toContain("Part XII");
+  expect(enSummary).not.toContain("Part XIII");
 
   const zhSummary = src("zh/practice/summary.qmd");
   expect(zhSummary).toContain("最后的判断");
-  expect(zhSummary).not.toContain("第十二部分");
+  // The zh summary names its own part, so a part renumbering that misses this
+  // file leaves it claiming to be the previous part. That is how the Part IX
+  // split first shipped: 第十一部分 now means Ecosystem.
+  expect(zhSummary).toContain("第十二部分");
+  expect(zhSummary).not.toContain("第十三部分");
 });

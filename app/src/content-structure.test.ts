@@ -582,7 +582,7 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
   }
 });
 
-test("infrastructure closes capability measurement with verification frontier", () => {
+test("the compute substrate ends before the frontier part begins", () => {
   const expected = [
     "infrastructure/01-accelerators-networking.qmd",
     "infrastructure/04-orchestration-data-infra.qmd",
@@ -590,10 +590,11 @@ test("infrastructure closes capability measurement with verification frontier", 
     "infrastructure/06-making-the-silicon.qmd",
     "infrastructure/07-powering-it.qmd",
     "infrastructure/08-the-machine-that-breaks.qmd",
-    "infrastructure/09-where-learning-hits-limits.qmd",
-    "infrastructure/10-the-capability-horizon.qmd",
-    "infrastructure/11-verification-frontier.qmd",
     "infrastructure/summary.qmd",
+    "frontiers/01-where-learning-hits-limits.qmd",
+    "frontiers/02-the-capability-horizon.qmd",
+    "frontiers/03-verification-frontier.qmd",
+    "frontiers/summary.qmd",
   ];
 
   for (const lang of ["en", "zh"]) {
@@ -605,11 +606,19 @@ test("infrastructure closes capability measurement with verification frontier", 
       last = next;
     }
 
-    expect(src(`${lang}/infrastructure/index.qmd`)).toContain("@sec-verification-frontier");
-    expect(src(`${lang}/infrastructure/11-verification-frontier.qmd`)).toContain("{#sec-verification-frontier}");
+    // The limits chapters left the substrate part; nothing may claim them back.
+    expect(
+      yml,
+      `${lang}/book.yml still lists a limits chapter under infrastructure/`,
+    ).not.toMatch(/infrastructure\/\d+-(where-learning-hits-limits|the-capability-horizon|verification-frontier)/);
+
+    expect(src(`${lang}/frontiers/index.qmd`)).toContain("@sec-verification-frontier");
+    expect(src(`${lang}/frontiers/03-verification-frontier.qmd`)).toContain("{#sec-verification-frontier}");
   }
 
-  expect(src("README.md")).toContain("compute, capability, and verification frontiers");
+  expect(src("en/book.yml")).toContain('part: "Part X: Frontiers and Limits"');
+  expect(src("zh/book.yml")).toContain('part: "第十部分 · 前沿与极限"');
+  expect(src("README.md")).toContain("**Part X, Frontiers and Limits.**");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Verification frontier**");
 });
 
@@ -630,30 +639,36 @@ test("mid-book handoffs do not signal that the whole book has ended", () => {
   }
 });
 
-test("the infrastructure arc explicitly hands off to ecosystem and practice", () => {
-  const enHorizon = src("en/infrastructure/10-the-capability-horizon.qmd");
+test("the frontier arc explicitly hands off to ecosystem and practice", () => {
+  const enHorizon = src("en/frontiers/02-the-capability-horizon.qmd");
   expect(enHorizon).toContain("@sec-verification-frontier takes the next step");
 
-  const zhHorizon = src("zh/infrastructure/10-the-capability-horizon.qmd");
+  const zhHorizon = src("zh/frontiers/02-the-capability-horizon.qmd");
   expect(zhHorizon).toContain("@sec-verification-frontier 会往前再走一步");
 
-  const enVerification = src("en/infrastructure/11-verification-frontier.qmd");
-  expect(enVerification).toContain("Part X asks how these constraints");
-  expect(enVerification).toContain("Part XI asks how to operate systems");
+  // Ecosystem is Part XI and practice Part XII since the frontier part split off.
+  const enVerification = flat("en/frontiers/03-verification-frontier.qmd");
+  expect(enVerification).toContain("Part XI asks how these constraints");
+  expect(enVerification).toContain("Part XII asks how to operate systems");
   expect(enVerification).toContain("operating contracts");
 
-  const zhVerification = src("zh/infrastructure/11-verification-frontier.qmd");
-  expect(zhVerification).toContain("第十部分会问");
+  const zhVerification = src("zh/frontiers/03-verification-frontier.qmd");
   expect(zhVerification).toContain("第十一部分会问");
+  expect(zhVerification).toContain("第十二部分会问");
   expect(zhVerification).toContain("运营契约");
 
+  // The practice intro situates itself after the substrate part (IX), the
+  // frontier part (X), and ecosystem (XI). Only the numbering is pinned: the
+  // sentence that carries it is prose and may be rephrased.
   const enPractice = flat("en/practice/index.qmd");
-  expect(enPractice).toContain("Part IX exposed");
-  expect(enPractice).toContain("Part X showed");
+  expect(enPractice).toMatch(/\bPart IX\b/);
+  expect(enPractice).toMatch(/\bPart X\b/);
+  expect(enPractice).toMatch(/\bPart XI\b/);
   expect(enPractice).toContain("This part asks");
 
   const zhPractice = src("zh/practice/index.qmd");
-  expect(zhPractice).toContain("第九部分暴露");
-  expect(zhPractice).toContain("第十部分则说明");
+  expect(zhPractice).toContain("第九部分");
+  expect(zhPractice).toContain("第十部分");
+  expect(zhPractice).toContain("第十一部分");
   expect(zhPractice).toContain("到了这一部分，要问的是另一类问题");
 });
