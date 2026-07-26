@@ -92,7 +92,7 @@
 Found by a structural audit on 2026-07-26, ranked by value. Each is evidence
 backed; none has been decided or started. Sizing is the audit's estimate.
 
-- [ ] **Frontier safety frameworks** (one section, ~1,200-1,800 words, in
+- [x] **Frontier safety frameworks** (one section, ~1,200-1,800 words, in
   `safety/08-law-regulation-policy`)
 
   The book names the frontier safety framework twice as an object other people
@@ -111,7 +111,7 @@ backed; none has been decided or started. Sizing is the audit's estimate.
   frameworks, with Anthropic's ASL-3 activation as the case where a threshold
   actually tripped.
 
-- [ ] **Retrieval authorization** (one section, ~500-700 words, in
+- [x] **Retrieval authorization** (one section, ~500-700 words, in
   `orchestration/08-rag-retrieval`)
 
   The retrieval funnel has no permission stage. The chapter's only security
@@ -140,7 +140,7 @@ backed; none has been decided or started. Sizing is the audit's estimate.
   part directory. A cheaper variant keeps the manifest and adds an explicit
   hinge inside the part.
 
-- [ ] **Quality SLI is defined twice** (paragraph-level consolidation, four
+- [x] **Quality SLI is defined twice** (paragraph-level consolidation, four
   files)
 
   `practice/10-reliability-nondeterministic` introduces the sampled, judged
@@ -150,19 +150,19 @@ backed; none has been decided or started. Sizing is the audit's estimate.
   the definition where it is introduced and cut 13 down to what only the
   contracts chapter can say.
 
-- [ ] **The epilogue skips Part II** (one clause, both trees)
+- [x] **The epilogue skips Part II** (one clause, both trees)
 
   `summary.qmd` retraces the parts in order and gives no clause to Generative
   and Multimodal Architectures, the one part the book insists is not an
   appendix.
 
-- [ ] **The preface roadmap's Part II bullet** (one clause, both trees)
+- [x] **The preface roadmap's Part II bullet** (one clause, both trees)
 
   The Part VI, VIII, IX and X bullets were resynced to `book.yml` on
   2026-07-26. Part II's bullet still omits `beyond-text`, the chapter that
   carries the argument to objects that do not arrive as strings.
 
-- [ ] **CoWoS capacity sourcing** (citation, `infrastructure/06`)
+- [x] **CoWoS capacity sourcing** (citation, `infrastructure/06`)
 
   The wafers-per-month capacity figures are attached to a TrendForce piece that
   carries the reticle roadmap and the eleven-fold AI wafer demand figure but no
