@@ -43,7 +43,7 @@ test("a zh page unfurls the English card text, not its own", () => {
   expect(html).toContain('<meta property="og:description" content="First paragraph snippet.">');
   expect(html).toContain('<meta property="og:locale" content="en_US">');
   // the page's own <title>/lang stay Chinese for the browser + SEO
-  expect(html).toContain('<html lang="zh-Hans" data-theme="light" data-palette="ink">');
+  expect(html).toContain('<html lang="zh-Hans" data-theme="light" data-palette="ink" data-layout="codex">');
   expect(html).toContain("<title>缩放定律 · AI as an Infrastructure</title>");
   // but the card never shows the Chinese title
   expect(html).not.toContain('property="og:title" content="缩放定律"');

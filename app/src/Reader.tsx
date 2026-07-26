@@ -118,11 +118,12 @@ export default function Reader({ chapter, initial }: ReaderProps) {
       if (raw) {
         const saved = JSON.parse(raw);
         setS((prev) => ({ ...prev, ...saved }));
-        // theme/palette live on <html> (a blocking head script already applied
-        // them before paint to avoid a flash). Re-assert here so the dev server,
-        // which omits that script, still tracks the persisted choice.
+        // theme/palette/layout live on <html> (a blocking head script already
+        // applied them before paint to avoid a flash). Re-assert here so the dev
+        // server, which omits that script, still tracks the persisted choice.
         if (saved.theme) document.documentElement.dataset.theme = saved.theme;
         if (saved.palette) document.documentElement.dataset.palette = saved.palette;
+        if (saved.layout) document.documentElement.dataset.layout = saved.layout;
       }
     } catch {}
     const mq = window.matchMedia("(max-width: 991px)");
@@ -260,6 +261,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     if (typeof document !== "undefined") {
       if (patch.theme) document.documentElement.dataset.theme = patch.theme;
       if (patch.palette) document.documentElement.dataset.palette = patch.palette;
+      // the reading measure is a CSS var keyed on <html data-layout>, same deal.
+      if (patch.layout) document.documentElement.dataset.layout = patch.layout;
     }
     setS((p) => ({ ...p, ...patch }));
   };
@@ -287,7 +290,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   return (
     <div
       className="reader lq-reader"
-      data-layout="codex"
+      data-layout={s.layout}
       style={{
         height: "100%", overflow: "hidden", position: "relative",
         background: "var(--bg)", color: "var(--fg-1)", fontFamily: "var(--font-ui)",
@@ -383,7 +386,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             instead of running underneath. */}
         <main ref={mainRef} style={{ flex: 1, minWidth: 0, overflowY: "auto", overscrollBehavior: "none", scrollBehavior: "smooth", borderRadius: 28, paddingRight: showMiniToc ? s.tocW + 24 : 0 }}>
           <article className="lq-article-panel lq-rise" style={{
-            maxWidth: 940, margin: "4px auto 40px",
+            margin: "4px auto 40px",
             padding: articlePadding,
             fontFamily: bodyFont, lineHeight: 1.85, color: "var(--fg-2)",
           }}>
@@ -778,6 +781,16 @@ function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; 
       </div>
       <div style={row}><span style={label}>{t.theme}</span>{Seg(s.theme, [{ v: "light", l: t.light }, { v: "dark", l: t.dark }], (v) => set({ theme: v as ReaderSettings["theme"] }))}</div>
       <div style={row}><span style={label}>{t.body}</span>{Seg(s.serifBody ? "kai" : "sans", [{ v: "sans", l: t.sans }, { v: "kai", l: t.kai }], (v) => set({ serifBody: v === "kai" }))}</div>
+      <div style={{ ...row, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
+        <span style={label}>{t.layout}</span>
+        <div style={{ ...seg, width: "100%" }}>
+          {([{ v: "manuscript", l: t.manuscript }, { v: "codex", l: t.codex }, { v: "atlas", l: t.atlas }] as { v: Layout; l: string }[]).map((o) => (
+            // "Manuscript" is the longest label in the popover, so this row
+            // trades side padding for room instead of widening the dialog.
+            <button key={o.v} style={{ ...segBtn(s.layout === o.v), flex: 1, minWidth: 0, padding: "5px 4px" }} onClick={() => set({ layout: o.v })}>{o.l}</button>
+          ))}
+        </div>
+      </div>
       <div style={row}>
         <span style={label}>{t.size}</span>
         <div style={{ ...seg, alignItems: "center" }}>
