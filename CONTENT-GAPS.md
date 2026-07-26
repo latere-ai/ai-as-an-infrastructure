@@ -104,7 +104,7 @@ backed; none has been decided or started. Sizing is the audit's estimate.
   spine ends at a deployed and governed behavior, and the gate that decides
   whether a frontier model may be deployed at all is the one gate never
   described. `evaluation/07`'s release gate is product-side; `safety/02`'s
-  control protocols are runtime containment; `infrastructure/11` is about
+  control protocols are runtime containment; `frontiers/03` is about
   accepting a model's claims, not accepting the model. The shape to write: a
   capability threshold, the evaluation suite that tests whether a model crossed
   it, and the safeguard tier that attaches when it does, read off the published
@@ -125,7 +125,7 @@ backed; none has been decided or started. Sizing is the audit's estimate.
   change and a re-embed. For an enterprise deployment this is the stage that
   decides whether the system ships.
 
-- [ ] **Part IX has grown into two parts under one name** (restructuring, no
+- [x] **Part IX has grown into two parts under one name** (restructuring, no
   new prose)
 
   Eleven chapters against a four-to-eight norm, spanning hardware substrate,
