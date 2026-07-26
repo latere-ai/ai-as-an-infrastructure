@@ -253,9 +253,84 @@ the order exists so that the expensive stages only ever see a short list. This
 is the workhorse design, and its strength is exactly its rigidity: embed once,
 retrieve once, generate once, with every dial set ahead of time.
 
+## The stage the funnel leaves out: who may read this
+
+Every stage so far ranks by relevance, and relevance knows nothing about
+permission. In a company's corpus, the chunk that best answers "what are we
+paying for the acquisition?" is often one the person asking is not cleared to
+read. Chunking, embedding, ANN search and reranking never consult an access
+control list, so a permission stage has to be inserted, and inserting it
+forces two decisions: what the index stores, and where the check runs.
+
+Start with the index. Azure AI Search documents four approaches, and two of
+them frame the choice for a corpus a team indexes itself. Both write the
+document's access control list into the index, as a filterable string field
+held non-retrievable so it never comes back in a result, listing the
+identifiers allowed to read that document [@microsoft2026securityfilters]. They
+differ in who vouches for the identity at query time.
+Under the security filter pattern the application resolves the caller's groups
+and passes them in as an ordinary filter value, and the service compares
+strings, with no authentication behind the principal. Under the permission
+filter pattern the query carries the user's Microsoft Entra token in an
+`x-ms-query-source-authorization` header, the service reads the user, group and
+scope claims out of it, builds the security filter internally, and appends it to
+whatever filter the query already had [@microsoft2026aclenforcement]. The two
+sit at different levels of maturity: the security filter is generally available
+and bound to no API version, while the permission filter is preview, part of
+the 2026-05-01-preview REST API. The index looks the same either way. The
+difference is whether the retriever believes the
+calling application about who is asking or verifies it, which is the question
+@sec-security-authorization answers with on-behalf-of token exchange.
+
+Where the check runs is a recall decision. Azure exposes it as
+`vectorFilterMode`. Prefiltering evaluates the permission predicate during HNSW
+traversal, expanding the graph until $k$ permitted candidates are found, so it
+returns $k$ results whenever $k$ exist. Postfiltering traverses without the
+predicate and intersects afterwards, so each shard contributes possibly fewer
+than $k$, and a permitted document less similar than the unfiltered top-$k$
+never surfaces at all [@microsoft2026vectorfilters]. Filtering after retrieval
+therefore shortens the candidate list silently, and it shortens it most for the
+users with the narrowest permissions: the user cleared for one percent of the
+corpus is the one whose evidence quietly goes missing. Prefiltering buys that
+recall back and charges latency for it, and Microsoft has already picked a
+side: `preFilter` is the default for indexes created after October 2023 and the
+recommended mode in every scenario, on the stated ground that the bias should
+favor recall over speed. On Microsoft's own benchmark, at one million vectors
+of 1,536 dimensions, a filter selecting under 2% of the corpus made
+prefiltering about seven times slower than postfiltering, and the penalty
+does not fade with scale: the billion-vector index in the same tests, at 96
+dimensions on a larger service tier, showed the same sevenfold gap once the
+filter admitted under 10% [@microsoft2026vectorfilters].
+
+The reranker inherits whatever survives. A permission filter placed between
+retrieval and reranking hands the cross-encoder a shortlist shorter than the
+depth that was tuned, so the diminishing-returns curve in
+@fig-rag-retrieval-curve is being read at a shallower depth than the one
+configured. Placed after the reranker, it spends cross-encoder compute
+on chunks that are then discarded and still returns fewer than $k$. Either way
+the remedy is to over-fetch, retrieving on the order of $k$ divided by the
+fraction of the corpus this caller can see, which makes the retriever's $k$ a
+property of the requester rather than of the index. A funnel tuned once against
+a corpus-wide recall-at-$k$ target is tuned for a requester who can see every
+document, and in an enterprise deployment no such requester exists. The depth
+worth tuning against is the narrowest entitlement the system must still serve
+well.
+
+Permissions also change faster than a corpus is re-embedded. Query-time
+enforcement compares the caller's claims against permission metadata already
+stored in the index, so a revocation takes effect only once that metadata is
+synchronized: a later indexer run, a push-API update, an explicit resync
+[@microsoft2026docaccess]. In between sits a window where the index encodes an
+entitlement that no longer holds, and the two directions of error are not
+symmetric, since a stale over-broad entry leaks and a stale narrow one only
+annoys. Granting by group rather than by user shrinks the window: group
+membership is resolved at query time through Microsoft Graph
+[@microsoft2026aclenforcement], so only the document-to-group edge ages with
+the index, and moving a person out of a group takes effect on their next query.
+
 ## Three weaknesses, three lines of attack
 
-That rigidity is also where the funnel breaks. The naive pipeline decouples its
+The funnel's rigidity is also where it breaks. The naive pipeline decouples its
 stages and runs each exactly once, which gives it three structural weaknesses,
 and most of the field's evolution is one line of work per weakness,
 @fig-rag-evolution.
