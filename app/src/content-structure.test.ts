@@ -161,9 +161,9 @@ test("evaluation is a full seven-chapter measurement part in both languages", ()
 });
 
 test("the expanded ecosystem part is reflected in top-level book surfaces", () => {
-  expect(src("README.md")).toContain("market structure");
-  expect(src("README.md")).toContain("adoption and productivity");
-  expect(src("README.md")).toContain("data rights");
+  expect(flat("README.md")).toContain("market structure");
+  expect(flat("README.md")).toContain("adoption and productivity");
+  expect(flat("README.md")).toContain("data rights");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Ecosystem and economics depth**");
 });
 
@@ -265,7 +265,7 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
     ["en/ecosystem/04-economics.qmd", "Training is a @gls-capex: a capital-style, one-time spend"],
     ["zh/ecosystem/04-economics.qmd", "训练是一笔@gls-capex：像资本开支一样一次性付出"],
     ["en/safety/01-mechanistic-interpretability.qmd", "The hypothesis is @gls-superposition: a model represents more features than it has dimensions"],
-    ["zh/safety/01-mechanistic-interpretability.qmd", "这个假说叫@gls-superposition：模型表示的特征多于它的维度"],
+    ["zh/safety/01-mechanistic-interpretability.qmd", "这个假说叫@gls-superposition：模型之所以能表示多于自身维度的特征"],
     ["en/safety/02-scalable-oversight-control.qmd", "The answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training"],
     ["zh/safety/02-scalable-oversight-control.qmd", "答案是@gls-deceptive-alignment：模型可能在训练与评测下表现得像是对齐"],
     ["en/practice/11-human-interface-oversight.qmd", "It may have created @gls-automation-bias: people over-accepting automated advice"],
@@ -322,7 +322,7 @@ test("early-book glossary first uses are readable without leaving the page", () 
     ["zh/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding把带小数概率的符号写成一条近似最优的比特码流"],
     ["en/orientation/03-borrowed-ideas.qmd", "@gls-two-part-code, an accounting that charges for the model description"],
     ["zh/orientation/03-borrowed-ideas.qmd", "用@gls-two-part-code来算，也就是先付模型描述长度"],
-    ["en/foundations/01-scaling-laws.qmd", "@gls-cross-entropy is the loss on the shifted sequence"],
+    ["en/foundations/01-scaling-laws.qmd", "@gls-cross-entropy, the number of bits, or *nats* if measured in natural-log units, the model spends to encode each true next token"],
     ["en/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp is the native version of the same full sharding idea"],
     ["zh/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp 则是同一全分片思路的原生版本"],
     ["en/foundations/07-mid-training.qmd", "@gls-sft on demonstrations, @gls-dpo from chosen-versus-rejected preferences"],
@@ -352,8 +352,9 @@ test("generative adaptation and reasoning first uses define the method locally",
     ["zh/adaptation/04-dpo-variants.qmd", "@gls-kto改从好/坏标签学习，去掉成对数据要求"],
     ["en/reasoning/01-eliciting-reasoning.qmd", "@gls-cot, a written chain of intermediate reasoning steps"],
     ["zh/reasoning/01-eliciting-reasoning.qmd", "@gls-cot，也就是写出来的一串中间推理步骤"],
-    ["en/reasoning/05-training-to-reason.qmd", "@gls-rloo, policy-gradient variants that compute a baseline from sampled groups"],
-    ["zh/reasoning/05-training-to-reason.qmd", "@gls-rloo这两种从一组采样里计算基线的策略梯度变体"],
+    // The lock spans the nested gloss of "baseline" the readability pass added.
+    ["en/reasoning/05-training-to-reason.qmd", "@gls-rloo are policy-gradient variants that compute a baseline (the reference value an outcome is compared against to decide if it was better than typical) from sampled groups"],
+    ["zh/reasoning/05-training-to-reason.qmd", "@gls-rloo是两种策略梯度变体，它们从一组采样里计算基线（用来判断某个结果是否好于寻常的参照值）"],
   ];
 
   for (const [path, snippet] of required) {
@@ -364,18 +365,21 @@ test("generative adaptation and reasoning first uses define the method locally",
 test("serving retrieval and evaluation first uses explain operational terms locally", () => {
   const required = [
     ["zh/inference/01-serving-problem.qmd", "@gls-mqa（多查询注意力，让多个查询头共享同一套键/值头）"],
-    ["en/inference/05-structured-long-context.qmd", "@gls-fsm, a finite-state machine that tracks which grammar state"],
-    ["zh/inference/05-structured-long-context.qmd", "@gls-fsm，也就是记录部分输出走到哪个语法状态的有限状态机"],
+    // @gls-fsm already renders as "finite-state machine (FSM)", so the gloss names
+    // the machine's job instead of repeating the expansion.
+    ["en/inference/05-structured-long-context.qmd", "@gls-fsm, a machine that tracks which grammar state the partial output is in"],
+    ["zh/inference/05-structured-long-context.qmd", "@gls-fsm给 logits 做掩码，也就是让一台记录语法走到了哪个状态的机器来决定下一个词元能是什么"],
     ["en/inference/05-structured-long-context.qmd", "@gls-attention-sink behavior where early tokens keep attracting attention"],
     ["zh/inference/05-structured-long-context.qmd", "@gls-attention-sink 这种开头词元持续吸引注意力的现象"],
     ["en/inference/05-structured-long-context.qmd", "@gls-constrained-decoding, the grammar-checked decode loop"],
     ["zh/inference/05-structured-long-context.qmd", "@gls-constrained-decoding，也就是带语法检查的解码循环"],
     ["en/orchestration/08-rag-retrieval.qmd", "@gls-bm25 lexical baseline, a sparse keyword-scoring method"],
     ["zh/orchestration/08-rag-retrieval.qmd", "@gls-bm25 词法基线，也就是一种稀疏关键词打分方法"],
-    ["en/evaluation/01-benchmarks.qmd", "@gls-held-out set is data deliberately kept out of every training stage"],
+    // @gls-held-out already renders as "held-out set"; the gloss follows the term.
+    ["en/evaluation/01-benchmarks.qmd", "@gls-held-out is data deliberately kept out of every training stage"],
     ["zh/evaluation/01-benchmarks.qmd", "@gls-held-out 指从每个训练阶段都排除在外的数据集"],
-    ["en/evaluation/01-benchmarks.qmd", "@gls-membership-inference, tests that ask whether a specific example looks trained-on"],
-    ["zh/evaluation/01-benchmarks.qmd", "@gls-membership-inference，也就是判断某个具体样本是否像被训练过的测试"],
+    ["en/evaluation/01-benchmarks.qmd", "@gls-membership-inference, tests that ask whether a specific example was in the training data"],
+    ["zh/evaluation/01-benchmarks.qmd", "@gls-membership-inference，也就是判断某个具体样本是否出现在训练数据里的测试"],
     ["en/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge, a model used as the grader"],
     ["zh/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge，也就是用模型当评分器"],
   ];
@@ -397,7 +401,8 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, which lets one machine move bytes into another's memory"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-rdma，也就是绕过 CPU 直接读写远端内存"],
     ["en/infrastructure/05-the-compute-frontier.qmd", "@gls-cowos package: an advanced package that places compute chiplets and HBM"],
-    ["zh/infrastructure/05-the-compute-frontier.qmd", "@gls-cowos这种把计算小芯片与 HBM 放到同一块硅中介层上的先进封装"],
+    // The zh twin introduces before use: the interposer is described, then named.
+    ["zh/infrastructure/05-the-compute-frontier.qmd", "并排铺在一块硅中介层上，这正是 @gls-cowos 这类先进封装"],
     ["en/infrastructure/07-powering-it.qmd", "@gls-pue, the ratio of total facility power to IT equipment power"],
     ["zh/infrastructure/07-powering-it.qmd", "@gls-pue，也就是数据中心总耗电除以 IT 设备耗电的比值"],
     ["en/infrastructure/08-the-machine-that-breaks.qmd", "@gls-mtbf, the expected interval between failures for the whole job"],
@@ -464,11 +469,11 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("en/orientation/02-field-map.qmd")).toContain(">Base Model Formation</tspan>");
   expect(src("zh/orientation/02-field-map.qmd")).toContain('id="fm-PI"');
   expect(src("zh/orientation/02-field-map.qmd")).toContain(">基座模型的形成</tspan>");
-  expect(src("en/orientation/index.qmd")).toContain("base-model formation, adaptation");
-  expect(src("zh/orientation/index.qmd")).toContain("经过基座模型形成和适配");
+  expect(src("en/orientation/index.qmd")).toContain("base-model formation (training the raw model), adaptation");
+  expect(src("zh/orientation/index.qmd")).toContain("经过基座模型形成（训练出原始模型）与适配");
   expect(src("en/orientation/01-whole-stack.qmd")).toContain("Station two: base-model formation");
   expect(src("zh/orientation/01-whole-stack.qmd")).toContain("环节二：基座模型形成");
-  expect(src("en/foundations/summary.qmd")).toContain("base-model formation is infrastructure");
+  expect(src("en/foundations/summary.qmd")).toContain("Base-model formation is infrastructure, not background");
   expect(src("zh/foundations/summary.qmd")).toContain("基座模型形成不是背景知识");
   expect(flat("en/summary.qmd")).toContain("We began with base-model formation");
   expect(src("zh/summary.qmd")).toContain("我们从基座模型的形成开始");
@@ -650,5 +655,5 @@ test("the infrastructure arc explicitly hands off to ecosystem and practice", ()
   const zhPractice = src("zh/practice/index.qmd");
   expect(zhPractice).toContain("第九部分暴露");
   expect(zhPractice).toContain("第十部分则说明");
-  expect(zhPractice).toContain("这里开始问");
+  expect(zhPractice).toContain("到了这一部分，要问的是另一类问题");
 });

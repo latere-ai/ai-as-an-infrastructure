@@ -660,11 +660,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/01-eliciting-reasoning.qmd",
-      ["@gls-cot helps because", "sampling many chains and voting helps", "useful branches", "verifier is the component that turns best-of-N"],
+      ["@gls-cot, a written chain of intermediate reasoning steps, helps because", "sampling many chains and voting helps", "useful branches", "verifier is the component that turns best-of-N"],
     ],
     [
       "zh/reasoning/01-eliciting-reasoning.qmd",
-      ["@gls-cot管用", "采样许多条链再投票更稳", "问题存在可探索分支", "验证器则是把 best-of-N"],
+      ["@gls-cot，也就是写出来的一串中间推理步骤，管用", "采样许多条链再投票更稳", "问题存在可探索分支", "验证器则是把 best-of-N"],
     ],
     [
       "en/reasoning/02-structured-reasoning-search.qmd",
@@ -804,11 +804,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/01-benchmarks.qmd",
-      ["published benchmark score is never a fact about a model alone", "@gls-held-out is a pipeline contract", "@gls-contamination silently inflates numbers", "harness, data contract, and uncertainty"],
+      ["published benchmark score is never a fact about a model alone", "@gls-held-out is data deliberately kept out of every training stage; it is a pipeline contract", "@gls-contamination silently inflates numbers", "harness, data contract, and uncertainty"],
     ],
     [
       "zh/evaluation/01-benchmarks.qmd",
-      ["基准分数，从来不是关于模型本身的事实", "@gls-held-out 是一份流水线契约", "@gls-contamination会不声不响地推高数字", "框架、数据契约与不确定性"],
+      ["基准分数，从来不是关于模型本身的事实", "@gls-held-out 指从每个训练阶段都排除在外的数据集，它是一份流水线契约", "@gls-contamination会不声不响地推高数字", "框架、数据契约与不确定性"],
     ],
     [
       "en/evaluation/02-statistical-reliability.qmd",
@@ -828,11 +828,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/04-judging-holistic.qmd",
-      ["@gls-llm-as-judge is biased", "arena-style preference ranking", "@gls-pairwise-comparison votes into a single number", "private test set is worth more"],
+      ["@gls-llm-as-judge, a model used as the grader, is biased", "arena-style preference ranking", "@gls-pairwise-comparison votes, head-to-head choices between two responses, into a single number", "private test set is worth more"],
     ],
     [
       "zh/evaluation/04-judging-holistic.qmd",
-      ["@gls-llm-as-judge会产生偏差", "竞技场式的偏好排名", "@gls-pairwise-comparison汇成单一数字", "私有测试集也因此比公开排行榜更有价值"],
+      ["@gls-llm-as-judge，也就是用模型当评分器，会产生偏差", "竞技场式的偏好排名", "@gls-pairwise-comparison，也就是两两回答的偏好票，汇成单一数字", "私有测试集也因此比公开排行榜更有价值"],
     ],
     [
       "en/evaluation/05-factuality-grounding.qmd",
@@ -876,11 +876,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/03-security-authorization.qmd",
-      ["agent acts in the world with someone's authority", "standing broad token plus a @gls-prompt-injection equals a breach", "Identity and governance split", "downstream of a verified principal"],
+      ["agent acts in the world with someone's authority", "standing broad token plus a @gls-prompt-injection, an instruction hidden in untrusted content, equals a breach", "Identity and governance split", "downstream of a verified principal"],
     ],
     [
       "zh/safety/03-security-authorization.qmd",
-      ["带着某人的授权在世界里行动", "长期存在的宽泛令牌，加上一次@gls-prompt-injection，就等于一次入侵", "身份与治理", "经过验证的主体的下游"],
+      ["带着某人的授权在世界里行动", "长期存在的宽泛令牌，加上一次@gls-prompt-injection，也就是藏在不可信内容里的指令，就等于一次入侵", "身份与治理", "经过验证的主体的下游"],
     ],
     [
       "en/safety/04-runtime-safety.qmd",
@@ -896,15 +896,15 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/05-adversarial-robustness.qmd",
-      ["@gls-jailbreak攻击的四个家族", "@gls-red-teaming是一项度量工作", "每一种已知防御都是局部的", "@gls-adversarial-robustness从结构上说是系统的属性"],
+      ["@gls-jailbreak攻击，也就是绕过拒绝边界的提示，已经分出四个家族", "@gls-red-teaming是一项度量工作", "每一种已知防御都是局部的", "@gls-adversarial-robustness从结构上说是系统的属性"],
     ],
     [
       "en/safety/06-privacy-provenance-unlearning.qmd",
-      ["lossy compression of its training set", "leaks at serving time what it absorbed at training time", "upstream or in a retraining run rather than at the output", "@gls-machine-unlearning can and cannot promise", "Memorization is not a bug layered on top of learning"],
+      ["lossy compression of its training set", "leaks at serving time what it absorbed at training time", "upstream or in a retraining run rather than at the output", "@gls-machine-unlearning, approximate removal of a learned fact from trained weights, can promise some things and not others", "Memorization is not a bug layered on top of learning"],
     ],
     [
       "zh/safety/06-privacy-provenance-unlearning.qmd",
-      ["训练集的一次有损压缩", "服务时泄露它在训练时吸收的内容", "上游或一次重训练里，而不是输出端", "@gls-machine-unlearning能承诺什么、不能承诺什么", "记忆不是学习之外额外叠上的 bug"],
+      ["训练集的一次有损压缩", "服务时泄露它在训练时吸收的内容", "上游或一次重训练里，而不是输出端", "@gls-machine-unlearning，也就是近似地从已训练权重里移除某个已学事实，能承诺什么、不能承诺什么", "记忆不是学习之外额外叠上的 bug"],
     ],
     [
       "en/safety/08-law-regulation-policy.qmd",
@@ -992,7 +992,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/05-structured-long-context.qmd",
-      ["用@gls-fsm给 logits 做掩码", "预计算索引和跳跃式前向", "滑动窗口、@gls-attention-sink 与重击者驱逐", "查询感知策略"],
+      ["用@gls-fsm给 logits 做掩码", "预计算索引和跳跃式前向", "滑动窗口、@gls-attention-sink 这种开头词元持续吸引注意力的现象，与重击者驱逐", "查询感知策略"],
     ],
     [
       "en/inference/06-serving-multimodal.qmd",
@@ -1164,7 +1164,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/10-reliability-nondeterministic.qmd",
-      ["@gls-sli for an output that is never twice the same", "measure a distribution", "reliable at every single step", "chase determinism", "embrace sampling and verify"],
+      ["For an output that is never twice the same, a @gls-sli, the metric that decides whether served events count as valid", "measure a distribution", "reliable at every single step", "chase determinism", "embrace sampling and verify"],
     ],
     [
       "zh/practice/10-reliability-nondeterministic.qmd",
