@@ -567,7 +567,10 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
   for (const lang of ["en", "zh"]) {
     for (const path of qmdPaths(lang)) {
       if (path.endsWith("/index.qmd") || path.endsWith("/summary.qmd")) continue;
+      // Back matter carries no argument, so it owes no contested box or
+      // constraint arrow.
       if (path.endsWith("references.qmd") || path.endsWith("glossary.qmd")) continue;
+      if (path.endsWith("changelog.qmd")) continue;
 
       const text = src(path);
       if (!contestedExceptions.has(path)) {
