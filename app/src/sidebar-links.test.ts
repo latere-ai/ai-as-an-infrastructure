@@ -69,8 +69,12 @@ test("sidebar external about links are localized on zh pages", () => {
     },
   }));
 
-  expect(html).toContain(">关于作者</a>");
-  expect(html).toContain(">关于 Latere AI</a>");
-  expect(html).not.toContain(">About Author</a>");
-  expect(html).not.toContain(">About Latere AI</a>");
+  // The shell appends an external-link arrow to each label, and React's SSR
+  // splits the two text children with a `<!-- -->` marker. Strip the marker so
+  // the assertions still pin the full anchor text, arrow included.
+  const text = html.replace(/<!-- -->/g, "");
+  expect(text).toContain(">关于作者 ↗</a>");
+  expect(text).toContain(">关于 Latere AI ↗</a>");
+  expect(text).not.toContain(">About Author ↗</a>");
+  expect(text).not.toContain(">About Latere AI ↗</a>");
 });
