@@ -35,7 +35,7 @@ const handoffs: Array<[string, string[], string[]]> = [
   ["adaptation", ["Part IV asks what can be left to inference time"], ["第四部分要问的是"]],
   ["reasoning", ["Part V turns that routing problem into serving machinery"], ["第五部分会把这个路由问题落到服务机器上"]],
   ["inference", ["Part VI begins when a served model is asked to do work"], ["第六部分从这里开始"]],
-  ["orchestration", ["Part VII supplies that instrument layer"], ["第七部分要补上的正是这层仪器"]],
+  ["orchestration", ["Part VII supplies that instrument layer"], ["第七部分补上的就是这层仪器"]],
   ["evaluation", ["Part VIII starts from that dependency on evidence"], ["第八部分接着问"]],
   ["safety", ["Part IX moves below the policy surface"], ["第九部分会再往下走"]],
   ["infrastructure", ["next part can turn to economics"], ["下一部分转向经济"]],
