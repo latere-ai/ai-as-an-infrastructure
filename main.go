@@ -205,14 +205,31 @@ func serveStatic(w http.ResponseWriter, r *http.Request, p string) {
 
 	// Content router: resolve the clean URL to the on-disk file, mirroring
 	// nginx's `try_files $uri $uri.html $uri/`.
-	var candidates []string
+	//
+	// One page must not be reachable under two spellings. A page's own links and
+	// images are relative, and the browser resolves them against the directory
+	// of the URL it is on, so "/en" and "/en/" are not interchangeable: at "/en"
+	// the cover image "figures/cover-dark.png" resolves to "/figures/..." and
+	// 404s. Each form therefore serves only if it is the canonical one, and 301s
+	// to the other when it is not: a directory index takes the trailing slash, a
+	// page file does not.
 	if name == "" || strings.HasSuffix(name, "/") {
-		candidates = []string{name + "index.html"}
+		if writeFile(w, r, name+"index.html", false) {
+			return
+		}
+		if trimmed := strings.TrimSuffix(name, "/"); trimmed != "" &&
+			(exists(trimmed) || exists(trimmed+".html")) {
+			http.Redirect(w, r, "/"+trimmed, http.StatusMovedPermanently)
+			return
+		}
 	} else {
-		candidates = []string{name, name + ".html", name + "/index.html"}
-	}
-	for _, c := range candidates {
-		if writeFile(w, r, c, false) {
+		for _, c := range []string{name, name + ".html"} {
+			if writeFile(w, r, c, false) {
+				return
+			}
+		}
+		if exists(name + "/index.html") {
+			http.Redirect(w, r, "/"+name+"/", http.StatusMovedPermanently)
 			return
 		}
 	}
@@ -220,6 +237,12 @@ func serveStatic(w http.ResponseWriter, r *http.Request, p string) {
 	// Unknown content URL -> back to the site entrypoint (which 302s to a
 	// language home) instead of exposing a bare 404 page.
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// exists reports whether name is an embedded file (not a directory).
+func exists(name string) bool {
+	info, err := fs.Stat(book, name)
+	return err == nil && !info.IsDir()
 }
 
 // writeFile serves the embedded file at name, returning false (without writing)
