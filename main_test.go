@@ -98,6 +98,12 @@ func TestRouting(t *testing.T) {
 	noloop(t, follow, base, "/en")
 	noloop(t, follow, base, "/en/foundations/")
 
+	// A legacy path with a trailing slash still lands on the new URL in one hop:
+	// the reorg patterns absorb the slash, so slash canonicalization never runs.
+	loc(t, nf, base, "/en/p3-reasoning/inference-time-scaling/", "/en/reasoning/inference-time-scaling", "")
+	noloop(t, follow, base, "/en/p3-reasoning/inference-time-scaling/")
+	noloop(t, follow, base, "/zh/infrastructure/verification-frontier/")
+
 	// Missing content paths return to the site entrypoint.
 	code(t, nf, base, "/zh/nope", 302)
 	loc(t, nf, base, "/zh/nope", "/", "")
