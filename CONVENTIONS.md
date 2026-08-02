@@ -130,7 +130,7 @@ Two motifs run through the prose without needing a callout: the **three
 loops** (training, inference, agentic) as one recurring control structure,
 and the **capability, efficiency, trust** lens that closes a chapter.
 
-## Bilingual
+## Language trees
 
 The book has two parallel language trees, `en/` and `zh/`. A chapter exists as
 the same path under both trees with the same `{#sec-...}` label, and each tree

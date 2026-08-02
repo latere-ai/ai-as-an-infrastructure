@@ -1,6 +1,6 @@
 # AI as an Infrastructure
 
-A bilingual technical book, written design-first. The spine is the lifecycle of
+A technical book, written design-first. The spine is the lifecycle of
 a capability, from compute to a deployed and governed behavior. See `README.md`
 for the part list and `CONVENTIONS.md` for how chapters are written.
 
@@ -8,7 +8,7 @@ Released under latere.ai, licensed CC BY-NC-ND 4.0.
 
 ## Layout
 
-- Content is bilingual markdown: `en/<part>/NN-slug.qmd` and the `zh/` twin,
+- Content is markdown in two language trees: `en/<part>/NN-slug.qmd` and the `zh/` twin,
   with the same chapter paths and `{#sec-...}` labels under each. `en/book.yml`
   and `zh/book.yml` are the chapter/part manifests read by the custom reader.
 - The site is a **custom React + Bun reader** in `app/`. It

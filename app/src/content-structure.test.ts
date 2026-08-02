@@ -9,6 +9,14 @@ function flat(p: string) {
   return src(p).replace(/\s+/g, " ");
 }
 
+// README's outline is wrapped prose whose part titles are links to the site.
+// Assertions below track content, not layout, so they match against text with
+// the line wrapping collapsed and the link syntax unwrapped: reflowing a
+// paragraph or linking a title must not turn a doc edit into a red build.
+function outline(p: string) {
+  return flat(p).replace(/\[([^\]]+)\]\([^)]*\)/g, "$1");
+}
+
 function qmdPaths(dir: string): string[] {
   const base = new URL("../../" + dir + "/", import.meta.url);
   const out: string[] = [];
@@ -38,7 +46,7 @@ test("the human-interface chapter closes the recorded content gap", () => {
     expect(src(`${lang}/orientation/02-field-map.qmd`)).toContain("@sec-human-interface-oversight");
     expect(src(`${lang}/practice/11-human-interface-oversight.qmd`)).toContain("{#sec-human-interface-oversight}");
   }
-  expect(src("README.md")).toContain("human oversight surfaces");
+  expect(outline("README.md")).toContain("human oversight surfaces");
 });
 
 test("practice and operations closes with operating contracts in both languages", () => {
@@ -74,7 +82,7 @@ test("practice and operations closes with operating contracts in both languages"
 });
 
 test("operating contracts are tracked in top-level book surfaces", () => {
-  expect(src("README.md")).toContain("operating contracts for SLOs, cost governance, incidents, and multi-tenancy");
+  expect(outline("README.md")).toContain("operating contracts for SLOs, cost governance, incidents, and multi-tenancy");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Operating contracts and infrastructure operations**");
   expect(src("en/index.qmd")).toContain("SLOs, cost governance, incidents");
   expect(src("zh/index.qmd")).toContain("SLO、成本治理、事故");
@@ -161,15 +169,15 @@ test("evaluation is a full seven-chapter measurement part in both languages", ()
 });
 
 test("the expanded ecosystem part is reflected in top-level book surfaces", () => {
-  expect(flat("README.md")).toContain("market structure");
-  expect(flat("README.md")).toContain("adoption and productivity");
-  expect(flat("README.md")).toContain("data rights");
+  expect(outline("README.md")).toContain("market structure");
+  expect(outline("README.md")).toContain("adoption and productivity");
+  expect(outline("README.md")).toContain("data rights");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Ecosystem and economics depth**");
 });
 
 test("the expanded evaluation part is tracked in top-level book surfaces", () => {
-  expect(src("README.md")).toContain("statistical reliability");
-  expect(src("README.md").replace(/\s+/g, " ")).toContain("operational governance");
+  expect(outline("README.md")).toContain("statistical reliability");
+  expect(outline("README.md")).toContain("operational governance");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Evaluation depth and governance**");
 });
 
@@ -209,9 +217,9 @@ test("post-training adaptation is a full seven-chapter part in both languages", 
 });
 
 test("the expanded adaptation part is tracked in top-level book surfaces", () => {
-  expect(src("README.md")).toContain("behavior specifications");
-  expect(src("README.md")).toContain("verifiable rewards");
-  expect(src("README.md")).toContain("instruction hierarchy");
+  expect(outline("README.md")).toContain("behavior specifications");
+  expect(outline("README.md")).toContain("verifiable rewards");
+  expect(outline("README.md")).toContain("instruction hierarchy");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Post-training adaptation and alignment depth**");
 });
 
@@ -447,7 +455,7 @@ test("audited leftover first uses define the role of the term in place", () => {
 });
 
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
-  expect(src("README.md")).toContain("mid-training bridges");
+  expect(outline("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
   expect(src("zh/index.qmd")).toContain("中段训练桥接");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Mid-training bridge**");
@@ -462,7 +470,7 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("zh/book.yml")).toContain('part: "第一部分 · 基座模型的形成"');
   expect(src("en/foundations/index.qmd")).toContain("# Part I: Base Model Formation");
   expect(src("zh/foundations/index.qmd")).toContain("# 第一部分 · 基座模型的形成");
-  expect(src("README.md")).toContain("Part I, Base Model Formation");
+  expect(outline("README.md")).toContain("Part I, Base Model Formation");
   expect(src("en/index.qmd")).toContain("Part I, Base Model Formation");
   expect(src("zh/index.qmd")).toContain("第一部分，基座模型的形成");
   expect(src("en/orientation/02-field-map.qmd")).toContain('id="fm-PI"');
@@ -548,9 +556,9 @@ test("reasoning and test-time compute is a full seven-chapter part in both langu
 });
 
 test("the expanded reasoning part is tracked in top-level book surfaces", () => {
-  expect(src("README.md")).toContain("structured search");
-  expect(src("README.md")).toContain("verifiers");
-  expect(src("README.md")).toContain("reasoning data");
+  expect(outline("README.md")).toContain("structured search");
+  expect(outline("README.md")).toContain("verifiers");
+  expect(outline("README.md")).toContain("reasoning data");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Reasoning and test-time compute depth**");
 });
 
@@ -621,7 +629,7 @@ test("the compute substrate ends before the frontier part begins", () => {
 
   expect(src("en/book.yml")).toContain('part: "Part X: Frontiers and Limits"');
   expect(src("zh/book.yml")).toContain('part: "第十部分 · 前沿与极限"');
-  expect(src("README.md")).toContain("**Part X, Frontiers and Limits.**");
+  expect(outline("README.md")).toContain("**Part X, Frontiers and Limits.**");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Verification frontier**");
 });
 

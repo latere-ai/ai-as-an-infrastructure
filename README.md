@@ -1,12 +1,17 @@
 # AI as an Infrastructure
 
+[![build](https://img.shields.io/github/actions/workflow/status/latere-ai/ai-as-an-infrastructure/render.yml?branch=main&label=build)](https://github.com/latere-ai/ai-as-an-infrastructure/actions/workflows/render.yml)
+[![release](https://img.shields.io/github/v/release/latere-ai/ai-as-an-infrastructure?label=release)](https://github.com/latere-ai/ai-as-an-infrastructure/releases)
+[![updated](https://img.shields.io/github/last-commit/latere-ai/ai-as-an-infrastructure/main?label=updated)](https://aaai.latere.ai/en/changelog)
+[![license](https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-blue)](LICENSE)
+
 From Systems to Agents: history, design decisions, and foundations.
 
-**Read it: [aaai.latere.ai/en](https://aaai.latere.ai/en) (English) ·
-[aaai.latere.ai/zh](https://aaai.latere.ai/zh) (中文)**
+**Read it: [aaai.latere.ai/en](https://aaai.latere.ai/en/) (English) ·
+[aaai.latere.ai/zh](https://aaai.latere.ai/zh/) (中文)**
 
-A bilingual book that treats AI as an infrastructure and explains it
-design-first. It follows one continuous arc, the lifecycle of a capability,
+A book that treats AI as an infrastructure and explains it design-first.
+It follows one continuous arc, the lifecycle of a capability,
 from raw compute to a deployed and governed behavior, asking at every step
 how each piece got its shape, what trade-offs that shape encodes, and the
 theory underneath. It is not a replacement for dedicated scaling, distributed
