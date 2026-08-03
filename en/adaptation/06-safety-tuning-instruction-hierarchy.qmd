@@ -1,203 +1,293 @@
 # Safety Tuning and Instruction Hierarchy {#sec-safety-tuning}
 
-Instruction following is not enough. A model that grants every user request is
-unsafe, while one that refuses every risky-looking request is useless. And when a
-model treats tool output as instruction, it becomes vulnerable to prompt
-injection, where untrusted input smuggled into that text hijacks the model's own
-instructions. Safety tuning is the part of post-training that teaches these
-boundaries before the runtime system ever sees a request.
+Safety tuning has to make two different decisions before a model answers. The first is
+about output policy: what behavior is allowed for this request? The second uses an
+instruction hierarchy to decide which instructions control the response when the context
+disagrees. Confusing them creates two familiar failures. A model may comply with a harmful
+request or refuse a
+harmless one, and it may obey attacker-controlled text instead of the application that
+invoked it.
 
-The training-time layer comes first. Runtime filters, policy engines, and
-authorization systems appear later in @sec-runtime-safety and
-@sec-security-authorization. The narrower task here is still foundational:
-teach the model which behavior is allowed, which instruction has authority, and
-how to reason over a written policy without turning every borderline request
-into a refusal.
+Training can improve both decisions, but it cannot give the model a security perimeter.
+Post-training changes the model's behavior, not its permissions. Runtime safety,
+authorization, secret handling, and tool isolation remain separate system responsibilities.
 
-## Safety as a calibrated boundary
+## Two decisions, two error surfaces
 
-A refusal is a classifier decision expressed in natural language. For a prompt
-$x$, the model chooses among actions such as answer, refuse, ask a clarifying
-question, transform safe portions, or escalate. A simple constrained objective
-captures the tension:
+The output-policy decision asks whether a candidate response stays within a written safety
+policy while preserving as much useful help as the policy permits. The authority decision
+asks which instructions are applicable, then resolves conflicts among them. These decisions
+interact, but neither can replace the other.
+
+| Decision | Desired behavior | Dangerous miss | Overcorrection |
+|---|---|---|---|
+| Output policy | Give the most useful permitted response | Unsafe compliance | Benign refusal or needless loss of detail |
+| Instruction authority | Follow all applicable instructions, with higher authority winning only on conflict | Jailbreak or prompt injection succeeds | A valid lower-authority instruction is ignored |
+| Runtime authorization | Permit only approved actions and data flows | Unauthorized side effect or disclosure | A legitimate operation is blocked |
+
+A jailbreak and a prompt injection are related but not identical. A jailbreak tries to
+bypass the model's learned safety behavior and need not exploit a conflict between message
+roles. Direct prompt injection puts attacker-controlled text in the user's request to
+override an application's instructions [@perez2022ignore]. Indirect prompt injection hides
+the text in a web page, document, email, or other third-party content that later enters the
+model's context [@greshake2023indirect]. The first two rows of the table are learned
+behaviors. The third row requires enforcement outside the model.
+
+## Refusal calibration is not binary
+
+Older safety recipes often framed the task as intent classification: comply with a benign
+request and refuse a malicious one. That framing works for clear cases, but it is brittle
+for dual-use requests. The same question about a biological protocol or software
+vulnerability may support defense, education, or abuse. The safe response may be a direct
+answer, a bounded answer that omits operational detail, a clarification, a refusal of one
+part, or a safe redirection. Refusal is one action, not the definition of safety.
+
+Two rates expose opposite sides of the boundary. Here $D_H$ is a held-out set of harmful
+requests and $D_B$ a held-out set of benign requests. Define
 
 $$
-\max_{\pi}\; \mathbb{E}[\operatorname{helpful}(x,y)]
-\quad \text{subject to} \quad
-\mathbb{E}[\operatorname{risk}(x,y)] \le \tau.
+\operatorname{UCR}
+=\frac{1}{|D_H|}\sum_{(x_i,y_i)\in D_H}\mathbf{1}[V(x_i,y_i)=1],
 $$
 
-Here the policy $\pi$ is optimized for helpfulness while the expected risk must
-stay below the threshold $\tau$.
-The threshold $\tau$ is a policy choice. Lower it and the model refuses more,
-reducing harmful completions but increasing @gls-over-refusal, where the model
-declines harmless requests. Raise it and the
-model becomes more helpful but lets more harmful requests through. RLHF can
-teach this boundary from comparisons, and constitutional methods can teach it
-from AI critiques over written principles [@bai2022constitutional]. But a
-boundary learned only from examples is brittle. Attackers search the space that
-the examples did not cover, and ordinary users suffer when a broad refusal
-template catches benign cases near a harmful class.
+where UCR is the unsafe-compliance rate, $x_i$ is request $i$, $y_i$ is the model's
+response, $V(x_i,y_i)=1$ means that the response violates the safety policy, $|D_H|$ is
+the number of harmful test requests, and $\mathbf{1}[\cdot]$ is the indicator function.
+For benign requests, define
+
+$$
+\operatorname{BRR}
+=\frac{1}{|D_B|}\sum_{(x_i,y_i)\in D_B}\mathbf{1}[F(x_i,y_i)=1],
+$$
+
+where BRR is the benign-refusal rate, $F(x_i,y_i)=1$ means that the response refuses or
+withholds help that the policy permits, and $|D_B|$ is the number of benign test requests.
+A lower UCR is not a success if BRR rises until the product becomes unusable.
+
+An average can hide the failure that matters. Report these rates by policy category,
+language, encoding, conversation length, and tool path. Also report the severity and
+actionability of unsafe outputs. A short response that avoids a refusal phrase but supplies
+no useful harmful information should not count as a successful attack.
 
 ```{=html}
 <figure id="fig-safety-tuning-frontier">
 <div class="viz" data-viz="safety-frontier"></div>
-<figcaption>Safety tuning is a frontier, not a single switch. Moving the refusal threshold reduces unsafe answers but increases benign refusals; better training moves the whole curve, but deployment still chooses an operating point. Idealized.</figcaption>
+<figcaption>A qualitative operating curve for a fixed risk score and evaluation set. Lowering the risk-score cutoff refuses more harmful requests and more benign requests. A better model may improve the empirical curve, but training does not guarantee that movement.</figcaption>
 </figure>
 ```
 
-## Instruction hierarchy
+Safe-completions training moves the target away from a hard comply-or-refuse label and
+toward the safety of the output. Yuan et al. train direct answers, bounded safe completions,
+and refusals with redirection, then use learned safety and helpfulness scores during
+reinforcement learning [@yuan2025safecompletions]. One disclosed reward is
 
-The second safety problem is authority. A modern model reads many text sources:
-system prompts, developer messages, user instructions, retrieved documents, tool
-outputs, web pages, emails, logs, and memory. Some are instructions; others are
-untrusted data. If the model cannot distinguish them, an attacker can place a
-malicious instruction inside data and have the model obey it.
+$$
+r_i=h_i s_i,
+$$
 
-Instruction hierarchy makes the authority order explicit. Wallace et al. define
-and train models to prefer higher-priority instructions over lower-priority
-conflicting ones: in their scheme the system message outranks user messages,
-which outrank the model's own earlier outputs, which outrank tool outputs, with
-developer text folded into the system message [@wallace2024instruction].
-OpenAI's Model Spec expands the hierarchy in product terms, separating the
-developer into a level of its own between system and user and adding root and
-guideline levels [@openai2025modelspec].
+where $h_i\in[0,1]$ is the learned helpfulness score for response $i$,
+$s_i\in[0,1]$ is its learned safety score, and $r_i$ is the resulting reward. Multiplication
+discourages both unsafe detail and empty but safe answers. It is still a learned proxy, not
+a hard constraint. The paper reports controlled and production gains, especially on
+dual-use prompts; those results do not establish that every policy, model, or adaptive
+attack receives the same trade-off.
+
+## Instruction hierarchy resolves applicable instructions
+
+Instruction hierarchy is a conflict rule, not a command to ignore every lower-level
+message. Lower-authority instructions should be followed when they are applicable and do
+not conflict with higher-authority constraints. At the same level, a later instruction may
+supersede an earlier one. Wallace et al. introduced targeted data generation for this
+behavior and showed improved robustness in experiments on GPT-3.5 [@wallace2024instruction].
+
+The exact ladder is a product convention rather than a law of language models. In the
+December 2025 OpenAI Model Spec snapshot, the stated order is **Root > System > Developer >
+User > Guideline**, followed by **No Authority** [@openai2025modelspec]. Assistant messages,
+tool outputs, and quoted or retrieved text have no authority by default in that
+specification. A higher-authority instruction can delegate authority to such content.
+
+Do not confuse role with trust. A developer message can quote attacker-controlled input,
+and a tool output can contain trustworthy facts without being allowed to rewrite policy.
+Conversely, a user can deliberately delegate a bounded task to instructions in a repository
+file. The system must preserve provenance inside messages, not infer trust from prose style
+or from the channel alone.
 
 ```{dot}
 //| label: fig-safety-tuning-hierarchy
-//| fig-cap: "Instruction hierarchy turns safety into conflict training. Higher-authority instructions should dominate lower-authority instructions, while untrusted content is treated as data, not command."
+//| fig-cap: "One product-specific authority chain. Higher authority wins only when applicable instructions conflict. Assistant, tool, quoted, and retrieved content has no authority by default; explicit delegation can make a bounded instruction applicable."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.35; ranksep=0.45;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  nodesep=0.18; ranksep=0.28;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9.5, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  root [label="Root / platform policy", fillcolor="#bfe3c0"];
+  root [label="Root rules", fillcolor="#bfe3c0"];
   system [label="System instruction"];
   developer [label="Developer instruction"];
   user [label="User instruction"];
-  tool [label="Tool output, retrieved docs,\nweb pages, emails", fillcolor="#f2c2c2"];
-  model [label="Model behavior\nfollow highest applicable authority"];
+  guideline [label="Guideline"];
+  data [label="No authority by default\nAssistant/tool/quoted/\nretrieved content", fillcolor="#f2c2c2"];
+  resolve [label="Resolve applicable,\nnon-conflicting candidates"];
+  response [label="Generate response\nthen enforce runtime controls"];
 
   root -> system [label="higher priority"];
   system -> developer;
   developer -> user;
-  user -> tool;
-  root -> model;
-  system -> model;
-  developer -> model;
-  user -> model;
-  tool -> model [style=dashed, label="data, not command"];
+  user -> guideline;
+  guideline -> resolve;
+  data -> resolve [style=dashed, label="delegation only"];
+  resolve -> response;
 }
 ```
 
-The training example is a conflict pair. Given context $c$ containing two
-conflicting instructions, choose response $y^+$ that follows the higher
-authority and reject response $y^-$ that follows the lower one:
+A practical resolver can be stated without pretending that natural-language conflicts are
+always mechanically decidable:
 
-$$
-\mathcal{L}_{\text{hier}} =
--\log \sigma\!\left(r(c,y^+) - r(c,y^-)\right).
-$$
+```text
+INPUT: context c, candidate instructions I(c), authority level a(i)
+1. Identify candidate instructions in authority-bearing sources.
+2. Mark quoted or retrieved text, tool output, and prior assistant text as data by default.
+3. Add a data-borne instruction only when an applicable instruction delegates authority to it.
+4. Remove candidates outside the task, superseded at the same level, or conflicting with a
+   higher applicable instruction.
+5. Follow every remaining compatible instruction, including lower-authority instructions.
+6. If conflict or delegation is ambiguous and the action has material side effects, ask or escalate.
+7. Generate response y, then apply output policy and runtime authorization.
+```
 
-This is the same pairwise machinery as @sec-rlhf, but the semantics of the
-preference are different. The label is not "which answer is nicer." It is
-"which answer respects the authority order." That difference matters because it
-turns safety from a list of forbidden topics into a source-sensitive behavior.
-The model learns that the same words have different force depending on where
-they came from.
+Here $c$ is the complete model context, $I(c)$ is the set of candidate instructions found
+in that context, $i$ denotes one candidate, $a(i)$ is its authority level, and $y$ is the
+response. Steps 1 through 6 define the behavioral target. They are not a deterministic
+parser or a proof that the model will follow the target.
 
-## Deliberation over policy
+## Train aligned and conflicting cases
 
-Safety examples alone do not cover the boundary. Deliberative Alignment adds a
-different ingredient: teach the model the written safety specification itself
-and train it to reason over that specification before answering
-[@guan2024deliberative]. It trains the model to recall and apply policy text at
-inference time, rather than to pattern-match a refusal. This is a change in what
-the model internalizes. Instead of only learning surface refusal patterns, it
-learns to recall policy text, apply it to the request, and choose a response
-type. Constitutional AI made the
-same pattern visible earlier through self-critique and revision against written
-principles [@bai2022constitutional]; Deliberative Alignment makes the policy
-reasoning more direct.
+Hierarchy training needs aligned and conflicting cases. If the dataset contains only
+attacks, a cheap strategy is to ignore users and tools. Wallace et al. avoid that shortcut
+with two constructions. *Context synthesis* creates examples in which lower-level context
+is relevant and should be followed. *Context ignorance* creates examples in which
+misaligned lower-level text should not affect the target response. Their reported recipe
+uses supervised fine-tuning and reinforcement learning from human feedback; the hierarchy
+is not defined by one universal pairwise loss.
 
-The benefit is generalization. A model trained only on prompt-to-refusal pairs
-learns local neighborhoods of danger. A model trained to reason over policy has
-a chance to handle an unseen request by mapping it to a rule. The risk is that
-policy reasoning can become theatrical. A model may produce a plausible
-justification for a decision it already would have made, or memorize policy
-phrases without improving calibration. The evaluation must therefore test the
-decision, not the beauty of the explanation.
+Evaluation needs the same contrast. IHEval contains 3,538 examples across nine tasks with
+both aligned and conflicting priorities. Its evaluated models all lost substantial
+accuracy under conflict, showing that ordinary instruction-following accuracy does not
+establish hierarchy behavior [@zhang2025iheval]. A model must succeed on four cases:
 
-This is also where behavior specifications from @sec-behavior-specs re-enter
-the pipeline. A safety-tuned model cannot be better than the policy it was
-given. If the policy is ambiguous about dual-use biology, privacy, self-harm, or
-political persuasion, the model will inherit that ambiguity. Written policy
-does not remove judgment; it relocates judgment into an auditable artifact.
+| Case | Expected behavior |
+|---|---|
+| Lower instruction is aligned and relevant | Follow it |
+| Lower instruction is irrelevant data | Ignore it for control, use it only as information |
+| Lower instruction conflicts with higher authority | Follow the higher instruction and continue safely if possible |
+| Delegation is ambiguous and action is consequential | Ask for clarification or require approval |
 
-## Refusal calibration
+IH-Challenge later built programmatically graded conflict tasks for reinforcement learning
+and generated adversarial examples online. On the authors' internal GPT-5-Mini experiment,
+average hierarchy robustness across 16 evaluations rose from 84.1 to 94.1 percent
+[@guo2026ihchallenge]. That is useful evidence that targeted training can generalize beyond
+its simplest tasks. It remains one model family, one training recipe, and a mixture of
+public and internal evaluations, not a universal security guarantee.
 
-The hard practical problem is not making a model refuse. It is making refusal
-specific. A good refusal boundary has several properties:
+## Written policy changes the supervision
 
-- it refuses the harmful transformation, not the topic itself;
-- it answers benign adjacent requests instead of treating the whole region as
-  forbidden;
-- it gives safe alternatives when those alternatives are genuinely useful;
-- it does not let style, roleplay, translation, or encoding move a harmful
-  request outside the boundary;
-- it preserves the instruction hierarchy under tool use and retrieval.
+Written principles can supply more than a list of refusal examples. Constitutional AI and
+Deliberative Alignment both use written policy, but they do so differently.
 
-These properties pull against one another. Broad refusals reduce false negatives
-but raise false positives. Narrow refusals preserve usefulness but expose more
-edge cases. Better training tries to move the whole frontier: more true harmful
-requests refused at the same benign-refusal rate. But there is still an
-operating point, and that operating point is a product and governance decision,
-not a mathematical constant.
+| Stage | Constitutional AI | Deliberative Alignment |
+|---|---|---|
+| Supervised data | Generate self-critique and revision using a constitution, then train on revised answers | Generate policy-grounded reasoning and answers from a safety specification |
+| Reinforcement signal | An AI judge compares responses under a principle; a preference model supplies reinforcement learning from AI feedback | A specification-aware judge scores whether the response applies the relevant policy |
+| Supported claim | The procedure produced a less evasive harmless assistant in the reported setting | The reported o-series experiments improved jailbreak robustness and overrefusal on their evaluations |
+| Unsupported leap | The model faithfully reasons from the constitution on every new request | A plausible policy explanation proves the internal reasoning was causal or correct |
 
-The refusal itself is also being retrained. OpenAI's safe-completions method,
-shipped in GPT-5, replaces the binary refuse-or-comply decision with
-output-centric training: the model learns to maximize helpfulness subject to
-the constraint that its own output stays within safety policy, rather than to
-classify the user's intent and answer or refuse on that classification
-[@yuan2025safecompletions]. The target is dual-use prompts, where intent
-classification fails because the same question serves the safety engineer and
-the attacker alike. This is the chapter's constrained objective, maximize
-helpfulness subject to risk below $\tau$, turned into a training recipe and
-applied to the output rather than the request.
+Constitutional AI first generates self-critique and revision, then fine-tunes on the revised
+responses. Its reinforcement phase uses AI comparisons to train a preference model, a
+procedure called reinforcement learning from AI feedback (RLAIF) [@bai2022constitutional].
+Deliberative Alignment instead trains synthetic examples that explicitly reference the
+safety specification and then applies a specification-aware reinforcement signal
+[@guan2024deliberative]. Neither procedure removes the human choices embedded in the
+policy, category labels, generators, judges, and evaluation sets.
+
+Evaluate policy reasoning at three observable stages: policy recall, policy application,
+and final output. The response should identify the relevant rule when an explanation is
+appropriate, apply it consistently to the facts, and produce a permitted useful answer.
+A fluent rationale cannot rescue a wrong decision. Conversely, a correct response need not
+expose private chain-of-thought to demonstrate compliance.
+
+The written policy is the supervised target, not ground truth. Ambiguous, inconsistent, or
+outdated rules create underspecification. Pretraining priors may make the model behave more
+sensibly than one ambiguous example, or may pull it away from the intended policy. Version
+the policy, the training data derived from it, and the evaluation suite together.
+
+## Evaluate the failure, not the refusal string
+
+Red teaming searches for failures; it does not certify their absence. A useful loop is:
+
+1. Define the policy taxonomy and threat model.
+2. Generate attacks with humans, models, transformations, and tool-mediated scenarios.
+3. Score the target's actual harmful usefulness, policy compliance, and task success.
+4. Cluster failures and convert selected examples into training or regression data.
+5. Keep entire attack families, not only near-duplicate strings, held out for evaluation.
+6. Repeat with adaptive attacks that observe previous defenses.
+
+Model-generated attacks and model judges can scale this loop, but they carry their own
+blind spots [@perez2022redteaming]. StrongREJECT found that common jailbreak evaluations
+often overstated success because bypassing a refusal could also degrade the answer into
+useless text [@souly2024strongreject]. Score whether the response delivers the prohibited
+capability, not whether it contains a refusal phrase.
+
+The release gate should report at least:
+
+- unsafe-compliance rate and severity by policy category;
+- benign-refusal rate on contrast sets such as XSTest [@rottger2024xstest];
+- safe-completion helpfulness and ordinary task quality;
+- aligned lower-level instruction following and conflicting-instruction accuracy;
+- direct and indirect prompt-injection success, prompt leakage, and unsafe tool actions;
+- results by language, encoding, multi-turn length, and retrieved-data source;
+- held-out attack-family results under a stated adaptive attack budget;
+- agreement between automated judges and policy-trained human reviewers.
+
+Do not tune on the release set. Training examples, red-team discoveries, and final
+evaluation cases need separate lineage so a higher score means more than memorizing the
+latest attack strings.
 
 ## Boundary with runtime safety
 
-Training-time safety is necessary and insufficient. It is necessary because the
-model's default behavior must already respect policy most of the time. It is
-insufficient because a deployed system faces fresh attacks, changing policy,
-tool permissions, jurisdictional differences, and data the model has never seen.
-Around the model, @sec-runtime-safety adds filters, classifiers, and response
-gates. @sec-security-authorization brings capability control, so the model cannot
-take actions merely because text asked it to. And @sec-adversarial-robustness
-studies jailbreaks and the other ways the learned boundary gets probed.
+Safety tuning sets a useful default, but learned behavior is probabilistic. Runtime
+classifiers are usually probabilistic too. A hard boundary exists only where the system
+uses deterministic enforcement under an explicit threat model.
 
-The post-training layer should therefore be read as the model's first line of
-behavior, not the system's last line of defense.
+| Layer | What it can improve | What it cannot guarantee |
+|---|---|---|
+| Safety and hierarchy tuning | Default refusals, safe completion, policy application, conflict handling | No jailbreaks, no prompt injection, or faithful reasoning |
+| Runtime classifiers and gates | Detection, escalation, logging, response blocking | Perfect coverage or resistance to every adaptive input |
+| Authorization and capability controls | Which tool, secret, recipient, and side effect is permitted | That a permitted action is wise or useful |
+| Isolation and data-flow controls | Limit blast radius and prevent specific flows | Correct natural-language judgment outside the enforced rule |
+
+An application should keep credentials out of the model context, issue least-privilege
+tool capabilities, validate tool arguments, require approval for consequential side
+effects, and record provenance across retrieval and tool calls. Those controls remain
+effective even when the model misreads an instruction. @sec-runtime-safety develops
+detection and gating, @sec-security-authorization develops capability enforcement, and
+@sec-adversarial-robustness develops attack evaluation.
 
 ::: {.callout-important}
 ## What's contested
-Instruction hierarchy and deliberative policy training improve robustness, but
-they do not create a formal security boundary. A model can be trained to ignore
-untrusted instructions, yet still fail on novel compositions, long-context
-attacks, or tool-mediated ambiguity. Authority must be learned by the model and
-enforced by the surrounding system.
+Instruction hierarchy, written-policy training, and safe-completion objectives have all
+improved measured behavior in reported experiments. How well those gains survive new model
+families, long contexts, unseen languages, and adaptive tool-mediated attacks remains an
+empirical question. None of the methods creates a formal security boundary inside the
+model.
 :::
 
 ::: {.callout-tip}
 ## Constraint Arrow
-Safety tuning sets the model's default behavior, but the hard boundary belongs
-to runtime controls. @sec-runtime-safety decides when a response is filtered or
-gated, @sec-security-authorization governs which actions the model is allowed to
-take, and @sec-adversarial-robustness probes the boundary under attack. The
-post-training policy is therefore one layer in a larger control system, not a
-substitute for it.
+Training decides how the model usually behaves. Infrastructure decides what the model is
+allowed to do. Keep policy evaluation, authorization, secret handling, sandboxing, and
+audit logs independent enough that one model failure cannot silently become an external
+side effect.
 :::
 
 ::: {#further-reading}

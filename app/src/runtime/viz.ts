@@ -1913,8 +1913,8 @@
     var zh = host.getAttribute('data-lang') === 'zh';
     var th = 0.52;
     var labels = zh
-      ? { th: '拒绝阈值', x: '无害请求被拒绝', y: '有害请求被放行', point: '工作点' }
-      : { th: 'refusal threshold', x: 'benign requests refused', y: 'harmful requests allowed', point: 'operating point' };
+      ? { th: '风险分数阈值', x: '无害请求被拒绝', y: '有害请求被放行', point: '工作点' }
+      : { th: 'risk-score cutoff', x: 'benign requests refused', y: 'harmful requests allowed', point: 'operating point' };
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 270);
     function xy(s) {
