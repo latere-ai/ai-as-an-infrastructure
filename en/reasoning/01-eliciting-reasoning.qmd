@@ -1,153 +1,200 @@
 # Eliciting Reasoning {#sec-eliciting-reasoning}
 
-A base model already holds far more reasoning ability than greedy decoding
-reveals, and you can draw it out at inference time without touching a single
-weight. Elicitation is the family of prompting and decoding methods that turns
-one forward pass into a deliberation. A @gls-cot, a written chain of intermediate reasoning steps,
-helps because it gives intermediate work tokens to live in, and sampling many chains and voting helps for a
-different reason: wrong paths scatter. Trees and searches pay only when the
-problem has useful branches, while a verifier is the component that turns
-best-of-N from raw sampling into selection. Teaching the weights to reason is the sibling problem
-of @sec-training-to-reason; here nothing is trained.
+Changing the weights is not the only way to change a model's answer. With the weights
+fixed, a system can ask for intermediate work, draw several candidates, extract their
+answers, compare them, or search among partial solutions. These choices spend more
+computation after the request arrives. They are therefore inference procedures, not new
+capabilities installed by training.
 
-![Schematic of test-time reasoning methods as more samples are spent. Direct answers plateau early, chains help, and search pays when the problem has useful branches to explore. Idealized curves, not measured data.](/figures/eliciting-reasoning-1.svg){#fig-eliciting-reasoning-1}
+That distinction keeps the claims in this chapter modest. A longer trace can help later
+tokens reach a better answer, but it can also carry an early mistake forward. More samples
+can increase the chance that a good candidate exists, but they do not identify it. Search
+can recover from a poor branch, but only if its evaluator recognizes the better one. The
+useful unit is the complete inference pipeline, not the instruction “think step by step.”
 
-## The answer token comes too early
+## Fixed weights, variable inference
 
-Ask a model a multi-step question and decode greedily, and it commits to an
-answer token before it has done the work that answer depends on. The
-autoregressive objective of @sec-scaling-laws spends a fixed, equal slice of
-compute on every token, so a problem that needs ten steps of arithmetic gets the
-same single pass as a problem that needs none. The model has the sub-skills,
-since pre-training saw the additions, the lookups, and the deductions, but the
-decode gives them nowhere to run. The answer position is asked to integrate
-everything at once.
+Elicitation changes the computation around a model while its weights stay fixed. A
+production procedure has at least five choices:
 
-That observation sets the design problem. The work is to spend more inference
-compute, and spend it in the right shape, so that latent ability surfaces,
-without changing the model. Two levers exist at inference time. One is
-the prompt, which can ask the model to externalize intermediate steps into
-tokens it can then condition on. The other is the decoding procedure, which can
-sample, branch, score, and select instead of greedily taking the top token.
-The methods that follow combine those two levers, and they arrived in a clear
-lineage: first give the reasoning somewhere to run, then stop trusting one
-sample of it, then shape and search the space it opens. @fig-eliciting-reasoning-shapes
-previews the four shapes that lineage produces.
+| Component | Question it answers | Typical options |
+|---|---|---|
+| Prompt or task representation | What problem and output contract does the model see? | Direct request, worked examples, decomposition prompt, tool state |
+| Candidate generator | What possible solutions are produced? | Greedy decode, temperature sampling, iterative expansion |
+| Answer extractor | How does a trace become a comparable answer? | Parser, canonicalizer, structured-output decoder |
+| Selector or verifier | Which candidate is returned? | First result, answer mode, deterministic checker, learned scorer |
+| Budget and stopping rule | How much work may the procedure spend? | Token cap, sample cap, deadline, confidence or verification stop |
+
+These choices compose. A single chain uses one prompt, one candidate, and no comparison.
+Self-consistency samples several chains and selects an answer mode. Best-of-$n$ scores
+complete candidates. A tree repeatedly generates and scores partial states. Calling all of
+them “reasoning prompts” hides where the additional work and the new failure modes enter.
 
 ```{dot}
 //| label: fig-eliciting-reasoning-shapes
-//| fig-cap: "Four decoding shapes that elicit and select reasoning from a fixed model. Each spends more inference compute than greedy decoding, in a different structure."
+//| fig-cap: "A fixed-weight elicitation pipeline. The prompt changes the conditional generation, the extractor makes answers comparable, and the selector turns a candidate set into one response. The budget constrains every stage."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=1.0; ranksep=1.1;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  Q [label="Question"];
-  M [label="Decoding shape", shape=diamond];
-  CoT [label="Chain of thought"];
-  SC [label="Self-consistency"];
-  ToT [label="Tree of Thoughts"];
-  BoN [label="Best-of-n"];
-  A [label="Answer"];
-  Q -> M;
-  M -> CoT [label="one chain"];
-  M -> SC [label="n chains, vote"];
-  M -> ToT [label="branch, evaluate, backtrack"];
-  M -> BoN [label="n candidates, score, pick"];
-  CoT -> A;
-  SC -> A;
-  ToT -> A;
-  BoN -> A;
+  nodesep=0.24; ranksep=0.32;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=8.5, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  request [label="Request"];
+  prepare [label="Prompt or task representation"];
+  generate [label="Generate candidate traces\none, many, or a searched frontier"];
+  extract [label="Extract and normalize answers"];
+  select [label="Select, verify, or abstain"];
+  response [label="Response"];
+  budget [label="Token · sample · scorer\nlatency budget", shape=note];
+
+  request -> prepare -> budget -> generate -> extract -> select -> response;
 }
 ```
 
-## Give the reasoning somewhere to run
-
-The first move is to make the model write its working, then exploit that the
-working is now part of the context. A chain-of-thought is the minimal form:
-prompt the model to produce intermediate reasoning steps before the final
-answer, and each step becomes a token sequence the later steps attend over. This
-converts a single hard prediction into a sequence of easier ones, and it gives
-the model room to allocate more forward passes, one per reasoning token, to a
-harder problem. A few worked examples in the prompt elicit this
-[@wei2022chainofthought], and even the bare instruction "Let's think step by
-step" elicits it zero-shot, with no exemplars at all [@kojima2022zeroshot]. No
-weights move. The ability was latent; the prompt unlocks the decode, and the
-zero-shot result makes the point sharp: the effect is about eliciting, not
-demonstrating.
-
-## Stop trusting a single sample
-
-Once reasoning lives in tokens, the decoding procedure becomes a design space.
-The next move is to stop trusting a single sample. A greedy chain can take a
-wrong turn early and never recover. @gls-self-consistency samples many chains at
-non-zero temperature, then takes a majority vote on the final answers
-[@wang2022selfconsistency]. The reasoning path is treated as scratch work to sum
-over, not an output to return:
+For one generated rationale $r$ and final answer $y$, an autoregressive model can be
+written as
 
 $$
-\hat{y} = \arg\max_{y} \sum_{i=1}^{n} \mathbf{1}\left[ a(z_i) = y \right], \quad z_i \sim p_\theta(z \mid x)
+p_\theta(r,y \mid x)
+= p_\theta(r \mid x)\,p_\theta(y \mid x,r).
 $$
 
-where each $z_i$ is a sampled chain and $a(z_i)$ is the answer it reaches. Many
-paths can reach the right answer by different routes, while wrong answers tend to
-scatter, so the mode of the answer distribution is a better estimate than any one
-sample. This is the highest value-per-line method in this family: it needs no
-verifier, no extra model, only more samples and a vote, and it remains the
-strongest simple baseline for exactly that reason [@wang2022selfconsistency].
+Here $x$ is the prepared prompt, $\theta$ is the fixed parameter set, $r$ is generated
+intermediate text, and $y$ is the final answer. Because $r$ precedes $y$, it becomes part
+of the context used to generate $y$. This factorization explains how intermediate text
+can affect an answer. It does not establish that $r$ faithfully reports all computation
+that caused the answer, or that a longer $r$ must be better.
 
-Try this: each chain is independently correct with probability `p`, and the
-simulation votes over `n` chains. Watch majority-vote accuracy rise above a
-single sample once `p > 0.5`, then saturate.
+## One trace: chain of thought and decomposition
+
+Intermediate-text computation predates the name *chain of thought*. Scratchpad work made
+models emit intermediate calculations before an answer, while Wei et al. showed that a
+few worked chain-of-thought examples could improve arithmetic, commonsense, and symbolic
+reasoning in sufficiently large models [@nye2021scratchpads; @wei2022chainofthought]. The
+size qualification matters: the reported gains were not uniform across smaller models,
+and the experiments established benchmark improvements, not a general law about all
+multi-step tasks.
+
+Kojima et al. removed the worked examples and used the instruction “Let's think step by
+step” [@kojima2022zeroshot]. Their Zero-shot-CoT procedure was a two-stage prompt: the
+first call generated intermediate text, and a second, answer-specific prompt extracted
+the final answer in the required format. “Zero-shot” referred to the absence of
+task-specific exemplars in that prompt. It did not mean the model had never seen
+reasoning demonstrations during training.
+
+Both results show that changing the requested output sequence can change performance
+without a weight update. That does not prove that the capability was latent and merely
+unlocked. Generated rationale tokens alter the context and therefore the subsequent
+computation. Whether this helps is task and model dependent, and filler tokens alone did
+not reproduce the chain-of-thought gains in the ablations reported by Wei et al.
+
+A @gls-cot, a written chain of intermediate reasoning steps, leaves the model responsible
+for deciding what the next useful step is. @gls-least-to-most makes that organization
+explicit. It first asks for a decomposition, then solves the resulting subproblems in
+dependency order while carrying earlier answers forward [@zhou2022leasttomost]. This can
+help when the decomposition is reliable and each earlier result supplies what the next
+subproblem needs. It can also fail before the first solution step: a missing subproblem,
+wrong dependency order, or early wrong answer contaminates everything downstream. The
+paper's strongest extrapolation result came from a task-engineered SCAN setup; its gains
+on other tasks were smaller. Decomposition is a design choice, not a universal upgrade.
+
+## Several traces: self-consistency is mode estimation
+
+A single sampled chain can be unrepresentative. @gls-self-consistency draws several
+chains at nonzero temperature, extracts the final answer from each, and returns the most
+frequent normalized answer [@wang2022selfconsistency]. This is an empirical answer mode,
+often called plurality voting. It is not necessarily a strict majority.
+
+Let $r_i$ be sampled trace $i$, let $e(r_i)$ be the answer extractor, and let
+$\mathcal{Y}$ be the set of normalized answers. With $n$ samples,
+
+$$
+\widehat{\pi}_n(y \mid x)
+= \frac{1}{n}\sum_{i=1}^{n}\mathbf{1}[e(r_i)=y],
+\qquad
+\widehat y_{\text{mode}}
+= \arg\max_{y\in\mathcal{Y}}\widehat{\pi}_n(y \mid x).
+$$
+
+Here $\mathbf{1}[\cdot]$ is one when its condition holds and zero otherwise,
+$\widehat{\pi}_n$ is the observed answer frequency, and $\widehat y_{\text{mode}}$ is the
+selected answer. A mode can win with less than half the votes. The implementation must
+also define answer extraction, equivalence, normalization, abstentions, and tie handling.
+For example, `0.5`, `1/2`, and “one half” may be the same answer even though their strings
+differ.
+
+The familiar claim that voting amplifies accuracy needs stronger assumptions. In a binary
+toy model, suppose each chain is conditionally independent and correct with probability
+$p$, and let the odd sample count be $n=2m+1$. Majority-vote accuracy is
+
+$$
+A_n(p)=\sum_{k=m+1}^{n}\binom{n}{k}p^k(1-p)^{n-k}.
+$$
+
+Here $m=(n-1)/2$, $k$ is the number of correct votes, and $\binom{n}{k}$ counts which
+$k$ samples are correct. Under these assumptions, voting improves with $n$ when
+$p > 1/2$ and makes the result worse when $p < 1/2$. Real traces have many possible wrong
+answers and correlated errors. The correct answer can win as the unique population mode
+even below 50 percent, or a shared wrong answer can become increasingly dominant.
+
+The following calculation adds a simple common-mode error. Here $\rho\in[0,1]$ represents
+the probability that all chains share one outcome; otherwise they are independent.
+Increasing $\rho$ preserves one-chain accuracy but removes most of the benefit from voting.
 
 :::: {.runnable}
 ```python
-import numpy as np
+from math import comb
 
-rng = np.random.default_rng(0)
-p = 0.55           # per-chain probability of the correct answer
-trials = 20000     # Monte Carlo trials per n
-ns = [1, 3, 5, 11, 21, 41]
+def independent_majority(n, p):
+    threshold = n // 2 + 1
+    return sum(
+        comb(n, k) * p**k * (1 - p)**(n - k)
+        for k in range(threshold, n + 1)
+    )
 
-for n in ns:
-    correct = rng.random((trials, n)) < p   # which chains got it right
-    votes = correct.sum(axis=1)             # how many voted for the right answer
-    win = (votes > n / 2).mean()            # majority is right (ties broken as wrong)
-    print(f"n={n:>2}  majority-vote accuracy = {win:.3f}")
+def shared_error_majority(n, p, rho):
+    independent = independent_majority(n, p)
+    return rho * p + (1 - rho) * independent
 
-print(f"\nSingle chain (n=1) accuracy = {p:.3f}; voting amplifies a weak edge.")
+p = 0.55
+for rho in (0.0, 0.25, 0.75):
+    values = [shared_error_majority(n, p, rho) for n in (1, 3, 5, 11, 21)]
+    print(f"rho={rho:.2f}: " + ", ".join(f"{value:.3f}" for value in values))
 ```
 ::::
 
-## Shape the chain, then search the space
+Self-consistency works best when sampling produces meaningfully different routes, the
+answer extractor is reliable, and systematic errors do not form the dominant answer
+cluster. Diversity of wording is not enough if every trace repeats the same mistaken
+premise.
 
-Sampling more of the same chain is not the only refinement. When a problem
-decomposes, you can shape the chain instead of just sampling it. @gls-least-to-most
-prompting asks the model first to break a problem into ordered subproblems and
-then to solve them in sequence, each conditioned on the solved ones, which lets
-the model generalize to problems harder than any single exemplar in the prompt
-[@zhou2022leasttomost].
+## From traces to search
 
-The richest design treats reasoning as search over a space of partial solutions.
-@gls-tot makes each node a coherent intermediate thought, expands several
-children per node, has the model self-evaluate each as promising or not, and
-explores the tree with breadth-first or depth-first search, including lookahead
-and backtracking [@yao2023tree]. A chain is then the degenerate tree with one
-child per node and no backtracking. Pushing this further, AlphaZero-style methods
-run Monte Carlo Tree Search over the reasoning tree, using value estimates to
-decide where to expand, so compute concentrates on promising branches rather than
-spreading evenly [@feng2023alphazero].
+Sampling complete traces spends the same amount of attention on every candidate. Search
+allocates the next unit of compute after inspecting partial work. Tree of Thoughts made
+this controller explicit for language-model inference [@yao2023tree]. A concrete search
+must define five task-specific elements:
 
-The chain, the tree, and the value-guided search differ in the shape of the
-space they explore, shown in @fig-eliciting-reasoning-structure. A chain walks
-one line. A tree fans out, self-evaluates each node, and can backtrack out of a
-dead end. Value-guided search goes one step further, adding a value estimate so
-compute concentrates on promising branches instead of spreading evenly.
+| Search choice | What must be specified | Failure if it is weak |
+|---|---|---|
+| Thought unit | What counts as one partial state or step | States are too small to evaluate or too large to revise |
+| Expansion rule | How children are proposed from a state | The viable continuation never enters the tree |
+| State evaluator | How partial states are ranked | Plausible mistakes outrank recoverable paths |
+| Frontier policy | Which states remain eligible for expansion | Breadth is wasted on duplicates or a good branch is pruned |
+| Stopping rule | When to accept, backtrack, exhaust the budget, or abstain | Search runs past its useful region or stops before verification |
+
+Tree of Thoughts instantiated these choices with task-designed thought units, model
+generation and self-evaluation, and breadth-first or depth-first search. Its large Game of
+24 gain is evidence for that setup on a task with useful branches. It is not evidence that
+trees dominate sampling on arbitrary workloads. Xie et al. similarly combined a prompted
+self-evaluation score with stochastic beam search and reported task-dependent gains
+[@xie2023selfeval]. In both cases the evaluator is part of the method, not an oracle. Wider
+search can amplify evaluator error by presenting more high-scoring mistakes.
 
 ```{dot}
 //| label: fig-eliciting-reasoning-structure
-//| fig-cap: "Chain, tree, and value-guided search as three shapes of the same reasoning space. The chain is the degenerate tree with one child per node and no backtracking. After Yao et al. (2023) and Feng et al. (2023)."
+//| fig-cap: "Three controller shapes. A chain commits to one continuation, a tree retains alternatives, and value-guided search prunes by an evaluator. The highlighted path is illustrative, not known ground truth."
 digraph G {
   rankdir=TB;
   bgcolor="transparent";
@@ -155,7 +202,7 @@ digraph G {
   edge [arrowsize=0.6, color="#6b7280"];
 
   subgraph cluster_chain {
-    label="Chain";
+    label="One chain";
     fontname="Helvetica";
     fontcolor="#6b7280";
     color="#6b7280";
@@ -163,19 +210,17 @@ digraph G {
   }
 
   subgraph cluster_tree {
-    label="Tree, branch and backtrack";
+    label="Retained tree";
     fontname="Helvetica";
     fontcolor="#6b7280";
     color="#6b7280";
     t0 -> t1; t0 -> t2;
-    t1 -> t3;
-    t1 -> t4 [style=dashed, color="#9ca3af"];
-    t2 -> t5 [style=dashed, color="#9ca3af"];
-    t3 [fillcolor="#3b82f6", color="#3b82f6"];
+    t1 -> t3; t1 -> t4;
+    t2 -> t5;
   }
 
   subgraph cluster_search {
-    label="Search, value-guided";
+    label="Evaluator-guided";
     fontname="Helvetica";
     fontcolor="#6b7280";
     color="#6b7280";
@@ -194,160 +239,161 @@ digraph G {
 
 <figure id="fig-eliciting-reasoning-tree-of-thoughts">
 <div class="viz" data-viz="tree-of-thoughts"></div>
-<figcaption>The chain, tree, and value-guided search above, now run on one tree. Toggle the strategy and watch value-guided search keep only the best few thoughts, pruning the rest (grey) and spending compute on the surviving best path, while the open tree spreads the same compute evenly across dead ends. The readout counts how many thoughts each strategy keeps. Illustrative.</figcaption>
+<figcaption>One synthetic tree under three controller policies. The value-guided policy keeps a narrow frontier according to illustrative scores; it does not know which path is truly correct. Toggle the strategy to compare the number of retained states.</figcaption>
 </figure>
 
-## When a vote is not enough: the verifier
+AlphaZero-style language search belongs on the boundary of elicitation. The cited TS-LLM
+work trained policy, value, and outcome-reward components from rollout data, then used
+them during search [@feng2023alphazero]. Its inference policy may be frozen during a run,
+but the guidance did not appear without training. The next chapter, @sec-structured-reasoning-search,
+develops the search layer in detail and explains why the clean board-game analogy breaks
+for free-form language states.
 
-Self-consistency votes, but a vote only works when the answer is a discrete label
-to count. Best-of-n replaces the vote with a score. Sample $n$ candidate
-solutions, score each with a verifier or reward model (a ground-truth checker, or
-a learned scorer of quality), and return the highest.
-This was introduced for grade-school math: train a verifier to judge candidate
-solutions, generate many, and keep the one the verifier ranks highest, which beat
-a fine-tuning baseline [@cobbe2021verifiers]. The same scorer can guide the search
-rather than just rank the finished output, evaluating partial states inside a
-tree, which is what self-evaluation guided beam search does
-[@xie2023selfeval]. The verifier is the component that turns raw samples into a
-selected answer, and its quality is the ceiling on what selection can buy. That
-ceiling, and how it bounds test-time scaling, is the subject of
-@sec-inference-time-scaling.
+## Selection: a good candidate must exist and be recognized
 
-A vote and a score can disagree, and @fig-eliciting-reasoning-vote-vs-score shows
-when. Over the same sampled chains, a vote rewards agreement and a score rewards
-correctness. When a biased model is consistently wrong, the majority answer is
-also wrong, and only a verifier that checks the answer against ground truth can
-rescue the minority chain that happens to be right.
+Best-of-$n$ samples $n$ complete candidates, scores them, and returns the candidate with
+the highest score. Two events must go right. First, the candidate set needs coverage: at
+least one acceptable answer must exist. Second, the selector must recognize one.
+
+Here $c_i$ denotes candidate $i$, $z(c_i)\in\{0,1\}$ is its independent acceptability
+judgment, and $j=S(c_1,\ldots,c_n)$ is the index chosen by selector $S$. Define
+per-request **selection regret** as
+
+$$
+R_{\text{sel}}
+= \max_{1\le i\le n} z(c_i) - z(c_j).
+$$
+
+Here $R_{\text{sel}}=1$ means an acceptable candidate existed but the selector missed it.
+If every candidate is unacceptable, coverage failed and selection regret is zero even
+though the system also fails. This separation prevents a common diagnostic mistake:
+adding samples addresses candidate coverage, while improving a checker or scorer
+addresses selection.
+
+Selectors provide different kinds of evidence:
+
+- An answer mode measures agreement after answer extraction. It needs no separate judge,
+  but a correlated mistake can become the winning answer.
+- A deterministic checker executes an encoded criterion. Exact numeric equality checks a
+  final value, unit tests cover only their cases, and a proof kernel checks a formal
+  statement rather than the model's translation from natural language.
+- A learned scorer estimates outcome or process quality from training data. It can make
+  both false acceptance and false rejection errors, especially on the high-scoring tail
+  produced by aggressive search.
+- Human review can cover open-ended criteria, but it adds latency, cost, and disagreement.
+
+Cobbe et al. applied a learned outcome verifier to GSM8K [@cobbe2021verifiers]. They
+generated candidate solutions, labeled them by whether the final answer matched, trained
+a verifier on those labels, and ranked 100 candidates at test time. The labels did not
+establish that each intermediate step was valid, so this was outcome supervision rather
+than process supervision. Verification improved their results and scaled better with more
+training problems than their fine-tuning baseline, but performance eventually declined
+when still larger candidate sets exposed high-scoring mistakes. Controlled experiments
+on reward-model optimization show the same general risk: optimizing a learned proxy more
+strongly can eventually reduce the gold score [@gao2023overoptimization].
 
 ```{dot}
 //| label: fig-eliciting-reasoning-vote-vs-score
-//| fig-cap: "Vote versus score over the same n samples. A majority vote returns the consensus 42, which is wrong. A verifier scores each chain against ground truth and selects the minority chain that reaches 37, which is right."
+//| fig-cap: "Agreement and checking answer different questions. In this constructed example, three candidates agree on 42, while an exact task checker accepts the minority answer 37. A learned scorer would add another estimate, not ground truth."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  Q [label="Question"];
-  C1 [label="chain 1, says 42"];
-  C2 [label="chain 2, says 42"];
-  C3 [label="chain 3, says 42"];
-  C4 [label="chain 4, says 37"];
-  V [label="Vote, count answers"];
-  S [label="Score, verifier checks each"];
-  VA [label="picks 42, wrong"];
-  SA [label="picks 37, right"];
-  Q -> C1;
-  Q -> C2;
-  Q -> C3;
-  Q -> C4;
-  C1 -> V;
-  C2 -> V;
-  C3 -> V;
-  C4 -> V;
-  C1 -> S;
-  C2 -> S;
-  C3 -> S;
-  C4 -> S;
-  V -> VA;
-  S -> SA;
+  rankdir=TB;
+  nodesep=0.24; ranksep=0.32;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=8.5, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  samples [label="Extracted answers\n42 · 42 · 42 · 37"];
+  mode [label="Answer mode\nagreement"];
+  check [label="Exact task checker\nencoded condition"];
+  modeout [label="returns 42"];
+  checkout [label="accepts 37"];
+
+  samples -> mode -> modeout;
+  samples -> check -> checkout;
 }
 ```
 
+The broader empirical record reinforces the distinction. Repeated sampling can keep
+raising oracle candidate coverage while majority and learned-score selection flatten
+[@brown2024monkeys]. That is a workload-specific finding, not a universal sample-count
+threshold. The amount of useful inference compute depends jointly on the generator, the
+candidate distribution, the selector, and the task.
+
 ::: {.callout-important}
-## What's contested
-Whether chain-of-thought tokens are a faithful account of the computation that
-produced the answer is unsettled. The optimistic reading treats the chain as the
-model's actual reasoning, which would make it both a performance lever and a
-window for oversight. The skeptical reading holds that the chain can be a
-post-hoc rationalization: the answer is determined by computation the tokens do
-not reflect, and the model can reach the same answer when the stated reasoning is
-perturbed, or state reasoning that does not drive the answer. If chains are
-unfaithful, then the accuracy gain is real but the interpretability it seems to
-offer is not, which matters directly for the oversight argument of
-@sec-oversight-control. The evidence cuts both ways and depends on task, model,
-and how faithfulness is probed, so treat a visible chain as a help to accuracy
-first and a faithful trace only when tested.
+## Contested: visible reasoning is a work artifact, not a proof
+
+Three questions are easy to conflate. Performance asks whether requesting intermediate
+text improves the final answer. Causal dependence asks whether changing that text changes
+the answer. Faithfulness asks whether the text accurately exposes the influential causes
+of the answer.
+
+Plausible or correct-looking steps do not prove faithfulness. Turpin et al. changed model
+answers with biased input cues that the resulting explanations often failed to mention
+[@turpin2023unfaithful]. Lanham et al. intervened on chains by truncating, paraphrasing, or
+inserting mistakes and found substantial variation across tasks and models
+[@lanham2023faithfulness]. These interventions provide graded evidence, not a certificate.
+Treat a visible rationale as generated intermediate text whose accuracy, causal role, and
+faithfulness require separate evaluation. It may help debugging, but it is not sufficient
+oversight for the safety claims discussed in @sec-oversight-control.
 :::
 
 ::: {.callout-tip}
 ## Constraint arrow
-The verifier you can build at the data layer decides which elicitation method you
-can run. Self-consistency needs only a discrete answer to vote on, so it works
-wherever answers are comparable. Best-of-n and search need a scorer, and the best
-scorer is a ground-truth checker, a unit test, a numeric or symbolic equality, a
-proof checker, exactly the checkable-answer condition that defines
-@sec-training-to-reason. Where a sound verifier exists, search and best-of-n pay
-off and their ceiling is high. Where only a learned reward model exists, the same
-methods inherit its over-optimization from @sec-rlhf and a stronger search can
-make the answer worse by driving harder on a flawed score. The availability of a
-verifier, a property of the task and not the decoder, is what sets how far
-inference-time compute can be spent profitably.
+
+The task's cheapest reliable evidence determines which inference procedure is worth
+running. Comparable answers permit mode selection. An exact answer check, executable test,
+or formal checker can filter candidates against its encoded property. Open-ended work
+usually falls back to learned or human judgment and inherits their errors. Search increases
+pressure on that judgment because it deliberately seeks unusually high-scoring states.
+Before widening the search, test the evaluator on candidates generated by the wider search.
 :::
 
-## What each shape costs, and what bounds it
+## Put the budget and failure policy in the design
 
-Each method buys accuracy with inference compute, and the exchange rate differs.
+No method should be the default merely because it spends more tokens. Route by what the
+task exposes and what the service can afford:
 
-- **Single chain versus voting.** One chain is cheapest and lowest latency but
-  brittle to an early wrong turn. Self-consistency multiplies token cost by the
-  sample count $n$ for a robust majority answer, with diminishing returns as $n$
-  grows. It needs a discrete, comparable answer, so it does not apply to
-  open-ended generation where there is nothing to vote on.
-- **Voting versus scoring.** A vote needs no extra model but cannot rank
-  free-form outputs and cannot tell a confidently-wrong consensus from a correct
-  one. Best-of-n needs a verifier or reward model but ranks anything that scorer
-  covers, and its ceiling rises with verifier quality. A vote rewards agreement; a
-  score rewards correctness, and they diverge when the model is consistently
-  wrong.
-- **Chain versus tree versus search.** A chain spends compute in one line. A tree
-  spends it on breadth and can backtrack out of dead ends, at the cost of many
-  self-evaluation calls per node, which are themselves model calls that can be
-  wrong. MCTS-style search concentrates compute on high-value branches but adds
-  the machinery and the dependence on a value estimate that, if miscalibrated,
-  steers the search wrong. The gain over self-consistency is real but smaller than
-  its cost on many tasks, so the simpler method is often the right default.
-- **Compute now versus training once.** Every method here pays its cost on every
-  query, forever. Training the behavior in, per @sec-training-to-reason, pays once
-  and amortizes, but costs a training run and the data to do it. Elicitation is
-  the right tool when the model is fixed, the task is new, or the volume is low;
-  internalization wins at scale.
+| Route | Use when | Primary failure |
+|---|---|---|
+| Direct answer | The task is easy or latency dominates | No recovery from a poor first decode |
+| One structured trace | Intermediate work improves the task and one attempt is affordable | Early mistakes propagate |
+| Sample and take the answer mode | Answers can be normalized and errors are sufficiently diverse | Correlated wrong consensus |
+| Best-of-$n$ | A tested checker or scorer can rank complete candidates | Coverage rises faster than selection quality |
+| Structured search | Partial states are meaningful and can be evaluated before completion | Evaluator error is amplified through pruning |
 
-Two structural boundaries keep elicitation in check, and neither is a tuning knob.
-It cannot exceed what the fixed model can produce, only surface and select among
-it, so a problem the model never solves in any sample is out of reach no matter
-how many you draw or how hard you search. And the visible chain is a lever on
-accuracy, not a guaranteed account of the computation, so reading it as
-oversight, per @sec-oversight-control, is a claim that needs its own test, not a
-free byproduct of asking the model to think out loud.
+A production controller needs a latency budget as well as token and scorer budgets.
+Independent samples can run in parallel when capacity exists, reducing wall-clock delay but
+not total work. It also needs a fallback for timeouts, parser failures, ties, an empty
+accepted set, and evaluator disagreement. Returning the direct answer, abstaining, or
+escalating to a human are different product decisions and should be explicit.
 
-## Stacking them, and the move back to training
+The minimum telemetry for each request is the model and prompt version, sampling settings,
+generated-token count, candidate count, extracted answers, selector type and version,
+scores or checker outcomes, chosen candidate, wall-clock latency, and fallback path.
+Offline evaluation should then separate:
 
-The methods compose more than they compete, and the practical recipe stacks them.
-Chain-of-thought is the substrate: get the model to externalize steps, by
-exemplars or by a step-by-step instruction. On top of it, self-consistency is the
-first upgrade, sample a handful to a few dozen chains and vote, because it is
-cheap to add and needs no other component. When a verifier exists, best-of-n over
-the same samples replaces the vote with a score and lifts the ceiling. A tree or
-a search is the heaviest tool, justified when the problem has a real branching
-structure and dead ends that backtracking escapes, and when the per-node
-self-evaluation is reliable enough to trust.
+- single-candidate accuracy;
+- oracle candidate coverage;
+- selected-answer accuracy;
+- selection regret when labels are available;
+- answer diversity and pairwise agreement;
+- false acceptance and false rejection by evaluator version;
+- cost per correct answer, plus median and tail latency.
 
-Each of those trade-offs is also a failure mode: an unreliable model votes
-confidently wrong, a weak verifier gets gamed (reward hacking, @sec-rlhf, now at
-inference time), and a miscalibrated self-evaluation steers a search into dead
-ends. The per-call cost is what bounds them in the end: a method that multiplies
-token count by tens for a few points of accuracy may not survive the economics of
-@sec-economics, which is why the field moved toward training the behavior in.
+Increase a budget only while its marginal gain survives on a selection-independent
+holdout. Stop or roll back when coverage rises but selected accuracy does not, when score
+tails drift away from audited quality, or when latency and cost exceed the service-level
+objective. Training may amortize recurring behavior, but it does not make inference free;
+elicitation may instead be routed only to hard or high-value requests. The decision is a
+workload calculation, not a universal contest between prompting and training.
 
-That move is the natural close of this arc. Everything here elicits, at
-inference, what a fixed model already contains. The next step is to take the
-traces these methods produce, the verified-correct chains and the high-value
-search paths, and train on them so the model internalizes the behavior and needs
-less scaffolding at inference. That step crosses into @sec-training-to-reason, and
-many of its ingredients, sampling many completions, scoring them with a verifier,
-keeping the good ones, are the same ingredients seen here, now wired into a weight
-update instead of a decode.
+Elicitation therefore changes context and decoding without updating weights. A single
+trace changes the sequence the model conditions on. Multiple traces change candidate
+coverage. A selector changes which candidate becomes the answer. Search changes where the
+next unit of compute goes. Keeping those effects separate makes the next chapters easier:
+@sec-structured-reasoning-search develops the controller, @sec-verifiers-process-supervision
+develops the evaluator, and @sec-inference-time-scaling turns both into a budget-allocation
+problem.
 
 ## Further reading
 

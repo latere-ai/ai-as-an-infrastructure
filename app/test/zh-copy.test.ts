@@ -664,7 +664,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/01-eliciting-reasoning.qmd",
-      ["@gls-cot, a written chain of intermediate reasoning steps, helps because", "sampling many chains and voting helps", "useful branches", "verifier is the component that turns best-of-N"],
+      ["Changing the weights is not the only way", "inference procedures, not new capabilities installed by training", "Self-consistency samples several chains", "a good candidate must exist and be recognized", "work artifact, not a proof"],
     ],
     [
       "zh/reasoning/01-eliciting-reasoning.qmd",

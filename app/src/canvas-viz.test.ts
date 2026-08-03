@@ -55,6 +55,20 @@ test("the viz runtime registers the tree-of-thoughts component", () => {
   expect(rt).toMatch(/R\['tree-of-thoughts'\]\s*=\s*function/);
 });
 
+test("tree-of-thoughts redraws its canvas after responsive layout changes", () => {
+  const start = rt.indexOf("R['tree-of-thoughts']");
+  const end = rt.indexOf("R['infonce-field']", start);
+  expect(rt.slice(start, end)).toContain("watchTheme(host, draw)");
+});
+
+test("tree-of-thoughts honors reduced-motion before starting its reveal loop", () => {
+  const start = rt.indexOf("R['tree-of-thoughts']");
+  const end = rt.indexOf("R['infonce-field']", start);
+  const tree = rt.slice(start, end);
+  expect(tree).toContain("prefers-reduced-motion: reduce");
+  expect(tree).toContain("if (reduceMotion) return");
+});
+
 test("ch13 eliciting-reasoning uses tree-of-thoughts in both languages", () => {
   expect(src("en/reasoning/01-eliciting-reasoning.qmd")).toContain('data-viz="tree-of-thoughts"');
   expect(src("zh/reasoning/01-eliciting-reasoning.qmd")).toContain('data-viz="tree-of-thoughts"');

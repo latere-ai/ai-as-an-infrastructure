@@ -698,6 +698,7 @@
   // rest (grey) and thickening the surviving best path. Auto-reveals by depth.
   R['tree-of-thoughts'] = function (host) {
     var D = 3, mode = 'guided', reveal = 0, timer;
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     var byLevel = [], nodes = [];
     (function build() {
       for (var d = 0; d <= D; d++) {
@@ -755,10 +756,12 @@
     }
     function tick() { reveal++; if (reveal > D + 1) reveal = 0; draw(); }
     btn.addEventListener('click', function () { mode = mode === 'chain' ? 'tree' : mode === 'tree' ? 'guided' : 'chain'; reveal = D; draw(); });
-    function restart() { if (timer) clearInterval(timer); timer = setInterval(tick, 700); }
+    function restart() { if (timer) clearInterval(timer); if (reduceMotion) return; timer = setInterval(tick, 700); }
     host.addEventListener('mouseenter', function () { if (timer) { clearInterval(timer); timer = null; } });
     host.addEventListener('mouseleave', restart);
-    reveal = D; draw(); restart();
+    reveal = D; draw();
+    watchTheme(host, draw);
+    restart();
   };
 
   // InfoNCE pull/push field: a query, its positive, and a cloud of negatives.
