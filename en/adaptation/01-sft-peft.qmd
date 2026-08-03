@@ -1,397 +1,465 @@
 # Supervised Fine-Tuning and PEFT {#sec-sft-peft}
 
-Hand a freshly pre-trained model the prompt "What is the capital of France?"
-and it may answer with three more exam questions. It has read enough of the
-web to know that Paris is the capital, but it has learned to continue text,
-not to respond to it. There is no turn-taking, no stable persona, no refusal,
-no fixed output format. The knowledge is present; the behavior is not.
+A base language model and an assistant can share the same architecture and most
+of the same weights. Their behavior differs because they were trained on
+different conditional distributions. Pre-training rewards likely continuations
+of text. Supervised fine-tuning (SFT) rewards a specified response after a
+specified conversation. That change can improve instruction following, teach a
+new output schema, or specialize the model to a domain. It does not guarantee
+truthfulness, safety, or knowledge that the examples never support.
 
-![Schematic of adaptation methods by trainable-parameter budget and task fit. PEFT methods live between prompting and full fine-tuning, buying much of the task adaptation without moving every weight. Idealized placement, not measured data.](/figures/sft-peft-1.svg){#fig-sft-peft-1}
+Two decisions are often collapsed into the word *fine-tuning*:
 
-Closing that gap is the first and cheapest step in turning a base model into
-an assistant. The opening from
-@sec-scaling-laws is concrete: pre-training buys knowledge under the wrong
-objective, and we now have to install assistant behavior without paying for a
-second pre-training run.
+1. **What is the training signal?** SFT defines target tokens and minimizes
+   their next-token loss.
+2. **Which parameters may change?** Full fine-tuning updates the model, while
+   parameter-efficient fine-tuning (PEFT) updates a smaller set of parameters
+   or adds a small trainable module.
 
-That constraint shapes everything. The behavior change must be large in
-effect but small in data, because high-quality instruction data is written or
-curated by people and does not exist at pre-training scale. And it must be
-cheap in compute and memory, because the people who adapt a model are rarely
-the people who trained it: a downstream team has one or a few accelerators,
-not a cluster, and wants many task-specific variants, not one. A full
-fine-tune that copies and updates every weight defeats both goals at once.
+SFT and PEFT therefore answer different questions. SFT is an objective and data
+pipeline. LoRA is one way to parameterize the update. A model can undergo SFT
+with every weight trainable, with LoRA, or with another PEFT method.
 
-One idea runs through that constraint. **Adaptation is a
-small, low-rank, additive, composable change on top of a frozen base.** Each
-word in that sentence pays off as a separate consequence: a few thousand
-examples reshape behavior because the change is *small*; a rank-16 adapter
-approximates a full fine-tune because the change is *low-rank* and
-*additive*; and two fine-tunes can be added together because the change is
-*composable*. The sections that follow take the three in turn.
+## Turn conversations into supervised tokens
 
-Two of those mechanics are worth pinning down now: a *gradient* is the
-per-weight signal, computed from the loss, that says which way to nudge a
-weight during training, and a frozen weight is one held fixed, receiving no
-such update and staying exactly as pre-training left it.
+An SFT record may contain a system message, several user and assistant turns,
+tool calls, and tool results. The model does not receive those fields directly.
+A chat template serializes them into one token sequence, including the exact
+role and boundary tokens expected by the tokenizer. Training and serving must
+use the same template. A mismatch changes the prefix distribution even when the
+visible conversation looks identical.
 
-## Why a few thousand examples reshape behavior
-
-The core method is @gls-sft, also called instruction
-tuning, the recipe that InstructGPT made the standard first step of
-alignment [@ouyang2022instructgpt]. Continue the same next-token objective
-from @sec-scaling-laws, but on a curated set of (prompt, response) pairs
-instead of raw web text, and mask the loss so only the response tokens are
-scored. The model still learns by predicting the next token; what changes is
-the distribution it predicts over. For a pair with prompt $x$ and response
-$y$,
+Let the serialized sequence be (u_{1:T}=(u_1,ldots,u_T)), and let a binary
+mask (m_t) select the tokens that should contribute to training. A common
+assistant-only objective is
 
 $$
-\mathcal{L}_{\text{SFT}} = - \sum_{t} \log p_\theta(y_t \mid x, y_{<t}),
+\mathcal{L}_{\mathrm{SFT}}(\theta)
+=
+-\frac{1}{M}
+\sum_{t=1}^{T}
+m_t\log p_\theta(u_t\mid u_{<t}),
+\qquad
+M=\sum_{t=1}^{T}m_t.
 $$
 
-where $x$ is the prompt, $y_t$ is the next response token, and $y_{<t}$ is the
-response prefix already shown to the model. The sum runs over response positions
-only. Masking the prompt keeps the model from spending capacity learning to
-generate user turns, and teaches the asymmetry of the assistant role: read the
-prompt, produce the answer.
+Here (T) is the sequence length; (u_t) is the token at position (t);
+(u_{<t}) is its prefix; (p_\theta) is the model distribution with parameters
+(\theta); (m_t=1) for a scored target token and (m_t=0) for an ignored
+token; and (M) is the number of scored tokens. The normalization by (M)
+makes the loss an average over targets rather than a sum that grows with
+sequence length.
 
-What makes the prompt and response distinguishable is the chat template. A
-base model sees one undifferentiated stream of tokens. An assistant needs to
-know where the user's turn ends and its own begins, so SFT wraps each turn in
-role markers, special tokens like `<|user|>` and `<|assistant|>` that the
-tokenizer reserves and the template inserts. The template is a contract: the
-same markers must be used at inference, or the model is served off the
-distribution it was tuned on. This is the smallest example of a recurring
-truth in this part, that adaptation is as much about format as about weights.
-@fig-sft-peft-masking traces a single example from template to scored loss.
+For assistant-only training, the mask usually selects assistant messages and
+may include the assistant end-of-turn token. System messages, user messages,
+padding, and tool results are context but not targets. This is a policy choice,
+not a definition of SFT. Some recipes score the whole sequence, only the final
+assistant turn, or tool-call tokens under a separate mask. State the choice
+because it changes what the model is asked to imitate.
 
 ```{dot}
 //| label: fig-sft-peft-masking
-//| fig-cap: "An SFT example flows from chat template through the token stream to a masked loss. Role markers split the stream, and only response tokens contribute gradients."
+//| fig-cap: "An SFT record becomes one token sequence before loss masking. The template and tokenizer establish role boundaries; the target mask determines which next-token predictions update the model."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
+  nodesep=0.35; ranksep=0.45;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  ex [label="(prompt, response) pair"];
-  tmpl [label="Chat template wraps each turn"];
-  stream [label="Token stream with role markers"];
-  pm [label="user tokens\nWhat is the capital of France?"];
-  rm [label="assistant tokens\nParis.", fillcolor="#bfe3c0"];
-  mask [label="Masked, no gradient"];
-  score [label="Scored, next-token loss", fillcolor="#bfe3c0"];
-  upd [label="Weight update"];
+  record [label="structured conversation\nroles + message content"];
+  template [label="exact chat template\nrole and turn boundaries"];
+  tokens [label="token sequence u_1 ... u_T"];
+  context [label="context positions\nm_t = 0"];
+  targets [label="assistant target positions\nm_t = 1", fillcolor="#bfe3c0"];
+  loss [label="masked next-token loss"];
+  update [label="optimizer updates\nallowed parameters"];
 
-  ex -> tmpl;
-  tmpl -> stream;
-  stream -> pm;
-  stream -> rm;
-  pm -> mask;
-  rm -> score;
-  score -> upd;
+  record -> template -> tokens;
+  tokens -> context;
+  tokens -> targets;
+  targets -> loss -> update;
+  context -> loss [label="conditions predictions", style=dashed];
 }
 ```
 
-The surprising part is how little data this takes, which is what *small* means in the unifying claim. The superficial-alignment hypothesis,
-named by the LIMA paper, holds that a model's knowledge and capability are
-laid down almost entirely in pre-training, and that SFT mainly teaches it
-which subdistribution of formats and styles to speak in [@zhou2023lima]. If
-that is right, then a few thousand carefully chosen examples should suffice,
-and LIMA showed exactly that: a 65B model tuned on 1,000 curated examples,
-without any reinforcement learning, was competitive with far more heavily
-aligned models [@zhou2023lima]. The lesson reframes the whole step. SFT is
-eliciting and shaping latent capability, not adding it, which is why data
-quality and diversity dominate data quantity, and why a small noisy set can
-teach a confident wrong style as easily as a right one.
+Several implementation details sit inside this apparently simple pipeline:
 
-That reframing cuts both ways, and the cut is the trade-off SFT carries. With
-few examples, every example matters, and a handful of wrong facts or a single
-overused format teaches a defect the model will repeat confidently. Narrow
-SFT data bakes in a rigid template; this is the format-overfitting failure
-that @gls-over-refusal and always-bulleted answers are instances of.
+- **End-of-turn tokens matter.** Without a learned stopping boundary, a model
+  may continue into a simulated user turn or produce several answers.
+- **Truncation changes supervision.** Left truncation can remove the instruction;
+  right truncation can remove the answer or its stop token. Log the fraction of
+  records and target tokens lost.
+- **Packing needs boundaries.** Concatenating short records improves accelerator
+  utilization, but each record still needs a terminal token and the intended
+  attention policy. Otherwise one example can become context for the next.
+- **Length changes weighting.** Token-averaged loss gives a long answer more
+  influence than a short one. Example-balanced sampling and token-balanced loss
+  solve different problems.
+
+Multi-turn supervision adds another choice. A recipe can score every assistant
+span in one serialized conversation, or create one example per assistant turn
+and score only that response. In both cases, later responses are conditioned on
+the recorded earlier replies during teacher forcing, not on errors the model
+might make in a live conversation. Full conversational rollouts are therefore a
+separate evaluation.
+
+InstructGPT used labeler demonstrations for an SFT stage before preference
+modeling and reinforcement learning [@ouyang2022instructgpt]. Its final behavior
+cannot be attributed to SFT alone. Earlier instruction-tuning work also showed
+that training across many tasks can improve generalization to held-out task
+types [@wei2022flan]. These results establish SFT as more than format selection,
+while leaving its effect dependent on the base model and training set.
+
+## Data determines the behavior being copied
+
+SFT supplies positive demonstrations. It says, “produce this continuation in
+this context.” It does not directly say which alternative was almost acceptable,
+which defect made another answer worse, or how strongly two requirements should
+trade off. Preference data in @sec-behavior-specs adds that kind of comparison.
+
+The LIMA experiment is a useful boundary case. A 65-billion-parameter LLaMA
+model fine-tuned on 1,000 curated examples learned strong response formats and
+broad conversational behavior in the reported human evaluation
+[@zhou2023lima]. That result supports the claim that a strong base model can need
+little data to adopt a style. It is not a general sample-complexity law. Teaching
+specialized facts, a new tool protocol, a language underrepresented in
+pre-training, or a difficult reasoning procedure can require much broader
+coverage.
+
+A useful dataset audit separates five concerns:
+
+| Concern | Question to answer before training |
+|---|---|
+| Correctness | Are answers factually and procedurally valid for their prompts? |
+| Coverage | Which tasks, languages, lengths, formats, and failure cases are represented? |
+| Mixture | What fraction of target tokens comes from each source or capability? |
+| Independence | Are validation and test sets separated by source, task, and near-duplicate content? |
+| Serialization | Are role tokens, tool schemas, stop tokens, and truncation identical to deployment? |
+
+Duplicate prompts can make a random split look better than true generalization.
+One dominant source can overwhelm a smaller capability even when the record
+counts appear balanced, because long answers contribute more target tokens.
+Incorrect demonstrations are especially costly: maximum-likelihood training
+rewards the model for reproducing them without expressing that the label was
+uncertain.
+
+Safety examples need the same distributional care. Too many broad refusals can
+produce @gls-over-refusal, meaning that the tuned model rejects benign requests
+because it learned a boundary wider than the intended policy.
+
+Evaluation should compare the base model, a prompting baseline, and the tuned
+model on the same held-out tasks. Report task metrics, instruction and format
+compliance, calibration where relevant, and regression suites for capabilities
+that should remain unchanged. Tulu 3 illustrates the value of separate
+development and unseen evaluations plus decontamination rather than choosing a
+checkpoint on the public test set [@lambert2024tulu3]. Training loss alone only
+shows that the model fits the supervised tokens.
 
 ::: {.callout-important}
 ## What's contested
-How far the superficial-alignment hypothesis holds is unsettled. The strong
-reading, that SFT only surfaces pre-trained capability and adds nothing, is
-contradicted by tasks where instruction tuning on enough data clearly teaches
-new skills and formats that a few hundred examples cannot. More precisely,
-the hypothesis is a good description of broad
-instruction-following style and a poor one of narrow capability acquisition,
-and where the line falls depends on how far the target behavior sits from the
-base distribution. Treat "a thousand examples is enough" as a claim about
-style, not about every task.
+
+The “superficial alignment” hypothesis proposes that most knowledge is learned
+during pre-training and that limited SFT mainly selects a conversational style.
+LIMA provides evidence for that view in one broad-assistant setting. FLAN-style
+instruction tuning, domain adaptation, and tool-use training show that SFT can
+also change task competence. The useful question is not whether SFT *elicits* or
+*teaches* in the abstract. It is which held-out behaviors changed, and whether
+those behaviors were already reachable from the base model by prompting.
 :::
 
-## Why a rank-16 adapter approximates a full fine-tune
+## Choose which parameters may move
 
-If adaptation is a small, low-dimensional change to behavior rather than a
-wholesale rewrite of knowledge, then the weight update that encodes it should
-be small too. This is the inference that makes parameter-efficient
-fine-tuning (PEFT) plausible. PEFT freezes the pre-trained weights and trains
-only a tiny set of new or selected parameters. To see why the field arrived
-at the dominant method, it helps to watch the per-task cost fall step by step.
+The update strategy is independent of the SFT dataset. Its main trade-offs are
+trainable state, optimizer memory, adaptation capacity, checkpoint storage, and
+serving behavior.
 
-```{dot}
-//| label: fig-sft-peft-lineage
-//| fig-cap: "Two lineages of adaptation. The efficiency spine drives the per-task cost down from a full copy to a single card; the merging branch composes finished checkpoints with no further training."
-digraph {
-  rankdir=TB;
-  bgcolor="transparent";
-  node [shape=box, style="rounded", fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
+| Method | Trainable state | Main advantage | Main limitation |
+|---|---|---|---|
+| Full fine-tuning | All selected model parameters | Maximum update capacity | Large gradient, optimizer, and checkpoint state |
+| Soft prompt or prefix | Learned input or prefix representations | Very small task artifact [@lester2021prompt] | Consumes conditioning capacity and may lag weight updates |
+| Bottleneck adapter | New modules between frozen layers | Small modular checkpoint [@houlsby2019parameter] | Adds an execution path unless fused or reparameterized |
+| LoRA | Low-rank updates on selected weight matrices | Small trainable and stored delta [@hu2021lora] | Capacity and coverage depend on rank and target modules |
+| QLoRA | LoRA plus a frozen 4-bit base during training | Reduces storage for the frozen training weights [@dettmers2023qlora] | Does not remove activation memory or guarantee full-fine-tune quality |
 
-  full [label="Full fine-tune\n(BERT, GPT)\nevery weight, full copy"];
-  adapt [label="Adapters\nbottleneck sublayers\nadds inference depth"];
-  lora [label="LoRA\nlow-rank update\nmerges into base"];
-  qlora [label="QLoRA\n4-bit NF4 base\nsingle accelerator"];
+Freezing a parameter means the optimizer does not change it and does not need
+gradient or optimizer state for it. The frozen parameter is still used in the
+forward and backward computations. PEFT therefore reduces some important memory
+terms, but it does not make the base model, activations, temporary buffers, or
+communication disappear.
 
-  soup [label="Model soups\naverage same-init runs"];
-  task [label="Task arithmetic\nsigned task vectors"];
-  ties [label="TIES-merging\ntrim, elect sign, merge"];
-  dare [label="DARE\ndrop and rescale delta"];
-
-  full -> adapt;
-  adapt -> lora;
-  lora -> qlora [label="cheaper per task"];
-  full -> soup [style=dashed, label="compose"];
-  soup -> task -> ties;
-  task -> dare;
-}
-```
-
-The efficiency spine in @fig-sft-peft-lineage runs from full fine-tuning to
-ever-cheaper approximations of it. The earliest transfer-learning recipe was
-to fine-tune all the weights of a pre-trained model on a downstream task, the
-approach that BERT and GPT made standard. It works but it is expensive and
-wasteful: every task needs a full copy of the model, and the update touches
-every weight to encode what is often a narrow behavioral change. The first
-answer was adapters, small bottleneck modules inserted between the frozen
-layers of a transformer, of which only the inserted parameters train
-[@houlsby2019parameter]. Adapters proved the principle that a tiny fraction
-of new parameters could recover most of full fine-tuning's quality, but they
-added depth, and therefore inference latency, to every forward pass
-[@houlsby2019parameter].
-
-@gls-lora removed that cost, and it is where *low-rank* and *additive* enter the
-claim. The *rank* of a matrix is the number of genuinely independent
-directions its rows or columns span, so a low-rank matrix is one whose content
-collapses into far fewer directions than its dimensions allow. For a frozen
-weight matrix $W_0 \in \mathbb{R}^{d \times k}$, LoRA learns a low-rank update
-[@hu2021lora]
+A useful memory ledger is
 
 $$
-W = W_0 + \Delta W = W_0 + \frac{\alpha}{r} B A,
-\quad B \in \mathbb{R}^{d \times r},\; A \in \mathbb{R}^{r \times k},
+M_{\mathrm{peak}}
+\approx
+M_{\mathrm{base}}
++M_{\mathrm{adapter}}
++M_{\mathrm{grad}}
++M_{\mathrm{optim}}
++M_{\mathrm{act}}
++M_{\mathrm{work}}.
 $$
 
-Here $W_0$ is the frozen matrix, $\Delta W$ is the trainable update, $r$ is the
-rank budget, and $\alpha/r$ is the scaling that keeps update size comparable as
-the chosen rank changes. With rank $r \ll \min(d, k)$, $A$ and $B$ together hold
-$r(d+k)$
-parameters instead of $dk$. Only $A$ and $B$ train; $W_0$ stays frozen. The
-hypothesis behind it is that the update a fine-tune wants to apply has low
-intrinsic rank, so a rank-8 or rank-16 factorization captures most of it
-[@hu2021lora]. Because the adaptation is an additive update to existing
-matrices rather than a new sublayer, at inference the product $BA$ folds back
-into $W_0$, so a served LoRA model has zero added latency, unlike adapters
-that bolt on extra layers. That is why LoRA became the default PEFT method.
-@fig-sft-peft-lora shows the two parallel paths and what each holds.
+Here (M_{\mathrm{peak}}) is peak accelerator memory;
+(M_{\mathrm{base}}) stores frozen base weights;
+(M_{\mathrm{adapter}}) stores trainable PEFT parameters;
+(M_{\mathrm{grad}}) stores their gradients;
+(M_{\mathrm{optim}}) stores optimizer state;
+(M_{\mathrm{act}}) stores activations needed for backpropagation; and
+(M_{\mathrm{work}}) covers temporary kernel, communication, and dequantization
+buffers. The approximation omits allocator details, so measure the actual peak.
 
-Plug in your own dimensions and ranks to see how few parameters $r(d+k)$ is
-against the full $dk$, and how the fraction grows linearly with rank.
+## LoRA constrains each update to a low-rank factorization
+
+For a frozen linear map (W_0\in\mathbb{R}^{d_{\mathrm{out}}\times
+d_{\mathrm{in}}}), @gls-lora replaces the effective weight with
+
+$$
+W
+=
+W_0+sBA,
+\qquad
+A\in\mathbb{R}^{r\times d_{\mathrm{in}}},
+\qquad
+B\in\mathbb{R}^{d_{\mathrm{out}}\times r}.
+$$
+
+Here (d_{\mathrm{in}}) and (d_{\mathrm{out}}) are the input and output
+dimensions; (r\le\min(d_{\mathrm{in}},d_{\mathrm{out}})) is the adapter rank;
+(A) and (B) are trainable; and (s) is a fixed scale, commonly (\alpha/r)
+in the original parameterization for a chosen multiplier (\alpha). The update
+obeys (\operatorname{rank}(sBA)\le r). For an input
+(x\in\mathbb{R}^{d_{\mathrm{in}}}), the output is
+(Wx=W_0x+sB(Ax)). Implementations commonly initialize one factor so that
+(BA=0), making the adapted model equal to the base model before the first
+update.
+
+The base matrix contains (d_{\mathrm{out}}d_{\mathrm{in}}) parameters. The
+LoRA branch contains
+
+$$
+N_{\mathrm{LoRA}}
+=r(d_{\mathrm{in}}+d_{\mathrm{out}}),
+\qquad
+\rho
+=\frac{N_{\mathrm{LoRA}}}
+{d_{\mathrm{out}}d_{\mathrm{in}}}.
+$$
+
+Here (N_{\mathrm{LoRA}}) is the number of trainable adapter parameters for
+this matrix and (\rho) is their fraction of the base-matrix parameter count.
+The total for a model is the sum over every targeted matrix, plus any biases,
+embeddings, or output heads deliberately left trainable.
+
+![For one 4,096 by 4,096 matrix, the exact LoRA parameter fraction is (2r/4{,}096). The chart counts the two factors only; it does not predict task quality, memory use, or the fraction for a whole model.](/figures/sft-peft-1.svg){#fig-sft-peft-1}
+
+The runnable performs the same exact accounting. It describes one matrix, not a
+complete transformer.
 
 :::: {.runnable}
 ```python
-import numpy as np
-d, k = 4096, 4096          # one weight matrix, e.g. an attention projection
-full = d * k               # full fine-tune touches every weight
+d_in = 4096
+d_out = 4096
 ranks = [4, 8, 16, 32, 64]
-print(f"full fine-tune: {full:,} trainable params")
-for r in ranks:
-    lora = r * (d + k)     # A is r x k, B is d x r
-    print(f"  rank {r:3d}: {lora:>9,} params  ({100*lora/full:5.2f}% of full)")
-import matplotlib.pyplot as plt
-fracs = [100 * r * (d + k) / full for r in ranks]
-plt.plot(ranks, fracs, "o-")
-plt.xlabel("LoRA rank r"); plt.ylabel("trainable params (% of full)")
-plt.title("Cost rises linearly with rank"); plt.grid(True); plt.show()
+
+full = d_in * d_out
+print(f"base matrix parameters: {full:,}")
+for rank in ranks:
+    adapter = rank * (d_in + d_out)
+    fraction = 100 * adapter / full
+    print(f"rank {rank:>2}: {adapter:>7,} parameters ({fraction:>6.3f}%)")
 ```
 ::::
 
 ```{dot}
 //| label: fig-sft-peft-lora
-//| fig-cap: "LoRA adds a trainable low-rank branch beside the frozen weight. The input feeds both paths and their outputs sum. Only A and B carry gradients, so the trained parameter count drops from d times k to r times the sum of d and k."
+//| fig-cap: "LoRA leaves the base matrix frozen and trains a parallel low-rank path. The paths can remain separate for adapter switching or be added into one materialized weight for deployment."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
+  rankdir=TB;
+  nodesep=0.35; ranksep=0.45;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
   x [label="input x"];
-  W0 [label="W0 (d x k)\nfrozen"];
-  A [label="A (r x k)\ntrained", fillcolor="#bfe3c0"];
-  B [label="B (d x r)\ntrained", fillcolor="#bfe3c0"];
-  sum [label="+", shape=circle];
-  h [label="output h"];
+  base [label="W_0 x\nfrozen base path"];
+  A [label="A x\nr by d_in", fillcolor="#bfe3c0"];
+  B [label="s B(Ax)\nd_out by r", fillcolor="#bfe3c0"];
+  sum [label="+", shape=circle, fixedsize=true, width=0.42, height=0.42];
+  y [label="output Wx"];
 
-  x -> W0;
-  x -> A;
-  A -> B;
-  W0 -> sum;
-  B -> sum [label="scale alpha/r"];
-  sum -> h;
+  x -> base -> sum;
+  x -> A -> B -> sum;
+  sum -> y;
 }
 ```
 
-@gls-qlora then attacked the remaining bottleneck by keeping the base model in
-4-bit form while training LoRA adapters on top. By then the bottleneck was not the
-trainable parameters but the memory to hold the frozen base in the
-optimizer's address space. It quantizes the frozen base weights to 4-bit (an
-information-theoretically motivated NormalFloat format, NF4) and trains the
-LoRA adapters in higher precision on top, dequantizing each weight block only
-when it is needed for the forward and backward pass [@dettmers2023qlora].
-Because the base never updates, its quantization error is fixed and
-tolerable; because the adapters are small, they stay in bf16 (a 16-bit floating-point
-format). The result is
-that a 65B model fits the adaptation step into roughly the memory a single
-48GB card provides [@dettmers2023qlora], which is the difference between
-needing a cluster and needing a workstation. With QLoRA the adaptation of a
-frontier-scale open model moved from a multi-accelerator job to a single-card
-one, and that is largely why the open-model fine-tuning ecosystem exists in
-the form it does.
-
-The low cost is bought with fidelity, and the tradeoffs are worth naming
-precisely.
-
-- **Full fine-tune versus LoRA.** A full fine-tune has the most capacity and
-  is the safe choice when the adaptation is large or far from the base
-  distribution. LoRA trades a small quality gap, usually negligible for
-  instruction tuning and larger for tasks that need new knowledge, for a
-  hundredfold cut in trainable parameters and the ability to keep one base
-  with many swappable adapters. Rank is the knob: too low underfits the task,
-  too high spends memory for no gain and starts to resemble a full fine-tune.
-  Later large-scale practice moved the default: applied to every linear layer
-  and run at roughly ten times the full-fine-tune learning rate, LoRA matches
-  full fine-tuning whenever the adapter is not capacity-constrained, and for
-  RL post-training it matches even at very low rank [@schulman2025lora].
-- **QLoRA's quantization error.** Holding the base in 4-bit introduces a
-  fixed error in every frozen weight. For most instruction tuning this is
-  below the noise floor, because the adapters learn around it, but it sets a
-  capability ceiling a precision-sensitive task can hit. The trade is memory
-  for a small, bounded accuracy risk.
-
-Cost rises linearly with rank, but the quality it buys saturates: drag the
-slider to watch task quality climb steeply at first, then flatten once the
-rank exceeds the update's intrinsic dimension, which is why a useful rank range
-exists.
-
-```{=html}
-<figure id="fig-sft-peft-curve">
-<div class="viz" data-viz="curve" data-family="diminishing" data-xlabel="LoRA rank r" data-ylabel="Task quality" data-plabel="saturation rate" data-pmin="0.05" data-pmax="0.5" data-p="0.2"></div>
-<figcaption>Task quality rises with LoRA rank and then saturates; too low underfits, too high spends memory for no gain, so the knob has a useful operating range.</figcaption>
-</figure>
-```
+The low-rank form is a capacity constraint, not proof that every useful
+fine-tuning update has low rank. The original LoRA paper found competitive
+results in its evaluated settings [@hu2021lora]. Later experiments on
+mathematics and code found that standard low-rank LoRA learned less of the new
+domain than full fine-tuning while retaining more of the base model's behavior
+[@biderman2024lora]. Rank, target modules, dataset size, batch size,
+initialization, scale, and learning rate all affect the comparison.
 
 ```{=html}
 <figure id="fig-sft-peft-lora-lowrank">
 <div class="viz" data-viz="lora-lowrank"></div>
-<figcaption>Why a low rank suffices. The update a fine-tune wants (left) has low intrinsic rank, so reconstructing it from a rank-r product B·A (right) recovers most of the structure within a few components and then saturates. Drag r and watch the residual fall while the parameter count stays r(d+k), far below the full d·k. Illustrative.</figcaption>
+<figcaption>A linear-algebra illustration of low-rank reconstruction. Increasing the rank can represent more independent directions in a synthetic update, while the parameter count remains r(d_in + d_out). This is not a task-quality curve.</figcaption>
 </figure>
 ```
 
-## Why two fine-tunes can be added together
+Target selection matters as much as rank. Attention-only LoRA was common in
+early work, but later experiments found gains from targeting MLP and, where
+applicable, MoE projections as well. A 2025 report found high-rank LoRA could
+match full fine-tuning in its Llama and Qwen sweeps when adapters covered all
+linear layers and were not capacity-constrained; it also found a different
+best learning rate and worse behavior at large batch sizes
+[@schulman2025lora]. Those are empirical results, not universal defaults. Sweep
+the update strategy on the actual dataset.
 
-Once adaptation is a small additive change, the changes compose, and *that*
-is the last word in the unifying claim. Model merging combines several
-fine-tuned checkpoints into one set of weights with no further training. The
-simplest form is weight averaging. Task arithmetic sharpens it: define a task
-vector $\tau_i = \theta_{\text{ft},i} - \theta_{\text{base}}$ as the
-difference between a fine-tuned model and its base. Here $\theta_{\text{base}}$
-is the starting checkpoint, $\theta_{\text{ft},i}$ is the checkpoint fine-tuned
-for task $i$, and $\tau_i$ is the displacement caused by that task. These
-vectors add, subtract, and scale like directions in weight space
-[@ilharco2023task].
-Adding two task vectors yields a model good at both tasks; negating one moves
-the model away from a behavior [@ilharco2023task]. The reason this works at
-all is that fine-tuning moves a model only a short distance across the loss landscape (the
-surface that maps each setting of the weights to its training loss), and over
-so small a neighborhood that surface is nearly flat, so the displacement
-behaves like a vector, and vectors compose.
+## QLoRA changes the storage of the frozen base
+
+@gls-qlora keeps the frozen base weights in a 4-bit NormalFloat representation
+and trains LoRA factors in a higher compute precision. During computation,
+weight blocks are dequantized as needed; gradients flow through the computation
+to the adapter parameters, while the quantized base remains unchanged.
+Double quantization compresses quantization constants, and paged optimizers
+manage temporary memory spikes [@dettmers2023qlora].
+
+The QLoRA paper demonstrated fine-tuning a 65-billion-parameter model on one
+48 GB GPU in its reported configuration. That is an existence result, not a
+hardware rule. Sequence length, batch size, activation checkpointing, attention
+kernels, adapter coverage, optimizer, and temporary buffers can move the peak
+substantially. Four bits per base parameter is also only the ideal payload for
+the quantized values; scales and other metadata add storage.
+
+QLoRA separates training precision from the deployment format. A QLoRA-trained
+adapter can be served beside a quantized base, beside a higher-precision base,
+or after a supported merge and requantization path. These choices need their own
+quality and latency tests. “Trained with QLoRA” does not by itself mean that the
+final server executes every operation in four bits.
+
+## Merged and switchable adapters have different costs
+
+After training, a LoRA update can be materialized as
+
+$$
+W_{\mathrm{merged}}=W_0+sBA.
+$$
+
+Here the merged matrix uses the original linear operation, so the LoRA branch adds no
+separate matrix multiplications at inference. The cost is operational: the
+result is another full-size weight set, and that model instance no longer has a
+small independent adapter to switch off. Keeping (A) and (B) separate
+preserves modularity but adds adapter computation, memory reads, and routing.
+The real latency depends on batch shape, kernel fusion, rank, target modules,
+and whether requests in a batch use the same adapter.
+
+Adapter hot-swapping also has compatibility constraints. A server must pair an
+adapter with the exact base architecture and parameter names it was trained
+against, plus the compatible tokenizer and chat template. Current PEFT tooling
+can replace LoRA weights in place, but target modules and compiled shapes constrain
+which adapters can share a slot [@huggingface2026peft]. “One base, many
+adapters” is a deployment design, not an automatic property of an adapter file.
+
+## Weight merging is a separate approximation
+
+Do not confuse merging one LoRA branch into its own base with combining several
+independently fine-tuned models. The latter is *model merging*. It operates on
+compatible parameter coordinates and tries to preserve several behaviors
+without another training run.
+
+For fine-tuned parameter vector (\theta_i) derived from the same base
+(\theta_0), define the task delta and a weighted merge as
+
+$$
+\tau_i=\theta_i-\theta_0,
+\qquad
+\theta_{\mathrm{merge}}
+=\theta_0+\sum_{i=1}^{n}\lambda_i\tau_i.
+$$
+
+Here (i\in\{1,\ldots,n\}) indexes the source fine-tunes; (\tau_i) is the
+parameter displacement for source (i); (\lambda_i) is its chosen merge
+coefficient; and (\theta_{\mathrm{merge}}) is the candidate merged model.
+The operation assumes matching architecture, tensor shapes, tokenizer-related
+parameters, and parameter alignment. A shared initialization supplies that
+alignment. Arithmetic on unrelated checkpoints is not justified by the
+equation.
+
+Model soups found that averaging checkpoints from one fine-tuning sweep often
+improved the evaluated models [@wortsman2022soups]. Task arithmetic showed that
+adding or negating task deltas can steer behavior in tested settings
+[@ilharco2023task]. Neither result says that arbitrary skills add cleanly.
+TIES trims small deltas, resolves sign conflicts, and merges values that agree
+with the selected sign [@yadav2023ties]. DARE randomly drops delta parameters
+and rescales those retained before a later merge [@yu2024dare]. These methods
+manage interference; they do not certify that every parent capability survives.
 
 ```{=html}
 <figure id="fig-sft-peft-task-arithmetic">
 <div class="viz" data-viz="task-arithmetic"></div>
-<figcaption>Task vectors as directions. Each fine-tune is a vector τ = θ_ft − θ_base from the base model. Add two and you get a model good at both; sweep the angle until they oppose and the sum cancels, the sign conflict that TIES and DARE clean up. Toggle to negate a vector and move the model away from a behavior. Illustrative.</figcaption>
+<figcaption>Task-vector arithmetic in an illustrative two-dimensional slice. Alignment makes deltas reinforce; opposition makes them cancel. Real checkpoints occupy far more dimensions, so the result must be evaluated rather than inferred from vector addition alone.</figcaption>
 </figure>
 ```
 
-The merging branch in @fig-sft-peft-lineage arrived from a different
-direction than the efficiency spine. Model soups showed that averaging the
-weights of several models fine-tuned from the same initialization with
-different hyperparameters often beats picking the single best one, with no
-inference cost [@wortsman2022soups]. Task arithmetic generalized averaging
-into a signed algebra of task vectors [@ilharco2023task]. The friction it
-exposed was interference: when two task vectors disagree on the sign of a
-parameter, naive addition cancels both contributions. TIES-merging addresses
-this by trimming small-magnitude changes, electing a sign per parameter, and
-merging only the agreeing updates [@yadav2023ties]; DARE drops and rescales a
-large fraction of the delta before merging [@yu2024dare]. These are the
-methods that let a community assemble a capable model by combining
-specialists instead of running one large alignment pipeline.
+When the training data can be combined, a joint fine-tune provides direct
+evidence about the joint objective. A training-free merge is useful when data or
+compute is unavailable, or as a cheap candidate in a measured merge sweep. Test
+every constituent task, general capabilities, calibration, and safety after the
+merge.
 
-Merging trades reliability for near-zero cost, and the trade splits along two
-lines.
+## Run adaptation as a controlled experiment
 
-- **Merging versus a fresh fine-tune.** Merging is nearly free: no training,
-  no data, just arithmetic on checkpoints. It is also approximate. The merged
-  model is a compromise that can underperform a model actually trained on the
-  union of the tasks, and interference between task vectors can erase a
-  capability that each parent had. Merge when the parents are cheap and a
-  good-enough combination is acceptable; train on the union when the
-  combination must be reliable.
+A reliable workflow keeps the data, optimizer, parameterization, and deployment
+artifact distinguishable:
 
-## Operational form
+1. Define held-out task and regression suites before inspecting final results.
+2. Freeze the base checkpoint, tokenizer, chat template, maximum length, and
+   target-mask policy as one versioned contract.
+3. Audit source mixture, duplicates, contamination, truncation, and target-token
+   counts.
+4. Measure the base model and a prompt-only baseline.
+5. Sweep learning rate and at least one capacity setting, such as LoRA rank or
+   target modules. Do not reuse full-fine-tune hyperparameters without testing.
+6. Compare PEFT with a small full-fine-tune baseline when hardware permits.
+7. Evaluate the exact artifact to be served: unmerged adapter, merged weights,
+   and quantized deployment can behave differently.
 
-A LoRA fine-tune is a small change to a standard training loop: wrap the
-target linear layers with the factored update, freeze everything else, and
-train only $A$ and $B$. The effective default is to wrap every linear layer,
-the MLP and MoE blocks included, and to run the adapter at roughly ten times
-the learning rate a full fine-tune would use; targeting only the attention
-projections, the early habit, underperforms even at matched parameter count
-[@schulman2025lora].
-A reader can find the canonical reference implementation in `LoraLayer,
-peft/src/peft/tuners/lora/layer.py` in the Hugging Face PEFT library, and the
-4-bit NF4 base in `bitsandbytes`. The operational shape is worth holding in
-mind: one frozen base on disk, a directory of small adapter files, and a
-serving layer that loads the base once and swaps adapters per request, which
-is the deployment pattern PEFT exists to enable.
-
-Three failure modes recur, one per consequence, and each has a different fix.
-The first is an underfit LoRA: the rank is too small for the adaptation, so
-the model half-learns the task and reverts under pressure. Raise the rank. A
-broken chat template is harder to spot, because serving with different role
-markers than training looks like a capable model that ignores instructions,
-when really it is being prompted off-distribution; the fix is to align the
-template exactly. Merge interference is the third, surfacing when two combined
-adapters degrade each other and the merged model ends up worse than either
-parent. Switch from naive averaging to a sign-aware merge, or train on the
-union instead.
+| Symptom | Likely checks |
+|---|---|
+| Training loss falls but chat behavior is erratic | Template mismatch, wrong target mask, missing stop token |
+| Target task improves while broad ability drops | Mixture imbalance, excessive steps, full-update forgetting |
+| LoRA underfits despite low loss on a small split | Rank or target-module bottleneck, duplicate split, narrow evaluation |
+| QLoRA runs out of memory | Activations, sequence length, batch size, temporary buffers, checkpointing |
+| Adapter is correct but serving is slow | Unmerged branch cost, per-request routing, fragmented batches, compilation |
+| Merged model loses a parent skill | Delta conflict, coefficient choice, incompatible sources, no joint training |
 
 ::: {.callout-tip}
-## Constraint arrow
-The serving layer reaches back and shapes this chapter. Because LoRA's update
-folds into the base weights at inference, it adds no latency and no extra
-key-value cache, which is exactly why it won over adapters that insert
-sublayers. And because a server can hold one base and swap many small
-adapters per request, the cheap multi-tenant serving pattern in
-@sec-serving-problem is what makes per-customer LoRA adaptation economical at
-all. The shape of the adaptation method is set by the cost of serving it.
+## Lower-layer constraint
+
+The training example is not just prose. It is bytes, normalized text, template
+tokens, truncation, an attention mask, a target mask, and a packed sequence.
+Likewise, “trainable parameters” is not peak memory: base weights, activations,
+gradients, optimizer state, communication buffers, and temporary kernels occupy
+different terms. Record those lower-layer contracts before comparing recipes.
 :::
+
+## The evidence boundary
+
+SFT makes a model more likely to reproduce demonstrated behavior under a
+particular serialization. PEFT changes the set or form of parameters allowed to
+carry that update. Neither choice determines the other, and neither removes the
+need for held-out evaluation.
+
+Small curated datasets can be enough for style and familiar tasks. LoRA and
+QLoRA can make those experiments much cheaper. The claims stop there. New
+knowledge, distant domains, long training runs, precision-sensitive tasks, and
+combined skills may expose capacity, forgetting, quantization, or interference
+limits. Choose the smallest update that passes the target and regression suites,
+then verify the exact deployed artifact.
 
 ## Further reading
 

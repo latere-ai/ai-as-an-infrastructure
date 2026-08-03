@@ -600,7 +600,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/adaptation/01-sft-peft.qmd",
-      ["small, low-rank, additive, composable", "rank-16 adapter approximates", "QLoRA", "two fine-tunes can be added together"],
+      ["SFT and PEFT therefore answer different questions", "LoRA constrains each update", "QLoRA", "Weight merging is a separate approximation"],
     ],
     [
       "zh/adaptation/01-sft-peft.qmd",

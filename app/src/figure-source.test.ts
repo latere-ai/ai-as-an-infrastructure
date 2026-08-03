@@ -177,6 +177,18 @@ test("beyond-text figure shows control arithmetic rather than invented modality 
   expect(spec).not.toContain('"label": "robot"');
 });
 
+test("SFT and PEFT figure shows LoRA parameter arithmetic rather than invented task fit", () => {
+  const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
+  const spec = catalog.match(/"sft-peft-1": \{[\s\S]*?\n    \},/)?.[0] ?? "";
+  expect(spec).toContain('"x": [4, 8, 16, 32, 64]');
+  expect(spec).toContain('"y": [0.1953125, 0.390625, 0.78125, 1.5625, 3.125]');
+  expect(spec).toContain('"xlabel": "LoRA rank r"');
+  expect(spec).toContain('"ylabel": "LoRA parameters (% of matrix)"');
+  expect(spec).not.toContain('"type": "scatter"');
+  expect(spec).not.toContain('"ylabel": "task adaptation"');
+  expect(spec).not.toContain('"label": "full SFT"');
+});
+
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();
