@@ -95,31 +95,42 @@ $$
 2 \cdot \text{layers} \cdot n_{\text{kv}} \cdot d_{\text{head}} \cdot \text{seq} \cdot \text{batch} \cdot \text{dtype}
 $$
 
-这里前面的 $2$ 分别对应键和值，$\text{layers}$ 与 $n_{\text{kv}}$ 表示每一层、每一个键值头都要存一份缓存，只有在普通多头注意力下 $n_{\text{kv}}$ 才等于 $h$，$d_{\text{head}}$ 是每个头的宽度，$\text{seq}$ 与 $\text{batch}$ 分别是上下文长度和批大小，$\text{dtype}$ 是每个数占用的字节数。这个乘积随上下文长度与批大小线性增长，在长上下文下会超过模型权重本身。@fig-transformer-architecture-1 画出这一线性增长，以及它与一条水平权重线的交叉点，每个变体的斜率由它保留多少 KV 头决定。这个事实，正是解释 MQA、GQA 与 MLA 的关键。它们各自回答的问题是：在质量明显下降之前，能删掉多少 KV 缓存？
+这里前面的 $2$ 分别对应键和值，$\text{layers}$ 与 $n_{\text{kv}}$ 表示每一层、每一个键值头都要存一份缓存，只有在普通多头注意力下 $n_{\text{kv}}$ 才等于 $h$，$d_{\text{head}}$ 是每个头的宽度，$\text{seq}$ 与 $\text{batch}$ 分别是上下文长度和批大小，$\text{dtype}$ 是每个数占用的字节数。这个乘积随上下文长度与批大小线性增长；它何时超过权重，取决于模型形状、批量以及缓存与权重精度。@fig-transformer-architecture-1 在明确假设下画出这项关系。
 
-![KV 缓存内存随上下文长度线性增长的示意图，依据 Shazeer（2019）与 Ainslie 等（2023）。每个注意力变体的斜率由它保留多少键/值头决定，因此 MHA 增长最快，MQA 与 MLA 最慢。越过一个交叉点后，缓存便超过水平的模型权重线。图为理想化的相对单位，并非实测数据。](/figures/transformer-architecture-1.svg){#fig-transformer-architecture-1}
+![在一组明确的 7B 级配置下精确计算的 KV 有效载荷。MHA 使用 32 个 KV 头，GQA 使用 8 个，MQA 使用 1 个；水平线表示 70 亿个两字节权重参数。图中不含分配器开销与运行时工作区。](/figures/transformer-architecture-1.svg){#fig-transformer-architecture-1}
 
-拿一个 7B 级模型试一试：把每个变体的 KV 缓存对上下文作图，读出它在哪里超过权重。改动 `n_kv`，看共享头如何把交叉点推远。
+下面的单元格用相同假设计算每词元 KV 有效载荷、128k 上下文的缓存量，以及缓存有效载荷等于权重字节数时的上下文长度。
 
 :::: {.runnable}
 ```python
-import numpy as np
-import matplotlib.pyplot as plt
+layers = 32
+head_width = 128
+bytes_per_kv_element = 2
+batch_size = 1
+parameter_count = 7_000_000_000
+bytes_per_weight = 2
+weight_bytes = parameter_count * bytes_per_weight
 
-layers, d_head, dtype, params = 32, 128, 2, 7e9  # fp16 字节数，7B 权重
-weights_gb = params * dtype / 1e9
-seq = np.linspace(0, 200_000, 400)
+def kv_payload_bytes(sequence_length, kv_heads):
+    return (
+        2
+        * layers
+        * batch_size
+        * sequence_length
+        * kv_heads
+        * head_width
+        * bytes_per_kv_element
+    )
 
-for name, n_kv in [("MHA", 32), ("GQA", 8), ("MQA", 1)]:
-    per_tok = 2 * layers * n_kv * d_head * dtype  # 每词元字节数
-    cache_gb = per_tok * seq / 1e9
-    crossover = weights_gb * 1e9 / per_tok
-    print(f"{name:3s}: {per_tok/1024:6.0f} KB/词元，在 {crossover:>7.0f} 个词元处越过权重大小")
-    plt.plot(seq / 1000, cache_gb, label=name)
-
-plt.axhline(weights_gb, ls="--", color="gray", label=f"权重 ({weights_gb:.0f} GB)")
-plt.xlabel("上下文长度（千词元）"); plt.ylabel("KV 缓存（GB）")
-plt.legend(); plt.title("KV 缓存与上下文长度，批量=1"); plt.show()
+for name, kv_heads in [("MHA", 32), ("GQA", 8), ("MQA", 1)]:
+    bytes_per_token = kv_payload_bytes(1, kv_heads)
+    crossover_tokens = weight_bytes / bytes_per_token
+    cache_at_128k_gib = kv_payload_bytes(128_000, kv_heads) / 2**30
+    print(
+        f"{name}: {bytes_per_token / 1024:.0f} KiB/词元；"
+        f"128k 缓存={cache_at_128k_gib:.2f} GiB；"
+        f"在 {crossover_tokens:,.0f} 个词元时等于权重字节数"
+    )
 ```
 ::::
 

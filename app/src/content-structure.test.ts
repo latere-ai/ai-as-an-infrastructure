@@ -481,6 +481,65 @@ test("tokenization defines a reproducible interface rather than only a vocabular
   expect(src("figures-src/tokenization-2.py")).not.toContain("illustrative, not measured");
 });
 
+test("transformer architecture separates equations, cache state, and kernels", () => {
+  const chapter = src("en/foundations/04-transformer-architecture.qmd");
+
+  for (const heading of [
+    "## Scope: a causal decoder",
+    "## A block updates one residual stream twice",
+    "## Normalization controls scale",
+    "## The feed-forward network supplies per-position capacity",
+    "## Causal self-attention with explicit shapes",
+    "## Position enters through queries and keys",
+    "## Prefill creates the cache; decode reuses it",
+    "## MHA, GQA, and MQA change KV-head sharing",
+    "## MLA changes the cached representation",
+    "## Separate arithmetic, temporary memory, and persistent state",
+    "## Record the architecture as a contract",
+    "## Validate before the full training run",
+  ]) {
+    expect(chapter).toContain(heading);
+  }
+
+  for (const contract of [
+    "p(t_{i+1}=v\\mid t_{\\le i})",
+    "\\operatorname{RMSNorm}(x)",
+    "\\operatorname{SwiGLU}(x)",
+    "M_{ij}=-\\infty",
+    "M_{\\mathrm{KV}}",
+    "M_{\\mathrm{MLA}}",
+    "cached equivalence",
+    "@ainslie2023gqa",
+    "@dao2022flashattention",
+    "@deepseek2025v32",
+  ]) {
+    expect(chapter).toContain(contract);
+  }
+
+  for (const rejected of [
+    "Three questions the field has closed",
+    "The one cost that stays open",
+    "answered and closed",
+    "Knowledge lives mostly in the MLP",
+    "zeros the upper triangle",
+    "at long context it overtakes",
+    "MQA can destabilize training",
+    "its successor, DeepSeek sparse attention",
+    "most open models use GQA",
+    "nearly every open dense model",
+    "None of these change what attention computes",
+  ]) {
+    expect(chapter).not.toContain(rejected);
+  }
+
+  expect(src("figures-src/transformer-architecture-1.py")).toContain(
+    "7_000_000_000 * 2 / 2**30",
+  );
+  expect(src("figures-src/transformer-architecture-1.py")).not.toContain(
+    "relative units",
+  );
+});
+
 test("scaling-laws separates forecasting, allocation, deployment, and execution", () => {
   const chapter = src("en/foundations/01-scaling-laws.qmd");
 

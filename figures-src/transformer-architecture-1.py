@@ -3,86 +3,66 @@ matplotlib.use("svg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Schematic illustration of KV-cache memory growth versus context length.
-# The KV cache size is 2 * layers * n_kv * d_head * seq * batch * dtype,
-# so for a fixed model it grows linearly in sequence length with a slope set
-# entirely by the number of distinct KV heads each attention variant keeps.
-# MHA keeps one KV head per query head, GQA keeps one per group, MQA keeps a
-# single KV head, and MLA caches a low-rank latent instead of per-head K and V.
-# All numbers here are idealized relative units, not measured benchmarks. The
-# point of the figure is the crossover with the flat model-weights line: past
-# some context length the cache overtakes the weights themselves.
+# Exact dense KV payload under the assumptions stated in the chapter:
+#   32 layers, head width 128, batch 1, two bytes per KV element.
+# The horizontal comparison is 7 billion parameters at two bytes each.
+# Allocator overhead, runtime workspace, and cache quantization metadata are
+# deliberately excluded.
 
 GRAY = "#6b7280"
 BLUE = "#3b82f6"
 
-seq = np.linspace(0, 128, 256)  # context length, thousands of tokens
+layers = 32
+head_width = 128
+batch_size = 1
+bytes_per_kv_element = 2
+weight_gib = 7_000_000_000 * 2 / 2**30
+sequence = np.linspace(0, 256_000, 400)
 
-# Relative per-token slopes, proportional to the number of cached KV heads.
-# Idealized: MHA = 8 query heads, GQA = 2 KV groups, MQA = 1 KV head, and MLA
-# a compressed latent slightly below MQA. Units are arbitrary (weights = 1).
-slopes = {
-    "MHA": 1.0 / 32.0,
-    "GQA": (1.0 / 32.0) * (2.0 / 8.0),
-    "MQA": (1.0 / 32.0) * (1.0 / 8.0),
-    "MLA": (1.0 / 32.0) * (0.75 / 8.0),
+variants = {
+    "MHA (32 KV heads)": 32,
+    "GQA (8 KV heads)": 8,
+    "MQA (1 KV head)": 1,
 }
-weights = 1.0  # model weights, the flat reference, in the same relative units
 
-fig, ax = plt.subplots(figsize=(5, 3))
+fig, ax = plt.subplots(figsize=(5.2, 3.1))
 
-# Small vertical nudges keep end labels off each other and off the dashed
-# model-weights line: GQA ends right at y=1, so lift its label clear of it.
-label_dy = {"MHA": 0.0, "GQA": 11.0, "MQA": 4.0, "MLA": -4.0}
+styles = [
+    (BLUE, "-"),
+    (GRAY, "--"),
+    (GRAY, ":"),
+]
 
-for name in ["MHA", "GQA", "MQA", "MLA"]:
-    cache = slopes[name] * seq
-    ax.plot(seq, cache, color=BLUE, linewidth=1.8)
-    # label at the right end of each line
-    ax.annotate(
-        name,
-        xy=(seq[-1], cache[-1]),
-        xytext=(4, label_dy[name]),
-        textcoords="offset points",
-        color=GRAY,
-        fontsize=9,
-        va="center",
+for (label, kv_heads), (color, linestyle) in zip(variants.items(), styles):
+    payload_gib = (
+        2
+        * layers
+        * batch_size
+        * sequence
+        * kv_heads
+        * head_width
+        * bytes_per_kv_element
+        / 2**30
     )
+    ax.plot(sequence / 1000, payload_gib, color=color, linestyle=linestyle,
+            linewidth=2.0, label=label)
 
-# Flat model-weights reference line.
-ax.axhline(weights, color=GRAY, linewidth=1.2, linestyle="--")
-ax.annotate(
-    "model weights",
-    xy=(4, weights),
-    xytext=(0, 4),
-    textcoords="offset points",
-    color=GRAY,
-    fontsize=9,
-    va="bottom",
-)
-
-# Mark the crossover where the MHA cache overtakes the weights.
-x_cross = weights / slopes["MHA"]
-if x_cross <= seq[-1]:
-    ax.plot([x_cross], [weights], marker="o", color=BLUE, markersize=4)
-    ax.annotate(
-        "cache overtakes weights",
-        xy=(x_cross, weights),
-        xytext=(34, -40),
-        textcoords="offset points",
-        color=GRAY,
-        fontsize=8,
-        va="top",
-        ha="left",
-        arrowprops=dict(arrowstyle="-", color=GRAY, linewidth=0.7),
+    bytes_per_token = (
+        2 * layers * batch_size * kv_heads * head_width * bytes_per_kv_element
     )
+    crossover = 7_000_000_000 * 2 / bytes_per_token
+    if crossover <= sequence[-1]:
+        ax.plot(crossover / 1000, weight_gib, marker="o", color=color,
+                markersize=4)
 
+ax.axhline(weight_gib, color=GRAY, linewidth=1.2, linestyle="-.",
+           label="7B weights at 2 bytes / parameter")
 ax.set_xlabel("context length (thousands of tokens)")
-ax.set_ylabel("memory (relative units)")
-ax.set_xlim(0, seq[-1] * 1.12)
-ax.set_ylim(0, max(weights, slopes["MHA"] * seq[-1]) * 1.1)
+ax.set_ylabel("KV payload (GiB)")
+ax.set_xlim(0, sequence[-1] / 1000)
+ax.set_ylim(0, 132)
+ax.legend(loc="upper left", frameon=False, labelcolor=GRAY, fontsize=7.5)
 
-# Mid-gray axes, ticks, labels; drop the top and right spines.
 for spine in ["top", "right"]:
     ax.spines[spine].set_visible(False)
 for spine in ["left", "bottom"]:
