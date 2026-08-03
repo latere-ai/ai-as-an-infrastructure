@@ -584,7 +584,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/generative/05-beyond-text.qmd",
-      ["The early evidence leans toward the latter", "carried more by free data"],
+      ["Predicting plausible observations is not the same as predicting what changes under an action", "A shared backbone is not yet a world model"],
     ],
     [
       "zh/generative/05-beyond-text.qmd",

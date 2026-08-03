@@ -1,288 +1,478 @@
 # Beyond Text: Multimodal, World Models, and Embodiment {#sec-beyond-text}
 
-Text has a data wall: the supply of high-quality tokens is finite, a limit
-@sec-learning-limits takes up in full. Leaving text does not remove that wall; it
-makes the missing data more physical. Video generators can look convincing
-without learning transferable physics, world-model papers disagree on what the
-model is supposed to represent, and robotics has no internet-scale action corpus
-to inherit. Generation, perception, and control therefore break at the same
-place: the absence of a grounded data flywheel and a transferable internal model
-of the world. Multimodality, world models, and robotics test whether the
-foundation-model recipe is general, or whether it worked because text and images
-arrived with free data attached. The early evidence leans toward the latter: the
-recipe was carried more by free data than the field liked to admit.
+A generated video, a learned simulator, and a robot policy can all use the same
+visual backbone. They solve different problems. The video generator predicts a
+plausible observation. The simulator predicts how a state changes under a chosen
+action. The policy chooses an action and must survive the result. Treating those
+three outputs as evidence of one general “world model” obscures the contracts
+that can actually be tested. Predicting plausible observations is not the same
+as predicting what changes under an action.
 
-![Schematic of why leaving text changes the learning problem: action horizons grow while dense human supervision becomes scarcer. Idealized placement of modalities, not measured data.](/figures/beyond-text-1.svg){#fig-beyond-text-1}
+This chapter separates those contracts. It defines the state and dynamics needed
+for planning, explains why visual realism is weak evidence for physical
+prediction, and follows the consequences into robot data, action
+representations, control frequency, and evaluation. The central question is not
+whether a model accepts pixels. It is whether its predictions remain useful when
+an agent intervenes and the environment answers back.
 
-## Looking real and being right are different things
+## Separate generation, dynamics, planning, and control
 
-The most striking artifacts of the period are the video generators. They
-produce seconds of photorealistic, physically plausible motion from a sentence.
-How those generators are built, diffusion transformers over spacetime latent
-patches, is the subject of @sec-multimodal; the question here is what they understand.
-The temptation is to read that fluency as understanding, as if a model that can
-render a ball bouncing has learned that balls bounce. Controlled study says it
-has not. When a video model is tested *out of distribution*, on inputs unlike
-anything it saw in training (here, a physical situation unlike its
-training trajectories), it fails, and it fails in a
-revealing way: it imitates the nearest scene it saw rather than applying a rule,
-and scaling the model and the data does not fix it [@kang2025physicallaw]. A
-benchmark built to decorrelate looking-real from being-right confirmed the
-point from the other side: across the leading generators, physical-understanding
-scores are severely limited and essentially unrelated to visual realism
-[@motamed2025physicsiq]. The realism and the physics are independent axes, and
-scaling buys the first without the second.
+Four capabilities are often bundled under “embodied intelligence”:
 
-This is the binding constraint of the whole chapter, and it is epistemic rather
-than engineering. The engine that bought reasoning in language, more data and
-more parameters, has not been shown to buy a transferable physics prior in
-pixels. A frontier video generator is a sophisticated predictor of the next
-frame, and prediction of appearance is not possession of a model of the world.
+| Capability | Input and output | What success establishes |
+|---|---|---|
+| Observation generation | Context and prompt → future-looking pixels | Samples resemble the requested distribution |
+| Dynamics prediction | State and proposed action → next-state distribution | The model captures action-conditioned change |
+| Planning | Current state, objective, and dynamics → candidate action sequence | Search finds a high-value course through the model |
+| Control policy | Live observations and instruction → actions | The system completes tasks in a closed loop |
 
-::: {.callout-tip}
-## Constraint arrow
+Success in one row does not imply success in the next. A video can look coherent
+without answering what would have happened under another action. A dynamics
+model can predict a bounded laboratory task without supporting open-world
+planning. A planner can exploit errors in its learned model, and a policy can
+fail because sensing, latency, calibration, or low-level control differs from
+training.
 
-The absence of a learned internal representation of state and dynamics dictates
-that physics cannot generalize out of distribution: the model falls back to
-case-based imitation, so adding data and parameters does not buy planning. This
-is the same shape of limit as the hallucination floor of @sec-learning-limits,
-one layer over: the objective rewards matching the training distribution, not
-understanding it, so the residual failure is structural (cross-ref
-@sec-scaling-laws, @sec-training-to-reason).
-:::
+The word *state* also needs care. The physical state of a room is not directly
+available to a camera. A model constructs a task-dependent state from its
+observation history. That state may omit texture while preserving object pose,
+or omit geometry while preserving features useful for reward prediction. There
+is no requirement that one representation serve every objective.
 
-## Three answers to "what is a world model?"
+## Give a world model an action interface
 
-If predicting pixels is not enough, what is? The field has split into three
-architectural answers, and the split is the chapter's organizing fault line.
+Neural world models have a longer history than current video generators. Ha and
+Schmidhuber combined a compressed visual representation with recurrent dynamics
+and trained policies inside the learned model in bounded game environments
+[@ha2018worldmodels]. PlaNet later learned stochastic latent dynamics from pixels
+and used online planning for continuous-control tasks [@hafner2019planet]. MuZero
+made the task dependence explicit: its hidden dynamics predicted rewards,
+values, and policies useful for search without reconstructing the observation
+[@schrittwieser2020muzero]. These systems differ substantially, but each gives
+actions a defined role in state transition.
 
-The first answer is to generate the world anyway, and make the generation
-interactive and controllable. Real-time world simulators produce navigable
-scenes a user can act in, and their builders frame them explicitly as a path
-toward general capability, an unlimited supply of training environments
-[@deepmind2025genie3]. The real limit is coherence: such a simulator holds
-only about a minute of visual memory before it forgets what it rendered, which
-is why this line keeps bolting on external memory rather than growing it
-internally. The second answer abandons pixels. A latent world model predicts in
-an abstract representation rather than rendering every pixel, on the argument
-that most pixels are unpredictable detail that wastes the model's capacity, and
-that planning should happen in the latent space; one such model, pretrained on
-a million hours of video and post-trained on under a hundred hours of robot
-data, drove a real arm zero-shot (with no task-specific training) [@assran2025vjepa2]. The third answer, newer,
-reconstructs the world as explicit persistent three-dimensional geometry, so
-that consistency is a property of the representation rather than something the
-model must remember. Where the first answer patches the coherence problem and
-the second sidesteps rendering, the third argues that persistent geometry *is*
-the world model.
+One general deterministic skeleton is
+
+$$
+z_t=e_\phi(o_{1:t}),
+\qquad
+\widehat z_{t+1}=f_\theta(z_t,a_t),
+\qquad
+(\widehat r_t,\widehat d_t)=h_\psi(z_t,a_t).
+$$
+
+Here \(t\) is a discrete time index; \(o_{1:t}\) is the observation history
+through time \(t\); \(z_t\) is the learned state; \(a_t\) is the action applied at
+time \(t\); \(e_\phi\) is an encoder with parameters \(\phi\);
+\(f_\theta\) is a learned transition with parameters \(\theta\);
+\(\widehat z_{t+1}\) is its predicted next state; and \(h_\psi\), with parameters
+\(\psi\), predicts reward \(\widehat r_t\) and termination probability
+\(\widehat d_t\). A decoder \(g_\omega(z_t)=\widehat o_t\) can render a predicted
+observation, but planning does not inherently require one. Stochastic world
+models replace the point prediction with a distribution over possible next
+states.
+
+A representation-prediction objective can take the form
+
+$$
+\mathcal{L}_{\mathrm{dyn}}
+=
+\sum_{t=1}^{T-1}
+D\!\left(
+f_\theta(e_\phi(o_{1:t}),a_t),
+\operatorname{sg}[e_\phi(o_{1:t+1})]
+\right).
+$$
+
+In this example, \(T\) is the trajectory length, \(D(\cdot,\cdot)\) measures the
+discrepancy between two representations, and \(\operatorname{sg}\) is a
+stop-gradient operator: its argument supplies a target but receives no gradient
+through that occurrence. This is a template, not a universal world-model loss.
+Other systems reconstruct observations, predict distributions, rewards, values,
+or combinations of them. The invariant is the conditional question posed to the
+model, especially whether the transition depends on \(a_t\).
 
 ```{dot}
-//| label: fig-beyond-trichotomy
-//| fig-cap: "Three architectural answers to what a world model is, each a different response to the out-of-distribution physics wall. The generative path renders and patches coherence with external memory; the latent path predicts in abstraction and plans there; the explicit-3D path makes persistent geometry the representation."
-digraph trichotomy {
+//| label: fig-world-model-loop
+//| fig-cap: "A model-based control loop. The encoder estimates state from observation history. Learned dynamics predict the consequence of a candidate action. A planner evaluates candidate futures, executes an action or short prefix, observes the real result, and replans. Rendering predicted pixels is optional."
+digraph {
+  bgcolor="transparent";
   rankdir=TB;
-  bgcolor="transparent";
+  nodesep=0.35; ranksep=0.45;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
-
-  wall [label="OOD physics wall\n(realism ≠ understanding)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  gen  [label="generative pixel-space\n(Sora, Genie, Cosmos)\nrender + bolt-on memory"];
-  jepa [label="latent prediction (JEPA)\nrepresent, don't render\nplan in latent space"];
-  d3   [label="explicit persistent 3D\n(World Labs / Marble)\ngeometry is the model"];
-
-  wall -> gen [label="render anyway"];
-  wall -> jepa [label="abandon pixels"];
-  wall -> d3 [label="reconstruct geometry"];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  observation [label="observation history"];
+  encoder [label="encoder\nstate estimate z_t"];
+  planner [label="planner\ncandidate actions"];
+  dynamics [label="learned dynamics\nnext state + reward"];
+  executor [label="robot or environment"];
+  decoder [label="optional decoder\npredicted observation", style="rounded,filled,dashed"];
+  observation -> encoder;
+  encoder -> planner;
+  planner -> dynamics [label="propose a_t"];
+  dynamics -> planner [label="evaluate future"];
+  planner -> executor [label="execute prefix"];
+  executor -> observation [label="new observation"];
+  dynamics -> decoder [style=dashed];
 }
 ```
 
-It helps to remember that latent world models for planning are not new: an
-earlier model-based reinforcement-learning lineage already learned a latent
-world model (a learned internal simulator of the environment) and planned
-inside it to solve bounded control tasks. That history
-sharpens the critique rather than dismissing it: latent world models plainly
-*can* plan in closed domains; the open question is whether any of the three
-paths scales to open-world physics, which none has yet shown.
+## Visual realism is not an intervention test
 
-The cautionary tale is what happened when generation shipped as a
-consumer product. A flagship video app, technically dazzling, was wound down in
-2026 after reportedly burning millions of dollars a day in compute, by one
-analyst estimate over ten million [@liu2025soracost], and colliding with
-copyright, even as the underlying model survived
-elsewhere. It is the chapter's thesis made vivid: product-grade realism can be
-fully decoupled from both sustainable economics and world-model value.
+A video generator commonly models a distribution such as
 
-## Native multimodality, and how to fuse it
+$$
+p_\theta(o_{t+1:t+H}\mid o_{1:t},c),
+$$
 
-A parallel frontier asks not whether a model understands the world but whether
-one model can perceive and produce across modalities at all, rather than bolting
-a vision encoder and an image generator onto a frozen language model. What changed
-in this period is that early fusion, training a single backbone jointly on text
-and pixels from the start, became mainstream for the general-purpose flagships,
-displacing the adapter-bridged stack. The live disagreement is the
-representation of vision inside that backbone. One camp recasts images as
-discrete tokens so the whole model is a clean next-token predictor, accepting
-the fidelity lost to quantization, and a notable model in this camp trained
-end-to-end on video frames as a "world learner" that predicts the next state
-across vision and language. The other camp keeps vision continuous and generates
-pixels through flow-matching to avoid the tokenizer's quality cliff, at the cost
-of a more complex architecture. Whether deep joint training actually buys
-cross-modal transfer, or merely co-locates two capabilities that remain
-internally separate, is the unsettled scientific question underneath the
-engineering.
+where \(o_{t+1:t+H}\) is a future sequence of \(H\) observations, \(o_{1:t}\) is
+the available visual context, \(c\) is a text or other condition, and \(\theta\)
+denotes model parameters. This objective can reward texture, motion, composition,
+and common event sequences. It need not identify which hidden dynamics produced
+the observations, and it supplies no action variable unless the training data and
+model explicitly provide one.
 
-## Robotics has no internet
+That distinction is partly statistical. Passive video records what happened
+under the behavior that generated the dataset. It rarely shows the same state
+followed by several controlled interventions. Different dynamics can therefore
+fit the observed clips while disagreeing about an untried action. More video may
+improve coverage, but coverage alone does not make those counterfactuals
+identifiable.
 
-The harshest form of the data wall is in robotics. Language and vision were
-handed a corpus for free; action was not. Every robot trajectory must be
-manufactured, and the gap to text is not a factor of two but roughly five orders
-of magnitude: the largest shared cross-embodiment dataset is estimated at around
-one two-hundred-thousandth of the token volume of a language-model corpus
-[@vlasurvey2025; @oxe2023]. The consequence shows up directly in how the leading
-models are trained. A @gls-vla that generalized across homes
-drew the overwhelming majority of its training examples, by one accounting more
-than 97 percent, from data that was not mobile-manipulation robot data at all,
-borrowing from static arms, cross-embodiment logs, and web vision-language pairs
-[@pi2025pi05]. The architecture is shaped by scarcity: it is built around what
-borrowed priors can supply because the native data does not exist.
+Recent evaluations make the limitation concrete without proving an impossibility
+result. Physics-IQ separates perceptual realism from performance on recorded
+physical experiments and found little relationship between the two for the video
+models it tested [@motamed2025physicsiq]. Controlled synthetic experiments on
+physical-law extrapolation likewise found strong in-distribution imitation and
+weak out-of-distribution generalization in the studied generators
+[@kang2025physicallaw]. These are benchmark results for particular models and
+prompts. They justify testing physics separately from appearance; they do not
+show that scale or video learning can never acquire useful dynamics.
 
-The lineage of these models is the transplant of the language recipe onto
-control. It began by fine-tuning a vision-language model on robot trajectories
-encoded as tokens, on the founding claim that web knowledge transfers to control
-[@brohan2023rt2], continued through an open, reproducible baseline
-[@kim2024openvla], and reached models that transfer one policy across
-heterogeneous robots by sharing a motion representation [@deepmind2025geminirobotics].
-Whether the web priors genuinely transfer to physical control, or only supply
-object and instruction semantics while the scarce robot data does the real work
-of contact dynamics and closed-loop control, is the field's central and
-unresolved transfer debate.
+At least four evaluations are needed before calling a generator a world model:
 
-::: {.callout-tip}
-## Constraint arrow
+| Test | Question |
+|---|---|
+| Perceptual quality | Does the output look coherent to people and visual metrics? |
+| Multi-step prediction | Do states, identities, and constraints remain consistent over time? |
+| Intervention | Does changing an action produce the correct change in outcome? |
+| Planning utility | Does using the model improve closed-loop task return outside its training scenes? |
 
-No internet-scale action corpus dictates the design of the whole stack.
-Co-training mixtures are dominated by non-robot data, cross-embodiment pooling
-becomes architecturally necessary to fake scale, and the closed-loop control
-rate (how often the robot senses and issues a fresh command), on the order of
-50 to 100 Hz, forces the model to split into a slow reasoner and a fast
-on-robot executor with action chunking (predicting a short burst of actions at
-once rather than one step at a time) and asynchronous inference, which ties the constraint to concrete on-robot silicon (cross-ref
-@sec-faster-decoding). Data scarcity at the bottom reshapes architecture,
-serving, and hardware all the way up.
-:::
+The last two tests are stronger because they expose the model to decisions that
+can exploit its errors. A plausible rollout is useful for presentation. A
+decision model must remain accurate along trajectories selected by a planner,
+including trajectories unlike the passive training distribution.
 
-## Four ways to manufacture a flywheel
+## Choose what the model must preserve
 
-Because the data does not exist, the frontier of robotics is really a contest of
-strategies to manufacture it, and every direction is one such strategy rather
-than an independent advance.
+World-model representations fall along a practical spectrum rather than into
+three mutually exclusive camps:
 
-The first is to collect real data at scale through teleoperation, and one effort
-pushed to hundreds of thousands of hours, growing tens of thousands of hours per
-week [@gen02025]. Its ceiling is human real time: a person drives one robot for
-one hour to make one hour of data, so the route scales linearly and cannot
-reach internet scale. A second strategy manufactures data in simulation and by
-video augmentation, expanding scarce real hours by an order of magnitude; that
-closes the data gap on paper but reopens the reality gap as the new binding
-constraint. Mining passive human footage is a third escape, learning from
-internet video and learned world models to sidestep teleoperation altogether.
-The fourth route, and the one the leading labs increasingly bet on, is wearable
-human-activity capture: pretrain on cheap egocentric recordings of people doing
-tasks, with no robot data in pretraining at all, then post-train on an hour of
-robot data per task. This last approach directly attacks the human-real-time
-ceiling of teleoperation, and its emergence in 2026 is a reminder of how fast
-this frontier moves.
+| Representation | Typical prediction target | Benefit | Main risk |
+|---|---|---|---|
+| Observation space | Pixels, depth, audio, or tokens | Inspectable rollouts and rich supervision | Capacity spent on unpredictable detail |
+| Learned latent state | Features needed for future prediction or reward | Compact planning and abstraction | Useful physical variables may be discarded |
+| Structured state | Objects, pose, geometry, contacts, or maps | Persistent constraints and interpretable planning | State extraction and schema become bottlenecks |
+
+Observation-space and latent prediction can coexist: a system may plan in a
+latent state and decode only for training or inspection. Structured geometry can
+be one component of a learned latent rather than a competing architecture. The
+right representation is the smallest one that preserves the distinctions needed
+by the downstream decisions.
+
+V-JEPA 2 illustrates the latent route. Its encoder was pretrained on more than a
+million hours of image and video data. A separate 300-million-parameter,
+action-conditioned predictor was then trained on fewer than 62 hours of robot
+video and used in a model-predictive-control loop for image-goal pick-and-place
+experiments on Franka arms [@assran2025vjepa2]. This result demonstrates planning
+in the reported tabletop setting. It does not establish general manipulation or
+open-world physics, and the action-conditioned robot stage remains essential.
+Passive video supplied a representation prior, not a complete controller.
+
+### Planning turns prediction errors into decisions
+
+Given a learned state \(z_t\), a finite-horizon planner can choose
+
+$$
+a^*_{t:t+H-1}
+=
+\arg\max_{a_{t:t+H-1}}
+\mathbb{E}
+\left[
+\sum_{k=0}^{H-1}
+\gamma^k\widehat r(z_{t+k},a_{t+k})
+\right],
+\qquad
+z_{t+k+1}=f_\theta(z_{t+k},a_{t+k}).
+$$
+
+Here \(a^*_{t:t+H-1}\) is the selected action sequence; \(H\) is the planning
+horizon; \(k\) indexes predicted steps; \(\gamma\in[0,1]\) discounts later
+rewards; \(\widehat r\) is the learned or specified reward; the expectation is
+over stochastic predictions; and \(f_\theta\) supplies the state transition.
+Model-predictive control executes only the first action or a short prefix, reads
+the next real observation, updates \(z_t\), and plans again.
+
+Long rollouts compound transition error. More subtly, optimization searches for
+action sequences that look unusually good *to the model*, so it can find flaws
+that random held-out trajectories do not expose. Useful evaluation therefore
+includes planner-selected rollouts, uncertainty under distribution shift, and
+real closed-loop return, not only one-step prediction loss.
+
+## A shared backbone is not yet a world model
+
+Chapter 15 separated input representation, fusion, output objective, and system
+composition. None of those choices alone creates a world model. A single
+backbone may process text, images, audio, and video yet have no action-conditioned
+transition. Conversely, a small robot dynamics model may be a valid world model
+for one workcell while accepting only proprioception and a depth image.
+
+Native multimodal training can still help embodiment. Language supplies task
+descriptions and semantic priors; video supplies appearance and motion priors;
+depth and proprioception constrain geometry and robot state. The scientific
+claim to test is transfer: after holding robot interaction data and evaluation
+fixed, does adding a modality improve closed-loop behavior on new objects,
+instructions, or environments? Merely placing modalities in one sequence does
+not answer that question.
+
+## A robot policy has a physical output contract
+
+A vision-language-action model (@gls-vla) extends a perception-language model
+with a policy over robot commands. A chunked policy can be written as
+
+$$
+\pi_\eta(a_{t:t+K-1}\mid o_{1:t},q_t,\ell),
+$$
+
+where \(\pi_\eta\) is a policy with parameters \(\eta\); \(o_{1:t}\) is the
+observation history; \(q_t\) is proprioception such as joint positions and
+velocities; \(\ell\) is the language instruction; \(K\) is the predicted action
+horizon; and \(a_{t:t+K-1}\) contains \(K\) robot actions. The actions may be
+discrete bins, continuous joint targets, end-effector poses, gripper commands, or
+a trajectory distribution. Those choices are not interchangeable across robot
+bodies.
+
+RT-2 demonstrated one discrete route by expressing actions as tokens and
+co-fine-tuning on web-scale vision-language data and robot trajectories
+[@brohan2023rt2]. OpenVLA provided an open 7-billion-parameter implementation
+trained on 970,000 real-world robot demonstrations [@kim2024openvla]. These
+models can reuse semantic representations from web data, but contact, latency,
+calibration, and action semantics still come from embodied data and the control
+stack.
+
+Continuous policies provide another route. Diffusion Policy models a
+multimodal distribution over continuous action sequences and replans in a
+receding-horizon loop [@chi2023diffusionpolicy]. Action Chunking with
+Transformers (ACT) predicts \(K\) future actions at once and combines overlapping
+predictions with a temporal ensemble [@zhao2023act]. Chunking shortens the
+policy's effective prediction horizon, but executing a longer prefix without new
+observations also reduces feedback. Here, \(K\) denotes the predicted chunk
+length; it remains separate from the replanning interval and low-level control
+rate.
+
+### Count control ticks and model calls
+
+For an episode lasting \(D\) seconds at a low-level control rate of \(F\) hertz,
+the number of control targets is
+
+$$
+N_{\mathrm{ctrl}}=\lceil FD\rceil.
+$$
+
+Here \(N_{\mathrm{ctrl}}\) is the number of control ticks, \(F\) is the number of
+commands executed per second, and \(D\) is episode duration. A 60-second episode
+contains 600 targets at 10 hertz and 3,000 at 50 hertz. These are correlated
+control targets, not 600 or 3,000 independent demonstrations.
+
+![The number of low-level control targets grows linearly with episode duration and command rate. Values are exact arithmetic for 10 Hz and 50 Hz, not measured latency, dataset diversity, or model quality.](/figures/beyond-text-1.svg){#fig-beyond-text-1}
+
+If a large policy runs once every \(R\) control ticks and predicts a horizon of
+\(K\) actions, then
+
+$$
+N_{\mathrm{model}}
+=
+\left\lceil\frac{N_{\mathrm{ctrl}}}{R}\right\rceil,
+\qquad
+N_{\mathrm{pred}}=K N_{\mathrm{model}}.
+$$
+
+Here, \(N_{\mathrm{model}}\) counts large-model calls, \(R\ge1\) is the replanning
+interval in control ticks, and \(N_{\mathrm{pred}}\) counts all action positions
+predicted, including overlapping positions that may be replaced before
+execution. The runnable makes that distinction explicit for a hypothetical
+10-second controller.
+
+:::: {.runnable}
+```python
+from math import ceil
+
+duration_s = 10
+control_hz = 50
+replan_every = 4
+prediction_horizon = 16
+
+control_ticks = ceil(duration_s * control_hz)
+model_calls = ceil(control_ticks / replan_every)
+predicted_positions = model_calls * prediction_horizon
+
+print(f"executed control ticks: {control_ticks}")
+print(f"large-model calls:      {model_calls}")
+print(f"predicted positions:    {predicted_positions}")
+print(f"model-call reduction:   {control_ticks / model_calls:.1f}x")
+```
+::::
+
+This accounting does not promise a fourfold latency improvement. A low-level
+controller must still issue 500 commands, overlapping predictions add work, and
+sensing plus actuation have their own deadlines. It shows why robotics systems
+often separate a slower semantic policy from a faster controller rather than
+forcing one model to own every timescale.
+
+## Robot data is heterogeneous before it is scarce
+
+There is no sound conversion from language tokens to robot trajectories. A
+trajectory contains many temporally correlated sensor readings and commands;
+its information depends on task diversity, embodiment, reset procedure,
+operator, camera placement, and sampling rate. Claims that robotics has a fixed
+fraction of “the data in language” hide those units.
+
+The available datasets still show a scale and diversity problem. Open
+X-Embodiment standardized data from 22 robot types, 21 institutions, and 527
+skills so cross-robot training could be studied [@oxe2023]. DROID collected
+76,000 demonstrations, about 350 hours, across 564 scenes with a common Franka
+manipulation setup [@khazatsky2024droid]. OpenVLA's 970,000 demonstrations are
+large by robot-learning standards and tiny beside web corpora only in a loose
+sense. More importantly, each robot dataset samples a narrow set of bodies,
+controllers, tasks, and environments.
+
+Five data sources trade one missing variable for another:
+
+| Source | What it supplies | What remains missing or distorted |
+|---|---|---|
+| Real teleoperation | Synchronized observation-action trajectories | Expensive labor, resets, limited coverage |
+| Cross-embodiment pooling | More tasks and hardware diversity | Incompatible action spaces and sensor calibration |
+| Simulation | Cheap interventions and exact state | Appearance, contact, wear, and actuator mismatch |
+| Passive human video | Broad objects, environments, and behavior | Robot actions, force, proprioception, and embodiment mapping |
+| Learned-model rollouts | Targeted synthetic trajectories | Bias and exploitable errors inherited from the model |
+
+Simulation-to-real methods can randomize textures, geometry, dynamics, and
+sensors to reduce reliance on one simulator configuration
+[@tobin2017domainrandomization]. They do not eliminate the need for real trials.
+Passive video can pretrain perception or motion representations, as V-JEPA 2
+shows, but converting a human hand motion into safe robot torques is a separate
+learning and calibration problem. Synthetic rollouts are most useful when real
+data validates where the model is trustworthy.
 
 ```{dot}
-//| label: fig-beyond-flywheel
-//| fig-cap: "Four rival strategies to manufacture the action-data flywheel that robotics never got for free. Each accepts the same bottleneck and bets on a different escape; each reopens a different downstream problem (the reality gap, the transfer question, human real time)."
-digraph flywheel {
-  rankdir=LR;
+//| label: fig-embodied-data-loop
+//| fig-cap: "An embodied data loop. Real trials anchor the loop. Teleoperation, simulation, passive video, and model rollouts contribute different signals, but only closed-loop evaluation reveals whether the resulting policy survives its own actions."
+digraph {
   bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.30; ranksep=0.42;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280"];
-
-  gap [label="no internet for action\n(~1/200,000 of text)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  teleop [label="teleoperation farms\nbounded by human real time"];
-  sim    [label="sim + video synthesis\nreopens the reality gap"];
-  video  [label="internet video + world models\ntransfer unproven"];
-  wear   [label="wearable human capture\nrobot-free pretraining"];
-
-  gap -> teleop;
-  gap -> sim;
-  gap -> video;
-  gap -> wear;
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  teleop [label="teleoperation\nreal actions"];
+  simulation [label="simulation\ncheap interventions"];
+  video [label="passive video\nbroad observations"];
+  rollout [label="model rollouts\ntargeted synthesis"];
+  dataset [label="versioned trajectory mixture"];
+  policy [label="policy + control stack"];
+  trials [label="closed-loop real trials"];
+  audit [label="failures, interventions, safety"];
+  teleop -> dataset;
+  simulation -> dataset;
+  video -> dataset;
+  rollout -> dataset;
+  dataset -> policy -> trials -> audit;
+  audit -> teleop [label="collect hard cases"];
+  audit -> simulation [label="build scenarios"];
+  audit -> rollout [label="probe model"];
 }
 ```
 
-A claimed empirical scaling law for robotics, downstream error falling as a
-power of pretraining data, would reframe the whole field from an algorithms
-problem into a data-manufacturing problem, mirroring the Part I narrative. The
-accurate reading is more guarded than the headline: the reported exponents vary by
-task rather than collapsing to one clean universal value, the result comes from
-a single organization on proprietary data without independent replication, and
-power laws in error are easy to fit and hard to extrapolate to open-world
-reliability. Alongside the data race, real-world reinforcement learning returned:
-letting a robot learn from its own successes and failures, rather than only from
-demonstrations, was shown to roughly double throughput and cut failures on hard
-long-horizon tasks, which partly answers the generalist-versus-specialist debate
-in favor of on-task adaptation.
+The useful flywheel is therefore not “generate unlimited robot data.” It is a
+measured loop: collect a failure, reproduce or approximate it, update the model,
+and retest on real hardware. Dataset lineage matters because a success rate can
+rise after near-duplicate scenes or operator habits leak across the split.
 
-## Nobody can grade it yet
+## Evaluate the closed loop
 
-The deepest shared problem is measurement, and it is distinct from the
-benchmark debates of @sec-benchmarks and @sec-evaluating-agents. For generative
-and world models there is no agreed metric for long-horizon consistency,
-controllability, or physical fidelity: perceptual-quality scores rank the
-products people enjoy, while physics benchmarks deliberately decorrelate from
-looking good, and the two do not agree. For embodied policies the situation is
-worse, because real physical trials are the only fully trusted signal and they
-do not scale across the task diversity a generalist targets, while simulated and
-real-to-sim evaluations scale but carry a domain gap that makes them an
-unreliable ranking signal. Until there is a metric that can tell a better
-simulator from a better world model, and a better demo from a more reliable
-policy, "world models as a path to physical reasoning" remains a bet rather than
-a result.
+Offline action prediction is a development metric, not a deployment result. A
+small per-step error can move the policy into states absent from the
+demonstrations, after which later predictions are evaluated on inputs the policy
+helped create. Closed-loop trials expose that feedback.
+
+An embodied evaluation should report at least:
+
+| Dimension | Example evidence |
+|---|---|
+| Task outcome | Completion criteria, partial progress, time to completion |
+| Robustness | New objects, layouts, lighting, instructions, and disturbances |
+| Recovery | Success after a forced slip, occlusion, or failed grasp |
+| Human burden | Interventions, resets, teleoperation takeover time |
+| Safety | Contacts, force or speed limit violations, near misses, emergency stops |
+| Efficiency | Policy latency, control deadline misses, energy, model calls |
+
+Every rate needs a denominator and trial protocol. “90% success” can mean nine
+of ten hand-picked attempts or 900 of 1,000 preregistered trials across several
+sites. Report the number of trials, task distribution, reset policy, operator
+involvement, hardware version, and uncertainty. For a generalist policy, a mean
+across tasks should not hide tasks with zero success or unacceptable safety
+events.
+
+World-model evaluation should follow the same hierarchy. One-step latent error
+tests the learned transition locally. Open-loop rollouts test compounding error.
+Counterfactual action tests examine the intervention interface. Planning return
+tests whether optimization can use the model. Real closed-loop trials test the
+whole system. No single perceptual metric substitutes for that ladder.
 
 ::: {.callout-important}
 ## What's contested
 
-- **Does scaling video generation yield a world model or a better pixel
-  predictor?** The emergence camp reads scale as buying physics; the controlled
-  studies read it as case-based imitation that fails out of distribution. The
-  evidence favors the skeptics.
-- **Generative, latent, or explicit-3D?** Render the world, represent it in
-  latent space, or reconstruct it as persistent geometry. The split is about
-  whether a world model should render, merely represent, or be a geometry, and
-  none has shown open-world planning.
-- **Do web priors transfer to control?** One camp credits emergent semantic
-  generalization to web pretraining; the other says the priors supply semantics
-  but not contact dynamics, and the scarce robot data does the real work.
-- **Collect, simulate, mine video, or capture humans?** Four manufacturing
-  routes for the missing action flywheel, each accepting the same bottleneck and
-  reopening a different downstream gap.
-- **Are robotics scaling laws real?** A single-organization power law versus the
-  objection that it is unreplicated and hard to extrapolate to reliability.
-- **Can generalist policies be measured at all?** Real trials do not scale;
-  simulated proxies carry a domain gap. The evaluation crisis is itself the open
-  problem.
+- **Can passive video identify useful physical dynamics?** Broad observation may
+  produce strong priors, but action effects remain weakly identified without
+  interventions.
+- **What should a world model preserve?** Pixel prediction is inspectable, latent
+  prediction is compact, and structured state carries stronger assumptions. The
+  best choice depends on the decisions the model must support.
+- **Do web priors transfer to control?** They clearly supply semantics and visual
+  features. How much they reduce the need for real interaction depends on the
+  task, action space, and evaluation shift.
+- **How much open-loop execution is acceptable?** Longer action chunks reduce
+  effective policy horizon and model-call frequency, while weakening feedback
+  when the environment changes.
+- **Which synthetic data helps?** Simulation and learned rollouts can target
+  rare cases, but both can amplify the assumptions and errors of their source.
 :::
 
-## The missing data flywheel
+::: {.callout-tip}
+## Lower-layer constraint
 
-Here the foundation-model recipe meets the limit that text did not expose.
-Capability is bounded by grounding: a model can render or describe the world far
-better than it can predict or act in it, because the data that grounds
-prediction and action in physics was never free. The efficiency question is what
-that grounding costs to manufacture, in teleoperation hours, simulation compute,
-or wearable capture, and whichever route produces it cheapest may decide the
-field. Trust is the part still unmeasured: we cannot yet certify that a world
-model understands or that a policy is reliable, so deployment outruns
-evaluation. Across generation, perception, and control, the same wall stands,
-the absence of a grounded data flywheel and a transferable internal world, and
-the field is best understood as a set of rival bets on how to get around it. The
-final chapter turns from these specific frontiers to the instrument that is
-supposed to tell us whether any of them, or the whole enterprise, is actually
-working.
+Embodiment turns model choices into deadlines and physical units. Camera rate,
+timestamp alignment, proprioception, action representation, inference latency,
+controller frequency, calibration, and actuator limits define what the policy
+can observe and command. A larger multimodal backbone cannot recover a missed
+control deadline or infer a contact force that no sensor recorded. Specify the
+trajectory schema and control loop before comparing model architectures.
+:::
+
+## The evidence boundary
+
+Moving beyond text does not reveal one missing ingredient called grounding. It
+reveals a stack of contracts: observations must preserve task-relevant state,
+dynamics must respond correctly to actions, planning must tolerate model error,
+and control must meet the timing and safety requirements of a particular body.
+Video, language, simulation, and robot experience can contribute to that stack,
+but their data are not interchangeable.
+
+The durable claim is narrower than “a video generator becomes a world model at
+scale.” Learned representations and dynamics already support planning in bounded
+domains, and web video can reduce the robot data needed for some experiments.
+The open problem is reliable transfer across environments, tasks, bodies, and
+interventions. Progress should be measured at those boundaries, with closed-loop
+trials anchored to real hardware.
 
 ## Further reading
 

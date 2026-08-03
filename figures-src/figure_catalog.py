@@ -226,15 +226,16 @@ SPECS = {
         "ylim": (0, 2400),
     },
     "beyond-text-1": {
-        "type": "scatter",
-        "points": [
-            {"label": "text", "x": 0.20, "y": 0.84, "color": DATA},
-            {"label": "vision", "x": 0.38, "y": 0.62, "color": ACCENT},
-            {"label": "world model", "x": 0.64, "y": 0.42, "color": WARN},
-            {"label": "robot", "x": 0.84, "y": 0.20, "color": MUTED},
+        "type": "line",
+        "x": [1, 5, 10, 30, 60],
+        "series": [
+            {"label": "10 Hz control", "y": [10, 50, 100, 300, 600], "color": DATA},
+            {"label": "50 Hz control", "y": [50, 250, 500, 1500, 3000], "color": ACCENT},
         ],
-        "xlabel": "action horizon",
-        "ylabel": "supervision density",
+        "xlabel": "episode duration (seconds)",
+        "ylabel": "control targets",
+        "xint": True,
+        "ylim": (0, 3200),
     },
     "sft-peft-1": {
         "type": "scatter",
