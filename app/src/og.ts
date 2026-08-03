@@ -102,9 +102,17 @@ mkdirSync(tmpDir, { recursive: true });
 mkdirSync(ogRoot, { recursive: true });
 
 const book = loadBook("en", repoRoot);
+// Cards are committed source, so regenerating all of them to add one page
+// would rewrite 100+ unchanged PNGs. Any arguments name the hrefs to redraw.
+const only = new Set(process.argv.slice(2));
+const wanted = only.size ? book.chapters.filter((ch) => only.has(ch.href)) : book.chapters;
+if (only.size) {
+  const unknown = [...only].filter((h) => !book.chapters.some((ch) => ch.href === h));
+  if (unknown.length) { console.error(`no such chapter href: ${unknown.join(", ")}`); process.exit(1); }
+}
 let made = 0;
 const failed: string[] = [];
-for (const ch of book.chapters) {
+for (const ch of wanted) {
   const { eyebrow, title, tagline } = cardFor(ch.href, ch.partLabel, ch.num, ch.title);
   const htmlPath = join(tmpDir, ch.href.replace(/\//g, "__") + ".html");
   writeFileSync(htmlPath, cardHtml(eyebrow, title, tagline));
