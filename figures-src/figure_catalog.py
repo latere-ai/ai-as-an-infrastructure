@@ -203,15 +203,15 @@ SPECS = {
         "ylim": (0, 270),
     },
     "speech-and-voice-1": {
-        "type": "stacked",
-        "categories": ["text chat", "voice turn", "full duplex"],
-        "segments": [
-            {"label": "recognize", "values": [0.00, 0.22, 0.15], "color": MUTED},
-            {"label": "reason", "values": [0.62, 0.48, 0.32], "color": DATA},
-            {"label": "speak", "values": [0.00, 0.24, 0.18], "color": ACCENT},
+        "type": "line",
+        "x": [1, 2, 4, 8],
+        "series": [
+            {"label": "12.5 frames/s", "y": [12.5, 25, 50, 100], "color": DATA},
+            {"label": "50 frames/s", "y": [50, 100, 200, 400], "color": ACCENT},
         ],
-        "ylabel": "latency budget",
-        "ylim": (0, 1.1),
+        "xlabel": "active codebooks Q",
+        "ylabel": "codec indices per second",
+        "ylim": (0, 420),
     },
     "multimodal-models-1": {
         "type": "line",

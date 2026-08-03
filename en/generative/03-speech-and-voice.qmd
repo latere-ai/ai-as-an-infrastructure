@@ -1,248 +1,388 @@
 # Speech and Realtime Voice {#sec-speech}
 
-The previous chapters loosened generation from a left-to-right text order. Speech
-adds a different pressure: time. Audio has to be recognized, represented,
-generated, and sometimes answered while the other person is still speaking. A
-live voice interface has only a few hundred milliseconds before the reply feels
-late, and that single budget shapes the whole stack, from recognizer alignment to
-codec frame rate to whether the agent is a cascade or one full-duplex model.
-The same budget runs through the chapter's other choices: self-supervision and
-weak supervision lower the cost of labeled audio, neural codecs split early
-semantic tokens from later fidelity tokens, a few seconds of reference audio can
-clone a voice, and synthesis now divides between autoregressive and
-flow-matching routes.
+Speech is not text with a microphone attached. It is a timed signal: words arrive
+inside a voice, listeners respond before every sentence is complete, and two
+people may speak at once. A batch transcription system can wait for the recording
+to end. A live captioner must revise partial hypotheses without distracting the
+reader. A voice assistant must also decide when to answer, begin producing audio,
+and keep listening while it speaks. Streaming changes what counts as correct.
 
-![Schematic latency budget for text chat, turn-based voice, and full-duplex voice. Voice adds recognition and synthesis, so the model has less room to think before the interaction feels late. Idealized budget, not measured data.](/figures/speech-and-voice-1.svg){#fig-speech-and-voice-1}
+This chapter develops the stack in that order. It begins with the latent alignment
+between audio frames and text, then explains how learned representations and
+neural codecs reduce the amount of audio a model must process. It closes with
+speech generation and the engineering contract behind a usable conversation.
 
-## Recognizing speech
+## Treat speech as a timed stream
 
-@gls-asr maps a long, unsegmented waveform, hundreds of
-frames, to a short transcript, with no per-frame label given. Training needs an
-alignment, and the field's three answers differ in how they supply it.
-@gls-ctc introduces a blank token and sums the
-probability over every frame-level path that collapses to the target, computed by
-a forward-backward dynamic program (an efficient algorithm that sums over all
-alignments between audio frames and output symbols), but it assumes the outputs are conditionally
-independent given the audio, so it carries no internal language model and leans on
-an external one [@graves2006ctc]. To restore the dependency between outputs, the
-RNN transducer adds a prediction network, an autoregressive label model, and a
-joint network; the alignment stays monotonic and frame-synchronous, so it emits as
-frames arrive and
-is naturally streaming, which is why an all-neural transducer became the standard
-for on-device recognition [@graves2012rnnt; @he2019streaming]. The attention-based encoder-decoder learns the alignment
-implicitly through attention and assumes no independence, but its soft attention
-spans the whole utterance, so it is not naturally streaming [@chan2016las]. The
-encoder these losses sit on is the Conformer, which interleaves self-attention for
-global context with a convolution module for local acoustic detail
-[@gulati2020conformer].
+A speech system first converts the waveform into a sequence of short, overlapping
+frames. What happens next depends on the application:
 
-The expensive part was always labeled audio, and two ideas drove that cost down.
-Self-supervision came first, and it has a lineage. wav2vec 2.0 masks spans of a
-latent audio sequence and solves a contrastive task (training the model to tell a
-true continuation apart from distractor samples, which forces it to learn useful
-structure without labels) whose target is the quantized
-version of each masked step, reaching strong recognition from as little as ten
-minutes of labels on top of unlabeled pretraining [@baevski2020wav2vec2]. In
-HuBERT the contrastive objective gives way to BERT-style masked prediction of
-offline k-means cluster targets (discrete labels made by clustering the audio
-features, used as stand-in training targets), the cluster labels refreshed by re-clustering on
-the model's own improving features, which decouples the target from the model and
-stabilizes training [@hsu2021hubert]. WavLM kept that objective but mixed in noise
-and overlapping speakers and trained the model to recover the clean primary
-speaker, which is what makes its representations strong on speaker and
-multi-speaker tasks, not just transcription [@chen2022wavlm]. Scale came next:
-Whisper is an encoder-decoder transformer trained on 680,000 hours of
-weakly-supervised audio, and it folds language identification, transcription,
-translation, and timestamping into one model through a prefix of special tokens
-the decoder is conditioned on [@radford2022whisper]. Its contribution is zero-shot
-*robustness* (holding up on accents, noise, and domains it was never fine-tuned on) rather than the lowest number on
-any single benchmark, where a model fine-tuned in-domain can still beat it. The
-arc mirrors the text side of the book, self-supervised pretraining then large
-weakly-supervised scaling.
+| Workload | May use future audio? | First useful output | Main failure to measure |
+|---|---:|---|---|
+| Recorded transcription | Yes | Complete transcript | Word errors |
+| Live captions | Limited look-ahead | Stable partial text | Revisions and delay |
+| Turn-based voice assistant | Until end of turn | First reply audio | Late or false endpoint |
+| Full-duplex conversation | No fixed turn boundary | Speech, pause, or interruption response | Overlap and state errors |
 
-## Audio as tokens
+The distinctions matter. A model can have an excellent final transcript while its
+partial text changes too often for captions. A synthesizer can render natural
+speech faster than real time yet take too long to produce its first audio frame.
+“Realtime” therefore needs a named measurement, not a single adjective.
 
-The move that folded audio into the rest of this book was to stop treating it as a
-continuous signal and start treating it as discrete tokens. A neural codec does
-this: an encoder downsamples a waveform to a latent at some frame rate, a residual
-vector quantizer maps it to a short sequence of codebook indices, and a decoder
-reconstructs it, all trained end to end with reconstruction and adversarial
-losses. SoundStream at 3 kbps outperforms the traditional Opus codec at 12 kbps
-and uses quantizer dropout so one model serves many bitrates
-[@zeghidour2021soundstream], and EnCodec pushed fidelity further with a streaming
-encoder-decoder and an entropy model over the codes [@defossez2022encodec].
-Residual quantization is the key mechanism: each quantizer codes the leftover the
-previous ones missed, so depth trades bitrate against reconstruction error.
+## Learn an alignment for recognition
+
+@gls-asr observes acoustic frames
+\(\mathbf{x}=(x_1,\ldots,x_T)\) and a shorter transcript
+\(\mathbf{y}=(y_1,\ldots,y_U)\), but no label says which frames produced each
+symbol. CTC and RNN-T sum over latent monotonic alignments. An attention-based
+encoder-decoder instead learns a soft correspondence between encoder frames and
+output steps.
+
+@gls-ctc adds a blank symbol and assigns probability to every length-\(T\) path
+that collapses to the transcript [@graves2006ctc]:
+
+$$
+p_{\mathrm{CTC}}(\mathbf{y}\mid\mathbf{x})
+=
+\sum_{\boldsymbol{\pi}\in B^{-1}(\mathbf{y})}
+\prod_{t=1}^{T}p(\pi_t\mid\mathbf{x}).
+$$
+
+Here \(\boldsymbol{\pi}\) is a path over the output alphabet plus blank, and
+\(B\) merges consecutive repeated labels and removes blanks. A forward-backward
+dynamic program evaluates the sum without enumerating every path. Standard CTC
+factorizes the path emissions across frames, conditioned on the encoder output.
+It has no explicit label-history model, although a contextual encoder can still
+use broad acoustic context and an external language model remains optional.
+
+RNN-T adds output history [@graves2012rnnt]. Its prediction network summarizes
+preceding nonblank labels, and its joint network combines that state with an
+acoustic encoder state. In the alignment lattice, blank advances acoustic time;
+a label advances output position. The model may therefore emit several labels at
+one encoder step. A causal or bounded-context encoder makes this factorization
+suitable for online decoding, but RNN-T by itself does not guarantee streaming.
+The original model used a bidirectional transcription network, while later work
+demonstrated a causal on-device system [@he2019streaming].
+
+An attention-based encoder-decoder such as Listen, Attend and Spell models
+
+$$
+p(\mathbf{y}\mid\mathbf{x})
+=\prod_{u=1}^{U}p(y_u\mid y_{<u},c_u),
+\qquad
+c_u=\sum_t\alpha_{u,t}h_t,
+$$
+
+where \(h_t\) is an encoder state and \(\alpha_{u,t}\) is its attention weight
+at output step \(u\) [@chan2016las]. The original system could attend over the
+whole utterance, so it was offline. Monotonic, chunked, or limited-look-ahead
+attention can trade future context for lower delay.
+
+These alignment objectives can sit on several encoder families. Conformer is an
+encoder architecture, not an alignment objective. Each Conformer block combines
+convolution for local acoustic patterns with self-attention for longer-range
+interactions [@gulati2020conformer]. Its original full-context attention was also
+offline; streaming implementations constrain that context.
+
+## Pretrain representations before transcribing
+
+Transcripts are expensive, while raw audio is plentiful. Self-supervision and weak
+supervision solve different data problems:
+
+| Method | Training signal | What the model predicts |
+|---|---|---|
+| wav2vec 2.0 | Untranscribed audio | A masked step's quantized target among distractors |
+| HuBERT | Untranscribed audio plus offline clusters | Cluster labels at masked positions |
+| WavLM | Clean speech targets with corrupted or overlapped input | Primary-speech cluster labels |
+| Whisper | Audio paired with noisy human or machine text | Text, language, task, and timestamp tokens |
+
+wav2vec 2.0 masks spans in a latent sequence. At a masked position \(t\), its
+context vector \(c_t\) must distinguish the corresponding quantized target
+\(q_t\) from a set \(Q_t\) containing that target and distractors
+[@baevski2020wav2vec2]:
+
+$$
+\mathcal{L}_t=-\log
+\frac{\exp(\operatorname{sim}(c_t,q_t)/\kappa)}
+{\sum_{\widetilde q\in Q_t}
+\exp(\operatorname{sim}(c_t,\widetilde q)/\kappa)}.
+$$
+
+Here, the similarity is cosine similarity and \(\kappa\) is a temperature. These targets
+are matching masked steps, not future continuations. In one reported low-resource
+setting, a large model pretrained on 53,000 hours of Libri-Light and fine-tuned on
+ten labeled minutes reached 4.8 and 8.2 word error rate on LibriSpeech test-clean
+and test-other; the headline decoder also used a Transformer language model.
+
+HuBERT replaces contrastive selection with masked prediction of offline cluster
+assignments [@hsu2021hubert]. It begins with clusters of handcrafted features,
+then can recluster representations produced by an earlier training stage. The
+targets stay fixed within a stage. The paper's important finding was that
+consistent targets can be useful even when they are imperfect phonetic labels.
+WavLM keeps this masked pseudo-label objective but sometimes adds noise or another
+speaker to the input. Its target remains the cluster label from the original
+primary utterance, so it learns to identify content through interference rather
+than reconstructing a clean waveform [@chen2022wavlm].
+
+Whisper follows a different recipe: 680,000 hours of weakly supervised,
+multilingual audio-text pairs train one encoder-decoder Transformer
+[@radford2022whisper]. Its decoder sequence carries a language token, a
+transcription-or-translation task token, controls for timestamps, and the text;
+when enabled, timestamp tokens are interleaved around transcript spans. The main
+result is broad zero-shot transfer across held-out datasets, not universal
+superiority to a system tuned for one domain.
+
+## Turn waveforms into codec indices
+
+A neural codec compresses a waveform into discrete indices. An encoder maps audio
+to one latent vector \(z_t\) per frame, a quantizer replaces each vector with
+codebook entries, and a decoder reconstructs audio. SoundStream established an
+end-to-end residual-vector-quantized design with quantizer dropout for multiple
+bitrates [@zeghidour2021soundstream]. EnCodec combined a streaming
+encoder-decoder, residual vector quantization, adversarial training, and optional
+entropy coding [@defossez2022encodec]. Their quality claims are tied to the
+bitrates, datasets, and listening tests reported in those papers.
+
+Residual vector quantization (RVQ) applies codebooks in sequence. For frame \(t\),
+let \(r_t^{(0)}=z_t\). At depth \(j\), choose the nearest entry and pass on the
+unexplained residual:
+
+$$
+k_t^{(j)}=\arg\min_k\left\lVert r_t^{(j-1)}-e_k^{(j)}\right\rVert_2^2,
+\qquad
+r_t^{(j)}=r_t^{(j-1)}-e_{k_t^{(j)}}^{(j)},
+\qquad
+\widehat z_t=\sum_{j=1}^{Q}e_{k_t^{(j)}}^{(j)}.
+$$
+
+Here \(e_k^{(j)}\) is entry \(k\) in codebook \(j\), \(k_t^{(j)}\) is its index,
+and \(Q\) is the active depth. Later codebooks refine what earlier ones missed.
+This usually improves reconstruction, but it also sends more indices.
+
+If the codec emits \(f\) frames per second and uses \(Q\) codebooks, its raw index
+traffic is
+
+$$
+R_{\mathrm{idx}}=fQ.
+$$
+
+If codebook \(j\) contains \(K_j\) entries and each index uses a fixed-width
+integer, the nominal payload is
+
+$$
+R_{\mathrm{bit}}=f\sum_{j=1}^{Q}\left\lceil\log_2K_j\right\rceil.
+$$
+
+Token rate is not bitrate. Neither number alone gives a generator's decoding
+cost: a model may predict codebooks sequentially, in parallel, or in groups.
+
+![Raw codec index traffic equals frame rate f times active codebooks Q. The lines show arithmetic examples, not measured bitrate, model latency, or audio quality.](/figures/speech-and-voice-1.svg){#fig-speech-and-voice-1}
+
+The following deterministic example compresses one two-dimensional frame. Each
+codebook has four entries, so every selected index costs two bits.
 
 :::: {.runnable}
 ```python
-import numpy as np
-rng = np.random.default_rng(0)
+from math import dist, log2
 
-d, K, Q = 16, 256, 6            # frame dim, codebook size, RVQ depth (num quantizers)
-codebooks = [0.5 * rng.normal(size=(K, d)) for _ in range(Q)]
-x = rng.normal(size=d)          # one audio-frame embedding to compress
+target = (1.0, -0.5)
+codebooks = [
+    [(0.0, 0.0), (0.75, -0.25), (-0.75, 0.25), (1.0, 0.0)],
+    [(0.0, 0.0), (0.25, -0.125), (-0.25, 0.125), (0.0, 0.25)],
+    [(0.0, 0.0), (0.0, -0.125), (0.0, 0.125), (0.125, 0.0)],
+]
+frame_hz = 50
+residual = target
 
-residual = x.copy(); tokens = []
-for cb in codebooks:
-    j = int(np.argmin(((cb - residual) ** 2).sum(1)))   # nearest entry to residual
-    tokens.append(j)
-    residual = residual - cb[j]                          # quantize the leftover
-    print(f"{len(tokens)} quantizer(s) -> {len(tokens)} token(s), "
-          f"recon error = {np.linalg.norm(residual):.3f}")
-print("each extra quantizer codes the leftover residual: error falls, bitrate rises")
+for depth, codebook in enumerate(codebooks, start=1):
+    index = min(range(len(codebook)), key=lambda i: dist(residual, codebook[i]))
+    chosen = codebook[index]
+    residual = tuple(x - q for x, q in zip(residual, chosen))
+    indices_per_second = frame_hz * depth
+    bits_per_second = indices_per_second * int(log2(len(codebook)))
+    print(
+        f"depth={depth} error={dist(residual, (0.0, 0.0)):.3f} "
+        f"indices/s={indices_per_second} bits/s={bits_per_second}"
+    )
 ```
 ::::
 
-Not all audio tokens carry the same thing, and the distinction governs the rest of
-the chapter. *Semantic* tokens come from a self-supervised model like HuBERT or
-w2v-BERT [@chung2021w2vbert] and capture linguistic content and long-range
-structure but discard fine acoustic detail; *acoustic* tokens come from a codec
-and capture speaker identity, room, and fidelity but lack long-range structure.
-The frontier folds the two together so a downstream language model gets meaning in
-its earliest tokens: SpeechTokenizer distills the first residual quantizer to match
-HuBERT's semantic tokens while later quantizers carry acoustics
-[@zhang2024speechtokenizer], the Descript codec fixes codebook collapse to push
-universal 44.1 kHz audio to about ninety-fold compression [@kumar2023dac], and the
-Mimi codec inside Moshi runs at a 12.5 Hz frame rate with a split residual
-quantizer whose first token is semantic, distilled from WavLM [@defossez2024moshi].
-The frame rate is the lever. For an autoregressive model the sequence length is the
-frame rate times the duration times the number of codebooks, so EnCodec's 75 Hz is
-hundreds of tokens per second while Mimi's 12.5 Hz is roughly six times shorter,
-which is the difference between a speech model that can run in real time and one
-that cannot. The tension is that fewer tokens cost reconstruction fidelity, so each
-codec spends its engineering on getting more quality per token.
+“Semantic” and “acoustic” are roles, not a clean partition. Tokens from a
+self-supervised speech model tend to preserve linguistic content while discarding
+some speaker and recording detail. Codec tokens must preserve enough information
+to reconstruct the signal, so they also carry content. Systems can encourage a
+division: SpeechTokenizer distills its first RVQ layer toward HuBERT units
+[@zhang2024speechtokenizer], while later layers refine the audio. AudioLM uses
+w2v-BERT units for long-range structure and SoundStream codes for fidelity
+[@chung2021w2vbert; @borsos2022audiolm]. The Descript Audio Codec targets
+high-fidelity 44.1 kHz audio with improved quantizer use [@kumar2023dac]. Mimi,
+used by Moshi, operates at 12.5 frames per second and combines a semantic
+quantizer with acoustic RVQ levels [@defossez2024moshi]. A low frame rate shortens
+the time axis, but quality, codebook depth, and the generator's schedule still
+determine the actual cost.
 
-## Generating speech
+## Choose a generation representation and schedule
 
-With audio as tokens, generation becomes language modeling, but a flat model over
-raw codec tokens wanders semantically, because codec tokens are optimized for
-fidelity, not content. AudioLM fixed this with a hierarchy: model semantic tokens
-first to lock what is being said, then coarse acoustic tokens for speaker and
-prosody, then fine acoustic tokens for high-frequency detail, producing coherent
-speech and even piano continuations with no transcript [@borsos2022audiolm].
-@gls-tts, the task of synthesizing speech from text, followed the same turn from
-signal regression to token prediction.
-VALL-E treats TTS as conditional codec language modeling with a now-standard split:
-an autoregressive model predicts the first, coarsest codebook token by token, where
-duration and prosody live, and a non-autoregressive model fills the remaining
-residual codebooks in parallel; given a three-second enrollment recording of an
-unseen speaker it clones the voice zero-shot, carrying over the speaker's emotion
-and acoustic environment because the prompt is itself codec tokens
-[@wang2023valle]. SoundStorm then made the acoustic stage fast with confidence-based
-parallel decoding, generating thirty seconds of audio in half a second
-[@borsos2023soundstorm], and VALL-E 2 reached reported human parity by stabilizing
-the sampling that otherwise makes autoregressive codec models loop [@chen2024valle2].
+AudioLM first models semantic units, then coarse and fine acoustic tokens. This
+hierarchy gave its samples longer-range coherence without asking one flat codec
+model to learn every timescale at once [@borsos2022audiolm]. @gls-tts, the task of
+synthesizing speech from text, adds a transcript and often a short acoustic prompt
+that identifies the target voice.
 
-A parallel lineage rejects the autoregressive codec model for non-autoregressive
-continuous generation, the @gls-flow-matching of @sec-diffusion applied to speech.
-Voicebox frames synthesis as text-guided audio infilling and trains a flow-matching
-model that attends to both past and future context, reporting a lower word error
-rate (the fraction of words wrong, lower is better) and
-roughly twenty-fold speedups over VALL-E [@le2023voicebox], NaturalSpeech 3
-factorizes speech into content, prosody, timbre, and detail and diffuses each
-[@ju2024naturalspeech3], and the F5-TTS line strips the recipe to a bare
-flow-matching model with no duration predictor or alignment search
-[@chen2024f5tts]. The split is the chapter's recurring one: the autoregressive
-codec model streams and samples diverse prosody but is prone to looping, while the
-flow or diffusion model is robust, fast, and bidirectional but needs the whole span
-up front, which makes it harder to stream. The same three-second cloning that makes
-this useful makes it a misuse vector, which is why audio watermarking arrived
-alongside it; AudioSeal trains a detector that localizes which samples of a clip
-are AI-generated in a single fast pass [@sanroman2024audioseal].
+VALL-E predicts EnCodec tokens conditioned on text and a three-second enrollment
+recording. Its autoregressive stage produces the first codebook, and its
+non-autoregressive stage fills residual codebooks one level at a time, with frame
+positions parallel within a level [@wang2023valle]. SoundStorm uses confidence-
+based masked decoding across positions; in the authors' TPU-v4 setup, it generated
+thirty seconds of audio in half a second [@borsos2023soundstorm]. VALL-E 2 changed
+codec grouping and sampling to reduce repetition. Its “human parity” claim refers
+to the paper's preference tests on LibriSpeech and VCTK, not to every speaker,
+language, or recording condition [@chen2024valle2].
 
-## Realtime, full-duplex voice
+Continuous generators offer another path. Voicebox uses conditional flow matching
+to infill masked mel-spectrogram spans, enabling synthesis, editing, denoising,
+and style transfer in one model [@le2023voicebox]. NaturalSpeech 3 instead
+factorizes speech into content, prosody, speaker identity, and acoustic detail,
+then uses discrete masked diffusion for the generated factors
+[@ju2024naturalspeech3]. F5-TTS removes an explicit alignment search and duration
+predictor from training, but inference still needs a target duration to define the
+generated span [@chen2024f5tts].
 
-The hard part of a voice agent is not recognition or synthesis but the conversation
-loop: turn-taking, interruption, and latency. Human turn-taking gaps average around
-two hundred milliseconds across languages, and that ceiling, not any accuracy
-target, is the governing constraint. The obvious design is a cascade, automatic
-speech recognition into a text model into text-to-speech. It is modular, debuggable,
-and rides text-model progress, but it stacks each stage's latency serially and
-flattens everything through a text bottleneck that discards timing, overlap, and
-prosody. The alternative models speech to speech directly.
+| Representation and schedule | Useful property | Design constraint |
+|---|---|---|
+| Autoregressive codec tokens | Natural variable-length generation | Serial dependencies can repeat or drift |
+| Masked codec tokens | Many frame positions update together | Several refinement passes may be required |
+| Flow or diffusion over spectrograms | Global conditioning and editing | Sampling schedule and output length must be chosen |
+
+None of these rows guarantees or forbids streaming. Chunking, causal context,
+look-ahead, and the vocoder determine when audio can leave the system.
+
+Voice cloning also makes consent and provenance part of the technical design.
+AudioSeal jointly trains a watermark generator and a detector that can localize
+its embedded signal [@sanroman2024audioseal]. It is proactive rather than a
+universal detector: it can recognize content carrying that watermark, not prove
+that any unmarked recording is human-made.
+
+## Build conversation on incremental state
+
+A turn-based cascade connects ASR, a text model, and TTS. Its components are easy
+to inspect and replace, and text offers a useful control boundary. It can also
+lose timing, overlap, pronunciation, and emotion unless those signals travel on
+separate channels. Direct speech-to-speech models preserve more of the signal but
+are harder to steer and diagnose.
+
+For a purely serial cascade, time to first audio can be decomposed as
+
+$$
+D_{\mathrm{first}}=D_{\mathrm{endpoint}}+D_{\mathrm{in}}+D_{\mathrm{ASR}}
++D_{\mathrm{model}}+D_{\mathrm{TTS}}+D_{\mathrm{out}}.
+$$
+
+The terms cover endpoint detection, inbound transport, recognition, response
+generation, synthesis, and outbound transport. Real systems overlap work, so the
+observed delay follows the critical path rather than always equaling this serial
+sum. Report time to first audio together with the endpoint rule and network
+conditions. Real-time factor, total generation time divided by audio duration,
+answers a different question.
 
 ```{dot}
 //| label: fig-voice-cascade-vs-e2e
-//| fig-cap: "Two voice-agent designs. The cascade chains automatic speech recognition, a text model, and text-to-speech, so latency is the sum of three stages and everything passes through a text bottleneck that drops timing and prosody. A full-duplex speech-to-speech model carries the user's and system's audio as parallel token streams with an inner text monologue, always listening while speaking, so it emits audio before the user has finished. After Defossez et al. (2024)."
+//| fig-cap: "Two dependency structures for voice interaction. A cascade exposes transcript and text-response boundaries. A speech-to-speech model keeps audio inside one learned path. Either design may stream or wait for an endpoint; full duplex adds the separate requirement that input remains active during output."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
+  rankdir=TB;
+  nodesep=0.35; ranksep=0.42;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
   subgraph cluster_C {
-    label="Cascade (serial latency)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    a1 [label="user audio"];
-    asr [label="ASR"];
-    llm [label="text model"];
-    tts [label="TTS"];
-    a2 [label="reply audio"];
-    a1 -> asr;
-    asr -> llm;
-    llm -> tts;
-    tts -> a2;
+    label="Cascade"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    c_audio [label="incoming audio"];
+    c_asr [label="ASR"];
+    c_text [label="text model"];
+    c_tts [label="TTS"];
+    c_reply [label="reply audio"];
+    c_audio -> c_asr -> c_text -> c_tts -> c_reply;
   }
   subgraph cluster_E {
-    label="Full-duplex speech-to-speech"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    u [label="user stream"];
-    m [label="one model\nuser + system audio\n+ inner text monologue"];
-    s [label="system stream"];
-    u -> m;
-    m -> s;
-    m -> m [style=dashed, label="always listening"];
+    label="Speech-to-speech"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    e_audio [label="incoming audio"];
+    e_model [label="audio model"];
+    e_reply [label="reply audio"];
+    e_audio -> e_model -> e_reply;
   }
 }
 ```
 
-Moshi is a full-duplex speech-text model that removes explicit speaker turns. It
-runs on the low-frame-rate Mimi codec, models its own audio and the user's as two
-parallel streams so it is always listening while it speaks, and predicts a text
-"inner monologue" before each step's audio tokens, which improves linguistic
-quality and yields streaming recognition and synthesis for free; it reports about
-160 ms theoretical and 200 ms practical latency [@defossez2024moshi]. The
-parallel-stream design is what makes interruption and backchannels native rather
-than a special case the way a half-duplex, silence-detecting agent must treat them.
-The first commercial instance was GPT-4o's voice mode in 2024, a single model
-trained end to end across text, vision, and audio that replaced the old
-three-model voice pipeline and reported an average 320 ms response
-[@openai2024gpt4o]. Dedicated realtime speech-to-speech models then made this a
-standard product tier: OpenAI's gpt-realtime shipped with the Realtime API's
-general availability in August 2025 [@openai2025gptrealtime], Google's Gemini
-Live added native-audio dialogue, and both architectures remain undisclosed. A
-parallel line unifies the tasks rather than the duplex loop:
-SeamlessM4T is one model for speech-to-speech, speech-to-text, text-to-speech, and
-text-to-text translation plus recognition across roughly a hundred languages
-[@seamless2023], and its streaming successor adds low-latency simultaneous
-translation that preserves vocal style [@seamless2023streaming].
+Full duplex is a systems contract: capture and input processing continue while
+reply audio plays. That contract needs acoustic echo cancellation so the agent
+does not hear itself, voice-activity and endpoint logic, interruption detection,
+output cancellation, and a policy for rolling back text or tool actions produced
+after the user barges in. Backchannels such as “mm-hm” are outputs too; they must
+not accidentally claim a turn or trigger an action.
+
+Moshi demonstrates one model-level implementation. It represents user and system
+audio as parallel streams and predicts a text “inner monologue” before the system
+audio at each step. The paper reports 160 ms theoretical latency and about 200 ms
+in its practical setup [@defossez2024moshi]. These figures describe that system,
+not a universal conversational threshold.
+
+Human conversation is not a 200 ms service-level objective. Across ten languages,
+Stivers and colleagues observed response-time distributions with modes from 0 to
+200 ms and median offsets from 0 to 300 ms, with substantial variation by language
+and response type [@stivers2009turntaking]. People also use pauses as meaningful
+signals. A voice product should measure its own task: dictation, translation,
+customer support, tutoring, and casual conversation tolerate different delays.
+
+End-to-end audio products provide useful system evidence but limited architectural
+detail. OpenAI reported 232 ms minimum and 320 ms average response time for GPT-4o
+audio, and described one network trained across audio, vision, and text
+[@openai2024gpt4o]. That does not by itself establish full-duplex behavior. Speech
+translation is another neighboring workload: SeamlessM4T covers speech and text
+translation and recognition across up to one hundred languages, with coverage
+varying by task and direction [@seamless2023]. Seamless Streaming uses monotonic
+attention for simultaneous translation; the same work also presents an expressive
+speech-to-speech model [@seamless2023streaming].
+
+## Benchmark every boundary
+
+An end-to-end score cannot explain which layer failed. Keep boundary metrics beside
+task-level listening tests:
+
+| Boundary | Measures that answer the engineering question |
+|---|---|
+| Recognition | Word error rate, partial-hypothesis stability, emission delay |
+| Codec | Listening quality at a named bitrate, algorithmic delay, robustness to packet loss |
+| TTS | Intelligibility, speaker similarity, naturalness, real-time factor, time to first audio |
+| Conversation | Endpoint errors, interruption response, overlap handling, echo leakage, tool-cancellation correctness |
+| Safety | Speaker consent, impersonation tests, watermark survival and false alarms, retention of voice data |
+
+For a reference transcript containing \(N\) words, word error rate is
+
+$$
+\mathrm{WER}=\frac{S+D+I}{N},
+$$
+
+where \(S\), \(D\), and \(I\) count substitutions, deletions, and insertions.
+WER does not measure punctuation, speaker attribution, prosody, naturalness, or
+whether a partial transcript arrived in time. Those need separate tests.
 
 ::: {.callout-important}
 ## What's contested
-Whether a voice agent should be a cascade or an end-to-end speech-to-speech model
-is unsettled. The cascade is debuggable and inherits every text-model
-improvement, but pays serial latency and throws away paralinguistics, the
-emotion, overlap, and timing that make speech more than its transcript. The
-end-to-end route keeps those and cuts latency, but is harder to train, steer, and
-evaluate, and cannot drop in a better text model the way a cascade can. The same
-split runs through synthesis itself, autoregressive codec models against
-non-autoregressive flow and diffusion, trading streaming and prosodic diversity
-against robustness and speed. Neither is decided by a general verdict; the choice
-is set by how much the product values expressiveness and sub-second response
-against controllability.
+There is no generally best boundary between speech and text. A cascade exposes
+transcripts, policy checks, and replaceable components. An end-to-end audio model
+can retain timing and prosody and may overlap more computation, but its mistakes
+are harder to attribute. Generation has the same unresolved choice between
+autoregressive, masked, and continuous schedules. Select from measured workload
+requirements rather than from an architecture label.
 :::
 
 ::: {.callout-tip}
-## Constraint arrow
-The latency budget of a conversation reaches back into the architecture. People
-expect a reply within roughly a few hundred milliseconds, and that ceiling, not
-any accuracy target, is what rules out a serial recognize-then-think-then-speak
-cascade for the most demanding cases and forces streaming, token-interleaved,
-full-duplex designs that emit audio before the user has finished. It even reaches
-down into the codec: a real-time speech model needs a frame rate low enough that
-its token sequence stays short, which is why Mimi runs at 12.5 Hz and distills
-meaning into its first token rather than leaving content to a longer stream. The
-interaction's latency dictates the model, the way the serving cost of a token
-dictates model size in @sec-scaling-laws.
+## Lower-layer constraint
+Conversation requirements reach every layer. An interruption target constrains
+audio chunk size, endpointing, transport, model scheduling, synthesis buffering,
+and cancellation. A codec's frame rate and codebook layout constrain how many
+indices a generator must handle, but they do not determine latency alone. Write
+the interaction contract first, then assign a measurable budget to each boundary.
 :::
 
 ## Further reading

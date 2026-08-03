@@ -143,6 +143,16 @@ test("NAR figure reports dependency depth rather than synthetic latency", () => 
   expect(spec).not.toContain("latency");
 });
 
+test("speech figure shows codec index arithmetic rather than an invented latency budget", () => {
+  const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
+  const spec = catalog.match(/"speech-and-voice-1": \{[\s\S]*?\n    \},/)?.[0] ?? "";
+  expect(spec).toContain('"type": "line"');
+  expect(spec).toContain('"x": [1, 2, 4, 8]');
+  expect(spec).toContain('"label": "12.5 frames/s", "y": [12.5, 25, 50, 100]');
+  expect(spec).toContain('"ylabel": "codec indices per second"');
+  expect(spec).not.toContain("latency budget");
+});
+
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();

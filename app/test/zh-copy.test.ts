@@ -568,7 +568,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/generative/03-speech-and-voice.qmd",
-      ["weak supervision", "semantic tokens", "flow-matching routes"],
+      ["Streaming changes what counts as correct", "Token rate is not bitrate", "Full duplex is a systems contract"],
     ],
     [
       "zh/generative/03-speech-and-voice.qmd",
