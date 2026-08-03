@@ -2,16 +2,14 @@ import matplotlib
 matplotlib.use("svg")
 import matplotlib.pyplot as plt
 import numpy as np
-import os
 
-# Schematic: pipeline bubble fraction shrinks with more micro-batches.
-# Idealized model: bubble fraction = (p - 1) / (m + p - 1) for p stages
-# and m micro-batches. Synthetic, illustrative only; not measured data.
+# Balanced synchronous GPipe flush schedule with equal stage times and
+# negligible communication. This is an analytic model, not measured throughput.
 
 fig_color = "#6b7280"
 data_color = "#3b82f6"
 
-m = np.linspace(1, 64, 400)
+m = np.arange(1, 129)
 
 fig, ax = plt.subplots(figsize=(5, 3))
 
@@ -21,7 +19,7 @@ for p, ls, alpha in [(4, "-", 1.0), (8, "--", 0.75), (16, ":", 0.55)]:
 
 ax.set_xlabel("micro-batches per step (m)", color=fig_color)
 ax.set_ylabel("pipeline bubble fraction", color=fig_color)
-ax.set_xlim(1, 64)
+ax.set_xlim(1, 128)
 ax.set_ylim(0, 1)
 
 ax.tick_params(colors=fig_color)

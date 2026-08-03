@@ -76,7 +76,7 @@ fp8（即 E4M3 与 E5M2 格式）在 Hopper 级及更新的硬件上，把矩阵
 ```{=html}
 <figure id="fig-training-at-scale-float-bits">
 <div class="viz" data-viz="float-bits"></div>
-<figcaption>每种格式把位分配到哪里。除去一个符号位，其余的在指数（动态范围）与尾数（精度）之间分配。bf16 保留 fp32 的八个指数位，所以跨越同样的范围、免掉 fp16 的损失缩放；fp8 的指数位太少，必须逐张量重新缩放，而 E5M2 换来范围、E4M3 换来精度。选一个格式看它的分配。示意性。</figcaption>
+<figcaption>每种浮点格式如何分配数值位。指数宽度决定范围，尾数宽度决定精度。分块缩放的 FP4 格式还带有额外的缩放元数据，此处的单值位布局没有画出这些元数据。</figcaption>
 </figure>
 ```
 
@@ -129,7 +129,7 @@ digraph precision {
   度增长 [@rajbhandari2019zero]。对的布局并不通用：换个模型规模、换个序列长度或者换个集群，最优点
   就挪了位。
 
-![流水线气泡占比如何随每步微批数量增长而缩小的示意图，对若干阶段数分别绘制，仿照 Huang 等（2019）与 Narayanan 等（2021）。理想化占比 (p-1)/(m+p-1)；并非实测数据。增益起初陡峭、随后趋平，因此超过寥寥几个微批之后再增加收效甚微。](/figures/training-at-scale-1.svg){#fig-training-at-scale-1}
+![平衡、同步刷新且忽略通信时，GPipe 流水线气泡占比随每步微批数量变化的解析结果；并非实测吞吐量。](/figures/training-at-scale-1.svg){#fig-training-at-scale-1}
 
 把这个精确公式运行一遍，亲眼看看收益递减：改改阶段数或微批的取值范围，看看曲线在哪儿趋平。
 
@@ -156,7 +156,7 @@ plt.show()
 ```{=html}
 <figure id="fig-training-at-scale-pipeline-bubble">
 <div class="viz" data-viz="pipeline-bubble"></div>
-<figcaption>流水线气泡。各阶段以波前方式处理微批，在每一步两端的填充与排空期间空着，于是气泡占比是 (p-1)/(m+p-1)。增加阶段，空闲的楔形就变大；增加每步的微批数，它就缩小，起初陡峭、随后趋平，这正是为什么寥寥几个微批通常就够了。示意性。</figcaption>
+<figcaption>平衡、同步刷新且忽略通信时的理想 GPipe 气泡。可调整阶段数和微批数来查看公式；真实轨迹还会受阶段不均衡与通信时间影响，因而可能更差。</figcaption>
 </figure>
 ```
 
@@ -220,18 +220,9 @@ digraph {
 
 症状成簇出现。MFU 偏低是个总括性症状，靠每步剖析追到暴露的通信、过大的气泡、过多的重算，或者未融合的内核。通信瓶颈意味着瓶颈在网络：TP 溢出了 NVLink 域、一次藏不进反向传播之下的 DP all-gather，或者 MoE 的 all-to-all 卡在某个热门专家上。OOM 意味着布局不能满足显存预算：长序列长度下的激活显存、优化器状态切分不够，或者只在某个微批数量下才出现的碎片化拐点。一次节点故障，若没有快速检测、隔离与新近的检查点，就会把训练回滚到上一次保存，中间那段间隔都会被浪费。
 
-最快的注意力内核也不改变这笔账：FlashAttention 让注意力保持精确，又让分数矩阵用得起，办法是从不把它写进高带宽显存。这是内核层面的一处巧解，位于这些并行轴之下，而不是替换掉其中任何一个 [@dao2022flashattention]。@fig-training-at-scale-2 把两种扩展规律摆在一起对照：一个被物化的分数矩阵，显存随序列长度二次增长；一个从不物化分数的流式内核，则只带来线性增长。
+最快的注意力内核也不改变这笔账：FlashAttention 让注意力保持精确，又让分数矩阵用得起，办法是从不把它写进高带宽显存。这是内核层面的一处巧解，位于这些并行轴之下，而不是替换掉其中任何一个 [@dao2022flashattention]。@fig-training-at-scale-2 对两个明确张量做字节计数：物化的注意力分数矩阵随序列长度二次增长，而单个词元状态张量线性增长。后者只是参照，不代表 FlashAttention 的完整峰值显存。
 
-![峰值注意力显存随序列长度变化的示意图，仿照 Dao 等（2022）。被物化的分数矩阵按 O(L²) 增长，而一个从不把分数写入 HBM 的 IO 感知内核按 O(L) 增长。理想化、任意单位；并非实测数据。](/figures/training-at-scale-2.svg){#fig-training-at-scale-2}
-
-拖动指数，感受两种规律之间的差距：指数为 2 时，显存是被物化的 O(L²) 分数矩阵；指数为 1 时，则是 FlashAttention 的 O(L) 流式处理。
-
-```{=html}
-<figure id="fig-training-at-scale-curve">
-<div class="viz" data-viz="curve" data-family="power-grow" data-xlabel="序列长度 L" data-ylabel="峰值注意力显存" data-plabel="指数" data-pmin="1" data-pmax="2" data-p="2" data-logy="true"></div>
-<figcaption>峰值注意力显存随序列长度变化：指数为 2 是被物化的 O(L²) 分数矩阵，指数为 1 是 FlashAttention 的 O(L) 流式处理。</figcaption>
-</figure>
-```
+![物化注意力分数张量与单个词元状态张量的精确字节计数，设 B=1、H=32、隐藏宽度为 4096，并使用 BF16 存储。线性曲线只是参照，并非 FlashAttention 完整峰值显存的模型。](/figures/training-at-scale-2.svg){#fig-training-at-scale-2}
 
 配方层面的稳定性，也就是让优化器不发散的 z-loss、QK-norm 与损失尖峰恢复，归 @sec-scaling-laws。这里讨论的稳定性有两层：数值层面的，由精度选择决定；以及运行层面的，由容错决定。
 

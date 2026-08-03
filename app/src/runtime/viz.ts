@@ -1402,14 +1402,15 @@
     show(TREE);
   };
 
-  // Float-bit inspector: each number format spends one sign bit then splits the
-  // rest between exponent (dynamic range) and mantissa (precision). bf16 keeps
-  // fp32's eight exponent bits, so it never needed fp16's loss scaling; fp8
-  // trades range (E5M2) against precision (E4M3). Pick a format to see the split.
+  // Float-bit inspector: each value format spends one sign bit then splits the
+  // rest between exponent (range) and mantissa (precision). bf16's wide exponent
+  // usually avoids FP16 loss scaling; scaled FP8/FP4 recipes also carry metadata
+  // and accumulation rules that this value-level view intentionally omits.
   R['float-bits'] = function (host) {
     var FORM = [
       { n: 'fp32', e: 8, m: 23 }, { n: 'fp16', e: 5, m: 10 }, { n: 'bf16', e: 8, m: 7 },
-      { n: 'fp8 E4M3', e: 4, m: 3 }, { n: 'fp8 E5M2', e: 5, m: 2 }
+      { n: 'fp8 E4M3', e: 4, m: 3 }, { n: 'fp8 E5M2', e: 5, m: 2 },
+      { n: 'fp4 E2M1', e: 2, m: 1 }
     ];
     var sel = 2;
     var COL = { s: '#888', e: '#2d63a8', m: '#e0936b' };
@@ -1435,10 +1436,8 @@
     render();
   };
 
-  // Pipeline bubble: stages process micro-batches in a wavefront, idle during the
-  // fill and drain at each end. The bubble fraction is (p-1)/(m+p-1): more
-  // micro-batches per step shrink it, steeply at first then flattening. Slide the
-  // stage count and micro-batch count and watch the idle wedge and the fraction.
+  // Ideal GPipe bubble for a balanced synchronous flush schedule with negligible
+  // communication. Real traces also include stage imbalance and message time.
   R['pipeline-bubble'] = function (host) {
     var p = 4, m = 6;
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
@@ -1458,7 +1457,7 @@
         }
       }
       var bub = (p - 1) / (m + p - 1);
-      read.textContent = 'p=' + p + ' stages · m=' + m + ' micro-batches · bubble ' + Math.round(bub * 100) + '%';
+      read.textContent = 'ideal GPipe · p=' + p + ' stages · m=' + m + ' micro-batches · bubble ' + Math.round(bub * 100) + '%';
     }
     host.appendChild(slider('pipeline stages p', 2, 8, 1, p, function (v) { p = Math.round(v); draw(); }).wrap);
     host.appendChild(slider('micro-batches m', 1, 16, 1, m, function (v) { m = Math.round(v); draw(); }).wrap);

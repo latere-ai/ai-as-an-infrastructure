@@ -333,7 +333,7 @@ test("early-book glossary first uses are readable without leaving the page", () 
     ["en/orientation/03-borrowed-ideas.qmd", "@gls-two-part-code, an accounting that charges for the model description"],
     ["zh/orientation/03-borrowed-ideas.qmd", "用@gls-two-part-code来算，也就是先付模型描述长度"],
     ["en/foundations/01-scaling-laws.qmd", "@gls-cross-entropy: it measures the model's surprise on a fixed held-out distribution"],
-    ["en/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp is the native version of the same full sharding idea"],
+    ["en/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp applies this full sharding idea to wrapped modules"],
     ["zh/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp 则是同一全分片思路的原生版本"],
     ["en/foundations/07-mid-training.qmd", "@gls-sft on demonstrations, @gls-dpo from chosen-versus-rejected preferences"],
     ["zh/foundations/07-mid-training.qmd", "在示范数据上做@gls-sft，从胜出与被拒回复的偏好里做@gls-dpo"],
@@ -342,6 +342,29 @@ test("early-book glossary first uses are readable without leaving the page", () 
   for (const [path, snippet] of required) {
     expect(flat(path), `${path} should keep early first-use explanation: ${snippet}`).toContain(snippet);
   }
+});
+
+test("training at scale states its accounting and recovery contracts", () => {
+  const chapter = flat("en/foundations/06-training-at-scale.qmd");
+
+  for (const contract of [
+    "B_{\\mathrm{global}} = DmB_\\mu",
+    "Persistent bytes per device",
+    "The table is a *persistent-state* estimate, not a peak-memory estimate",
+    "f_{\\mathrm{bubble}}=\\frac{p-1}{m+p-1}",
+    "The formula is useful for sizing, not prediction",
+    "N = D T p C",
+    "Steady-state MFU commonly excludes restart time",
+    "*Deterministic replay*",
+    "*Coverage-equivalent resume*",
+    "M_{\\mathrm{score}} = BHL^2b",
+  ]) {
+    expect(chapter, `missing training contract: ${contract}`).toContain(contract);
+  }
+
+  expect(chapter).not.toContain("a handful of micro-batches is usually enough");
+  expect(chapter).not.toContain("fp32 master weights are non-negotiable");
+  expect(chapter).not.toContain("letting the context grow nearly without bound");
 });
 
 test("borrowed-ideas chapter distinguishes evidence from analogy", () => {

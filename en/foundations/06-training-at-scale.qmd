@@ -1,76 +1,170 @@
 # Training at Scale: Stability and Distributed Parallelism {#sec-training-at-scale}
 
-The architectures from the previous chapters only matter if the run can be
-executed. A frontier model does not fit on one accelerator, and the training
-job that produces it spans thousands of them for weeks. Once the work is split
-across that many devices, three resources start to fight: the memory each shard
-must hold, the communication that keeps the shards consistent, and the failures
-that a fleet of that size produces as its steady state. Training systems spend
-those three against each other so achieved throughput stays high and a dead GPU
-costs minutes, not days. The scoreboard for that work is model FLOPs
-utilization: the number that says how much of the machine is doing useful model
-math after communication, bubbles, recomputation, and failures take their cut.
+A training run becomes distributed for one of two reasons: the model state no
+longer fits on one accelerator, or one accelerator would take too long to
+finish the work. Distribution solves those problems by creating another one.
+Every shard must exchange data with its peers, and every participating worker
+becomes another place where the job can stop.
 
-## Three forces that fight
+The design task is therefore an accounting problem. For each proposed layout,
+ask four questions:
 
-Two facts force everything that follows. A frontier model's parameters,
-gradients, and optimizer state do not fit in one device's memory, and the
-arithmetic to train it does not finish on one device in any acceptable time.
-So the work is split across thousands of accelerators, and the moment it is
-split, three constraints start to fight.
+1. What is replicated, and what is sharded?
+2. What is the peak memory on each device, including temporary buffers?
+3. Which messages lie on the critical path of a step?
+4. What state must survive a restart for the run to continue correctly?
 
-Memory comes first: weights, the Adam moments (the optimizer's per-weight
-running averages of the gradient) whose state dominates (see
-@sec-scaling-laws), activations (intermediate values saved on the forward
-pass for use in the backward pass), and gradients must each find a home, and
-peak activation memory grows with sequence length. Communication is the next
-pressure, since every split introduces traffic to keep the shards consistent,
-and that traffic competes with compute for the same time budget. Then there is
-failure. At thousands of nodes for weeks, a dead GPU or NIC is the steady
-state, not the exception, and a single one kills the whole collective. The
-job of the training-systems layer is to spend memory, communication, and
-recovery against each other so that achieved throughput stays high and a
-failure costs minutes, not days. No single way of splitting the work resolves
-all three at once, which is why the design offers several orthogonal cuts and
-composes them.
+This chapter develops that accounting from a single-device training step to a
+multi-dimensional device mesh. The goal is not a universal recipe. Model shape,
+sequence length, numerical format, and network topology jointly determine the
+best layout.
 
-## Four cuts, and what each one costs
+## Start with one logical optimizer step
 
-Each axis answers a different scaling problem, shards a different resource,
-and arrived in the literature when the previous generation hit a wall. Read in
-that order they are less a menu than a record of how the toolkit was
-assembled, one cut at a time.
+Data parallelism is the simplest place to begin. Each of $D$ replicas receives
+a different part of the batch, runs the same model, and contributes to one
+synchronous gradient update. If every replica processes $m$ micro-batches of
+$B_\mu$ sequences before the optimizer runs, then
 
-*Tensor parallelism (TP)* came first. It shards individual matmuls inside a
-layer, splitting attention heads and the feed-forward columns and rows across
-devices. Megatron-LM showed how to do this with only two all-reduces per
-layer, which made a multi-billion-parameter model trainable once it no longer
-fit on one device [@shoeybi2019megatron]. The cost is that it is
-communication-heavy: each TP layer needs an all-reduce (or a reduce-scatter
-and all-gather pair) on the critical path of every forward and backward step.
-That cost is only affordable over the fastest interconnect, so TP stays
-inside a node.
+$$
+B_{\mathrm{global}} = DmB_\mu.
+$$
 
-*Pipeline parallelism (PP)* arrived in parallel and cuts a different
-resource. It splits the layer stack into stages placed on different nodes and
-streams micro-batches through them, so stage two works on micro-batch one
-while stage one works on micro-batch two. GPipe established the micro-batching
-that keeps the stages busy [@huang2019gpipe], and PipeDream generalized the
-schedule to cut the bubble [@narayanan2019pipedream]. PP is bandwidth-cheap,
-moving only the activations at stage boundaries, but it pays a pipeline
-bubble: the fill and drain at the ends of each step where some stages sit
-idle. @fig-training-bubble shows where that idle time lives.
+Here, $B_{\mathrm{global}}$ is the number of sequences in one optimizer step,
+$D$ is the data-parallel degree, $m$ is the number of micro-batches accumulated
+per replica, and $B_\mu$ is the number of sequences in one micro-batch. Token
+counts can differ between sequences, so production runs often track tokens per
+step as well as sequences per step.
+
+With equal local batch sizes, an all-reduce produces the mean gradient
+
+$$
+g = \frac{1}{D}\sum_{r=1}^{D}g_r,
+\qquad
+g_r = \frac{1}{B_{\mathrm{global}}/D}
+      \sum_{i\in\mathcal B_r}\nabla_\theta \ell_i(\theta).
+$$
+
+Here, $r$ indexes replicas, $\mathcal B_r$ is replica $r$'s local batch,
+$\theta$ is the parameter vector, $\ell_i$ is the loss for example $i$, and
+$g_r$ and $g$ are the local and global mean gradients. If local batch sizes
+differ, averaging the replica means equally is wrong; the reduction must weight
+each sum by its example or token count.
+
+This equation is the semantic contract. Different sharding schemes may change
+where tensors live and the order of floating-point reductions, but they should
+implement the same intended synchronous update. Bitwise identity is a stronger
+and usually topology-dependent requirement.
+
+## Account for model-state memory
+
+Plain distributed data parallelism (DDP) replicates parameters, gradients, and
+optimizer state on every replica. It distributes compute and the batch, but it
+does not shard this persistent model state. @gls-zero removes the replication
+in stages [@rajbhandari2019zero]:
+
+| Layout | Sharded across the data-parallel group | Persistent bytes per device |
+|---|---|---:|
+| DDP | nothing | $P_\theta(b_w+b_g+b_o)$ |
+| ZeRO stage 1 | optimizer state | $P_\theta(b_w+b_g+b_o/D)$ |
+| ZeRO stage 2 | optimizer state and gradients | $P_\theta[b_w+(b_g+b_o)/D]$ |
+| ZeRO stage 3 | parameters, gradients, and optimizer state | $P_\theta(b_w+b_g+b_o)/D$ |
+
+Here, $P_\theta$ is the parameter count; $b_w$, $b_g$, and $b_o$ are the bytes
+per parameter used by working parameters, gradients, and all optimizer-related
+state; and $D$ is the data-parallel degree. For one common Adam recipe,
+$b_w=2$, $b_g=2$, and $b_o=12$: a two-byte working parameter and gradient,
+plus a four-byte master parameter and two four-byte moments. That recipe uses
+$16P_\theta$ bytes before activations and temporary storage, but these dtypes
+are choices rather than constants of Adam.
+
+The table is a *persistent-state* estimate, not a peak-memory estimate. Under
+full sharding, a wrapped module's parameters are gathered before computation
+and gradients are reduced and scattered afterward. A useful lower bound is
+
+$$
+M_{\mathrm{peak}}
+\gtrsim
+\frac{P_\theta(b_w+b_g+b_o)}{D}
++ P_u b_w + M_{\mathrm{act}} + M_{\mathrm{tmp}}.
+$$
+
+Here, $P_u$ is the number of parameters simultaneously materialized by the
+current and prefetched units, $M_{\mathrm{act}}$ is saved activation memory,
+and $M_{\mathrm{tmp}}$ covers communication workspaces, allocator overhead,
+padding, and other temporary buffers. PyTorch @gls-fsdp applies this full
+sharding idea to wrapped modules and can prefetch a later unit's parameters
+while the current one computes [@zhao2023pytorch]. ZeRO-Infinity extends the
+memory hierarchy to CPU memory and NVMe storage [@rajbhandari2021zeroinfinity].
+
+More sharding does not make communication disappear. In the element-volume
+model used by the ZeRO paper, DDP and stages 1 and 2 move roughly two model
+copies per step, while stage 3 moves roughly three because parameters are
+gathered for both forward and backward computation [@rajbhandari2019zero].
+Per-device state falls as $1/D$; parameter-gather payload per device approaches
+one model copy as $D$ grows, while latency and topology can still make a larger
+group slower.
+
+## Four more ways to divide the work
+
+Data parallelism is only one axis. A model that still does not fit, or whose
+layers do not run efficiently on one device, needs other cuts.
+
+### Tensor parallelism: split a layer
+
+*Tensor parallelism (TP)* divides matrix multiplications within a layer. For a
+feed-forward block with input $X$, the paired column and row partition is
+
+$$
+H_r=\phi(XW_1^{(r)}),
+\qquad
+Z=\sum_{r=1}^{T}H_rW_2^{(r)}.
+$$
+
+Here, $T$ is the tensor-parallel degree; $r$ indexes its ranks; $W_1^{(r)}$ is
+a column shard of the first projection; $W_2^{(r)}$ is the matching row shard
+of the second projection; $\phi$ is the activation function; and the sum that
+forms $Z$ requires a reduction. Attention can similarly shard query, key, and
+value heads, then row-shard the output projection.
+
+Megatron-LM's original layout arranges the attention and feed-forward blocks so
+that each Transformer layer has two all-reduces in its forward pass and the
+corresponding reductions in backward [@shoeybi2019megatron]. TP lowers
+per-rank parameters and arithmetic, but places communication on the critical
+path of every layer. It is therefore usually mapped to the fastest fabric
+domain available. That is a placement rule, not a law: whether a TP group may
+cross nodes depends on message size, topology, and the performance target.
+
+### Pipeline parallelism: split the layer stack
+
+*Pipeline parallelism (PP)* assigns consecutive groups of layers to stages and
+streams micro-batches through them. Stage boundaries carry activations forward
+and their gradients backward. The stages need not coincide with nodes.
+
+At the start and end of a synchronous flush schedule, some stages are idle. For
+balanced stages with negligible communication, GPipe's idealized idle fraction
+is [@huang2019gpipe]
+
+$$
+f_{\mathrm{bubble}}=\frac{p-1}{m+p-1}.
+$$
+
+Here, $p$ is the number of pipeline stages, $m$ is the number of micro-batches
+per replica per optimizer step, and $f_{\mathrm{bubble}}$ is the fraction of
+aggregate stage slots left idle by fill and drain. This denominator matters:
+the often-quoted $(p-1)/m$ is bubble time relative to ideal compute time, not
+the fraction of total stage capacity.
 
 ```{dot}
 //| label: fig-training-bubble
-//| fig-cap: "Pipeline bubble over four stages and four micro-batches: the fill at the start and the drain at the end leave stages idle. After Huang et al., 2019."
+//| fig-cap: "One forward wave through four balanced pipeline stages. Colored cells are micro-batch work; blank cells are the fill and drain slots counted by the ideal GPipe bubble model. A full training schedule also sends activation gradients backward."
 digraph bubble {
   bgcolor="transparent";
   rankdir=LR;
   node [shape=plaintext, fontname="Helvetica", fontcolor="#6b7280"];
   t [label=<
     <table border="0" cellborder="1" cellspacing="0" cellpadding="6" color="#6b7280">
-      <tr><td bgcolor="#f1ece1"><b>time</b></td><td bgcolor="#f1ece1">1</td><td bgcolor="#f1ece1">2</td><td bgcolor="#f1ece1">3</td><td bgcolor="#f1ece1">4</td><td bgcolor="#f1ece1">5</td><td bgcolor="#f1ece1">6</td><td bgcolor="#f1ece1">7</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>slot</b></td><td bgcolor="#f1ece1">1</td><td bgcolor="#f1ece1">2</td><td bgcolor="#f1ece1">3</td><td bgcolor="#f1ece1">4</td><td bgcolor="#f1ece1">5</td><td bgcolor="#f1ece1">6</td><td bgcolor="#f1ece1">7</td></tr>
       <tr><td bgcolor="#f1ece1"><b>stage 1</b></td><td bgcolor="#dbeafe">mb1</td><td bgcolor="#dbeafe">mb2</td><td bgcolor="#dbeafe">mb3</td><td bgcolor="#dbeafe">mb4</td><td>idle</td><td>idle</td><td>idle</td></tr>
       <tr><td bgcolor="#f1ece1"><b>stage 2</b></td><td>idle</td><td bgcolor="#dbeafe">mb1</td><td bgcolor="#dbeafe">mb2</td><td bgcolor="#dbeafe">mb3</td><td bgcolor="#dbeafe">mb4</td><td>idle</td><td>idle</td></tr>
       <tr><td bgcolor="#f1ece1"><b>stage 3</b></td><td>idle</td><td>idle</td><td bgcolor="#dbeafe">mb1</td><td bgcolor="#dbeafe">mb2</td><td bgcolor="#dbeafe">mb3</td><td bgcolor="#dbeafe">mb4</td><td>idle</td></tr>
@@ -80,117 +174,208 @@ digraph bubble {
 }
 ```
 
-*Data parallelism (DP)* replicates the model and shards the batch across
-replicas; each replica computes gradients on its slice and an all-reduce
-averages them. Plain DP does not save memory, since every replica holds a
-full copy. @gls-zero observed that the optimizer state, gradients, and parameters
-in standard DP are redundantly replicated, and sharded them across the DP
-group in three progressive stages [@rajbhandari2019zero]; ZeRO-Infinity
-extended the idea to offload onto CPU and NVMe [@rajbhandari2021zeroinfinity],
-and PyTorch @gls-fsdp is the native version of the same full sharding idea,
-gathering each layer's weights only when that layer runs
-[@zhao2023pytorch]. Sharding drops per-device memory without changing the
-math: a layer's parameters are all-gathered just before they are needed and
-freed right after. This is the sharding @sec-scaling-laws points to when it
-notes that the optimizer state is the dominant memory term.
+The formula is useful for sizing, not prediction. Unequal stage times,
+communication, optimizer work, and alternative schedules change the result.
+A 1F1B schedule can reduce saved activation memory without changing this
+ideal bubble; interleaved schedules can reduce the bubble but send more
+point-to-point messages [@narayanan2021efficient]. PipeDream explores
+asynchronous schedules and weight versions, a different optimizer-semantics
+tradeoff from GPipe's synchronous flush [@narayanan2019pipedream].
 
-*Sequence and context parallelism (SP/CP)* shard along the sequence
-dimension, the axis that activation memory lives on. SP splits the parts of a
-layer that TP leaves replicated, the norms and dropouts, along the sequence to
-cut activation memory, introduced alongside selective recomputation that
-redoes only the cheap-to-redo, memory-heavy operations rather than the whole
-layer [@korthikanti2022reducing]. CP, of which ring attention is the canonical
-form, shards the attention computation itself so a context too long for one
-device can be processed in blocks that pass key and value tiles around a ring,
-letting the context grow nearly without bound [@liu2023ring].
+![Ideal GPipe bubble fraction for balanced synchronous flush schedules. The model assumes equal stage times and negligible communication; it is not measured throughput.](/figures/training-at-scale-1.svg){#fig-training-at-scale-1}
 
-For each axis the design question is the same: what does it shard, what does
-it cost in communication, and which tier of the interconnect can it afford to
-use. @fig-training-axes lays the answers side by side.
+The calculation below makes the scale of the bubble concrete. For 32 stages
+and 32 micro-batches, nearly half of aggregate stage capacity is still idle in
+this idealized schedule.
+
+:::: {.runnable}
+```python
+def bubble_fraction(stages, microbatches):
+    """Balanced GPipe flush schedule; communication is ignored."""
+    if stages < 1 or microbatches < 1:
+        raise ValueError("stages and microbatches must be positive")
+    return (stages - 1) / (microbatches + stages - 1)
+
+
+for stages in (4, 8, 16, 32):
+    values = {
+        microbatches: round(bubble_fraction(stages, microbatches), 3)
+        for microbatches in (1, 4, 8, 16, 32, 64)
+    }
+    print(f"p={stages}: {values}")
+
+print("p=32, m=32:", f"{bubble_fraction(32, 32):.1%}")
+```
+::::
+
+```{=html}
+<figure id="fig-training-at-scale-pipeline-bubble">
+<div class="viz" data-viz="pipeline-bubble"></div>
+<figcaption>The ideal GPipe bubble for a balanced synchronous flush schedule with negligible communication. Increase the stage count or micro-batch count to inspect the formula; a real trace can be worse because stages are unequal and messages take time.</figcaption>
+</figure>
+```
+
+### Sequence parallelism and context parallelism: split tokens
+
+These names describe related but distinct mechanisms. Megatron-style
+*sequence parallelism (SP)* shards the layer-normalization, dropout, and other
+regions that TP otherwise replicates along the sequence dimension. It reuses
+the TP group and replaces selected all-reduces with reduce-scatter and
+all-gather pairs; it is not usually another multiplier in the device mesh
+[@korthikanti2022reducing]. Selective activation recomputation complements SP
+by recomputing operations that are cheap relative to the memory they save.
+
+*Context parallelism (CP)* divides the sequence through attention itself. Each
+rank owns local queries and passes or gathers key/value blocks needed to compute
+exact attention. Ring Attention streams those blocks around a ring while using
+an online softmax [@liu2023ring]; all-to-all designs are another option. CP
+reduces local sequence storage, but dense attention still performs
+$O(L^2)$ global arithmetic for context length $L$. Maximum context remains
+bounded by aggregate memory, communication, device count, and the degree to
+which communication can overlap computation.
+
+### Expert parallelism: split conditional parameters
+
+Mixture-of-experts models add *expert parallelism (EP)*. Tokens are routed to
+the ranks that hold their selected experts and the outputs are returned to the
+original token owners, commonly with all-to-all communication
+[@lepikhin2020gshard]. A forward pass often has a dispatch and a combine
+exchange; backward sends the corresponding gradient traffic. Hot experts cause
+stragglers, so routing locality, load balance, optional capacity padding, and
+dropless kernels are systems concerns as well as modeling choices. The routing
+objective itself is covered in @sec-moe-ssm-hybrids.
+
+@fig-training-axes summarizes what each axis moves. The collective names are
+common implementations, not promises: frameworks can fuse, decompose, or
+schedule them differently.
 
 ```{dot}
 //| label: fig-training-axes
-//| fig-cap: "The four parallelism axes plus expert parallelism, each by what it shards, the collective it runs, and the interconnect tier it can afford."
+//| fig-cap: "Parallelism axes by the state they divide and the communication they commonly introduce. SP usually reuses the TP group; the other degrees may form independent mesh dimensions."
 digraph axes {
   bgcolor="transparent";
   rankdir=LR;
   node [shape=plaintext, fontname="Helvetica", fontcolor="#6b7280"];
   t [label=<
-    <table border="0" cellborder="1" cellspacing="0" cellpadding="10" color="#6b7280">
-      <tr><td bgcolor="#f1ece1"><b>Axis</b></td><td bgcolor="#f1ece1"><b>Shards</b></td><td bgcolor="#f1ece1"><b>Collective</b></td><td bgcolor="#f1ece1"><b>Interconnect tier</b></td></tr>
-      <tr><td>DP / ZeRO</td><td>batch, optimizer state</td><td>all-reduce, reduce-scatter, all-gather</td><td>across nodes</td></tr>
-      <tr><td>TP</td><td>matmuls in a layer</td><td>all-reduce per layer</td><td>inside node, NVLink</td></tr>
-      <tr><td>PP</td><td>layer-stack stages</td><td>point-to-point activations</td><td>across nodes</td></tr>
-      <tr><td>SP / CP</td><td>sequence dimension</td><td>all-gather, ring exchange</td><td>with TP or across nodes</td></tr>
-      <tr><td>EP</td><td>experts</td><td>all-to-all dispatch and combine</td><td>own all-to-all group</td></tr>
+    <table border="0" cellborder="1" cellspacing="0" cellpadding="9" color="#6b7280">
+      <tr><td bgcolor="#f1ece1"><b>Axis</b></td><td bgcolor="#f1ece1"><b>Divides</b></td><td bgcolor="#f1ece1"><b>Common communication</b></td></tr>
+      <tr><td>DDP</td><td>batch; model state replicated</td><td>gradient all-reduce</td></tr>
+      <tr><td>ZeRO-3 / full-shard FSDP</td><td>batch and all persistent model state</td><td>parameter all-gather, gradient reduce-scatter</td></tr>
+      <tr><td>TP</td><td>matrix multiplications within a layer</td><td>all-reduce or reduce-scatter/all-gather</td></tr>
+      <tr><td>PP</td><td>consecutive layer groups</td><td>point-to-point activations and gradients</td></tr>
+      <tr><td>SP</td><td>TP-replicated activation regions</td><td>reduce-scatter and all-gather on TP group</td></tr>
+      <tr><td>CP</td><td>sequence through attention</td><td>key/value ring exchange or all-to-all</td></tr>
+      <tr><td>EP</td><td>expert parameters and routed tokens</td><td>dispatch and combine all-to-all</td></tr>
     </table>
   >];
 }
 ```
 
-Mixture-of-experts layers add a fifth cut. The experts are sharded across
-devices, and each token is dispatched to its chosen experts by an all-to-all
-collective, then the results are combined back by a second all-to-all, the
-dispatch pattern traced to GShard [@lepikhin2020gshard]. The systems layer
-owns only this execution: the two all-to-all exchanges per MoE layer, the
-load-imbalance stragglers when a hot expert draws more than its share of
-tokens, the capacity padding that bounds per-expert work, and the overlap of
-dispatch and combine with expert compute. The routing decision and the
-load-balancing loss that *create* this traffic pattern belong to
-@sec-moe-ssm-hybrids.
+## Map the cuts onto the network
 
-## Paying in bits: the precision axis
+For independent data, tensor, pipeline, and context dimensions, a dense-model
+mesh satisfies
 
-The arithmetic does not need to run in fp32. Mixed precision keeps the
-forward and backward matmuls and the activations in bf16, while holding an
-fp32 master copy of the weights and fp32 optimizer state so that small updates
-do not vanish when added to a large weight, the recipe established by
-Micikevicius et al. [@micikevicius2017mixed]. bf16's wide exponent is what
-makes this safe: it retired the loss scaling (multiplying gradients up so the
-small ones do not underflow) that fp16 needed to keep gradients off the floor
-of its narrow range.
+$$
+N = D T p C.
+$$
 
-fp8 (the E4M3 and E5M2 formats) pushes the matmuls further on Hopper-class and
-newer hardware, roughly doubling matmul throughput and halving the memory the
-operands occupy; the formats paper defined E4M3 and E5M2 for the generation
-that made fp8 matmuls native [@micikevicius2022fp8]. The price is range: fp8
-has so few exponent bits that the operands must be rescaled per tensor, or
-more finely, to keep values inside the representable band. It is applied
-selectively, the matmuls in fp8 while the numerically sensitive operations,
-the normalizations, residual adds, and the attention softmax, stay in higher
-precision. Pushed too far, fp8 does not crash; it quietly costs quality, which
-is what makes it hard to use well.
+Here, $N$ is the world size, $D$ the data-parallel degree, $T$ the
+tensor-parallel degree, $p$ the number of pipeline stages, and $C$ the
+context-parallel degree. SP normally shares the $T$ group. EP is
+model-dependent: its group may be carved from or overlap another mesh
+dimension, so blindly multiplying by an expert degree can double-count
+devices.
 
-That boundary has since moved. DeepSeek-V3 trained at frontier scale with fp8
-matmuls in late 2024, which settled that the format can carry a full
-pre-training run [@deepseek2024deepseekv3]. The live edge is now four bits.
-fp4 formats such as NVFP4 and MXFP4 are microscaling formats: values are
-stored in four bits, and each small block of them, sixteen or thirty-two
-values, carries its own scale factor to recover locally the range four bits
-cannot hold, with Blackwell-class hardware running the four-bit matmul
-natively. NVIDIA has trained a 12B model over ten trillion tokens in NVFP4 to
-match an fp8 baseline, leaning on Hadamard transforms and stochastic rounding
-to keep the narrow format unbiased [@nvidia2025nvfp4], and the design space of
-what makes four-bit training hold together is being mapped systematically
-[@hu2025fp4]. The hardware side of this bet, why the compute frontier wants
-fewer operand bytes at all, is @sec-compute-frontier's subject.
+The placement principle is simple: put the most frequent and
+latency-sensitive exchanges inside the fastest fabric domain. TP often gets
+that domain because it communicates inside every layer. EP needs strong
+bisection bandwidth for all-to-all traffic. PP message size depends on the
+boundary activation, while ZeRO-3/FSDP repeatedly gathers parameters. Which
+axis crosses a node or rack boundary is therefore a measurement-driven choice,
+not a fixed hierarchy [@narayanan2021efficient].
 
-@fig-training-precision shows why the exponent bits matter. bf16 keeps fp32's
-eight exponent bits, so it spans the same dynamic range and never needed fp16's
-loss scaling; fp8 spends its few bits on a tradeoff between range (E5M2) and
-precision (E4M3). fp4's E2M1 layout is the floor: one mantissa bit, two
-exponent bits, and the per-block scale factor carrying the rest.
+```{dot}
+//| label: fig-training-mesh
+//| fig-cap: "A device mesh is a set of communication groups over the same workers. Frequent TP exchanges are usually placed on the fastest links; DP, PP, CP, and EP placement depends on payload, topology, and available overlap."
+digraph mesh {
+  bgcolor="transparent";
+  rankdir=LR;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1"];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
+  workers [label="N accelerators"];
+  groups [label="logical groups\nDP × TP × PP × CP"];
+  topology [label="physical fabric\nlinks, switches, failure domains"];
+  profile [label="measured step\ncompute, exposed communication, stalls"];
+  workers -> groups [label="assign ranks"];
+  groups -> topology [label="place groups"];
+  topology -> profile [label="run and trace"];
+  profile -> groups [label="revise layout"];
+}
+```
+
+Collectives have different semantics. An all-reduce reduces values and gives
+every rank the result. A reduce-scatter reduces and leaves each rank one shard.
+An all-gather concatenates shards on every rank. An all-to-all sends a distinct
+shard to each peer. PP mostly uses point-to-point send and receive. Libraries
+such as NCCL implement several algorithms for these operations and select among
+them according to the hardware and message shape [@nvidia2024nccl].
+
+Communication is necessary work, but only its *exposed* part extends the step's
+critical path. FSDP can gather the next unit while the current unit computes;
+gradient buckets can reduce during backward; PP and EP messages can overlap
+nearby kernels. Overlap is not free: communication may contend with compute for
+memory bandwidth, execution resources, or the network. A step trace, rather
+than a list of enabled flags, shows whether the overlap worked.
+
+::: {.callout-tip}
+## Lower-layer constraint
+
+The physical network limits the logical mesh. Link bandwidth and latency,
+switch oversubscription, routing, and failure domains determine which groups
+can communicate frequently without stalling. The accelerator and fabric model
+described in @sec-accelerators-networking must therefore be part of every
+parallel-layout benchmark. A mesh tuned on one cluster is not automatically
+portable to another.
+:::
+
+## Choose numerical formats per operation
+
+Mixed precision is not one global dtype. A common recipe performs large matrix
+multiplications in a low-precision format, accumulates reductions more
+carefully, and keeps sensitive operations or optimizer state in a wider format.
+The original mixed-FP16 recipe used FP32 master parameters, FP32 accumulation,
+and loss scaling [@micikevicius2017mixed]. BF16 has eight exponent bits and
+therefore roughly FP32's normal range, so it usually avoids FP16's loss scaling;
+its seven fraction bits still make accumulation and small updates precision
+problems.
+
+FP8 offers two common layouts: E4M3 spends more bits on precision, while E5M2
+spends more on range [@micikevicius2022fp8]. Values must be scaled into the
+representable interval, and the scaling granularity, whether tensor, tile, or block, is
+part of the recipe. Hopper-class hardware can have twice BF16's peak dense
+matmul rate for FP8 and FP8 operands use half as many payload bytes, but casts,
+scale metadata, non-matmul work, and retained high-precision state reduce the
+end-to-end gain.
+
+DeepSeek-V3 demonstrated a full pre-training run whose core matrix
+multiplications used FP8, while several sensitive operations and outputs stayed
+in BF16 or FP32 [@deepseek2024deepseekv3]. A later NVIDIA experiment trained a
+12B model for ten trillion tokens with NVFP4 and reported results comparable to
+an FP8 baseline, using fine-grained scaling, Hadamard transforms, stochastic
+rounding, and selective higher precision [@nvidia2025nvfp4]. These are measured
+recipes, not evidence that every model or operation can be lowered safely.
 
 ```{=html}
 <figure id="fig-training-at-scale-float-bits">
 <div class="viz" data-viz="float-bits"></div>
-<figcaption>Where each format spends its bits. After one sign bit, the rest split between exponent (dynamic range) and mantissa (precision). bf16 keeps fp32's eight exponent bits, so it spans the same range and skips fp16's loss scaling; fp8 has so few exponent bits it must rescale per tensor, and E5M2 buys range while E4M3 buys precision. Pick a format to see the split. Illustrative.</figcaption>
+<figcaption>Where each floating-point format spends its bits. Exponent width controls range; mantissa width controls precision. Block-scaled FP4 formats attach additional scale metadata that this value-level layout does not show.</figcaption>
 </figure>
 ```
 
 ```{dot}
 //| label: fig-training-precision
-//| fig-cap: "Bit layouts of the training precisions. Sign, exponent, and mantissa fields drawn to width. bf16 inherits fp32's eight exponent bits, which is why it spans the same range without loss scaling. fp4's E2M1 keeps almost none, which is why the microscaling formats attach a scale factor to each small block of values."
+//| fig-cap: "Value-level bit layouts used in training. A complete numerical recipe also specifies accumulation dtypes, scaling granularity and history, and which operations remain in higher precision."
 digraph precision {
   bgcolor="transparent";
   rankdir=LR;
@@ -198,253 +383,153 @@ digraph precision {
   t [label=<
     <table border="0" cellborder="1" cellspacing="0" cellpadding="5" color="#6b7280">
       <tr><td bgcolor="#f1ece1"><b>format</b></td><td bgcolor="#f1ece1"><b>sign</b></td><td bgcolor="#f1ece1"><b>exponent</b></td><td bgcolor="#f1ece1"><b>mantissa</b></td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp32</b></td><td>1</td><td bgcolor="#dbeafe">8 bits</td><td>23 bits</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp16</b></td><td>1</td><td bgcolor="#dbeafe">5 bits</td><td>10 bits</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>bf16</b></td><td>1</td><td bgcolor="#dbeafe">8 bits</td><td>7 bits</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp8 E4M3</b></td><td>1</td><td bgcolor="#dbeafe">4 bits</td><td>3 bits</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp8 E5M2</b></td><td>1</td><td bgcolor="#dbeafe">5 bits</td><td>2 bits</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp4 E2M1</b></td><td>1</td><td bgcolor="#dbeafe">2 bits</td><td>1 bit</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP32</b></td><td>1</td><td bgcolor="#dbeafe">8</td><td>23</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP16</b></td><td>1</td><td bgcolor="#dbeafe">5</td><td>10</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>BF16</b></td><td>1</td><td bgcolor="#dbeafe">8</td><td>7</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP8 E4M3</b></td><td>1</td><td bgcolor="#dbeafe">4</td><td>3</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP8 E5M2</b></td><td>1</td><td bgcolor="#dbeafe">5</td><td>2</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP4 E2M1</b></td><td>1</td><td bgcolor="#dbeafe">2</td><td>1</td></tr>
     </table>
   >];
 }
 ```
 
-## Hiding the traffic
-
-Every cut above generates traffic, and that traffic runs through a small set
-of collectives: all-reduce, reduce-scatter, all-gather, and all-to-all. NCCL
-(RCCL on AMD) implements them and maps each onto the topology, choosing a ring
-or a tree algorithm and routing over NVLink within a node or the network
-between nodes [@nvidia2024nccl].
-
-The collectives are pure overhead unless they run while the device is doing
-something else, so overlap is the central throughput technique. FSDP prefetches
-the next layer's parameters with an all-gather while the current layer
-computes [@zhao2023pytorch]. The gradient reduce-scatter is folded into the
-backward pass, PP communication into stage compute, and EP all-to-all into the
-expert matmuls. Whatever cannot be hidden is exposed communication, and it shows
-up directly as lost throughput.
-
-Model FLOPs utilization is the scoreboard that says whether the overlap
-worked. It is achieved FLOPs over peak hardware FLOPs, counting only the FLOPs
-the model mathematically requires. It is distinct from hardware FLOPs
-utilization (HFU), which also counts the redundant FLOPs of activation
-recomputation, so HFU exceeds MFU whenever recomputation is on. MFU is the
-single number that says the systems work is done, and its budget is a sum of
-losses: exposed communication, the pipeline bubble, recomputation, and unfused
-kernels each take a slice. A low MFU is diagnosed from a per-step timeline, not
-from the loss curve. It is the thread that ties the whole teardown together,
-since every cut and every precision choice ends up scored here.
+A robust update has an explicit order: accumulate all micro-batches; unscale
+FP16 gradients if loss scaling is active; check finite values across all ranks;
+compute any global gradient norm over the logical, fully sharded gradient; clip
+if configured; then update every shard or skip the update everywhere. Scaling
+state, including FP8 amax history or a dynamic loss scaler, belongs in the
+checkpoint. Narrow formats can cause underflow, saturation, Inf/NaN values,
+skipped steps, divergence, or quiet quality drift. Validation must look for all
+of them.
 
 ::: {.callout-important}
 ## What's contested
-How low training precision can go is unsettled, but the question's frontier
-has moved. bf16 is the conservative default; fp8 became the workhorse once
-DeepSeek-V3 carried it through a frontier-scale run [@micikevicius2022fp8;
-@deepseek2024deepseekv3]; and the live boundary is now fp4, where NVFP4-class
-microscaling and Blackwell's native four-bit matmuls make the throughput case
-but the recipes are young [@nvidia2025nvfp4; @hu2025fp4]. The disagreement is
-the same at every rung: which operations can move down, how fine the scaling
-must be, and how many trillions of tokens a run can sustain before the
-narrowed range costs final quality. The failure mode is what makes this hard
-to settle empirically: precision pushed too far does not crash, it quietly
-degrades the model, so the cost is invisible until a late evaluation. Treat
-the boundary as a per-operation, per-recipe choice that must be validated, not
-a setting you can copy.
+
+The lowest reliable training format remains recipe-dependent. Published FP8
+and FP4 runs establish that particular models, scaling rules, accumulation
+paths, and hardware can work; they do not establish a universal precision
+floor. The useful question is therefore not "Does FP4 work?" but "Which tensors
+and operations can use this format for this run, under which validation
+thresholds?"
 :::
 
-::: {.callout-tip}
-## Constraint arrow
-The interconnect dictates the parallelism layout. Tensor parallelism needs an
-all-reduce on the critical path of every layer, which is only affordable over
-the fastest links, so the size of the NVLink domain sets the maximum TP group;
-beyond it, TP traffic crosses the network and stalls [@shoeybi2019megatron].
-Pipeline and data parallelism, which move less and can hide it, are the axes
-that span nodes, and expert parallelism gets its own all-to-all group. The
-bandwidth hierarchy of @sec-accelerators-networking is therefore upstream of
-every mesh decision in this chapter: a lower layer's wires decide which split
-an upper layer may use where.
-:::
+## Measure throughput without hiding assumptions
 
-## Turning the dials
+Model FLOPs utilization (MFU) compares observed model work with a stated
+hardware peak [@chowdhery2022palm]:
 
-Each axis spends a different resource, and the layout that wins is the one
-that hides the most communication under compute for a specific model shape on
-a specific interconnect. By 2021 the axes were being combined deliberately:
-the PTD-P work mapped data, tensor, and pipeline parallelism onto a single GPU
-cluster as a composed 3D layout, establishing the ordering that frontier runs
-still follow [@narayanan2021efficient]. The dials below are what an engineer
-actually turns inside that layout.
+$$
+\mathrm{MFU}=
+\frac{r_{\mathrm{tok}}F_{\mathrm{model,tok}}}
+     {N P_{\mathrm{peak}}}.
+$$
 
-- **Parallelism layout, and its non-portability.** TP cuts per-device memory
-  and latency but burns intra-node bandwidth, so it caps at the NVLink domain.
-  PP is bandwidth-cheap but pays a pipeline bubble, mitigated by more
-  micro-batches and interleaved schedules [@narayanan2019pipedream], with
-  diminishing returns once the bubble is already small (@fig-training-at-scale-1). DP and
-  ZeRO scale the batch, but the optimizer-state shard and the all-gather
-  traffic grow with the DP degree [@rajbhandari2019zero]. The right layout is
-  not portable: change the model size, the sequence length, or the cluster,
-  and the optimum moves.
+Here, $r_{\mathrm{tok}}$ is aggregate observed tokens per second,
+$F_{\mathrm{model,tok}}$ is the forward-plus-backward FLOP count required by
+the model per token, $N$ is the accelerator count, and $P_{\mathrm{peak}}$ is
+the matching-precision peak FLOP rate of one accelerator. The report must state
+the FLOP convention, how active MoE parameters and padding are treated, the
+precision peak used, and the measurement window.
 
-![Schematic illustration of how the pipeline bubble fraction shrinks as the number of micro-batches per step grows, for several stage counts, after Huang et al. (2019) and Narayanan et al. (2021). Idealized fraction (p-1)/(m+p-1); not measured data. The gain is steep at first and flattens, so beyond a handful of micro-batches more buys little.](/figures/training-at-scale-1.svg){#fig-training-at-scale-1}
+Hardware FLOPs utilization (HFU) instead counts executed FLOPs, including
+activation recomputation. HFU can therefore exceed MFU even when useful-token
+throughput is unchanged. Neither metric proves training quality or reliability.
+Steady-state MFU commonly excludes restart time; end-to-end goodput should also
+charge failed steps, checkpoints, evaluation pauses, and input stalls.
 
-Run the exact formula and watch the diminishing returns: change the stage counts or the range of micro-batches and see where the curve flattens.
+When MFU is low, inspect a trace before changing the mesh. The usual causes are
+small or poorly shaped kernels, stage imbalance, exposed communication,
+excessive recomputation, input stalls, and synchronization behind a straggler.
+Peak memory, collective duration by group, tokens per second, step-time tails,
+and time lost to recovery complete the operational picture.
 
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
+## Make restart a correctness property
 
-m = np.arange(1, 33)  # micro-batches per step
-for p in [4, 8, 16, 32]:  # pipeline stages
-    bubble = (p - 1) / (m + p - 1)
-    plt.plot(m, bubble, marker="o", markersize=3, label=f"p={p} stages")
+In an ordinary synchronous job, one failed rank invalidates its communicators.
+Elastic launchers generally stop and rebuild the worker group, then load a
+committed checkpoint; they do not hot-swap one device into a running collective.
+The control sequence is: detect the lack of progress, abort communication,
+fence or quarantine the suspect worker, replace capacity, rendezvous, rebuild
+groups, load a validated checkpoint, verify the data cursor, and resume.
 
-print("p=8 stages:", {int(mm): round((8 - 1) / (mm + 8 - 1), 3) for mm in [1, 4, 8, 16, 32]})
-plt.xlabel("micro-batches per step (m)")
-plt.ylabel("pipeline bubble fraction")
-plt.title("Bubble fraction (p-1)/(m+p-1)")
-plt.legend()
-plt.grid(alpha=0.3)
-plt.show()
-```
-::::
+A recoverable checkpoint is an atomic set, not merely a parameter file. It
+contains model and any master parameters; optimizer tensors and step;
+learning-rate state; loss-scaler and low-precision scale history; per-rank RNG
+state; sampler, shuffle, data-mixture counters, and cursor; plus a shard
+manifest, checksums, and a completion marker. Saving at an optimizer-step
+boundary avoids storing partially accumulated gradients. Keep more than the
+latest checkpoint because a numerically damaged state may already have been
+saved.
 
-```{=html}
-<figure id="fig-training-at-scale-pipeline-bubble">
-<div class="viz" data-viz="pipeline-bubble"></div>
-<figcaption>The pipeline bubble. Stages process micro-batches in a wavefront, idle during the fill and drain at each end, so the bubble fraction is (p-1)/(m+p-1). Add stages and the idle wedge grows; add micro-batches per step and it shrinks, steeply at first then flattening, which is why a handful of micro-batches is usually enough. Illustrative.</figcaption>
-</figure>
-```
+There are two legitimate resume contracts. *Deterministic replay* attempts the
+same batches and random draws and usually requires the same topology plus
+deterministic kernels. *Coverage-equivalent resume* may reshard onto a different
+world size while preserving which data is consumed overall. It need not be
+bitwise identical. State the contract and test it.
 
-- **Memory versus compute.** Activation and gradient checkpointing trade extra
-  forward FLOPs in the backward pass for lower peak activation memory.
-  Selective recomputation redoes only the cheap, memory-heavy operations
-  [@korthikanti2022reducing]. More recomputation lets you fit a bigger model
-  or a longer sequence, at the cost of MFU, which is exactly why HFU exceeds
-  MFU when recompute is on.
-- **Precision versus stability.** bf16 is the safe default, and fp32 master
-  weights are non-negotiable for the optimizer [@micikevicius2017mixed]. fp8
-  is the proven workhorse: it buys throughput and memory but narrows range, so
-  it is applied with per-tensor or finer scaling and kept away from the
-  sensitive operations [@micikevicius2022fp8; @deepseek2024deepseekv3]. fp4 is
-  the live boundary, affordable only with per-block scaling and the newest
-  hardware [@nvidia2025nvfp4]. Pushed too far, any of them produces silent
-  quality loss, not a crash.
-- **Checkpoint cadence.** Frequent checkpoints shrink the work lost per
-  failure but tax storage bandwidth and can stall the run. Asynchronous and
-  sharded checkpointing is what makes a short cadence affordable, and the
-  optimum depends on cluster mean time between failures and write cost
-  [@mohan2021checkfreq].
+Checkpoint cadence trades write cost against repeated work. A first-order
+fail-stop model gives
 
-## Laying out a real run, and how it breaks
+$$
+W(\tau)\approx\frac{C}{\tau}+\frac{\tau}{2M},
+\qquad
+\tau^\star\approx\sqrt{2CM}.
+$$
 
-### Composing the axes
+Here, $W(\tau)$ is the expected fraction of time lost to checkpointing and
+recomputation, $\tau$ is useful compute time between checkpoints, $C$ is the
+exposed checkpoint cost, $M$ is the synchronized job's mean time between
+interruptions, and $\tau^\star$ is the approximate minimizing interval
+[@daly2006higher]. The approximation assumes independent fail-stop events and
+omits correlated outages, recovery delay, and storage contention. Asynchronous
+checkpointing lowers exposed $C$, but still consumes device links, host memory,
+network capacity, and storage bandwidth. CheckFreq demonstrates adaptive
+cadence and pipelined snapshot/persist phases rather than a free write
+[@mohan2021checkfreq].
 
-A frontier run maps the device mesh as a product of axes, conventionally
-(DP x TP x PP), adding EP for MoE and layering SP on top of TP. The ordering
-rule of thumb follows directly from the constraint arrow and from the PTD-P
-result: put TP inside a node under NVLink, run PP and DP across nodes where
-their cheaper communication can hide, and give EP its own all-to-all group
-[@narayanan2021efficient]. The layout is co-designed with the model shape from
-@sec-transformer-architecture and @sec-moe-ssm-hybrids, and it shifts with
-model size, sequence length, and interconnect.
+## Verify the layout before a long run
 
-@fig-training-mesh sketches the conventional placement.
+A distributed configuration is ready only after it passes small, deliberate
+tests:
 
-```{dot}
-//| label: fig-training-mesh
-//| fig-cap: "The conventional device-mesh placement: communication-heavy TP and SP stay inside a node under NVLink, while the cheaper-to-hide DP, PP, and EP span nodes."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_across {
-    label="Across nodes"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    DP [label="DP / ZeRO-FSDP: shard batch and optimizer state"];
-    PP [label="PP: layer-stack stages, stream micro-batches"];
-    EP [label="EP: experts sharded, all-to-all dispatch/combine"];
-  }
-  subgraph cluster_node {
-    label="Inside a node under NVLink"; labelloc="b"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    TP [label="TP: shard matmuls, all-reduce per layer"];
-    SP [label="SP: shard sequence dim, cut activation memory"];
-  }
-  DP -> TP;
-  PP -> TP;
-  TP -> SP;
-}
-```
+- **Update equivalence:** on a tiny deterministic batch, compare the unsharded
+  and sharded loss, gradients, and one optimizer update within a stated
+  tolerance.
+- **Memory accounting:** measure persistent, peak, and temporary memory while
+  sweeping micro-batch and sequence length. Confirm that the wrapped-unit and
+  prefetch assumptions match the trace.
+- **Communication accounting:** profile each group and identify exposed rather
+  than merely total communication. Test the planned cross-node boundaries.
+- **Numerical stability:** compare a higher-precision control with the proposed
+  per-operation recipe; record nonfinite tensors, skipped steps, pre-clip
+  gradient norms, clipped-step frequency, and evaluation drift.
+- **Restart correctness:** kill a worker during compute and during checkpoint
+  persistence. Reject incomplete manifests, restore the declared data contract,
+  and compare the resumed trajectory with the control.
+- **Goodput:** run long enough to include checkpoints, input loading, and at
+  least one recovery. Report useful tokens per wall-clock second alongside MFU.
 
-### Frameworks
+FlashAttention illustrates why every layer of this accounting matters. It
+computes exact attention without materializing the full score matrix in HBM
+[@dao2022flashattention]. For batch size $B$, head count $H$, context length
+$L$, and $b$ bytes per score element, materializing the scores alone would use
 
-The frameworks differ mostly in which layout and which hardware each makes
-ergonomic. Megatron-LM and Megatron-Core carry TP, PP, SP, and EP on the
-NVIDIA stack [@shoeybi2019megatron]. DeepSpeed packages ZeRO and offload
-[@rajbhandari2019zero]. PyTorch FSDP is native sharded DP [@zhao2023pytorch].
-JAX and XLA express sharding as GSPMD-style annotations on TPU, where the JAX
-`pjit` interface drives the partitioner [@xu2021gspmd]. In practice a frontier
-stack combines pieces, for example Megatron-Core for model parallelism plus a
-custom data and checkpoint plane.
+$$
+M_{\mathrm{score}} = BHL^2b.
+$$
 
-### Fault tolerance
+Here, $M_{\mathrm{score}}$ excludes softmax workspace, inputs, outputs, saved
+activations, and allocator overhead. FlashAttention removes this quadratic
+HBM tensor, but it does not remove the dense attention arithmetic or the need
+to shard a context that exceeds aggregate memory.
 
-At thousands of nodes for weeks, recovery is a first-class subsystem.
-Checkpointing cadence is set by the write cost against the work lost per
-failure; asynchronous and sharded checkpointing, as in CheckFreq, keep the
-write off the critical path so a short cadence stays affordable
-[@mohan2021checkfreq]. Elastic restart detects a dead node, fences it, and
-resumes from the last checkpoint, ideally onto spare capacity without a full
-restart. Stragglers and silent data corruption are harder than clean crashes,
-because the run keeps going while it is slow or subtly wrong.
+![Exact byte accounting for a materialized attention-score tensor versus one token-state tensor, using B=1, H=32, hidden width 4096, and BF16 storage. The linear token-state line is a reference, not a model of FlashAttention's complete peak memory.](/figures/training-at-scale-2.svg){#fig-training-at-scale-2}
 
-One fault-tolerance concern reaches into the data plane: a restart must resume
-the exact same data order, which means the sampler and shuffle state are part
-of the checkpoint. Without that, a resume re-feeds or skips data and breaks
-the mixture contract from @sec-data-curation, surfacing as an unexplained loss
-discontinuity at every restart. The storage fabric that streams the corpus and
-the cluster orchestration that schedules the run live in
-@sec-orchestration-data-infra; the resumability contract is the piece that
-stays here.
-
-### Failure modes
-
-The symptoms cluster. A low MFU is the catch-all, traced by a per-step profile
-to exposed communication, an oversized bubble, too much recomputation, or
-unfused kernels. When a communication bottleneck dominates, the network is the
-limiter: TP spilling past the NVLink domain, a DP all-gather that cannot hide
-under the backward pass, or MoE all-to-all stalling on a hot expert. An
-out-of-memory error points instead to the wrong layout for the budget:
-activation memory at long sequence length, optimizer state under-sharded, or a
-fragmentation cliff that appears only at a certain micro-batch count. And a node
-failure with no fast detection, fencing, and recent checkpoint rolls the run
-back to its last save, where the gap is pure waste.
-
-The fastest attention kernel does not change this accounting: FlashAttention
-keeps attention exact and makes the score matrix affordable by never writing
-it to high-bandwidth memory, a kernel-level win that sits underneath these
-parallelism axes rather than replacing one of them [@dao2022flashattention].
-@fig-training-at-scale-2 contrasts the two scaling regimes: a materialized
-score matrix whose memory grows quadratically with sequence length against the
-linear growth of a kernel that streams the scores.
-
-![Schematic illustration of peak attention memory versus sequence length, after Dao et al. (2022). A materialized score matrix grows as O(L²) while an IO-aware kernel that never writes the scores to HBM grows as O(L). Idealized, arbitrary units; not measured data.](/figures/training-at-scale-2.svg){#fig-training-at-scale-2}
-
-Drag the exponent to feel the gap between the two regimes: at exponent 2 the memory is the materialized O(L²) score matrix, at exponent 1 it is the FlashAttention O(L) stream.
-
-```{=html}
-<figure id="fig-training-at-scale-curve">
-<div class="viz" data-viz="curve" data-family="power-grow" data-xlabel="sequence length L" data-ylabel="peak attention memory" data-plabel="exponent" data-pmin="1" data-pmax="2" data-p="2" data-logy="true"></div>
-<figcaption>Peak attention memory versus sequence length: exponent 2 is the materialized O(L²) score matrix, exponent 1 is the FlashAttention O(L) stream.</figcaption>
-</figure>
-```
-
-Recipe-level stability, the z-loss and QK-norm and loss-spike recovery that
-keep the optimizer from diverging, belongs to @sec-scaling-laws. The stability
-this chapter owns is numerical, set by the precision choice, and run-level, set
-by fault tolerance.
+The same discipline applies to the whole run: name the tensor, count its bytes,
+identify when it exists, and state which communication or recovery step follows.
+That turns a collection of parallelism acronyms into an engineering design that
+can be checked.
 
 ## Further reading
 
