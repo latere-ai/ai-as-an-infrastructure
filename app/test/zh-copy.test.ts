@@ -508,7 +508,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/foundations/01-scaling-laws.qmd",
-      ["Kaplan-era parameter-heavy", "Chinchilla-style data allocation", "inference-aware"],
+      [
+        "favored increasingly large models trained on comparatively few tokens",
+        "about twenty tokens per parameter",
+        "include expected serving demand and cost",
+      ],
     ],
     [
       "zh/foundations/01-scaling-laws.qmd",

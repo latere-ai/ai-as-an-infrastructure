@@ -1,376 +1,437 @@
 # Scaling Laws and Compute Allocation {#sec-scaling-laws}
 
-The first irreversible choice in the stack is the training run itself. A model's
-architecture and its mixture of training data are committed to a cluster, and
-weeks of computation turn into a finished base model. You cannot run the whole
-thing twice to see which choice was better, so the entire problem is to decide,
-before booking the cluster, how large to make the model and how much text to
-train it on. The sizing answer itself has moved: from Kaplan-era
-parameter-heavy recipes, through Chinchilla-style data allocation, to
-inference-aware over-training; the rest of the chapter is how that decision
-is made and then carried out.
+Training a base model requires several choices that become expensive to revise
+once the run begins: the architecture, parameter count, data mixture, number of
+training tokens, optimizer, and schedule. Scaling laws address one part of that
+planning problem. For a fixed model family and training setup, they estimate how
+held-out loss changes with model size, data, and compute.
 
-Four quantities run through everything below, so it helps to fix them in plain
-terms first. A *parameter* is one of the adjustable numbers inside the model, set
-during training; model size means how many of them there are, usually billions. A
-*token* is a small chunk of text, roughly a short word or a word-piece, and a
-model learns by reading a long stream of them. *Loss* is a single number that
-measures how badly the model predicts the next token, averaged over all the text
-it reads: lower is better, and pushing it down is the whole point of the run.
-*Compute* is the total arithmetic the run costs, measured in FLOPs
-(floating-point operations); for a transformer it is close to six times the
-parameter count times the number of training tokens. With those in hand the
-chapter's question is simple to state: spend a fixed compute budget so the final
-loss is as low as it can be, and know roughly what that loss will be before
-committing.
+That is narrower than predicting whether a model will be useful. A
+@gls-scaling-law can help choose the size of a training run and forecast its
+validation loss. It does not choose the data, guarantee a downstream capability,
+or account for
+serving cost unless those factors are added to the objective. Keeping those
+boundaries visible is the key to using the method well.
 
-## The irreversible bet
+## What the forecast measures
 
-A pre-training run commits a cluster for weeks and a budget you cannot refund.
-Before it starts you must choose how many parameters the model will have, how
-many tokens it will read, and the settings that govern the optimization (the
-learning-rate schedule and the batch size, both defined later in this chapter).
-You must choose them from small experiments, because you cannot afford to try
-them once at full scale. Everything that follows is a way of answering that same
-question from cheap runs, before the cluster is booked and the bet is locked in.
-
-The question is answerable because the loss has a predictable shape, and it has
-that shape because of how the model is trained. The model is trained to predict
-the next token in a stream of text, one token at a time, each prediction
-conditioned on the tokens before it; this is @gls-next-token-prediction. Every
-position in the text is therefore its own training example, with the right answer
-being simply the token that actually came next, so the text supervises the model
-for free and at enormous scale. The loss is the average surprise of those
-predictions: formally it is @gls-cross-entropy, the number of bits, or *nats* if
-measured in natural-log units, the model spends to encode each true next token,
-and @gls-perplexity is just its exponential. That single scalar, the loss, is
-what the run buys, and the rest of the chapter learns to forecast it and then to
-minimize it per dollar.
-
-## A law you can extrapolate
-
-The decision that dominates everything else is sizing: how to split the budget
-between parameters and tokens. It is tractable because the loss falls in a
-regular way as either one grows, a *power law*. A power law is a relationship
-where the loss drops by a constant factor each time the input grows by a constant
-factor, which is exactly the relationship that plots as a straight line when both
-axes are logarithmic. A @gls-scaling-law fits that line on a ladder of small,
-affordable runs and reads off where it goes for a run you can only afford once
-[@kaplan2020scaling]. The form that is actually fit pairs two power-law terms
-with an irreducible floor $E$, the loss that no amount of scale removes
-[@rosenfeld2020constructive; @hoffmann2022chinchilla]:
+Language-model scaling studies usually measure next-token prediction on held-out
+text. Given a sequence $x_1,\ldots,x_T$, a model with parameters $\theta$ assigns
+a probability to each token after seeing the preceding tokens. Its average
+cross-entropy loss is
 
 $$
-L(N, D) = E + \frac{A}{N^{\alpha}} + \frac{B}{D^{\beta}}
+\begin{aligned}
+\ell_t&=-\log p_\theta(x_t\mid x_{<t}),\\
+L_{\mathrm{eval}}(\theta)&=\frac{1}{T}\sum_{t=1}^{T}\ell_t.
+\end{aligned}
 $$
 
-Here $N$ is the parameter count and $D$ is the number of @gls-training-tokens.
-The two exponents $\alpha$ and $\beta$ set how fast loss falls as the model and
-the data grow, a larger exponent meaning a steeper return to scale, and $A$ and
-$B$ are scaling constants; all four are fit from the cheap runs. With them in hand
-you read off the @gls-compute-optimal $N$ and $D$: the pair with the lowest
-predicted loss for the budget you intend to spend. One subtlety: training tokens
-are not vocabulary entries but token instances read during training, so
-repeated passes over the same text count again.
+Here $T$ is the number of evaluated token positions, $x_t$ is the true token at
+position $t$, $x_{<t}$ is its preceding context, and
+$p_\theta(x_t\mid x_{<t})$ is the probability assigned by the model. The value
+$\ell_t$ is the negative log-probability at position $t$. This is
+@gls-next-token-prediction. The average negative log-probability is
+@gls-cross-entropy: it measures the model's surprise on a fixed held-out
+distribution. With natural logarithms, the unit is nats per token and
+@gls-perplexity is $\exp(L_{\mathrm{eval}})$; with base-2 logarithms, the unit is
+bits per token and perplexity is $2^{L_{\mathrm{eval}}}$.
 
-The law matters because it extrapolates. A few cheap runs stand in for a run you
-will only ever do once: because the loss is a power law, those runs fall on a
-straight line in log-log coordinates, and the line predicts the loss far to its
-right, as @fig-scaling-laws-1 sketches. Compute here is the total spend, close to
-$6ND$, so the same straight line can be read against parameters, against tokens,
-or against the whole budget.
+Lower held-out loss means better probabilistic prediction on that evaluation
+distribution. Comparisons are meaningful only when the tokenizer, held-out data,
+and loss convention are held fixed. A small loss improvement may or may not
+produce a useful change on a particular task.
 
-![Schematic illustration of power-law extrapolation: a ladder of cheap small runs fits a straight line in log-log coordinates, which forecasts the loss of one large run you can only afford once. Idealized data, after Kaplan et al. (2020) and Hoffmann et al. (2022).](/figures/scaling-laws-1.svg){#fig-scaling-laws-1}
+The word *token* is used in two different counts. A vocabulary contains token
+types, while a training run processes token instances. In particular,
+@gls-training-tokens are not vocabulary entries, and repeated passes over the
+same text count again. If a corpus contains $U$ unique token instances and is
+read for $R$ full epochs, the run processes approximately $D=RU$ training
+tokens.
 
-The same logic extends to the model's other tuning knobs, the *hyperparameters*
-that the loss formula does not name: settings like the learning rate (how big a
-step each update takes) and the initialization (the random values the parameters
-start from). These normally have to be re-tuned at every model size.
-Maximal-update parametrization (muP) removes that cost: it parametrizes the
-network's width (how many parameters sit side by side in each layer) so the best
-learning rate and initialization stay fixed as the model grows, which lets you
-tune them once on a small proxy and carry them to full scale [@yang2022mup].
-Sizing and tuning both become decisions you make on small runs and trust at
-large ones.
+## From small runs to a loss surface
 
-## Why a power law at all
+Across a matched family of models, held-out loss often decreases smoothly as the
+parameter count $N$ and training-token count $D$ increase. A commonly used fit is
 
-This section is optional theory. It explains why loss falls so smoothly, and can
-be skipped without losing the chapter's practical thread. The law is an empirical
-regularity, not a theorem, and asking where it comes from bounds how far to trust
-it. Two derivations reach it from different starts. One reads the slope off the
-data. Picture the data as points lying on a curved surface, a *manifold*, whose
-effective number of independent directions is its intrinsic dimension $d$; a model
-fitting that surface has loss that scales as about $N^{-4/d}$, so the more
-independent directions the data has, the slower scale pays off [@sharma2020neural].
-The other reads it off the skills: if competence decomposes into discrete units
-learned in order of decreasing frequency, and those frequencies are themselves
-power-law distributed, then learning them in order produces a smooth power-law
-loss out of strictly discrete steps [@michaud2023quantization]. A percolation
-argument on natural data recovers both as two regimes of one model
-[@brill2024rooted]. None of this is settled, but the shared implication is
-concrete: the slope is a property of the data, not the architecture.
+$$
+L(N,D)=E+\frac{A}{N^\alpha}+\frac{B}{D^\beta}.
+$$
 
-That discrete-skills reading connects to a debate the book returns to later. If
-skills are acquired in discrete steps, the overall loss curve can stay smooth
-while individual abilities switch on suddenly, and whether scaling then looks
-gradual or shows a sharp "emergent" jump turns largely on how you measure it.
-@sec-interpretability makes the discreteness concrete, as separable features
-recoverable from a trained model, and @sec-borrowed-ideas takes up the emergence
-question.
+$E$ is a fitted asymptote for the chosen tokenizer and data distribution. The
+terms $A/N^\alpha$ and $B/D^\beta$ estimate the excess loss caused by limited
+model capacity and limited training data. The positive constants $A$, $B$,
+$\alpha$, and $\beta$, together with $E$, are estimated from smaller runs
+[@rosenfeld2020constructive; @hoffmann2022chinchilla]. A larger exponent means
+that the corresponding excess-loss term falls faster as its input grows.
 
-## Kaplan, then Chinchilla
+The power law applies to excess loss above the fitted floor, not to total loss.
+For example, holding $D$ large and fixed gives
+$L(N,D)-E-B/D^\beta\propto N^{-\alpha}$. That relationship is a straight line on
+log-log axes. The two-variable surface is not one universal straight line: model
+size, data size, and compute each produce a different one-dimensional slice or
+frontier.
 
-The sizing rule itself has a history, and getting it wrong is the most
-expensive mistake in this chapter. Kaplan et al. (2020) established that
-loss follows smooth power laws and, from their fits, recommended spending
-most of a larger budget on parameters [@kaplan2020scaling]. Hoffmann et al.
-(2022), the Chinchilla paper, corrected this: parameters and tokens should
-scale together, roughly twenty training tokens per parameter at
-compute-optimal, and the Kaplan-era parameter-heavy recipe had been systematically
-under-training on data [@hoffmann2022chinchilla]. A Chinchilla-optimal model
-is smaller and reads more than the prior generation expected.
+Scaling studies fit this surface on a ladder of affordable runs and then test
+whether it predicts larger held-out runs. @fig-scaling-laws-1 illustrates the
+basic extrapolation. The figure is schematic; a real study needs uncertainty
+estimates and held-out runs of its own.
 
-That two careful teams disagreed at all is instructive, and the gap turned out to
-be mostly an accounting choice. Some of a model's parameters sit in its
-embeddings, the lookup table that maps each token to a vector, one row per
-vocabulary entry; the rest are the layers that do the actual computation. Kaplan
-counted only the non-embedding parameters, and at small scale the embeddings are
-a large enough share of the total to tilt the optimal split toward parameters.
-Count total parameters instead and let scale grow, and the exponent converges to
-Chinchilla's roughly equal split [@pearce2024reconciling]. The disagreement was
-never nature being ambiguous, but which quantity the curve was plotted against.
+![Schematic illustration of power-law extrapolation. Small runs fit the reducible part of held-out loss in log-log coordinates, then forecast a larger run. The points are illustrative, after Kaplan et al. (2020) and Hoffmann et al. (2022).](/figures/scaling-laws-1.svg){#fig-scaling-laws-1}
 
-The same compute budget, fixed by $C \approx 6ND$, splits very differently
-under each of these recipes. @fig-scaling-allocation contrasts the three
-allocations of one budget: Kaplan spends it mostly on parameters, Chinchilla
-balances parameters against tokens at roughly twenty tokens per parameter,
-and inference-aware over-training deliberately shrinks the model and pours
-the rest into tokens so each served token is cheaper.
+::: {.callout-note}
+## Why might the curve be smooth?
 
-```{dot}
-//| label: fig-scaling-allocation
-//| fig-cap: "How a fixed training-compute budget C is approximately 6ND splits into parameters N and tokens D under three sizing rules. After Kaplan et al. (2020), Hoffmann et al. (2022), and inference-aware scaling."
-digraph allocation {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280"];
-
-  budget [label="Fixed compute budget\nC ≈ 6ND"];
-
-  kaplan [label="Kaplan 2020\nmost budget to N\nlarge model, fewer tokens"];
-  chin [label="Chinchilla 2022\nN and D scale together\nabout 20 tokens per parameter", color="#3b82f6", fontcolor="#3b82f6"];
-  infer [label="Inference-aware\nsmaller N, far more D\nover-train past 20:1"];
-
-  budget -> kaplan;
-  budget -> chin;
-  budget -> infer;
-
-  kaplan -> k_out [arrowhead=none, style=dashed];
-  chin -> c_out [arrowhead=none, style=dashed];
-  infer -> i_out [arrowhead=none, style=dashed];
-
-  k_out [shape=note, style=filled, fillcolor="#f8f6f1", label="lower loss per training FLOP\nbut costly to serve"];
-  c_out [shape=note, style=filled, fillcolor="#f8f6f1", label="compute-optimal loss\nfor the training budget"];
-  i_out [shape=note, style=filled, fillcolor="#f8f6f1", label="higher training cost\ncheapest per served token"];
-}
-```
-
-<figure id="fig-scaling-laws-curve">
-<div class="viz" data-viz="curve" data-family="u-shape" data-xlabel="parameters N (at a fixed compute budget)" data-ylabel="loss" data-plabel="penalty curvature" data-pmin="0.4" data-pmax="2.2" data-p="1.2"></div>
-<figcaption>At a fixed compute budget C ≈ 6ND, spending it on more parameters means fewer training tokens, and the reverse, so loss is U-shaped in the split. The minimum is the compute-optimal point, around twenty tokens per parameter; the curvature sets how steeply a wrong split is punished. Illustrative.</figcaption>
-</figure>
-
-The recipe did not stop at Chinchilla. Chinchilla assumes you can always feed the
-model more fresh text, but the supply of high-quality unique text is finite, and
-a large run can exhaust it. Once that happens, data-constrained scaling takes
-over: re-reading the same text has decaying value, and past a few epochs (a few
-full passes over the data) adding parameters beats adding repetitions
-[@muennighoff2023scaling]. Later work sharpens the penalty rather than the
-schedule, adding an explicit overfitting term, where overfitting means the model
-starts memorizing the training text instead of learning patterns that
-generalize. That term grows with the ratio of model capacity to unique data, so
-larger models exhaust repeated tokens faster, with strong weight decay (a steady
-pull that keeps the parameters small and so discourages memorization) buying part
-of it back [@lovelace2026prescriptive]. The power-law lens also travels beyond
-pretraining loss. The same forecast-from-cheap-runs logic now sizes test-time
-compute (@sec-inference-time-scaling), reduced precision
-(@sec-quantization-kernels), and distillation (@sec-reasoning-data-distillation),
-each its own curve under its own budget, so reading scaling as a single
-pretraining decision understates how often the field makes this bet. The frontier
-of the recipe is still moving.
-
-## Test it yourself
-
-The law is concrete enough to run. The cell below walks a fixed compute
-budget along the parameters-versus-tokens trade and finds where the loss
-bottoms out. Edit the exponents and rerun (Run, or Ctrl/Cmd+Enter) to watch
-the compute-optimal split move.
-
-::: {.runnable}
-```python
-import numpy as np, matplotlib.pyplot as plt
-
-# Toy scaling law L(N, D) = E + A/N^a + B/D^b, on the Besiroglu et al. (2024)
-# refit of Chinchilla. Change the exponents.
-E, A, B, a, b = 1.82, 482.0, 2085.0, 0.348, 0.366
-loss = lambda N, D: E + A / N**a + B / D**b
-
-C = 1e19                       # fixed compute budget, roughly 6 * N * D
-N = np.logspace(8, 11, 300)    # candidate parameter counts
-D = C / (6 * N)                # tokens the budget then allows
-
-plt.figure(figsize=(5, 3))
-plt.plot(N, loss(N, D))
-plt.xscale("log"); plt.xlabel("parameters N"); plt.ylabel("loss")
-plt.tight_layout(); plt.show()
-
-best = N[np.argmin(loss(N, D))]
-print(f"compute-optimal: N ~ {best:.2e} params, D ~ {C/(6*best):.2e} tokens")
-```
+The empirical pattern is well established within many model families, but its
+cause is not settled. Sharma and Kaplan derive a power law in a restricted
+manifold-regression setting, with exponent $4/d$ for intrinsic data dimension
+$d$ [@sharma2020neural]. Michaud et al. propose a different hypothesis: discrete
+skills learned in frequency order can aggregate into a smooth loss curve
+[@michaud2023quantization]. Brill explores how related regimes can arise in
+synthetic percolation-based data [@brill2024rooted]. These are possible
+explanations under particular assumptions, not proof that architecture and
+optimization no longer matter.
 :::
 
-## How much to trust the fit
+## Turning a compute budget into model and data sizes
 
-The toy makes plain something the published curves tend to hide: the
-extrapolation is only as trustworthy as the fit, and the fit is delicate.
-Re-deriving Chinchilla's parametric estimate from the same data, a later
-replication found it inconsistent with the paper's own other two methods, with
-confidence intervals so tight they would imply hundreds of thousands of runs
-behind a few hundred [@besiroglu2024replication]. It also fits the data points
-reconstructed from the original plots poorly. The lesson is fragility: ordinary
-choices in how a curve is fit can move where it extrapolates to, and none of
-them leave a mark on the final power law you read off. This does not make the
-law useless,
-it remains the best forecast available and is bet on routinely, but it does make
-a scaling law a measurement instrument, with error bars the headline number
-omits. The same caution returns wherever the field reads a curve to settle a
-costly question, from benchmark scores in @sec-statistical-reliability to
-capability forecasts in @sec-verification-frontier.
+For a dense decoder-only Transformer in a regime dominated by
+parameter-dependent matrix multiplications, training compute is often
+approximated by
+
+$$
+C_{\mathrm{train}}\approx \kappa ND,
+\qquad \kappa\approx 6.
+$$
+
+$C_{\mathrm{train}}$ is the number of training floating-point operations
+(FLOPs), $N$ is the number of parameters active for each token, and $D$ is the
+number of processed training tokens. The factor near six accounts roughly for a
+forward pass and its backward pass. It is a planning approximation, not a bill:
+attention, output layers, sparse routing, rematerialization, communication, and
+hardware utilization can all move actual time and cost away from it
+[@kaplan2020scaling; @hoffmann2022chinchilla].
+
+At a fixed compute budget $C_{\mathrm{train}}$, choosing $N$ also fixes
+$D=C_{\mathrm{train}}/(\kappa N)$. Substituting that constraint into the loss
+fit gives
+
+$$
+\begin{aligned}
+\widehat L_C(N)
+&=E+\frac{A}{N^\alpha}\\
+&\quad+B\left(\frac{\kappa N}{C_{\mathrm{train}}}\right)^\beta.
+\end{aligned}
+$$
+
+Increasing $N$ lowers the capacity term but leaves fewer tokens for training;
+decreasing $N$ does the reverse. This creates the U-shaped tradeoff in
+@fig-scaling-laws-curve. Under this particular loss and compute model, the
+minimum has a closed form:
+
+$$
+\begin{aligned}
+N_\star=
+&\left(\frac{\alpha A}{\beta B}\right)^{\!1/(\alpha+\beta)}\\
+&\quad\times
+\left(\frac{C_{\mathrm{train}}}{\kappa}\right)^{\!\beta/(\alpha+\beta)},
+\end{aligned}
+$$
+
+$$
+\begin{aligned}
+D_\star=
+&\left(\frac{\beta B}{\alpha A}\right)^{\!1/(\alpha+\beta)}\\
+&\quad\times
+\left(\frac{C_{\mathrm{train}}}{\kappa}\right)^{\!\alpha/(\alpha+\beta)}.
+\end{aligned}
+$$
+
+Here the star marks the loss-minimizing allocation predicted by the fit. These are
+the @gls-compute-optimal $N$ and $D$: the pair with the lowest predicted loss
+under the stated training-compute budget. The exponents determine how additional
+compute is divided. A constant token-to-parameter ratio emerges only when
+$\alpha=\beta$; it is not a universal consequence of power-law scaling.
+
+<figure id="fig-scaling-laws-curve">
+<div class="viz" data-viz="curve" data-family="u-shape" data-xlabel="parameters N (at fixed training compute)" data-ylabel="held-out loss" data-plabel="penalty curvature" data-pmin="0.4" data-pmax="2.2" data-p="1.2"></div>
+<figcaption>At fixed training compute, a larger model receives fewer training tokens and a smaller model receives more. The minimum marks the allocation predicted to achieve the lowest held-out loss. The curve is illustrative.</figcaption>
+</figure>
+
+## Kaplan and Chinchilla estimated different frontiers
+
+Kaplan et al. found smooth language-model scaling and estimated that the
+compute-optimal parameter count should grow approximately as
+$N_\star\propto C_{\mathrm{train}}^{0.73}$, leaving
+$D_\star\propto C_{\mathrm{train}}^{0.27}$ for data
+[@kaplan2020scaling]. Here $C_{\mathrm{train}}$ denotes the training-compute
+budget. That estimate favored increasingly large models trained on comparatively
+few tokens.
+
+Hoffmann et al. ran a broader set of iso-compute experiments and found exponents
+near one half for both model size and data [@hoffmann2022chinchilla]. Their 70B
+parameter Chinchilla model was trained on 1.4T tokens, about twenty tokens per
+parameter, and outperformed several larger models trained with similar compute.
+The useful conclusion is that the models of that period were undertrained on
+data. “Twenty tokens per parameter” is the configuration of that demonstration
+and a practical rule of thumb, not a physical constant.
+
+Later analyses help explain the disagreement without making it disappear.
+Kaplan counted non-embedding parameters, whereas Chinchilla used total
+parameters. Pearce and Song show that this accounting choice, combined with the
+smaller scale of Kaplan's experiments, reproduces much of the difference in the
+reported exponents [@pearce2024reconciling]. Other experimental and fitting
+choices still matter.
+
+The Chinchilla paper also used three estimation methods. Besiroglu et al. found
+that the published coefficients for its parametric third method fit reconstructed
+data poorly and conflict with the other two methods; the reported confidence
+intervals would require more than 600,000 runs, rather than the likely fewer than
+500 [@besiroglu2024replication]. Their refit again gives a near-even allocation,
+but with meaningful uncertainty. A scaling prescription should therefore name
+the fit, its experimental range, and its uncertainty instead of presenting one
+ratio as settled.
 
 ::: {.callout-important}
 ## What's contested
-The compute-optimal token-to-parameter ratio is not settled, and Chinchilla
-is not the last word. Inference-aware scaling argues that if a model will
-serve a large volume of tokens, the right move is to deliberately
-over-train a smaller model far past Chinchilla-optimal, because training is
-paid once and inference is paid forever. Frontier models now train well past
-the twenty-to-one ratio for exactly this reason. The reconciliation between
-Kaplan and Chinchilla fits, and how far over-training pays, are active
-questions. Treat any single ratio as a budget-and-deployment-dependent
-choice, not a constant.
+
+The broad result, that loss often scales predictably within a controlled model
+family, is much stronger than any single estimate of the optimal token-to-parameter
+ratio. The fitted coefficients depend on the tokenizer, data distribution,
+architecture, optimizer, parameter accounting, and range of experimental runs.
+Far outside that range, a narrow confidence interval from the fit can understate
+the uncertainty of the extrapolation.
 :::
+
+## Deployment changes the objective
+
+Chinchilla minimizes training loss for a fixed training-compute budget. A model
+that will serve many requests faces a different optimization problem because
+training is paid once while inference is paid repeatedly. A simplified lifetime
+cost is
+
+$$
+\begin{aligned}
+C_{\mathrm{life}}(N,D,Q)
+&=C_{\mathrm{train}}(N,D)\\
+&\quad+Q\,c_{\mathrm{serve}}(N).
+\end{aligned}
+$$
+
+Here $Q$ is the expected lifetime volume of served tokens, or another consistently
+defined request unit, and $c_{\mathrm{serve}}(N)$ is the average compute or
+monetary cost per unit for a model of size $N$. For dense models, that cost
+generally grows with the active parameter count, although batching, sequence
+length, and hardware also matter.
+
+Under a target-quality constraint and large expected demand, it can be cheaper
+overall to train a smaller model for longer than the training-compute optimum.
+Sardana et al. tested this reasoning across 47 models and found such allocations
+for scenarios with roughly a billion expected requests [@sardana2024lifetime].
+This is not a third way to divide the same fixed training budget. It changes the
+objective from *lowest loss for fixed training FLOPs* to *lowest lifetime cost
+for fixed quality and demand*.
 
 ::: {.callout-tip}
 ## Constraint arrow
-This is the first place a lower layer reaches up the stack. The serving
-cost in @sec-serving-problem, not the training budget, is what justifies
-over-training a smaller model. A decision that looks like pure pre-training
-economics is actually set by how many tokens the model will decode over its
-lifetime.
+
+Serving demand reaches backward into pre-training. If a model will generate a
+large volume of tokens, spending more once on training can reduce every later
+inference bill. The relevant quantities are target quality, expected demand,
+latency, and hardware, not a token-to-parameter ratio by itself. Serving economics
+are developed in @sec-serving-problem.
 :::
 
-## The rest of the recipe
+## Finite data changes the choice again
 
-Once the sizing rule fixes $N$ and $D$, the problem shifts from forecasting the
-run to executing it. The scaling law does not say how to actually walk the
-parameters down to that loss, and those choices are a set of balances, each with
-a knee.
+Inference-aware training assumes that more useful training tokens are available.
+Sometimes the binding constraint is the supply of unique high-quality text. In
+that case, a run must decide how often to repeat the corpus as well as how large
+to make the model.
 
-The optimizer is the first of them: the algorithm that turns each batch's
-gradient, the direction that would lower the loss, into a concrete update to the
-parameters. @gls-adamw is the default. It keeps two running averages per
-parameter (the moment estimates, tracking the recent mean and spread of the
-gradient), and that extra per-parameter state is the dominant memory term, which
-is why @sec-training-at-scale shards it across devices [@loshchilov2019decoupled].
-Second-order and preconditioned optimizers, Shampoo and the newer Muon, use
-curvature information to condition the update, aiming at better loss per FLOP
-[@jordan2024muon]. Muon has since trained Moonlight, a 16B MoE model, over
-5.7T tokens [@liu2025muon], and then Kimi K2 at roughly a trillion total
-parameters [@kimiteam2025k2], which makes it a frontier-proven option even
-though AdamW remains the default.
-The learning-rate schedule that drives the optimizer has three parts: a linear
-warmup while the moment estimates are still cold, a stable high phase, and a
-decay.
-Cosine decay to a small floor is the well-understood default, but it locks
-the token budget at run start. @gls-warmup-stable-decay holds a constant rate on
-a plateau and decays only when you choose to stop, which makes one plateau
-checkpoint spawn many decays and makes scaling experiments composable
-[@hu2024minicpm]. It trades a small loss penalty for the ability to keep
-training, fork decays, and run clean scaling ladders. Choose cosine for a
-single known-budget run, the plateau schedule when the budget is uncertain.
+Muennighoff et al. found little loss penalty from repeating constrained data for
+up to roughly four epochs at fixed compute in their experiments. Beyond that
+range, repeated tokens had diminishing value. Their fitted allocation still
+favored smaller models trained for more epochs than a naive application of the
+single-pass Chinchilla law would suggest [@muennighoff2023scaling]. The result is
+not that every fourth pass is free; it is evidence from a particular range of
+models, corpora, and compute budgets.
 
-Batch size is the second balance. A larger batch buys data parallelism and
-shorter wall-clock, but past the critical batch size you burn compute for
-no loss gain, and too small a batch leaves the accelerators idle and pays
-communication overhead per useful token [@mccandlish2018empirical].
-@fig-scaling-laws-2 sketches that knee: progress per step climbs almost
-linearly while the batch is small, then flattens once it passes the critical
-size. The critical batch size grows during training, so the optimal batch is
-a schedule, not a constant.
+A 2026 preprint studies heavier repetition and adds an explicit overfitting
+penalty to the loss law [@lovelace2026prescriptive]. In experiments up to 1B
+parameters and 16 epochs, Lovelace et al. found regimes where further repetition
+became counterproductive and additional compute was better spent on capacity.
+Strong weight decay reduced their fitted repetition penalty by about 70%, but it
+worsened the single-epoch frontier and helped only after a data- and
+compute-dependent crossover. This is promising recent evidence, not yet a
+universal recipe.
 
-![Schematic illustration of the critical batch size: training progress per optimizer step rises almost linearly with batch size, then saturates, so compute past the knee buys little extra progress. Idealized data, after McCandlish et al. (2018).](/figures/scaling-laws-2.svg){#fig-scaling-laws-2}
+The three planning questions are therefore distinct:
 
-And muP closes the loop back to sizing. Tuning the learning rate and
-initialization on a small proxy and transferring them at full width is what
-keeps the largest run from leaving loss on the table for a reason you would
-never see otherwise [@yang2022mup].
+1. With fixed training FLOPs and enough fresh data, choose $N$ and $D$ to
+   minimize held-out loss.
+2. With a lifetime deployment objective, include expected serving demand and
+   cost.
+3. With fixed unique data, model the declining value and overfitting risk of
+   repeated epochs.
 
-## Keeping the run alive
+## How to run a scaling study
 
-The plan only matters if the run stays alive. Multi-week training therefore needs
-a small operational kit alongside the scaling rule. A few of these techniques
-reach into the internals of the transformer, covered in
-@sec-transformer-architecture; the point here is only that each one guards against
-a specific way a long run can blow up. @gls-z-loss adds a small penalty that keeps
-the model's raw output scores, the logits that get turned into next-token
-probabilities, from drifting ever larger [@chowdhery2022palm]. @gls-qk-norm
-normalizes two of the internal vectors in the attention mechanism, the query and
-the key, before they are multiplied together, to stop their product from growing
-without bound. Depth-scaled initialization sets the starting parameter values
-with the model's depth in mind, and global-norm @gls-gradient-clipping caps the
-size of any single update as a blunt safety net. Loss-spike recovery is a
-procedure, not a hyperparameter: detect the spike from gradient-norm and loss
-telemetry, then skip and resume from a recent checkpoint, lower the rate, and
-reorder the data batches that triggered it [@deepseek2024deepseekv3].
-@fig-loss-spike-recovery traces that loop.
+A useful fit starts with controlled experiments, not a formula copied from a
+different model family.
 
-```{dot}
-//| label: fig-loss-spike-recovery
-//| fig-cap: "Loss-spike recovery as a control loop over a multi-week run, following DeepSeek-V3 (2024) practice."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+1. **Fix the comparison.** Keep the tokenizer, held-out distribution, data
+   mixture, architecture family, optimizer, and loss definition consistent.
+2. **Build a scale ladder.** Train several model sizes at several compute budgets,
+   including multiple parameter-token allocations at each budget.
+3. **Use completed, comparable runs.** A short run with the wrong learning-rate
+   schedule can make a model look capacity-limited when it is merely
+   under-optimized.
+4. **Hold runs out from fitting.** A curve that explains its own input points but
+   misses larger held-out runs is not a reliable extrapolator.
+5. **Fit more than one plausible form.** Report sensitivity to exclusions,
+   rounding, parameter definitions, and the assumed compute model.
+6. **Carry uncertainty into the allocation.** Give a range of plausible $N$ and
+   $D$, then test nearby choices instead of treating the numerical minimum as
+   exact.
 
-  run [label="Training proceeds\nlog grad-norm and loss"];
-  watch [label="Grad-norm or loss\nspikes?", shape=diamond];
-  rollback [label="Roll back to a recent\ngood checkpoint"];
-  lower [label="Lower the learning rate"];
-  reorder [label="Skip and reorder the\nbatches that triggered it"];
-  resume [label="Resume training"];
+Maximal-update parametrization (muP) can reduce one part of the experimental
+cost. Under its width-dependent parameterization, many hyperparameter optima can
+transfer between different widths in a matched model family
+[@yang2022mup]. It does not guarantee transfer across depth, architecture, data,
+optimizer, or batch changes; the target configuration still needs a validation
+run.
 
-  run -> watch;
-  watch -> run [label="no"];
-  watch -> rollback [label="yes"];
-  rollback -> lower;
-  lower -> reorder;
-  reorder -> resume;
-  resume -> run;
-}
+## Test the allocation
+
+The cell below evaluates the fixed-compute tradeoff with the rounded coefficients
+from the Besiroglu et al. refit. They are useful for reproducing this example,
+not as defaults for another training program. Change the exponents or compute
+budget and rerun the cell to see how the optimum moves.
+
+::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Rounded coefficients from Besiroglu et al. (2024).
+E, A, B = 1.8172, 482.01, 2085.43
+alpha, beta = 0.3478, 0.3658
+C = 1e19
+kappa = 6.0
+
+def predicted_loss(N, D):
+    return E + A / N**alpha + B / D**beta
+
+N = np.logspace(7.5, 11, 400)
+D = C / (kappa * N)
+L = predicted_loss(N, D)
+best_index = np.argmin(L)
+best_N = N[best_index]
+best_D = D[best_index]
+
+plt.figure(figsize=(5, 3))
+plt.plot(N, L, label="predicted held-out loss")
+plt.axvline(best_N, color="tab:orange", linestyle="--", label="predicted optimum")
+plt.xscale("log")
+plt.xlabel("parameters N")
+plt.ylabel("loss")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+print(f"N* = {best_N:.2e} parameters")
+print(f"D* = {best_D:.2e} training tokens")
+print(f"D*/N* = {best_D / best_N:.1f} tokens per parameter")
 ```
+:::
 
-Each failure mode arrives at a different point in the run.
-Divergence to NaN sends the loss to infinity early, usually from too high a
-rate, too short a warmup, or a precision interaction from
-@sec-training-at-scale, and is cheapest to prevent with warmup and clipping.
-Loss spikes appear mid-run and waste days of compute if you have no recovery
-plan. The wrong size-versus-tokens choice is the most expensive of all
-because it is the whole run, and an untuned learning rate at full width
-loses gains you cannot detect without a muP baseline to expose them.
+## What the scaling fit does not tune
+
+The loss surface chooses a model-data allocation only after the training recipe
+has been fixed. The optimizer, learning-rate schedule, and batch size need their
+own experiments.
+
+**Optimizer.** @gls-adamw decouples weight decay from Adam's gradient update and
+remains a common baseline [@loshchilov2019decoupled]. It stores first- and
+second-moment estimates for each optimized parameter, so optimizer state is a
+major memory cost in large runs. Muon instead orthogonalizes momentum updates for
+matrix-shaped hidden-layer weights; it is not a curvature or second-order method.
+Its authors report about twice the compute efficiency of AdamW in their scaling
+experiments and use AdamW for embeddings, normalization parameters, and the
+output head [@liu2025muon]. Kimi K2 later used a Muon variant in a model with
+roughly one trillion total parameters [@kimiteam2025k2]. These are strong
+demonstrations, not proof
+that one optimizer wins for every architecture or data mixture.
+
+**Learning-rate schedule.** A cosine schedule assumes a planned end point and
+decays toward it. @gls-warmup-stable-decay uses a warmup, a long stable plateau,
+and a decay that begins when training is about to stop. MiniCPM used this design
+to continue training from the plateau and compare several token budgets without
+restarting every run [@hu2024minicpm]. The choice affects the validity of the
+scaling comparison: runs at different budgets must be evaluated at comparable
+points in their schedules.
+
+**Batch size.** A batch is the set of token examples used for one optimizer
+update. Larger batches expose more data parallelism and can reduce the number of
+updates needed to reach a target loss. The benefit is not proportional forever.
+The gradient noise scale predicts a *critical batch size* near the knee where
+larger batches begin trading compute efficiency for fewer sequential steps
+[@mccandlish2018empirical]. The noise scale often grows as loss falls, so a useful
+batch size may change during the run. @fig-scaling-laws-2 shows the shape; it is
+not a hard failure threshold.
+
+![Schematic illustration of the critical batch size. Progress per optimizer step rises with batch size and then saturates, so batches beyond the knee buy fewer sequential steps with diminishing compute efficiency. Idealized data, after McCandlish et al. (2018).](/figures/scaling-laws-2.svg){#fig-scaling-laws-2}
+
+## Keeping a long run stable
+
+A predicted final loss is worthless if the run diverges before reaching it.
+Stability controls address different signals rather than forming one universal
+recovery recipe.
+
+- @gls-z-loss penalizes the squared log of the softmax normalizer, discouraging
+  all output logits from drifting together to large absolute values. PaLM used
+  it as a stability control [@chowdhery2022palm].
+- @gls-qk-norm normalizes query and key vectors before their dot product, limiting
+  attention-logit growth. Small-scale proxy experiments reproduce this large-run
+  instability and show that the mitigation can be tested cheaply
+  [@wortsman2023small].
+- Global-norm @gls-gradient-clipping rescales an unusually large gradient before
+  it reaches the optimizer. Gradient norms, activation norms, and held-out loss
+  still need to be monitored
+  because clipping can hide a deteriorating run rather than repair its cause.
+- Frequent checkpoints make hardware failures and diagnosed optimization failures
+  recoverable. A restart policy must record the optimizer state, data position,
+  and schedule position, not only the model weights.
+
+Published reports illustrate why claims should be precise. DeepSeek-V3 reported
+no *irrecoverable* loss spikes and no rollbacks over its 14.8T-token run
+[@deepseek2024deepseekv3]. Kimi K2 reported zero loss spikes after adding QK-clip
+to Muon [@kimiteam2025k2]. Those are results from two training systems, not a
+guarantee that the same controls will transfer unchanged.
+
+Distributed execution, checkpoint storage, numerical precision, and failure
+recovery are developed in @sec-training-at-scale. This chapter's boundary is the
+training recipe: the scaling fit proposes a destination, while optimization and
+systems engineering determine whether the run reaches it.
+
+## Before committing the run
+
+The decision record for a large training run should state:
+
+- the held-out distribution, tokenizer, and exact loss definition;
+- the model family, parameter count convention, and training-token count;
+- the measured scale ladder and which runs were held out from fitting;
+- the fitted form, coefficient uncertainty, and extrapolation distance;
+- whether the objective covers training FLOPs, wall-clock time, monetary cost,
+  lifetime serving, or some combination;
+- the unique-data budget and expected number of repeated epochs;
+- the optimizer, schedule, batch policy, and stability gates.
+
+That record turns a scaling law from an impressive curve into an auditable
+allocation decision. It also makes the forecast falsifiable: after the run, the
+observed held-out loss can be compared with the interval that justified the
+investment.
 
 ## Further reading
 

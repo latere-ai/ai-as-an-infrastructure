@@ -259,7 +259,9 @@ test("base model formation ends with a mid-training bridge chapter", () => {
 });
 
 test("scaling laws explain training tokens inline at first use", () => {
-  expect(flat("en/foundations/01-scaling-laws.qmd")).toContain("training tokens are not vocabulary entries");
+  expect(flat("en/foundations/01-scaling-laws.qmd")).toContain(
+    "@gls-training-tokens are not vocabulary entries",
+  );
   expect(flat("en/foundations/01-scaling-laws.qmd")).toContain("repeated passes over the same text count again");
   expect(flat("zh/foundations/01-scaling-laws.qmd")).toContain("训练词元不是词表项");
   expect(flat("zh/foundations/01-scaling-laws.qmd")).toContain("同一段文本如果重复训练两轮，就计两次");
@@ -330,7 +332,7 @@ test("early-book glossary first uses are readable without leaving the page", () 
     ["zh/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding把带小数概率的符号写成一条近似最优的比特码流"],
     ["en/orientation/03-borrowed-ideas.qmd", "@gls-two-part-code, an accounting that charges for the model description"],
     ["zh/orientation/03-borrowed-ideas.qmd", "用@gls-two-part-code来算，也就是先付模型描述长度"],
-    ["en/foundations/01-scaling-laws.qmd", "@gls-cross-entropy, the number of bits, or *nats* if measured in natural-log units, the model spends to encode each true next token"],
+    ["en/foundations/01-scaling-laws.qmd", "@gls-cross-entropy: it measures the model's surprise on a fixed held-out distribution"],
     ["en/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp is the native version of the same full sharding idea"],
     ["zh/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp 则是同一全分片思路的原生版本"],
     ["en/foundations/07-mid-training.qmd", "@gls-sft on demonstrations, @gls-dpo from chosen-versus-rejected preferences"],
@@ -389,6 +391,45 @@ test("infrastructure-before separates inherited practice from workload differenc
   expect(chapter).not.toContain("computationally, an inversion of a transformer");
   expect(chapter).not.toContain("at civilizational sample size");
   expect(chapter).not.toContain("far ahead in measured trust");
+});
+
+test("scaling-laws separates forecasting, allocation, deployment, and execution", () => {
+  const chapter = src("en/foundations/01-scaling-laws.qmd");
+
+  for (const heading of [
+    "## What the forecast measures",
+    "## From small runs to a loss surface",
+    "## Turning a compute budget into model and data sizes",
+    "## Kaplan and Chinchilla estimated different frontiers",
+    "## Deployment changes the objective",
+    "## Finite data changes the choice again",
+    "## How to run a scaling study",
+    "## What the scaling fit does not tune",
+    "## Keeping a long run stable",
+    "## Before committing the run",
+  ]) {
+    expect(chapter).toContain(heading);
+  }
+
+  expect(chapter).toContain("L_{\\mathrm{eval}}(\\theta)");
+  expect(chapter).toContain("N_\\star=");
+  expect(chapter).toContain("C_{\\mathrm{life}}(N,D,Q)");
+  expect(chapter).toContain("@sardana2024lifetime");
+  expect(chapter).toContain('data-viz="curve" data-family="u-shape"');
+
+  for (const rejected of [
+    "supervises the model for free",
+    "The disagreement was never nature being ambiguous",
+    "frontier-proven option",
+    "following DeepSeek-V3 practice",
+    "rollback -> lower",
+    "fig-scaling-allocation",
+    "fig-loss-spike-recovery",
+  ]) {
+    expect(chapter).not.toContain(rejected);
+  }
+
+  expect(src("figures-src/scaling-laws-2.py")).not.toContain("compute wasted");
 });
 
 test("generative adaptation and reasoning first uses define the method locally", () => {
