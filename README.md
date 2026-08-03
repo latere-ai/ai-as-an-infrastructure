@@ -99,7 +99,9 @@ over. The writing rules are in [`CONVENTIONS.md`](CONVENTIONS.md).
 
 Corrections, typos, and build fixes are welcome. See
 [`CONTRIBUTING.md`](CONTRIBUTING.md) for the repository layout and how to
-build the book locally.
+build the book locally. Readers arriving from the site land on
+[Contribute](https://aaai.latere.ai/en/contribute), which every chapter links
+to alongside an edit link to its own source file.
 
 ## License
 

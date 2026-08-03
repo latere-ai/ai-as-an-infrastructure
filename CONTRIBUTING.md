@@ -50,7 +50,8 @@ lint, the Bun build for `en` and `zh`, and `go test` on every push and pull
 request, so a broken build is a broken commit.
 
 `make og` is slow (headless Chrome) and only needed after adding or retitling a
-chapter. Its output in `app/static/og/` is committed.
+chapter. Its output in `app/static/og/` is committed, so to redraw one card
+rather than all of them, name its href: `cd app && bun run og contribute`.
 
 ## Deploy
 
