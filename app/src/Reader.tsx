@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS } from "./types.ts";
 import { runSearch, type SearchDoc } from "./search-match.ts";
 import { Comments } from "./comments.tsx";
 import { BookmarkButton, ChapterStats, HeaderAuth } from "./account.tsx";
+import { REPO_URL, editUrl, issueUrl } from "./repo.ts";
 
 type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
@@ -16,7 +17,7 @@ type Strings = {
   body: string; sans: string; kai: string; size: string; layout: string;
   codex: string; manuscript: string; atlas: string; prev: string; next: string; language: string; resize: string;
   author: string; updated: string; readtimeLabel: string; noResults: string;
-  aboutAuthor: string; aboutLatere: string;
+  aboutAuthor: string; aboutLatere: string; sourceRepo: string;
 };
 
 const STRINGS: Record<Lang, Strings> = {
@@ -26,7 +27,7 @@ const STRINGS: Record<Lang, Strings> = {
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
     codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", language: "语言", resize: "拖动调整宽度",
     author: "作者", updated: "更新于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
-    aboutAuthor: "关于作者", aboutLatere: "关于 Latere AI",
+    aboutAuthor: "关于作者", aboutLatere: "关于 Latere AI", sourceRepo: "GitHub 源码仓库",
   },
   en: {
     sidebar: "Sidebar", onThisPage: "On this page", settings: "Reading settings", search: "Search chapters…",
@@ -34,7 +35,7 @@ const STRINGS: Record<Lang, Strings> = {
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
     codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", language: "Language", resize: "Drag to resize",
     author: "Author", updated: "Updated", readtimeLabel: "Reading time", noResults: "No matching results",
-    aboutAuthor: "About Author", aboutLatere: "About Latere AI",
+    aboutAuthor: "About Author", aboutLatere: "About Latere AI", sourceRepo: "Source on GitHub",
   },
 } as const;
 
@@ -43,7 +44,17 @@ const LS_KEY = "aaai-reader-settings";
 const SIDEBAR_EXTERNAL_LINKS = [
   { labelKey: "aboutAuthor", href: "https://changkun.de" },
   { labelKey: "aboutLatere", href: "https://latere.ai" },
+  { labelKey: "sourceRepo", href: REPO_URL },
 ] as const;
+
+// GitHub's octicon mark, the one shape readers recognize without a label.
+function GitHubMark({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden>
+      <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" />
+    </svg>
+  );
+}
 
 // latere brand mark (from ../latere-ai LatereLogoMark.vue).
 function LatereLogo() {
@@ -349,6 +360,13 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             </svg>
             <span style={{ flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".08em", color: "var(--fg-3)", minWidth: 26, textAlign: "right" }}>{progressLabel}</span>
           </div>
+        )}
+
+        {!mobile && (
+          <a href={REPO_URL} target="_blank" rel="noreferrer" title={t.sourceRepo} aria-label={t.sourceRepo}
+            className="glass-ultrathin lq-iconbtn" style={{ ...iconBtn(false), textDecoration: "none" }}>
+            <GitHubMark />
+          </a>
         )}
 
         {(!mobile || chapter.headings.length > 0) && (

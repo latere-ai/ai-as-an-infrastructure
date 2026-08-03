@@ -50,6 +50,21 @@ test("sidebar shows external about links above preface", () => {
   expect(preface).toBeGreaterThan(latere);
 });
 
+test("the source repository is reachable from the sidebar and the header", () => {
+  const html = renderToString(createElement(Reader, { chapter }));
+  const repo = 'href="https://github.com/latere-ai/ai-as-an-infrastructure"';
+
+  // Once in the sidebar's about block, once as the header icon button.
+  expect(html.split(repo).length - 1).toBe(2);
+  expect(html).toContain("Source on GitHub");
+
+  const latere = html.indexOf("About Latere AI");
+  const source = html.indexOf(">Source on GitHub");
+  const preface = html.indexOf(">Preface</a>");
+  expect(source).toBeGreaterThan(latere);
+  expect(preface).toBeGreaterThan(source);
+});
+
 test("nav stays at the top when the active part starts above the fold", () => {
   // The preface sits ~80px down, just under the About links: scrolling it to
   // the top of an 800px nav would hide those links for no gain.
@@ -86,6 +101,7 @@ test("sidebar external about links are localized on zh pages", () => {
   const text = html.replace(/<!-- -->/g, "");
   expect(text).toContain(">关于作者 ↗</a>");
   expect(text).toContain(">关于 Latere AI ↗</a>");
+  expect(text).toContain(">GitHub 源码仓库 ↗</a>");
   expect(text).not.toContain(">About Author ↗</a>");
   expect(text).not.toContain(">About Latere AI ↗</a>");
 });
