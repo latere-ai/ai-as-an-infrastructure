@@ -1,324 +1,490 @@
 # Tokenization {#sec-tokenization}
 
-@sec-data-curation ended with token-id shards. Tokenization defines those ids:
-the map between text and the integers a model actually reads. This early map
-decides how expensive each language is to process, where code and numbers get
-split, and how much of a document's sequence length is spent encoding it. It is
-also why one preprocessing choice becomes one of the hardest decisions in the
-stack to revisit. And so
-byte-level BPE appears here as the dominant compromise, with Unigram and
-tokenizer-free schemes set beside it as different answers to the same
-constraints rather than cosmetic alternatives.
+@sec-data-curation defined which text the training run will sample. Before that
+text can reach a model, a tokenizer must turn it into integer ids. The mapping
+affects sequence length, multilingual coverage, numerical and code structure,
+the shape of token-indexed model parameters, and compatibility with every
+checkpoint and data shard that follows.
 
-## A model never sees text
+This is not just a vocabulary-building problem. A production tokenizer also
+specifies Unicode normalization, boundaries, byte handling, special tokens,
+automatic prefix and suffix insertion, and decoding. Those decisions form a
+versioned model interface. They should be measured and frozen with the same
+care as an architecture or data mixture.
 
-A transformer does not see text. It sees a sequence of integers drawn from a
-fixed vocabulary, each mapped to a row of an embedding matrix, the lookup
-table mapping each token id to a learned vector, one row per vocabulary
-entry. Something has
-to turn a stream of Unicode into that sequence, and the @gls-tokenizer is that
-something. The choice looks like plumbing and behaves like a foundation.
+## The artifact is more than a vocabulary
 
-The reason is a conjunction of three constraints, each harmless alone and
-unforgiving together.
-
-The vocabulary must be finite and fixed before training begins, yet text is
-open. New words, code, emoji, and languages the designer never enumerated
-must still encode without failure. A table of words can never be complete,
-so completeness has to come from somewhere other than the table.
-
-The segmentation must be cheap. Tokenization runs over the entire corpus on
-CPU fleets ahead of the GPU run, as covered in @sec-data-curation, so an
-elegant but slow scheme is not affordable at corpus scale.
-
-And the result is permanent. The embedding and output matrices are sized to
-the vocabulary (the output matrices, or output projection, convert the
-model's final vectors back into a score per vocabulary entry), so the
-vocabulary cannot change without retraining the model. A tokenizer trained on a skewed corpus caps quality for everything
-under-represented in it, and that ceiling is invisible until evaluation.
-
-Together, these constraints make tokenizer choice both quality-critical and
-close to irreversible. Everything that follows is an attempt to satisfy the
-first two constraints while living with the third.
-
-## The subword bargain
-
-The dominant answer is subword tokenization: a vocabulary of pieces smaller
-than words but larger than characters, sized so common words are single
-tokens while rare words decompose into known parts. This is a bargain struck
-directly against the open-vocabulary constraint. Any string is representable
-because the pieces bottom out at units that always exist, and frequent text
-stays short because common sequences are merged into single ids.
-
-Byte-pair encoding (BPE) is the workhorse construction. Start from a base
-alphabet, count adjacent pair frequencies across the corpus, merge the most
-frequent pair into a new symbol, and repeat until the vocabulary reaches its
-target size [@sennrich2015neural]. The learned merge list is the tokenizer;
-encoding replays the merges in order.
-
-```text
-# BPE training, conceptual
-vocab = set(base_symbols)
-merges = []
-while len(vocab) < target_size:
-    pair = most_frequent_adjacent_pair(corpus, vocab)
-    merges.append(pair)
-    vocab.add(merge(pair))
-```
-
-A worked example makes the loop concrete. @fig-tokenization-bpe-merge runs
-two merges on a tiny corpus of the word `low` repeated, where the most
-frequent adjacent pair is absorbed into a new symbol each round until the
-common sequence is a single token.
-
-<figure id="fig-tokenization-stepper">
-<div class="viz" data-viz="stepper">
-<div data-chip="l o w" data-title="1 · Start">Corpus is low low low; the base vocab is l, o, w.</div>
-<div data-chip="(l,o)" data-title="2 · Count">Count adjacent pairs; (l, o) is the most frequent.</div>
-<div data-chip="lo w" data-title="3 · Merge">Merge (l, o) → lo, and append it to the merge list.</div>
-<div data-chip="(lo,w)" data-title="4 · Count">Recount; now (lo, w) is the most frequent pair.</div>
-<div data-chip="low" data-title="5 · One token">Merge (lo, w) → low; the frequent sequence is now a single token.</div>
-</div>
-<figcaption>BPE learns by counting pairs and merging the most frequent, round after round. Step through each round, or let it play.</figcaption>
-</figure>
+A model consumes ids, but several ordered transforms produce them:
 
 ```{dot}
-//| label: fig-tokenization-bpe-merge
-//| fig-cap: "BPE training as repeated greedy merges. Each round counts adjacent pairs, merges the most frequent one into a new symbol, and appends it to the merge list. Common sequences collapse into single tokens. After Sennrich et al. (2015)."
-digraph bpe {
+//| label: fig-tokenization-contract
+//| fig-cap: "The tokenizer contract. Normalization and boundary rules determine the stream seen by the segmentation model; the vocabulary, special-token policy, postprocessor, and decoder then determine the ids and their meaning."
+digraph {
   bgcolor="transparent";
   rankdir=TB;
-  node [shape=box, fontname="Helvetica", fontsize=11, style="rounded,filled", fillcolor="#f1ece1", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280"];
+  nodesep=0.32; ranksep=0.36;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  s0 [label="Start: l o w  l o w  l o w\nvocab = { l, o, w }"];
-  s1 [label="Merge 1: pair (l, o) is most frequent\nlo w  lo w  lo w"];
-  s2 [label="Merge 2: pair (lo, w) is most frequent\nlow  low  low"];
-  s3 [label="Result: 'low' is one token\nvocab = { l, o, w, lo, low }", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.6];
+  A [label="Input contract\nUnicode text or raw bytes"];
+  B [label="Normalization N\nUnicode / case / whitespace"];
+  C [label="Boundary rules\npretokenizer + protected spans"];
+  D [label="Segmentation model\nBPE ranks or Unigram scores"];
+  E [label="ID mapping + special tokens\nBOS / EOS / PAD / control ids"];
+  F [label="Token stream\nids + offsets + decoder policy", shape=cylinder];
 
-  s0 -> s1 [label="  count + merge"];
-  s1 -> s2 [label="  count + merge"];
-  s2 -> s3 [label="  freeze merge list"];
+  A -> B -> C -> D -> E -> F;
 }
 ```
 
-Run the pseudocode for real: this trains BPE on a tiny corpus, prints the
-learned merges, then shows how common and rare words split into a different
-number of tokens.
+The **@gls-tokenizer** is this full contract, not only the segmentation model.
+A vocabulary file without the normalizer, boundary rules, special-token ids,
+and decoder can produce a different id sequence while appearing to contain the
+same pieces.
+
+Here the ids index model parameters. For vocabulary size $V$ and model width $d$,
+the input embedding is a matrix $E\in\mathbb{R}^{V\times d}$. An untied output
+projection has another token-indexed matrix
+$W_{\mathrm{out}}\in\mathbb{R}^{V\times d}$; a tied model reuses $E$. Changing
+the meaning of an existing id therefore changes the meaning of an existing row
+in the checkpoint. That is the central compatibility constraint.
+
+The boundary rules matter before any merge is learned. They decide whether a
+piece may cross whitespace, punctuation, script changes, or a protected span.
+The original neural-machine-translation BPE operated inside externally split
+words. GPT-2-style byte-level BPE first applies a regular expression over
+categories such as letters, numbers, punctuation, and whitespace.
+@gls-sentencepiece can train from raw sentences without an external
+language-specific word segmenter, but it still applies configured normalization
+and boundary behavior
+[@sennrich2015neural; @kudo2018sentencepiece; @radford2019language].
+
+## BPE learns merge priorities
+
+Sennrich, Haddow, and Birch adapted byte-pair encoding (BPE), a compression
+algorithm, to open-vocabulary neural machine translation in 2016
+[@sennrich2015neural]. BPE starts from base symbols and repeatedly joins a
+frequent adjacent pair. The result is an ordered merge table: earlier merges
+have higher priority during encoding.
+
+A conceptual trainer is:
+
+```text
+1. Normalize and split the training corpus with the frozen boundary rules.
+2. Express every pretoken as base symbols plus any boundary marker.
+3. Count adjacent symbol pairs, weighted by pretoken frequency.
+4. Select the highest-count pair with a deterministic tie-break rule.
+5. Replace every non-overlapping occurrence of that pair in the corpus.
+6. Append the pair to the ordered merge table.
+7. Repeat steps 3–6 until the target vocabulary size is reached.
+```
+
+Here a *pretoken* is one segment emitted by the boundary rule; the base symbols
+are characters, bytes, or another guaranteed starting alphabet; and the merge
+table records both the selected pairs and their ranks. The tie-break rule is
+part of reproducibility because many corpora contain equally frequent pairs.
+
+Training and encoding are different algorithms. Training counts frequencies
+and changes the corpus representation after each selected merge. Encoding
+does not recount the input. It starts from base symbols and repeatedly applies
+the available learned pair with the best rank, without crossing a protected
+boundary. A naive pedagogical trainer rescans all symbol positions for every
+merge; production trainers maintain pair-occurrence indexes and update only
+affected neighbors. Complexity therefore depends on the implementation, not
+on the name “BPE” alone.
+
+The interactive example uses `low low low lo`, so `(l, o)` occurs four times
+while `(o, w)` occurs three times. There is no hidden tie in the first step.
+
+<figure id="fig-tokenization-stepper">
+<div class="viz" data-viz="stepper">
+<div data-chip="low low low lo" data-title="1 · Start">Treat each word as a separate pretoken. The base symbols are l, o, and w.</div>
+<div data-chip="(l,o) × 4" data-title="2 · Count">The pair (l, o) occurs four times; (o, w) occurs three times.</div>
+<div data-chip="lo w · lo w · lo w · lo" data-title="3 · Merge">Merge (l, o) into lo and record it at rank 1.</div>
+<div data-chip="(lo,w) × 3" data-title="4 · Count">After replacement, (lo, w) is the unique most frequent pair.</div>
+<div data-chip="low low low lo" data-title="5 · Freeze">Merge (lo, w) into low and record it at rank 2.</div>
+</div>
+<figcaption>A tie-free BPE example. Each round counts pairs in the current representation, replaces the selected pair, and records its rank for later encoding.</figcaption>
+</figure>
+
+The runnable cell trains a small character BPE, freezes its merge order, and
+then encodes held-out words. Its end-of-word marker prevents merges across word
+boundaries. The final example deliberately contains an unseen character to
+show that character BPE is not automatically free of unknown tokens.
 
 :::: {.runnable}
 ```python
 from collections import Counter
 
-def merge_pair(word, a, b):
+EOW = "</w>"
+UNK = "<unk>"
+
+def merge_pair(symbols, pair):
+    left, right = pair
     out, i = [], 0
-    while i < len(word):
-        if i < len(word) - 1 and word[i] == a and word[i + 1] == b:
-            out.append(a + b); i += 2
+    while i < len(symbols):
+        if i + 1 < len(symbols) and symbols[i] == left and symbols[i + 1] == right:
+            out.append(left + right)
+            i += 2
         else:
-            out.append(word[i]); i += 1
+            out.append(symbols[i])
+            i += 1
     return out
 
-corpus = "low low low lower lowest newest wider".split()
-words = [list(w) + ["_"] for w in corpus]
+training_words = "low low low lo lower newest widest".split()
+base_symbols = set("".join(training_words))
+encoded_training = [list(word) + [EOW] for word in training_words]
 merges = []
-for _ in range(6):
-    pairs = Counter()
-    for w in words:
-        for a, b in zip(w, w[1:]):
-            pairs[(a, b)] += 1
-    if not pairs:
-        break
-    (a, b), _ = max(pairs.items(), key=lambda kv: (kv[1], kv[0]))
-    merges.append((a, b))
-    words = [merge_pair(w, a, b) for w in words]
 
-print("learned merges:", [a + "+" + b for a, b in merges])
-for w, toks in zip(corpus, words):
-    print(f"{w:7s} -> {' '.join(toks)}  ({len(toks)} tokens)")
+for _ in range(8):
+    counts = Counter()
+    for symbols in encoded_training:
+        counts.update(zip(symbols, symbols[1:]))
+    if not counts:
+        break
+    # Highest count first; lexical order makes ties deterministic.
+    pair = min(counts, key=lambda candidate: (-counts[candidate], candidate))
+    merges.append(pair)
+    encoded_training = [merge_pair(symbols, pair) for symbols in encoded_training]
+
+def encode_word(word):
+    symbols = [char if char in base_symbols else UNK for char in word] + [EOW]
+    for pair in merges:
+        symbols = merge_pair(symbols, pair)
+    return symbols
+
+print("merge ranks:", [left + "+" + right for left, right in merges])
+for word in ["low", "lower", "lowest", "lobster"]:
+    pieces = encode_word(word)
+    print(f"{word:7s} -> {' '.join(pieces)}  ({len(pieces)} pieces)")
+
+print("UTF-8 bytes for 🐍:", list("🐍".encode("utf-8")))
 ```
 ::::
 
-The decisive refinement is to run BPE over raw bytes rather than Unicode
-characters. With 256 byte values as the base alphabet, every possible input
-encodes with zero out-of-vocabulary risk, even text the tokenizer never saw,
-and there is no separate unknown token to handle. This is byte-level BPE, and
-it is why the same tokenizer can ingest English, code, a new emoji, and a
-script absent from its training data. Byte-fallback gives a near-equivalent
-guarantee in character-based schemes by decomposing any unseen character into
-its underlying bytes. The open-vocabulary constraint, which sank every
-word-level table, is now satisfied by construction rather than by hoping the
-table was large enough.
+## Byte coverage is not efficient coverage
 
-There is a second question the bargain leaves open: not what the pieces are,
-but how to choose a split when several are possible. BPE is greedy and
-frequency-driven, with no probabilistic model of how a string should split.
-The unigram language model offers an alternative: posit that a sentence is a
-bag of subword pieces with independent probabilities, start from a large
-candidate vocabulary, and prune pieces whose removal least hurts the corpus
-likelihood [@kudo2018subword]. Unigram yields a principled segmentation and,
-because it defines a distribution over segmentations, supports subword
-regularization: sampling alternative splits at training time as a form of
-augmentation [@kudo2018subword].
+A generic subword model is open only over its base alphabet. A character BPE
+can still emit an unknown token for a character absent from that alphabet.
+Completeness requires an exhaustive base representation or a fallback path.
 
-Two parameters set by the data pipeline govern the rest. Vocabulary size
-trades sequence length against matrix size, and the tokenizer's own training
-corpus bakes in which languages and domains get short, efficient encodings.
-Both are frozen here and consumed, not chosen, downstream.
+Byte-level BPE uses all 256 byte values as its base alphabet. A valid Unicode
+string is encoded as UTF-8 bytes, so every string accepted by the text API has
+a representation without an encoder-side unknown token. Implementations such
+as GPT-2 map the bytes to reversible placeholder characters before learning
+merges; other implementations operate on byte values directly
+[@radford2019language; @wang2020byte]. This coverage guarantee does not say the
+encoding will be short. A rare script, emoji sequence, or binary-looking span
+may fall back to many byte-sized pieces.
 
-## From words to bytes
+Byte fallback is related but not identical. A character BPE or Unigram model
+with fallback learns ordinary pieces over characters and emits byte tokens only
+when a character is otherwise unknown. Byte-level BPE learns its full merge
+system over a byte base. Both can avoid an unknown token when configured
+correctly, but they induce different segmentations.
 
-The construction above did not arrive whole. Tokenization moved from words to
-bytes in three steps, each removing a failure of the last.
-@fig-tokenization-evolution traces the lineage, with the specific failure
-each stage carries and the one its successor removes.
+The decoder also needs an error policy. A valid input string becomes valid
+UTF-8 bytes, but an arbitrary sequence sampled by a model can end inside a
+multi-byte character or combine bytes into invalid UTF-8. Replacement, strict
+failure, and byte-preserving display are different contracts.
 
-```{dot}
-//| label: fig-tokenization-evolution
-//| fig-cap: "The lineage from word-level to byte-level tokenization. Each arrow is labeled with the failure the next stage removes. Byte-level BPE closes the out-of-vocabulary gap entirely."
-digraph evolution {
-  bgcolor="transparent";
-  rankdir=LR;
-  node [shape=box, fontname="Helvetica", fontsize=11, style="rounded,filled", fillcolor="#f1ece1", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
+### Normalization changes what can round-trip
 
-  word    [label="Word-level\nfails: unknown token\non any unseen word"];
-  char    [label="Character-level\nfails: long sequences,\nrelearns spelling"];
-  subword [label="Subword BPE / Unigram\nopen vocabulary,\nshort common text"];
-  byte    [label="Byte-level BPE\nzero out-of-vocabulary,\nany input encodes", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.6];
+Let $N$ be the declared normalizer. Under a deterministic tokenizer with no
+lossy decoder cleanup, the intended invariant is
 
-  word    -> char    [label="  remove unknown token"];
-  char    -> subword [label="  shorten sequences"];
-  subword -> byte    [label="  close OOV gap"];
-}
-```
+$$
+\operatorname{Decode}(\operatorname{Encode}(x))=N(x).
+$$
 
-Word-level vocabularies came first and broke on the open-vocabulary problem:
-any word absent from the table became a single unknown token, discarding its
-content. Character-level models removed the unknown token but made sequences
-long and forced the model to relearn spelling from scratch, spending depth on
-what a vocabulary could have stored.
+Here $x$ is the input string, $N(x)$ is its normalized form, and
+$\operatorname{Encode}$ and $\operatorname{Decode}$ are the frozen tokenizer
+functions. Equality with the original $x$ holds only when $N$ preserves the
+relevant distinctions. Unicode compatibility normalization, case folding, or
+whitespace collapsing can intentionally map different raw strings to the same
+normalized string.
 
-Sennrich et al. (2015) brought BPE, invented for data compression, to neural
-machine translation as the subword compromise, and it became the default
-[@sennrich2015neural]. The unigram language model, introduced by Kudo (2018),
-offered a probabilistic alternative with subword regularization
-[@kudo2018subword]. Kudo and Richardson (2018) then packaged both in
-@gls-sentencepiece, which treats input
-as a raw stream including whitespace, so the tokenizer is language-independent
-and needs no pre-tokenization rules [@kudo2018sentencepiece]. The final step
-was byte-level BPE, which made the base alphabet the 256 byte values and
-closed the out-of-vocabulary gap entirely. Byte-level BPE is the construction
-behind most current frontier tokenizers, with unigram and SentencePiece
-remaining common in multilingual and non-Latin-script settings.
+SentencePiece makes whitespace visible to its segmentation model and can
+reconstruct the normalized stream unambiguously. That does not imply a
+byte-for-byte round trip to raw input under every normalizer and whitespace
+configuration [@kudo2018sentencepiece]. Code indentation, combining marks,
+full-width forms, right-to-left text, emoji joiners, and no-space scripts all
+belong in normalization tests.
 
-The open frontier is whether to tokenize at all. @gls-tokenizer-free schemes
-operate directly on bytes or characters, learning the segmentation inside the
-model rather than fixing it in a preprocessing step. They remove the frozen
-vocabulary and its biases, at the cost of longer sequences and the compute to
-process them. This is a live research direction, not a settled replacement.
+## Unigram scores complete segmentations
 
-::: {.callout-important}
-## What's contested
-Whether a fixed tokenizer should exist at all is genuinely unsettled. The
-case against it is that the vocabulary is a frozen, corpus-dependent artifact
-that bakes in language and domain bias, fragments numbers and code in ways
-that hurt arithmetic and program synthesis, and is the single component you
-cannot change after training. Tokenizer-free and byte-level approaches answer
-by learning structure inside the model, trading preprocessing bias for longer
-sequences and higher compute per character. That answer now has concrete
-systems behind it. The Byte Latent Transformer reads raw bytes and groups
-them into patches whose size tracks how predictable the next byte is,
-spending compute where the text is hard, and it matches BPE-based models in
-FLOP-controlled scaling comparisons [@pagnoni2024blt]. H-Net goes further and
-learns the chunking itself, end to end, inside a hierarchical model
-[@hwang2025hnet]. Both still
-run their byte-level layers over sequences several times longer than a
-tokenized model sees, the tax a vocabulary exists to avoid. Byte-level BPE is
-so entrenched, and that sequence-length penalty so real, that the field has
-not converged. Treat tokenizer-free schemes as a promising open direction, not
-a drop-in replacement.
-:::
+Kudo introduced the Unigram language-model tokenizer in 2018 as a
+probabilistic alternative to merge-ranked BPE [@kudo2018subword]. It starts
+with a large candidate vocabulary, estimates piece probabilities, and prunes
+pieces whose removal least reduces corpus likelihood. It models an ordered
+segmentation, not a bag of pieces.
 
-## What you cannot take back
+For normalized input $X$, the model is
 
-The history above reads like progress, and it is, but every choice it settled
-became a setting that someone has to make once and then live with. Each
-tokenizer setting is a balance with a knee, and several of them set a ceiling
-that only shows up later. @fig-tokenization-1 makes the central one visible:
-a larger vocabulary shortens sequences but enlarges the matrices sized to it,
-so the two costs cross rather than agree.
+$$
+P(z)=\prod_{j=1}^{m}p(z_j),
+\qquad
+z^*=\arg\max_{z\in\mathcal{S}(X)}P(z),
+\qquad
+\mathcal{L}=\sum_{X\in D}\log\!\sum_{z\in\mathcal{S}(X)}P(z).
+$$
 
-![Schematic illustration of the vocabulary-size trade-off: a larger vocabulary shortens token sequences (cheaper per document) while enlarging the embedding and output matrices sized to it. The optimum is a knee, not an endpoint. Idealized data, not measured.](/figures/tokenization-1.svg){#fig-tokenization-1}
+Here $z=(z_1,\ldots,z_m)$ is one ordered segmentation of $X$; $z_j$ is its
+$j$-th piece; $p(z_j)$ is that piece's learned probability;
+$\mathcal{S}(X)$ is the set of valid segmentations under the vocabulary; $z^*$
+is the highest-probability segmentation; and $D$ is the tokenizer-training
+corpus. Dynamic programming finds $z^*$. Training alternates probability
+estimation with vocabulary pruning.
 
-- **Vocabulary size.** A larger vocabulary shortens sequences, which makes
-  training and inference cheaper per document and lowers multilingual
-  fertility, the average number of tokens a word is split into. Lower fertility
-  means the vocabulary suits the language better. The larger vocabulary also
-  enlarges the
-  embedding and output matrices and can starve rare tokens of the occurrences
-  they need to train a good embedding. The optimum is a function of corpus and
-  budget, not a constant.
-- **Training corpus for the tokenizer.** Train it on the final data mixture or
-  on a separate curated set? The choice permanently bakes the language and
-  domain balance into the vocabulary. A mismatch with the real mixture spends
-  vocabulary on the wrong things and leaves under-represented languages with
-  long, expensive encodings.
-- **BPE versus unigram.** BPE is greedy, fast, and ubiquitous, with strong
-  tooling and broad compatibility. Unigram is probabilistic, supports subword
-  regularization, and often segments multilingual text more evenly, at the
-  cost of a heavier training procedure and less ecosystem inertia behind it.
-- **Multilingual fairness.** Petrov et al. (2023) show that a tokenizer tuned
-  on English-heavy data splits other languages into many more tokens for the
-  same meaning [@petrov2023language]. That inflates cost and latency for those
-  users and shortens their effective context window, a structural unfairness
-  fixed in the vocabulary itself. This is the trade-off that most directly
-  caps downstream quality, and it is set entirely here. @fig-tokenization-2
-  shows the shape of the gap: the same sentence costs several times more
-  tokens in some languages than in English.
+Because the model assigns probability to complete segmentations, training can
+sample alternatives instead of always choosing $z^*$. Kudo called this
+subword regularization and reported it as useful augmentation in neural
+machine translation [@kudo2018subword]. It does not remove the need for a
+complete base alphabet or byte fallback.
 
-![Schematic illustration of tokenizer fertility across languages: the same sentence costs many more tokens under an English-tuned tokenizer for some languages, with the multiple relative to English shown beside each bar. Idealized token counts, after Petrov et al. (2023).](/figures/tokenization-2.svg){#fig-tokenization-2}
+BPE and Unigram therefore expose different controls. BPE deterministically
+applies learned merge priorities. Unigram scores a segmentation lattice and
+can sample paths through it. Neither is universally better; compare them under
+the same corpus, vocabulary budget, model compute, and evaluation suite.
 
-The reason these matter more than ordinary hyperparameters is lock-in. A
-vocabulary trained on a skewed mixture caps multilingual quality and inflates
-token cost for under-served languages, and it cannot be changed without
-retraining the model, because the embedding and output matrices are sized to
-it. Vocabulary extension during continued training can graft on new tokens as
-a partial workaround, but it does not undo the original bias. In short, the
-tokenizer is decided once and lived with for the model's
-life, which is why a choice that looks like preprocessing deserves the
-scrutiny of an architecture decision.
+## Vocabulary size changes both sequence and model cost
+
+A larger vocabulary often compresses in-distribution text into fewer tokens.
+It also adds token-indexed parameters and makes a dense output projection score
+more candidates at every position. The token-indexed parameter count, ignoring
+biases, is
+
+$$
+P_{\mathrm{token}}=
+\begin{cases}
+Vd, & \text{if input and output weights are tied},\\
+2Vd, & \text{if they are untied}.
+\end{cases}
+$$
+
+Here $V$ is vocabulary size, $d$ is model width, and
+$P_{\mathrm{token}}$ counts parameters in the input embedding and output
+projection. Weight tying reuses one matrix. Optimizer state, quantization,
+sharding overhead, and output-projection compute are not included.
+
+@fig-tokenization-1 plots this exact relationship for an illustrative width of
+4,096 with two bytes of parameter storage. It does not claim a universal
+optimal vocabulary size.
+
+![Token-indexed parameter storage for a model width of 4,096 using two bytes per parameter. Tied input and output weights require Vd parameters; untied weights require 2Vd. The figure excludes optimizer state and output-projection compute.](/figures/tokenization-1.svg){#fig-tokenization-1}
+
+Sequence length changes the rest of the model's work, while vocabulary size
+changes both storage and logit computation. Whether a larger vocabulary is
+cheaper depends on model width, weight tying, hardware, sequence lengths,
+fixed-token versus fixed-document budgeting, and the serving workload. Tao et
+al. found a compute-dependent optimum in controlled scaling experiments, not a
+single vocabulary size that transfers to every run [@tao2024scaling].
+
+The tokenizer's training mixture matters just as much as $V$. Sampling English
+web prose, source code, mathematics, and low-resource languages at their raw
+byte proportions can spend most learned pieces on the largest source. A
+tokenizer-specific mixture may deliberately rebalance those domains, but that
+policy and its downstream effect must be recorded. Rare pieces also need enough
+training occurrences to learn useful rows in the model.
+
+Token-level perplexity cannot compare two tokenizers directly because each
+defines a different unit. Use a common source unit such as bits per UTF-8 byte,
+character, or another explicitly defined unit when comparing language models
+with different tokenizers.
 
 ::: {.callout-tip}
 ## Constraint arrow
-The tokenizer is frozen in the data pipeline and dictates a choice one layer
-up. The vocabulary size set here fixes the row count of the embedding matrix
-and the output projection in @sec-transformer-architecture: that layer
-consumes the vocabulary and sizes its matrices to match, it does not get to
-choose it. A token budget decided during data work therefore sets a hard
-parameter of the model architecture.
+
+The vocabulary size and id mapping fix the row semantics of the input embedding
+and output projection in @sec-transformer-architecture. Architecture may choose
+whether to tie those weights and how to shard them, but it must consume the
+tokenizer's exact $V$ and stable id assignment.
 :::
 
-## Knobs you set once
+## Measure languages and domains, not only compression
 
-Naming the lock-in is not the same as dismissing the work. In practice a
-tokenizer is trained once, with a handful of decisions that are expensive to
-get wrong, and two recurring knobs deserve their own attention beyond
-vocabulary size and training corpus.
+“Tokens per word” is not a fair universal metric because languages disagree on
+what a word boundary is. Parallel content provides a clearer comparison. For
+parallel item $i$, language $\ell$, reference language $r$, and tokenizer $T$,
+define the token premium
 
-The first is digit handling: splitting numbers into individual digits so
-arithmetic does not depend on whether "1234" happened to merge into one
-token. The second is whitespace handling, where SentencePiece-style schemes
-encode spaces as ordinary symbols so detokenization is exact and reversible
-[@kudo2018sentencepiece]. The build itself is the `BPE training, conceptual`
-loop above: count, merge, repeat, then freeze the merge list and vocabulary
-as the artifact every later stage consumes.
+$$
+p_{\ell,i}=\frac{|T(s_{\ell,i})|}{|T(s_{r,i})|}.
+$$
 
-That artifact is the whole point. It is small, it is produced early, and it
-binds everything downstream to the language and domain balance present in the
-corpus that made it. The tokenizer arrives looking like a preprocessing step and turns out to be
-the first irreversible commitment in the model's life, and that is the lens
-worth carrying into the architecture that consumes it.
+Here $s_{\ell,i}$ and $s_{r,i}$ express the same item in languages $\ell$ and
+$r$; $|T(s)|$ is the number of emitted tokens; and $p_{\ell,i}$ is the
+sentence-level premium relative to the reference. Report its distribution,
+including median and upper quantiles, rather than one hand-picked sentence.
+
+Petrov et al. applied this kind of comparison to parallel translations and
+found large token-count differences across languages for several tokenizers,
+including systems designed for multilingual use [@petrov2023language]. The
+result directly affects per-token pricing and usable context. If a parallel
+content slice has premium $p$, a fixed $C$-token window holds roughly $1/p$ as
+much of that content as the reference, before prompt-format overhead. Actual
+latency still depends on batching, kernels, model architecture, and whether the
+extra tokens occur in prefill or serial generation.
+
+@fig-tokenization-2 shows the audit procedure rather than invented token counts.
+
+![A tokenizer equity audit starts with pinned parallel content, applies one normalization policy, encodes every language with the same tokenizer artifact, and reports the distribution of token premiums by language and domain.](/figures/tokenization-2.svg){#fig-tokenization-2}
+
+Token premium is one metric, not a quality score. Rust et al. found that
+tokenizer choice can contribute to multilingual downstream differences even
+when controlling pretraining data, but data coverage, morphology, script,
+objective, and model capacity also matter [@rust2021good]. Report at least:
+
+- tokens per Unicode scalar, grapheme cluster, and UTF-8 byte, with the unit
+  named explicitly;
+- unknown-token and byte-fallback rates;
+- median, p95, and maximum sequence lengths, plus truncation at the deployed
+  context limit;
+- encode and decode throughput on representative hardware;
+- slices for prose, code, numbers, formulas, URLs, emoji, and mixed scripts;
+- normalization collisions and source-to-token offset accuracy.
+
+Numbers deserve their own ablation. Digit-wise, left-grouped, right-grouped,
+and fixed-width schemes create different positional groupings. Singh and
+Strouse showed that number-tokenization direction changed arithmetic behavior
+in their experiments; they did not establish one universal best scheme
+[@singh2024tokenization]. Code needs similar tests for indentation, identifiers,
+operators, and long literals.
+
+## Freeze the compatibility contract
+
+Special tokens are control-plane inputs to the model. Beginning-of-sequence,
+end-of-sequence, padding, document-boundary, role, tool, and modality markers
+need stable spellings and ids. The contract must also say whether the encoder
+inserts them automatically, how literal marker text is escaped or rejected,
+which tokens participate in loss, and how padding is masked. Treating a control
+marker as ordinary user text can change both behavior and security boundaries.
+
+A machine-readable tokenizer manifest should include at least:
+
+```yaml
+tokenizer:
+  schema_version: <manifest version>
+  artifact_sha256: <digest of serialized tokenizer>
+  library: <name, version, and build>
+input:
+  type: <Unicode text or raw bytes>
+  encoding: <for example, UTF-8>
+  invalid_input_policy: <reject, replace, or preserve>
+normalization:
+  unicode_version: <pinned version>
+  form: <identity, NFC, NFKC, or named custom transform>
+  case_and_whitespace_rules: <ordered configuration>
+boundaries:
+  pretokenizer: <regex or model and exact version>
+  protected_spans: <rules that merges may not cross>
+model:
+  type: <BPE or Unigram>
+  vocabulary_sha256: <piece-to-id mapping>
+  ranks_or_scores_sha256: <BPE ranks or Unigram probabilities>
+  byte_mapping_or_fallback: <complete configuration>
+special_tokens:
+  ids: <BOS, EOS, PAD, document, role, tool, and modality ids>
+  literal_text_policy: <ordinary, escaped, allowed, or rejected>
+postprocessor_and_decoder:
+  automatic_insertions: <ordered rules>
+  cleanup_and_error_policy: <exact behavior>
+training:
+  corpus_manifest_sha256: <source mixture and sample>
+  trainer_flags_and_seed: <complete deterministic configuration>
+tests:
+  golden_vectors_sha256: <raw, normalized, ids, offsets, decoded output>
+compatibility:
+  model_config_sha256: <checkpoint-side tokenizer contract>
+  stable_id_prefix: <ids whose meanings may never change>
+```
+
+Golden vectors should cover combining marks, compatibility characters,
+repeated whitespace, right-to-left text, emoji joiners, no-space scripts, code
+indentation, numbers, URLs, literal control-token strings, and malformed input
+according to policy. Pin the tokenizer digest in corpus shards, model configs,
+training checkpoints, serving images, and evaluation reports.
+
+### Changing a tokenizer is a migration
+
+Replacing the text-to-id function is not a drop-in preprocessing update, but it
+is not impossible. An append-only extension can preserve every old id while
+adding rows to token-indexed parameters; the new rows still need initialization
+and continued training. Wang et al. demonstrated vocabulary expansion for a
+pretrained multilingual model [@wang2019vocabulary].
+
+Remapping existing ids requires the corresponding embedding and output rows to
+be remapped exactly. A replacement tokenizer changes segmentation throughout
+the data distribution and normally needs stronger adaptation or retraining;
+zero-shot tokenizer-transfer work shows that model surgery and continued
+training can reduce that cost in some settings [@minixhofer2024zeroshot]. These
+are migrations with evidence requirements, not ordinary configuration edits.
+
+Retain source text or an approved normalized representation whenever future
+retokenization may be required. Token-id shards alone cannot recover
+distinctions erased by normalization, unknown tokens, or decoder cleanup.
+
+## Tokenizer-free models move the boundary
+
+The phrase **@gls-tokenizer-free model** usually means that no separately
+trained subword vocabulary maps text to variable-length pieces. It does not
+mean that the model performs no representation or compression. Different
+systems move that work to different places:
+
+| System | Base input | How long sequences are handled |
+|---|---|---|
+| ByT5 | UTF-8 bytes | No learned chunks; a byte-to-byte Transformer bears the longer sequence directly [@xue2022byt5] |
+| CANINE | Unicode characters | Strided convolution downsamples before the deep encoder [@clark2022canine] |
+| MEGABYTE | bytes | Fixed-size patches split global and local computation [@yu2023megabyte] |
+| BLT | bytes | A next-byte entropy model selects dynamic patch boundaries [@pagnoni2024blt] |
+| H-Net | bytes | The hierarchy learns content-dependent chunk boundaries end to end [@hwang2025hnet] |
+
+Raw byte and character streams are longer than typical subword streams.
+Hierarchical models try to keep expensive global computation at the patch or
+chunk level while using smaller local modules on bytes. Their realized quality,
+FLOPs, memory, and latency depend on architecture and workload. BLT reported
+competitive FLOP-controlled scaling up to its tested 8B-parameter setting;
+H-Net reported gains over its compute- and data-matched baselines. Neither
+result proves universal superiority over fixed tokenization.
+
+::: {.callout-important}
+## What's contested
+
+A fixed subword vocabulary provides mature tooling and strong compression, but
+it freezes corpus-dependent boundaries outside the model. Raw-unit systems
+remove that learned vocabulary while paying for longer base sequences and new
+hierarchical machinery. They can still inherit bias from Unicode encoding,
+normalization, training data, patching rules, and architecture. The open
+question is where segmentation and compression should live, not whether one
+design is free of representational choices.
+:::
+
+## Validate before model training
+
+Before producing final token-id shards:
+
+1. **Replay the artifact.** Train twice from the pinned sample and confirm
+   vocabulary, ranks or scores, ids, and serialized digests are identical.
+2. **Run golden vectors.** Verify normalization, ids, offsets, special-token
+   insertion, decoding, and error behavior for every required input class.
+3. **Audit coverage.** Measure unknown and byte-fallback rates by language,
+   domain, script, and score band.
+4. **Audit length.** Report common-unit compression and parallel token-premium
+   distributions, including truncation at deployed context limits.
+5. **Benchmark the system.** Measure training-time tokenization, online encode
+   and decode throughput, output projection cost, and end-to-end latency.
+6. **Ablate model quality.** Under matched data and compute, compare tokenizer
+   candidates on held-out loss and target tasks, including multilingual, code,
+   and numerical slices.
+7. **Test control tokens.** Confirm literal marker text, padding, document
+   boundaries, roles, tools, and modality tokens follow the declared policy.
+8. **Verify hand-offs.** Check that corpus manifests, checkpoints, evaluation,
+   and serving all name the same tokenizer digest.
+
+Once these checks pass, the tokenizer becomes the stable interface between the
+training distribution and the architecture. Later changes remain possible, but
+they are explicit checkpoint migrations rather than silent preprocessing
+updates.
 
 ## Further reading
 

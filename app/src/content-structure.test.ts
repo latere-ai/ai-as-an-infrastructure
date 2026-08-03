@@ -434,6 +434,53 @@ test("data curation separates acquisition, retention, sampling, and evaluation c
   expect(src("figures-src/data-curation-1.py")).not.toContain("MinHash + LSH ≈ O(n)");
 });
 
+test("tokenization defines a reproducible interface rather than only a vocabulary", () => {
+  const chapter = src("en/foundations/03-tokenization.qmd");
+
+  for (const heading of [
+    "## The artifact is more than a vocabulary",
+    "## BPE learns merge priorities",
+    "## Byte coverage is not efficient coverage",
+    "## Unigram scores complete segmentations",
+    "## Vocabulary size changes both sequence and model cost",
+    "## Measure languages and domains, not only compression",
+    "## Freeze the compatibility contract",
+    "## Tokenizer-free models move the boundary",
+    "## Validate before model training",
+  ]) {
+    expect(chapter).toContain(heading);
+  }
+
+  for (const contract of [
+    "\\operatorname{Decode}(\\operatorname{Encode}(x))=N(x)",
+    "P(z)=\\prod",
+    "P_{\\mathrm{token}}",
+    "p_{\\ell,i}=",
+    "artifact_sha256:",
+    "golden_vectors_sha256:",
+    "@radford2019language",
+    "@petrov2023language",
+    "@xue2022byt5",
+  ]) {
+    expect(chapter).toContain(contract);
+  }
+
+  for (const rejected of [
+    "cannot change without retraining",
+    "single component you cannot change",
+    "bag of subword pieces",
+    "most current frontier tokenizers",
+    "exact and reversible",
+    "set entirely here",
+    "Corpus is low low low",
+  ]) {
+    expect(chapter).not.toContain(rejected);
+  }
+
+  expect(src("figures-src/tokenization-1.py")).not.toContain("arbitrary units");
+  expect(src("figures-src/tokenization-2.py")).not.toContain("illustrative, not measured");
+});
+
 test("scaling-laws separates forecasting, allocation, deployment, and execution", () => {
   const chapter = src("en/foundations/01-scaling-laws.qmd");
 

@@ -67,6 +67,16 @@ test("generated zh SVG figures use localized visible labels", () => {
   const curation = read("zh/figures/data-curation-1.svg");
   expect(curation).toContain(">全量两两比较 O(n²)</text>");
   expect(curation).not.toContain("All-pairs O(n");
+
+  const tokenStorage = read("zh/figures/tokenization-1.svg");
+  expect(tokenStorage).toContain("词元索引参数存储量（GiB）");
+  expect(tokenStorage).toContain("输入 / 输出权重绑定");
+  expect(tokenStorage).not.toContain("tied input / output weights");
+
+  const tokenAudit = read("zh/figures/tokenization-2.svg");
+  expect(tokenAudit).toContain("固定平行文本");
+  expect(tokenAudit).toContain("词元溢价分布");
+  expect(tokenAudit).not.toContain("Pinned parallel text");
 });
 
 test("localized zh bar-chart ticks are positioned from zh label widths", () => {
