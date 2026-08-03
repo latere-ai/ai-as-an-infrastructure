@@ -23,7 +23,9 @@ test("viz theme reads palette vars from .reader, not body's default-black color"
 test("canvas visualizations redraw after a viewport resize clears the backing buffer", () => {
   const watcher = rt.slice(rt.indexOf("function watchTheme("), rt.indexOf("var R = {}"));
   expect(watcher).toContain("window.addEventListener('resize', schedule)");
-  expect(watcher).toContain("requestAnimationFrame(function () { raf = 0; draw(); })");
+  expect(watcher).toContain("host.querySelector('canvas.viz-canvas')");
+  expect(watcher).toContain("var width = host.clientWidth || 600");
+  expect(watcher).toContain("requestAnimationFrame(function () { raf = 0; resizeCanvas(); draw(); })");
 });
 
 test("ch32 mechanistic-interpretability uses superposition in both languages", () => {
@@ -186,6 +188,10 @@ test("the viz runtime registers the mid-training bridge component", () => {
   expect(rt).toMatch(/R\['midtraining-bridge'\]\s*=\s*function/);
   expect(rt).toContain("introduction point");
   expect(rt).toContain("专门数据占比");
+  expect(rt).toContain("var runShare = 0.5 * share * (1 - start);");
+  expect(rt).toContain("ctx.fillStyle = th.ink; ctx.fillText(L.specialist");
+  expect(rt).not.toContain("function targetFit(t)");
+  expect(rt).not.toContain("function abruptRetention(t)");
 });
 
 test("mid-training uses the bridge visualization in both languages", () => {

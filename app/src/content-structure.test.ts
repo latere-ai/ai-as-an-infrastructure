@@ -258,6 +258,28 @@ test("base model formation ends with a mid-training bridge chapter", () => {
   }
 });
 
+test("mid-training defines operational boundaries and measurable transfer", () => {
+  const chapter = flat("en/foundations/07-mid-training.qmd");
+
+  for (const contract of [
+    "A training run is an ordered sequence of phases, not an unordered set",
+    "A mid-training phase can be continued pretraining",
+    "\\bar\\alpha=\\frac{1}{T}\\sum_{t=1}^{T}\\alpha_t",
+    "Annealing” is used for two different choices",
+    "progressed from 4K through 32K, 65,536, 131,072, and 262,144 tokens",
+    "Trained length",
+    "Accepted length",
+    "Effective length",
+    "Deployable length",
+    "loss on a frozen held-out sample from broad distribution $P$",
+  ]) {
+    expect(chapter).toContain(contract);
+  }
+
+  expect(chapter).not.toContain("timing more important than the exact mixture weight");
+  expect(chapter).not.toContain("reach 1M-token contexts without giving up short-context performance");
+});
+
 test("scaling laws explain training tokens inline at first use", () => {
   expect(flat("en/foundations/01-scaling-laws.qmd")).toContain(
     "@gls-training-tokens are not vocabulary entries",

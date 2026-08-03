@@ -1,233 +1,414 @@
 # Mid-Training: Annealing, Domain Bridges, and Context Extension {#sec-mid-training}
 
-The first broad pre-training pass gives a model a general distribution of
-language, code, facts, styles, and latent procedures. It does not automatically
-give the post-training pipeline the right starting point. A model can be
-competent on web text and still be awkward for math traces, code edits,
-instruction-formatted examples, long documents, or specialist corpora. If
-post-training is forced to make that jump alone, it must change behavior and
-repair a distribution gap at the same time.
+Broad pre-training ends when its token and compute budget ends. That stopping
+point does not guarantee that the resulting model is the best starting point
+for code assistance, mathematical reasoning, a specialist domain, or long
+documents. Post-training can adapt behavior, but asking a relatively small
+post-training dataset to repair a large distribution mismatch at the same time
+makes the transfer harder to diagnose.
 
-@gls-mid-training names the phase that separates those jobs. It is still
-pretraining-like: the model usually keeps the same architecture, updates all
-parameters, and often continues optimizing @gls-next-token-prediction, the
-objective of predicting each next token from the ones before it, rather
-than a preference or reward objective. What changes is the data distribution,
-the schedule, or the context length. The aim is not to make the model polite,
-safe, or agentic, but to move its capability distribution closer to the data
-that later post-training will draw on.
+@gls-mid-training is a name for an intermediate capability-building phase. It
+usually retains a pretraining-like objective while changing the data mixture,
+learning-rate schedule, or trained sequence length before final
+behavior-shaping stages. The practice is older than the name. Domain-adaptive pretraining,
+for example, was studied explicitly by Gururangan et al. in 2020
+[@gururangan2020dontstop]. Liu, Neubig, and Xiong proposed a narrower working
+definition of midtraining in 2025 and tested late mixtures of general and
+specialist data [@liu2025midtraining]. No universal taxonomy has settled yet,
+so a useful account must describe what a phase actually changes rather than
+rely on its label.
 
-## The boundary is operational
+## Name the phase by its role
 
-The clean definition is not "training that happens in the middle." It is a
-phase in a sequence. Write a training run as
+A training run is an ordered sequence of phases, not an unordered set:
 
 $$
-S = \{(D_i, \mathcal{L}_i, n_i)\}_{i=0}^{N},
+\mathcal R=(\mathcal P_0,\ldots,\mathcal P_K),
+\qquad
+\mathcal P_i=(\mathcal O_i,\mathcal D_i,\eta_i,B_i,L_i).
 $$
 
-where $D_i$ is the data distribution, $\mathcal{L}_i$ the loss, and $n_i$ the
-number of steps. The initial phase $i=0$ is broad pre-training. The final phase
-$i=N$ is post-training or fine-tuning. The intermediate phases $0<i<N$ are
-mid-training when they still look like pretraining in scale and objective but
-change the distribution, schedule, or usable context window
-[@liu2025midtraining].
+Here, $\mathcal R$ is the complete run; $\mathcal P_i$ is phase $i$;
+$\mathcal O_i$ is its training objective; $\mathcal D_i$ is its data
+distribution; $\eta_i$ is its learning-rate schedule; $B_i$ is its token
+budget; $L_i$ is its maximum trained sequence length; and $K+1$ is the number
+of phases. Writing these fields down prevents a vague phrase such as “trained
+for longer” from hiding the actual intervention.
 
-This makes three boundaries sharp enough to engineer:
+The phases are best separated by purpose and supervision:
 
-- **Versus ordinary pre-training.** Broad pre-training chooses a general corpus
-  and spends the majority of the token budget on it. Mid-training changes the
-  mixture after the model already has general features.
-- **Versus @gls-continued-pretraining.** Continued pretraining can switch almost
-  entirely to the target domain. Mid-training usually keeps a general-data
-  component in the mixture, which reduces forgetting while still moving the
-  model toward code, math, instructions, or long documents [@liu2025midtraining;
-  @gururangan2020dontstop].
-- **Versus post-training.** Post-training changes the behavioral interface:
-  @gls-sft on demonstrations, @gls-dpo from chosen-versus-rejected preferences,
-  @gls-rlvr from automatically checkable rewards, safety hierarchy, or tool use.
-  Mid-training tries to make the base model a better substrate before those
-  objectives touch it.
+| Phase | Typical data and objective | Intended result |
+|---|---|---|
+| Broad pre-training | large heterogeneous corpus; self-supervised token prediction | general base capability |
+| Mid-training | selected or reweighted corpus, sometimes longer sequences; usually the same self-supervised objective | a base checkpoint closer to a later target |
+| Post-training | demonstrations, preferences, rewards, policies, and safety data | a behavioral interface |
 
-@fig-mid-training-boundary draws the placement. The important arrow is not
-"more training." It is "distribution moved before behavior is optimized."
+The word *typical* matters. Mid-training often updates every parameter, but it
+need not. Next-token prediction is also not a unique boundary because
+supervised fine-tuning can express a token-level likelihood loss. A phase is
+classified by the combination of its place in the pipeline, its data and
+supervision, and the model property it is intended to change.
+
+This also corrects a common false distinction. @gls-continued-pretraining is a
+method: resume a pretrained model on more self-supervised data. A mid-training
+phase can be continued pretraining. In Liu et al.'s experiments, “continued
+pretraining” names the special comparison that switches to 100 percent
+specialist data, while “midtraining” keeps specialist and broad data mixed
+[@liu2025midtraining]. Other papers use continued pretraining more broadly, so
+the mixture must be stated rather than inferred from the name.
+
+Post-training then changes what is supervised. It may use @gls-sft on
+demonstrations, @gls-dpo from chosen-versus-rejected preferences, @gls-rlvr
+from automatically checked outcomes, or other policy and safety objectives.
+Those later phases can still teach capabilities. The narrower claim is that a
+well-chosen bridge can reduce the distribution shift they must absorb.
 
 ```{dot}
 //| label: fig-mid-training-boundary
-//| fig-cap: "Mid-training sits between broad pre-training and post-training. It still uses pretraining-like updates, but changes the data mixture, schedule, or context window so post-training starts from a closer distribution."
+//| fig-cap: "A phase is identified by what changes and why. Mid-training usually retains self-supervised token prediction while changing data, schedule, or trained length; post-training changes the supervision used to shape behavior."
 digraph midtraining {
   bgcolor="transparent";
   rankdir=LR;
   nodesep=0.45; ranksep=0.45;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
   edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  A [label="Broad pre-training\nweb, books, code,\nmultilingual mix"];
-  B [label="Mid-training\nquality anneal,\ndomain bridge,\ncontext extension", fillcolor="#dbeafe"];
-  C [label="Post-training\nSFT, preference,\nverifiable rewards,\nsafety tuning"];
-  D [label="Served model\nevaluated behavior,\nlatency and policy"];
-  A -> B [label="same base objective"];
-  B -> C [label="closer substrate"];
-  C -> D [label="behavioral interface"];
+  A [label="Broad pre-training\nheterogeneous data\nbase objective"];
+  B [label="Mid-training\nselected mixture, schedule,\nor trained length", fillcolor="#dbeafe"];
+  C [label="Post-training\ndemonstrations, preferences,\nrewards, policies"];
+  D [label="Served model\nquality, latency, policy"];
+  A -> B [label="capability bridge"];
+  B -> C [label="adapt behavior"];
+  C -> D [label="deploy and evaluate"];
 }
 ```
 
-## The bridge view
+## Quantify the distributional bridge
 
-The most useful model of mid-training is a distributional bridge. Suppose
-$D_0$ is the broad pretraining distribution, where $D_s$ denotes a specialist
-slice: code, math derivations, instruction-formatted problems, high-quality
-web, or long documents. A simple mixture schedule is
+Let $P$ denote the broad pretraining distribution and $Q$ a specialist
+distribution such as code, mathematical text, scientific papers, or long
+documents. At step $t$, a mixture can be written as
 
 $$
-D_t = (1 - \alpha_t)D_0 + \alpha_t D_s,\qquad 0 \leq \alpha_t \leq 1.
+\mathcal D_t=(1-\alpha_t)P+\alpha_t Q,
+\qquad 0\leq\alpha_t\leq1.
 $$
 
-In words, if $\alpha_t=0$, nothing has changed. If $\alpha_t=1$, the run has
-become pure continued pretraining on the specialist domain. The middle is the
-bridge. It keeps enough broad data to preserve general language modeling while
-making the next post-training distribution less foreign. Controlled experiments
-in 2025 found this especially helpful for math and code, and found timing more
-important than the exact mixture weight in the studied code setting
+Here, $\mathcal D_t$ is the sampling distribution at step $t$ and $\alpha_t$
+is the probability of drawing a token or example from $Q$ under the stated
+sampler. At $\alpha_t=0$, the phase continues on broad data. At
+$\alpha_t=1$, it makes a full specialist switch. Values in between replay
+broad data while increasing specialist exposure. They may reduce forgetting,
+but do not guarantee it.
+
+The final mixture weight does not reveal the total specialist dose. If the
+phase contains $T$ equal-token steps, its average specialist share is
+
+$$
+\bar\alpha=\frac{1}{T}\sum_{t=1}^{T}\alpha_t.
+$$
+
+Here, $\bar\alpha$ is the fraction of phase tokens expected to come from $Q$;
+$T$ is the number of equal-token training steps; and $\alpha_t$ is the
+specialist share at step $t$. A comparison of “early” and “late” introduction
+is confounded if their $T\bar\alpha$ specialist tokens differ.
+
+For illustration, suppose normalized progress is $u\in[0,1]$, specialist data
+starts at $s$, and its share ramps linearly to $a$ at the end:
+
+$$
+\alpha(u)=
+\begin{cases}
+0, & 0\leq u<s,\\
+a\dfrac{u-s}{1-s}, & s\leq u\leq1,
+\end{cases}
+\qquad
+\bar\alpha=\frac{a(1-s)}{2}.
+$$
+
+Here, $s$ is the introduction point, $a$ is the final specialist share, and
+$\bar\alpha$ is the whole-phase specialist-token fraction under a constant
+token rate. This linear ramp is an accounting example, not a claim that it is
+the best schedule. Liu et al. instead studied fixed mixture weights after
+several introduction points. Their timing and weight effects interacted in
+small code experiments, so “earlier is better” is not a universal rule
 [@liu2025midtraining].
 
 ```{=html}
 <figure id="fig-mid-training-bridge">
 <div class="viz" data-viz="midtraining-bridge"></div>
-<figcaption>A toy bridge schedule. Introducing a specialist slice earlier and keeping it mixed with broad data improves target fit while preserving more general retention than an abrupt full switch. The curves are illustrative, not measured.</figcaption>
+<figcaption>An exact token-accounting view of the illustrative linear ramp above. The orange area is the expected specialist-token fraction over the whole run. It makes no claim about resulting capability or retention.</figcaption>
 </figure>
 ```
 
-This is why a late high-quality slice is not merely a better corpus. It is a
-timing decision. A clean math or code distribution can be powerful when the
-model still has enough steps and learning rate left to internalize it. Arrive
-too late and the slice mostly polishes surface statistics; switch to it too
-abruptly and it can erase broad capability. There is also the case where the
-timing is fine but the aim is not: a slice introduced without a downstream
-target just optimizes the wrong gap.
+The runnable calculation shows why introduction time and final share cannot be
+reported separately from total exposure.
 
-## Three recipes in the wild
+:::: {.runnable}
+```python
+def specialist_share(progress, start, final_share):
+    """Linear mixture ramp over normalized training progress."""
+    if not 0 <= progress <= 1:
+        raise ValueError("progress must be between 0 and 1")
+    if not 0 <= start < 1 or not 0 <= final_share <= 1:
+        raise ValueError("invalid schedule")
+    if progress < start:
+        return 0.0
+    return final_share * (progress - start) / (1 - start)
 
-**Quality annealing** gives the final part of pretraining a denser, cleaner
-signal. OLMo 2 reports a specialized Dolmino Mix 1124 introduced during the
-annealing phase of pretraining, improving downstream capability while keeping
-the training data, code, logs, and checkpoints open [@olmo2025olmo2].
-MiniCPM makes the scheduling problem explicit through
-@gls-warmup-stable-decay: a long stable learning-rate plateau can keep a shared
-main branch alive, then branch into decay phases for different stopping points
-or domain-adaptation experiments [@hu2024minicpm]. This turns "the end of
-pretraining" from a single terminal event into a place where recipes can be
-composed.
 
-**Domain mid-training** moves the model toward a specialist language before
-post-training gives it assistant behavior. Qwen2.5-Coder is reported as a
-code-specific model built on Qwen2.5 and further trained on more than 5.5T
-tokens with cleaned code, synthetic data, and balanced mixing while retaining
-general and math ability [@hui2024qwen25coder]. DeepSeekMath starts from a
-coder base and continues training on 120B math-related tokens mixed with
-natural language and code before the later SFT and reinforcement-learning
-stages [@shao2024deepseekmath]. The stack implication is direct: the base model
-should meet post-training halfway, especially when the target format is far
-from ordinary web text.
+start = 0.60
+final_share = 0.30
+total_tokens = 100_000_000_000
+whole_run_share = 0.5 * final_share * (1 - start)
 
-**Long-context mid-training** changes the length distribution and positional
-regime. @gls-rope scaling methods such as Position Interpolation and YaRN make
-extension cheaper by avoiding raw extrapolation beyond the trained positional
-range [@chen2023position; @peng2023yarn]. But long context is not only a
-positional method. Qwen2.5-1M reports long-context pre-training, long-data
-synthesis, progressive pre-training, and multi-stage SFT to reach 1M-token
-contexts without giving up short-context performance [@yang2025qwen251m].
-That belongs here because the model is being taught a new sequence-length
-distribution before serving has to schedule the resulting KV-cache pressure.
+for progress in (0.0, 0.4, 0.6, 0.8, 1.0):
+    print(f"progress={progress:.1f}: specialist={specialist_share(progress, start, final_share):.1%}")
 
-## What gets tuned
+print(f"whole-run specialist share: {whole_run_share:.1%}")
+print(f"specialist tokens: {total_tokens * whole_run_share / 1e9:.1f}B")
+print(f"broad tokens: {total_tokens * (1 - whole_run_share) / 1e9:.1f}B")
+```
+::::
 
-Mid-training has fewer objectives than post-training, but the knobs are
-dangerous because each one changes what the later model can become.
+## Keep the data schedule separate from the learning rate
 
-- **Mixture.** The data plane from @sec-data-curation decides the candidate
-  sources; mid-training decides when and how much of each source enters the
-  stream. Proxy methods such as DoReMi make mixture selection measurable, but
-  the final choice still depends on the target post-training distribution
-  [@xie2023doremi].
-- **Timing.** The same specialist slice can be weak when introduced late and
-  destructive when introduced as a hard switch. The bridge experiments put
-  timing above exact mixture weight for the code setting they studied
-  [@liu2025midtraining].
-- **Learning-rate schedule.** Cosine decay (the learning rate following a
-  cosine curve down to near zero), WSD, and branch-and-decay recipes
-  decide whether the model can still move. A late high-quality phase with too
-  little learning rate is mainly evaluation dressing; too much learning rate
-  can reopen broad loss.
-- **Format.** Instruction-formatted data can appear before SFT, but it is still
-  next-token data unless the objective changes. This gives the model syntax
-  and discourse forms without yet optimizing preference, helpfulness, or
-  refusal behavior.
-- **Context length.** Long-document mixtures, RoPE scaling, sequence packing,
-  and attention kernels must be aligned with @sec-training-at-scale and
-  @sec-serving-problem, because a longer context learned during training
-  becomes a memory and scheduling cost at inference time.
+“Annealing” is used for two different choices: changing the data near the end
+of training and decaying the learning rate. They can happen together, but they
+are not the same intervention. A generic warmup-stable-decay (WSD) schedule is
+
+$$
+\eta(t)=
+\begin{cases}
+\eta_{\max}w(t/T_w), & 0\leq t<T_w,\\
+\eta_{\max}, & T_w\leq t<T_s,\\
+\eta_{\max}d((t-T_s)/(T_e-T_s)), & T_s\leq t\leq T_e.
+\end{cases}
+$$
+
+Here, $\eta(t)$ is the learning rate at step $t$; $\eta_{\max}$ is the stable
+rate; $T_w$ ends warmup; $T_s$ starts decay; $T_e$ ends the branch; $w$ rises
+from 0 to 1; and $d$ falls from 1 to the chosen terminal ratio. Linear, cosine,
+and other choices for $w$ and $d$ produce different schedules.
+
+MiniCPM used WSD so a checkpoint on the stable plateau could support continued
+training and multiple decay branches [@hu2024minicpm]. That is an experimental
+convenience, not permission to splice schedules casually. A branch must record
+its source checkpoint, optimizer and scheduler state, new data manifest,
+learning-rate path, token count, and random seeds. Resetting optimizer state or
+raising the learning rate is another intervention and needs its own control.
+
+## Three uses of the phase
+
+### Quality annealing
+
+**Quality annealing** shifts a late data curriculum toward sources selected for
+quality or downstream usefulness. In OLMo 2, the first stage consumes roughly
+90 to 95 percent of training FLOPs. A final 5 to 10 percent switches to Dolmino
+Mix 1124 while the learning rate decays. The specialized mix includes filtered
+web data, decontaminated task data, academic and reference sources, Q&A, and
+synthetic mathematics [@olmo2025olmo2]. That result establishes one documented
+recipe, not a general law that cleaner data is always best late. The source
+weights, filters, duplicates, and benchmark-overlap checks remain part of the
+claim.
+
+A “high-quality” bucket should therefore be decomposed into observable
+properties: source provenance, filter thresholds, document and language mix,
+deduplication policy, synthetic-data share, and contamination results. Otherwise
+the phase cannot be reproduced or explained.
+
+### Domain mid-training
+
+**Domain mid-training** uses self-supervised specialist data before behavior
+adaptation. Qwen2.5-Coder reports 5.2 trillion tokens of file-level training,
+then roughly 300 billion tokens of repository-level long-context training. Its
+mixture combines code, text, and mathematics, and its objectives include both
+next-token prediction and fill-in-the-middle code completion
+[@hui2024qwen25coder]. DeepSeekMath starts from the pre-decay
+DeepSeek-Coder-Base-v1.5 7B checkpoint and trains for 500 billion tokens. The
+reported mixture includes a roughly 120-billion-token filtered math corpus,
+AlgebraicStack, arXiv, GitHub code, and English and Chinese web text
+[@shao2024deepseekmath]. These are useful lineage examples, but neither
+isolates the causal contribution of every mixture component.
+
+Earlier domain-adaptive pretraining work showed that a second self-supervised
+phase can improve downstream tasks in biomedical, computer-science, news, and
+review domains [@gururangan2020dontstop]. Modern mid-training adds scale,
+mixture replay, and a deliberate handoff to post-training. DoReMi and related
+proxy methods can propose domain weights, but proxy gains must still transfer
+to the target model and target evaluation [@xie2023doremi].
+
+### Long-context mid-training
+
+**Long-context mid-training** is this book's functional grouping for a phase
+that changes trained sequence length before final behavior adaptation. It was
+not part of Liu et al.'s midtraining experiments. A usable extension requires
+three coordinated changes: a positional method, data containing dependencies
+at the new lengths, and a training system that can afford longer attention.
+
+For simple Position Interpolation, $L_{\mathrm{train}}$ denotes the original
+trained length, $L_{\mathrm{ext}}$ the new length, and $m$ a position in the
+extended sequence. The position supplied to the model is
+[@chen2023position]
+
+$$
+s=\frac{L_{\mathrm{ext}}}{L_{\mathrm{train}}},
+\qquad
+m'=\frac{m}{s}.
+$$
+
+Here, $s$ is the extension factor, $m$ is the token's position in the extended
+sequence, and $m'$ is the interpolated position supplied to @gls-rope. This
+keeps positions inside the range seen during the original training. YaRN is not
+just the same linear map: it treats RoPE frequency bands differently and
+rescales attention logits, with empirical settings that should not be assumed
+universal [@peng2023yarn].
+
+Position handling alone does not teach the model to combine distant evidence.
+Qwen2.5-1M illustrates the full stack. Its reported pretraining curriculum
+progressed from 4K through 32K, 65,536, 131,072, and 262,144 tokens. The later
+one-million-token input claim combines that training with inference-time
+position and attention methods; its multi-stage SFT belongs to post-training,
+not to this phase [@yang2025qwen251m]. A configured input limit is therefore
+not the same as a trained or effective context length.
+
+| Length | Meaning |
+|---|---|
+| Trained length | maximum sequence length present in gradient updates |
+| Accepted length | maximum input the runtime permits |
+| Effective length | longest input meeting a stated quality threshold on a stated task |
+| Deployable length | longest input meeting memory and latency requirements in production |
+
+The compute budget changes too. For dense causal attention over sequences of
+lengths $L_i$, the number of query-key pairs is
+
+$$
+N_{\mathrm{pairs}}
+=H\sum_i\frac{L_i(L_i+1)}{2}.
+$$
+
+Here, $H$ is the number of query heads, $L_i$ is the token length of sequence
+$i$, and $N_{\mathrm{pairs}}$ counts causal attention pairs. At a fixed token
+budget, replacing many short sequences with fewer long ones raises attention
+work roughly in proportion to typical sequence length. FlashAttention avoids
+materializing the full score matrix, but it does not remove this exact dense
+attention arithmetic. Sequence packing, context parallelism, and memory limits
+therefore connect this phase directly to @sec-training-at-scale.
+
+## Design it as a transfer experiment
+
+A mid-training run needs a control matrix, not only a new training loss. At
+minimum, branch the same source checkpoint into:
+
+1. broad-data continuation for the same token budget;
+2. a full specialist switch;
+3. one or more mixed schedules; and
+4. when post-training compatibility is the goal, a direct-to-post-training
+   branch.
+
+Keep total tokens, batch semantics, evaluation checkpoints, and as much of the
+optimizer path as possible comparable. Report both the final mixture and
+cumulative specialist tokens. If a schedule changes several things at once,
+for example data, learning rate, and sequence length, add ablations or describe
+the result as a bundle rather than assigning credit to one knob.
+
+Evaluation must remain fixed while the training distribution moves:
+
+- **Target transfer:** held-out specialist loss and capability evaluations
+  chosen before the run.
+- **General retention:** broad, multilingual, and cross-domain held-outs, plus
+  short-context checks for a length extension.
+- **Post-training compatibility:** the same small SFT or preference recipe
+  applied to comparable intermediate checkpoints. Liu et al.'s strongest
+  claims concern outcomes after SFT at 70M and 160M parameters, not arbitrary
+  frontier-scale models [@liu2025midtraining].
+- **Long-context use:** a matrix of length, evidence depth, distractor count,
+  and task type. Needle retrieval alone is insufficient; models can accept
+  long inputs while failing to use middle evidence or combine multiple facts
+  [@liu2023lost; @hsieh2024ruler].
+- **Data integrity:** re-run deduplication and decontamination on the assembled
+  mixture, complete long documents, and generated instruction-like material.
+
+Training loss on the new mixture cannot serve as the retention metric because
+the measurement distribution changed. A simple fixed-distribution measure is
+
+$$
+\Delta_P=J_P(\theta_{\mathrm{after}})-J_P(\theta_{\mathrm{before}}).
+$$
+
+Here, $J_P$ is loss on a frozen held-out sample from broad distribution $P$;
+$\theta_{\mathrm{before}}$ is the source checkpoint; and
+$\theta_{\mathrm{after}}$ is the checkpoint after the phase. Positive
+$\Delta_P$ means broad held-out loss worsened. It does not by itself prove that
+every general capability declined, so capability evaluations remain necessary.
+Every reported loss also needs a named tokenization policy.
+
+## Record the handoff contract
+
+The output is a new base checkpoint with lineage. Its handoff record should
+include:
+
+- source checkpoint and architecture hash;
+- optimizer, scheduler, and precision state;
+- ordered data manifests, weights, filters, and sampling schedule;
+- tokens seen by source, language, format, and sequence-length bucket;
+- tokenizer version, packing masks, document boundaries, and position-ID
+  policy;
+- trained context length and every RoPE or attention parameter;
+- contamination report and fixed evaluation results over time; and
+- the post-training recipe versions used to compare transfer.
+
+This record separates a reproducible phase from a model file whose provenance
+is “continued for a while.” It also lets a later team determine whether a
+regression entered through data, optimization, length extension, or
+post-training.
 
 ::: {.callout-important}
 ## What's contested
-The term "mid-training" is newer than the practice. Model reports often
-describe late curriculum training, annealing data, domain continuation, or
-context extension without using one common name. The useful distinction is
-therefore functional rather than terminological. If the phase still uses a
-pretraining-like objective, updates the whole model, and exists to move the
-base distribution before post-training, it belongs in this layer. If it changes
-assistant behavior through demonstrations, preferences, rewards, or policies,
-it belongs to Part III.
+
+“Mid-training” is a useful working term, not a settled scientific boundary.
+Some teams call the same operation late-stage pretraining, annealing, domain
+adaptation, or continued pretraining. Context extension stretches the term
+further because it changes position and length as well as data. The durable
+distinction is operational: publish the source checkpoint, objective, mixture,
+schedule, token budget, trained length, and intended handoff. Readers can then
+compare phases even when their names differ.
 :::
 
 ::: {.callout-tip}
-## Constraint arrow
-Post-training cannot reliably add capabilities that the base model never made
-available. It can elicit, rank, suppress, and format behavior, but its data and
-reward budgets are small compared with pretraining-scale token budgets. This
-is why @sec-verifiable-rewards and @sec-inference-time-scaling repeatedly point
-back to base capability. Mid-training is the last large-token chance to reshape
-that base before alignment and evaluation start measuring behavior.
+## Lower-layer constraint
+
+The training and serving systems bound the curriculum. Longer sequences raise
+attention work and activation memory; specialist sources may be too small to
+feed every replica without repetition; a changed tokenizer or position scheme
+may break checkpoint compatibility. @sec-training-at-scale determines what can
+be trained, while @sec-serving-problem determines which accepted context
+lengths are affordable to serve. A capability bridge that violates either
+constraint does not produce a deployable model.
 :::
 
-## Failure modes
+## Diagnose the layer before spending the run
 
-Mid-training fails quietly. The loss may improve on the new mixture while the
-model forgets broad language, loses multilingual coverage, or overfits to a
-format that later post-training will amplify. Specialist code data can move a
-model toward compiler-friendly syntax at the expense of prose. With math
-traces, the symbolic style transfers but reliable calculation does not always
-come with it. Long-context extension is its own trap: a model that passes
-retrieval probes can still use the middle of its context poorly. And a
-high-quality web slice can launder benchmark contamination if the
-decontamination contract from @sec-data-curation is not re-run after the slice
-is assembled.
+Different symptoms point to different interventions:
 
-The engineering failure is to treat mid-training as a cheap epilogue. It
-touches the optimizer state, learning-rate schedule, data manifest, tokenizer
-assumptions, position encodings, evaluation decontamination, and checkpoint
-lineage. It also creates new model variants that need names, model cards, and
-downstream compatibility tests. If the run cannot answer which distribution
-changed, when it changed, how much broad data remained, and which evaluations
-protected against forgetting, the phase is not reproducible.
+| Symptom | Evidence to gather | Likely intervention |
+|---|---|---|
+| high held-out loss on specialist text | fixed specialist and broad losses | domain or mixture phase |
+| adequate base likelihood but wrong response format | demonstrations and behavioral evaluation | post-training |
+| long input accepted but evidence use collapses with depth | length-by-depth task matrix | long-data/position training, not a larger runtime limit alone |
+| quality holds but long prompts exceed memory or latency | memory and prefill profiles | serving or attention-system change |
+| specialist gain accompanies broad regression | fixed retention suite and cumulative mixture dose | lower specialist share, more replay, or a different checkpoint |
 
-## Where it lands in the stack
+This diagnosis prevents mid-training from becoming a default answer to every
+model gap. It is justified when the base checkpoint's data or length
+distribution is the limiting factor and the expected gain survives a fixed
+retention and post-training comparison.
 
-Part I now ends with a boundary rather than a cliff. @sec-scaling-laws fixes
-the budget, @sec-data-curation defines the sources, @sec-tokenization settles the
-vocabulary, @sec-transformer-architecture and @sec-moe-ssm-hybrids shape the
-model body, and @sec-training-at-scale makes the run possible. Mid-training
-decides whether that run stops as a broad base model or bends toward the
-capability distribution that Part III will adapt.
-
-That distinction keeps the book's later layers clean. When @sec-sft-peft adapts
-behavior, it relies on a code assistant already understanding code syntax,
-without being the place that taught it. @sec-verifiable-rewards trains with
-checkable rewards, yet none of those rewards conjure the mathematical substrate
-they exploit. Serving long prompts in @sec-structured-long-context inherits one
-fact it cannot change: whether the model was trained to use long evidence at
-all. And the buy-tune-continue decision in @sec-training-practice turns on this
-boundary, because it is what tells you whether a problem is really a
-post-training task or a mid-training one.
+Part I ends at that handoff. @sec-scaling-laws set the budget,
+@sec-data-curation defined the sources, @sec-tokenization fixed the symbol
+interface, @sec-transformer-architecture and @sec-moe-ssm-hybrids fixed the
+model body, and @sec-training-at-scale made the run executable. Mid-training
+decides whether the resulting base remains broad or moves toward a declared
+target. Part III then changes the supervision used to shape its behavior.
 
 ## Further reading
 
