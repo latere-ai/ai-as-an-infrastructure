@@ -194,13 +194,13 @@ SPECS = {
         "type": "line",
         "x": [8, 16, 32, 64, 128, 256],
         "series": [
-            {"label": "autoregressive", "y": [0.10, 0.20, 0.38, 0.70, 1.25, 2.20], "color": DATA},
-            {"label": "iterative NAR", "y": [0.18, 0.25, 0.34, 0.48, 0.70, 1.02], "color": ACCENT},
+            {"label": "autoregressive", "y": [8, 16, 32, 64, 128, 256], "color": DATA},
+            {"label": "iterative NAR", "y": [8, 8, 8, 8, 8, 8], "color": ACCENT},
         ],
         "xlabel": "output length (tokens)",
-        "ylabel": "decode latency (relative)",
+        "ylabel": "dependent steps",
         "logx": True,
-        "ylim": (0, 2.35),
+        "ylim": (0, 270),
     },
     "speech-and-voice-1": {
         "type": "stacked",

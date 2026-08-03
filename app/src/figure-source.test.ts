@@ -134,6 +134,15 @@ test("programs solvers figure keeps repair loop off the main pipeline", () => {
   expect(source).not.toContain('"repair loop"');
 });
 
+test("NAR figure reports dependency depth rather than synthetic latency", () => {
+  const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
+  const spec = catalog.match(/"nar-diffusion-lms-1": \{[\s\S]*?\n    \},/)?.[0] ?? "";
+  expect(spec).toContain('"ylabel": "dependent steps"');
+  expect(spec).toContain('"label": "autoregressive", "y": [8, 16, 32, 64, 128, 256]');
+  expect(spec).toContain('"label": "iterative NAR", "y": [8, 8, 8, 8, 8, 8]');
+  expect(spec).not.toContain("latency");
+});
+
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();

@@ -560,7 +560,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/generative/02-nar-diffusion-lms.qmd",
-      ["autoregressive teacher", "discrete diffusion", "2025 wave"],
+      ["dependency depth", "weighted family of masked-language-model losses", "standard causal prefix KV cache"],
     ],
     [
       "zh/generative/02-nar-diffusion-lms.qmd",

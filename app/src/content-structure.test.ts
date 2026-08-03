@@ -743,6 +743,43 @@ test("the diffusion and flow chapter keeps model path sampler and cost distinct"
   expect(chapter).not.toContain("rankdir=LR;");
 });
 
+test("the non-autoregressive chapter separates factorization diffusion and serving cost", () => {
+  const chapter = flat("en/generative/02-nar-diffusion-lms.qmd");
+
+  for (const required of [
+    "The two ideas overlap, but they are not synonyms",
+    "p_\\theta(y\\mid c,L,z)",
+    "dependency depth, total model work, output-length handling",
+    "not a mathematical requirement for all parallel generation",
+    "does not inherit a diffusion likelihood bound merely because it uses masks",
+    "q(x_t\\mid x_{t-1})",
+    "a weighted family of masked-language-model losses",
+    "An existing masked language model does not become a complete generator",
+    "one full-sequence diffusion evaluation is not cost equivalent to one cached autoregressive token step",
+    "It is different from a causal KV cache",
+    "the standard causal prefix KV cache cannot simply be carried between rounds",
+    "They did not create one controlled comparison in which only the factorization changed",
+    "Perplexity is not directly comparable when tokenizers differ",
+    "rankdir=TB;",
+  ]) {
+    expect(chapter, `missing NAR/diffusion contract: ${required}`).toContain(required);
+  }
+
+  for (const rejected of [
+    "almost never trained on real data",
+    "the reason this is essential",
+    "Mask-Predict is a discrete diffusion sampler",
+    "The deepest result in this area",
+    "the commercial edge is already shipping",
+    "The scale objection then fell",
+    "every frontier model is still autoregressive",
+    "through the whole 2025 wave",
+    "rankdir=LR;",
+  ]) {
+    expect(chapter).not.toContain(rejected);
+  }
+});
+
 test("serving retrieval and evaluation first uses explain operational terms locally", () => {
   const required = [
     ["zh/inference/01-serving-problem.qmd", "@gls-mqa（多查询注意力，让多个查询头共享同一套键/值头）"],
