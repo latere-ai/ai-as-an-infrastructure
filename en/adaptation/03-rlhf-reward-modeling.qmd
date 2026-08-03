@@ -1,383 +1,537 @@
 # RLHF and Reward Modeling {#sec-rlhf}
 
-Supervised fine-tuning in @sec-sft-peft teaches a model the shape of an
-answer. @sec-behavior-specs explains where the preference labels and rubrics
-come from. This chapter starts once those comparisons exist: train a reward
-model on human comparisons, optimize a *policy* (the model being trained)
-against that reward with @gls-ppo, replace the human labeler with an AI one in
-constitutional and
-@gls-rlaif variants, and then confront the @gls-reward-hacking failure that
-shadows the whole approach.
-A learned reward needs a KL constraint, and optimizing the
-reward too hard can make the model worse.
+Preference data does not update a language model by itself. Reinforcement
+learning from human feedback (RLHF) adds two learned systems: a reward model
+that estimates which responses the labeling procedure would prefer, and a
+policy that is updated to receive higher estimated reward. The first compresses
+comparisons into a scalar score. The second searches for responses that score
+well.
 
-The same tension runs through the whole pipeline. Why a preference signal is the
-right thing to learn sets it up, and the reward and its KL constraint are the
-machinery that holds that signal in place. The recipe behind them has a history
-worth tracing, and the proxy, once optimization leans on it, breaks in one
-precise way. The balances and operational reality follow from that.
+The familiar recipe is to train a reward model on human comparisons, then
+optimize a *policy* (the model being trained) against that reward with
+@gls-ppo. Some constitutional and @gls-rlaif variants change who produces some of
+the comparisons, not what the reward model mathematically represents. In the
+classic recipe, a learned reward needs a KL constraint because the score is a
+proxy learned on a limited response distribution. Neither the constraint nor
+PPO makes that proxy correct.
 
-## Why a preference, not a demonstration
+This chapter keeps three objects separate: the preference record is a
+measurement, the reward model is an estimator fitted to those measurements,
+and the policy objective decides how aggressively to use the estimate.
+@sec-behavior-specs covered the first object. This chapter starts with the
+second and follows it through an online policy update.
 
-SFT optimizes a single demonstrated response per prompt. It cannot express
-that one answer is better than another, only that a given answer is the
-target. Many behaviors people care about are comparative and hard to
-demonstrate: be helpful but not sycophantic, refuse the harmful request
-without over-refusing the benign one near it, prefer the concise correct
-answer over the padded one. You can recognize the better of two responses far
-more reliably than you can write the ideal one from scratch, and there is no
-single ground-truth string to imitate.
+## RLHF learns a judge, then trains a policy
 
-The signal is a preference, and the reward that encodes it is a proxy for human
-judgment, not a checkable fact. When the reward becomes verifiable ground truth,
-a unit test that passes or a math answer that matches, the machinery is related
-but the failure modes change. @sec-verifiable-rewards separates those reward
-sources, and @sec-training-to-reason follows the reasoning training algorithms
-that exploit them.
-Here the reward is learned and therefore wrong somewhere. The problem, then, is
-to optimize against a reward you know to be imperfect without letting the policy
-discover and exploit exactly where it is wrong. The rest of the pipeline
-is the machinery that makes optimizing a known-imperfect reward safe enough to
-be useful.
+For some open-ended tasks, comparing two candidate responses is more practical
+than writing an ideal answer. A labeler can often identify the clearer summary
+or the more useful explanation even when several answers would be acceptable.
+That advantage is task-dependent. A vague rubric, missing expertise, or a
+forced choice between equally good responses still produces a poor label.
 
-## Building the reward
+The classic assistant-training pipeline has three stages:
 
-The pipeline has three stages: start from an SFT model, train a reward model
-on human preferences, then reinforce the policy against that reward. The
-InstructGPT paper fixed this recipe as the standard [@ouyang2022training].
+1. **Supervised fine-tuning.** Demonstrations produce an assistant-shaped model,
+   as described in @sec-sft-peft.
+2. **Reward modeling.** Labelers compare responses sampled for the same prompt.
+   A reward model learns to predict those comparisons.
+3. **Policy optimization.** The current policy samples new responses. The
+   frozen reward model scores them, a frozen reference measures policy drift,
+   and a policy-gradient optimizer updates the policy.
 
-The reward model turns comparisons into a scalar. Take an SFT backbone,
-replace the token-prediction head with a scalar head, and train it so that
-for a prompt $x$ with a human-preferred response $y_w$ and a dispreferred
-$y_l$, it scores the winner higher. Here the subscripts mean winner and loser:
-$y_w$ is the preferred sample and $y_l$ is the rejected one. The Bradley-Terry model gives the
-probability that $y_w$ beats $y_l$ as a sigmoid of the score difference, and
-the reward model is fit by maximizing that likelihood:
+Only the third stage is reinforcement learning. The reward-model stage is
+supervised learning on comparison labels. Keeping the stages distinct matters
+because they fail differently: the labels may express the wrong criterion, the
+reward model may generalize poorly, or the policy may exploit an error in an
+otherwise useful reward model.
+
+## Train a scorer from comparisons
+
+Let a reward-model dataset contain $N$ comparisons:
 
 $$
-\mathcal{L}_{\text{RM}} = - \log \sigma\big(r_\phi(x, y_w) - r_\phi(x, y_l)\big).
+\mathcal{D}=\{(x_i,y_i^+,y_i^-)\}_{i=1}^N,
 $$
 
-Here $r_\phi$ is the learned scalar reward, $\sigma$ is the logistic sigmoid
-(an S-curve squashing any real number into $(0,1)$),
-$y_w$ is the response humans preferred, and $y_l$ is the one they rejected. The
-loss is small only when the winner's score exceeds the loser's by enough margin,
-so the model learns an ordering of responses rather than a target reward value.
-Only the difference of scores is supervised, so the reward is identified up to an
-additive constant, which is why a reward model gives a meaningful ranking but not
-a calibrated absolute number. Labels come from human annotators ranking model
-samples, and their quality sets a ceiling on
-everything downstream: annotator disagreement is the noise floor, ambiguous
-or underspecified guidelines bias the whole reward, and the reward model
-overfits the narrow distribution of responses it was trained to compare. This
-is the most failure-prone artifact in the pipeline, because every later step
-trusts it.
-
-@fig-rlhf-reward-modeling-2 shows the Bradley-Terry curve and why only the
-difference of scores is identified: shifting both scores by the same constant
-leaves the preference probability unchanged.
-
-![Schematic of the Bradley-Terry preference model. The probability that the preferred response wins is a sigmoid of the score difference, so two score pairs with the same difference give the same probability and an absolute shift of both scores does nothing. Idealized illustration, after the Bradley-Terry model (Bradley and Terry, 1952).](/figures/rlhf-reward-modeling-2.svg){#fig-rlhf-reward-modeling-2}
-
-## The KL constraint
-
-Reinforcement learning then optimizes the policy to produce responses the
-reward model scores highly. Here it means letting the policy generate
-responses, scoring them with the reward model, and pushing the policy's token
-probabilities toward the higher-scoring ones (a *policy-gradient* update).
-Unlike the supervised reward-model loss above, which learns from labeled
-winner and loser targets, this learns from a reward signal inside a sampling
-loop. The objective is not simply to maximize reward.
-A reward model is a proxy, and a policy that maximizes a proxy without
-constraint will leave the distribution the reward model understands and find
-high-scoring artifacts. The fix is a constraint: penalize the policy for
-drifting from the SFT reference it started at, measured as a per-token @gls-kl:
-how different the new token distribution is from the reference distribution.
-The objective is
+where $x_i$ is prompt $i$; $y_i^+$ is the response preferred under the
+annotation procedure; $y_i^-$ is the other response; and $N$ is the number of
+recorded comparisons. A reward model $r_\phi(x,y)$ with parameters $\phi$
+assigns one scalar to a prompt-response pair. Under the Bradley-Terry model
+[@bradley1952rank], define
 
 $$
-\max_{\pi_\theta}\; \mathbb{E}_{x,\, y \sim \pi_\theta}\big[\, r_\phi(x, y)\,\big]
-\;-\; \beta \, \mathrm{KL}\big(\pi_\theta(\cdot \mid x)\,\|\,\pi_{\text{ref}}(\cdot \mid x)\big),
+\Delta_i
+=r_\phi(x_i,y_i^+)-r_\phi(x_i,y_i^-),
+\qquad
+p_i=\sigma(\Delta_i)=\frac{1}{1+e^{-\Delta_i}},
 $$
 
-where $\pi_{\text{ref}}$ is the frozen SFT model and $\beta$ sets how strongly
-the KL term constrains drift. The expectation $\mathbb{E}_{x,\, y \sim \pi_\theta}$
-in front is an average over the responses the policy generates, where
-$y \sim \pi_\theta$ reads as $y$ drawn from the policy $\pi_\theta$. The KL term is the main reason RLHF is stable: it
-keeps the policy near the region where the reward model was trained, where its
-scores still mean something, and it preserves the fluency and knowledge the
-policy already had.
+and minimize the average negative log-likelihood
 
-PPO is the optimizer that maximizes this objective [@schulman2017proximal].
-It is a policy-gradient method with two ideas that make it usable on language
-models. A clipped surrogate objective bounds how far the policy moves in one
-update, by clipping the probability ratio between the new and old policy so a
-single batch cannot push the policy off a cliff. And a value model, a critic,
-of the same backbone estimates the expected reward from each partial
-generation, so the per-token advantage (how much better this token was than
-the critic expected) has lower variance than the raw reward alone. The KL
-penalty enters as a per-token shaping term added to the reward. The result is
-a four-model arrangement held in memory at once: the policy being trained, the
-frozen reference for the KL term, the reward model for the score, and the
-critic for the advantage.
+$$
+\mathcal{L}_{\mathrm{RM}}(\phi)
+=-\frac{1}{N}\sum_{i=1}^{N}\log p_i.
+$$
+
+Here $\Delta_i$ is the score difference; $\sigma$ is the logistic sigmoid; and
+$p_i$ is the model's probability that the annotation procedure prefers
+$y_i^+$ to $y_i^-$. The model is never told that either response deserves an
+absolute reward such as 7. It is asked to make the observed winner more
+probable than the loser.
+
+A hard winner discards uncertainty. If the same pair receives $m_i$ valid votes
+and $n_i^+$ of them prefer $y_i^+$, a soft target
+$q_i=n_i^+/m_i$ can retain the vote split:
+
+$$
+\mathcal{L}_i
+=-q_i\log p_i-(1-q_i)\log(1-p_i).
+$$
+
+In this expression, $m_i$ is the vote count, $n_i^+$ is the number of votes for
+$y_i^+$, and $q_i\in[0,1]$ is their fraction. A value of $q_i=0.5$ can represent
+an even split or an explicit tie. It does not explain *why* annotators
+disagreed, so the raw votes, annotator metadata, and reasons described in
+@sec-behavior-specs should remain available.
+
+Rankings require another qualification. InstructGPT showed a labeler between
+four and nine responses, then derived every ordered pair implied by the ranking
+[@ouyang2022training]. A ranking of $K$ candidates yields
+$K(K-1)/2$ pairwise constraints, but not that many independent observations:
+the pairs share the same prompt, candidates, and labeler. Ouyang et al. grouped
+all pairs from one ranking into one training batch because treating them as
+independent updates caused rapid overfitting. Rankings amortize annotation
+effort; they do not manufacture independent evidence.
+
+A reward-model validation report should include held-out log loss, pairwise
+accuracy, and a calibration curve. Accuracy alone treats a probability of
+$0.51$ like $0.99$ when both select the same winner. Break the report down by
+prompt source, task, response length, candidate policy, safety category, and
+annotator group. RewardBench illustrates the need for structured slices by
+testing reward models on chat, reasoning, and safety comparisons whose winners
+sometimes differ for small but verifiable reasons [@lambert2024rewardbench].
+
+## Pairwise training fixes differences, not absolute quality
+
+The loss depends on a score difference. For any prompt-only offset $c(x)$,
+
+$$
+r'_\phi(x,y)=r_\phi(x,y)+c(x)
+$$
+
+produces exactly the same comparison probabilities because $c(x)$ cancels.
+Raw reward values therefore have no natural zero and should not be compared
+across prompts. Under a correctly specified and calibrated logistic model, a
+*difference* does have an interpretation: $\Delta=\log[p/(1-p)]$ is the fitted
+log-odds. For example, $p=0.75$ corresponds to
+$\Delta=\log 3\approx1.10$. This does not make either individual score an
+absolute measure of response quality.
+
+@fig-rlhf-reward-modeling-2 shows this invariance. Shifting both scores leaves
+the fitted probability unchanged.
+
+![The Bradley-Terry probability depends on the difference between two reward-model scores. Adding the same offset to both scores changes neither the difference nor the modeled preference probability. The individual scores are therefore not an absolute quality scale.](/figures/rlhf-reward-modeling-2.svg){#fig-rlhf-reward-modeling-2}
+
+Implementations often choose a convenient zero after training. InstructGPT
+shifted the reward-model bias so labeler demonstrations had mean reward zero
+[@ouyang2022training]. Centering in this way changes no score difference and no
+pairwise probability. Rescaling is different. Multiplying every reward by a
+positive constant preserves the ranking but changes the fitted probabilities
+and the reward's strength relative to the KL penalty. For reproducibility,
+reward scale and $\beta$ must be recorded together.
+
+The scalar itself is also an assumption. Bradley-Terry represents the compared
+responses with one latent ordering. Cyclic preferences, context-dependent
+criteria, and stable differences among annotators may not fit that ordering.
+Pooling them can still yield a useful predictor, but it does not turn plural
+judgments into one objective truth.
+
+## The policy objective has two terms
+
+Once the reward model is frozen, the policy generates responses and receives
+their learned scores. A common population objective is
+
+$$
+J(\theta)
+=\mathbb{E}_{x\sim\mathcal{D}_x,\,y\sim\pi_\theta(\cdot\mid x)}
+\left[
+r_\phi(x,y)
+-\beta\log\frac{\pi_\theta(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)}
+\right].
+$$
+
+Here $\mathcal{D}_x$ is the prompt distribution; $\pi_\theta$ is the policy
+being optimized, with parameters $\theta$; $y$ is a response sampled from that
+policy; $r_\phi$ is the frozen learned reward; $\pi_{\mathrm{ref}}$ is a frozen
+reference policy, usually derived from SFT; and $\beta>0$ controls the strength
+of the reference penalty. The first term rewards responses favored by the
+learned judge. The second makes responses costly when the policy assigns them
+much more probability than the reference does.
+
+The distribution-level quantity is @gls-kl: how different the new token
+distribution is from the reference distribution. Taking the expectation of the
+sampled sequence log-ratio under $\pi_\theta$ gives
+$\mathrm{KL}(\pi_\theta\|\pi_{\mathrm{ref}})$. For an autoregressive response
+$y=(y_1,\ldots,y_T)$,
+
+$$
+\log\frac{\pi_\theta(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)}
+=\sum_{t=1}^{T}
+\log\frac{\pi_\theta(y_t\mid x,y_{<t})}
+{\pi_{\mathrm{ref}}(y_t\mid x,y_{<t})}.
+$$
+
+In this sum, $T$ is the response length; $y_t$ is token $t$; and $y_{<t}$ is
+the preceding response prefix. Implementations use these sampled token
+log-ratios as reward-shaping terms. A sampled log-ratio is not itself the KL
+divergence, and an individual contribution can be negative. The KL is an
+expectation over tokens sampled from the policy.
+
+The penalty is a regularizer, not a certificate. A small measured KL does not
+show that the reward is correct, and a large $\beta$ can prevent useful changes.
+Some systems keep $\beta$ fixed; others adjust it to track a target KL. Either
+way, the achieved KL, not only the configured coefficient, belongs in the run
+record.
+
+## KL and PPO clipping constrain different moves
+
+PPO is one optimizer for the objective above [@schulman2017proximal]. It
+introduces a third policy notation that is easy to confuse with the reference.
+Here the rollout policy $\pi_{\mathrm{old}}$ is a snapshot that generated the current
+batch. The reference $\pi_{\mathrm{ref}}$ is the SFT anchor used across many
+batches. They usually are not the same model.
+
+Here $a_t=y_t$ is the sampled token and $s_t=(x,y_{<t})$ is its
+prompt-and-prefix state. PPO forms the importance ratio
+
+$$
+\rho_t(\theta)
+=\frac{\pi_\theta(a_t\mid s_t)}
+{\pi_{\mathrm{old}}(a_t\mid s_t)}
+$$
+
+and maximizes the clipped surrogate
+
+$$
+L_{\mathrm{clip}}(\theta)
+=\mathbb{E}_t\left[
+\min\left(
+\rho_t(\theta)\widehat{A}_t,
+\operatorname{clip}(\rho_t(\theta),1-\epsilon,1+\epsilon)
+\widehat{A}_t
+\right)
+\right].
+$$
+
+Here $a_t$ is the sampled token; $s_t$ is its prompt-and-prefix state;
+$\rho_t$ compares the updated policy with the rollout snapshot;
+$\widehat{A}_t$ is an estimated advantage; $\epsilon>0$ is the clipping width;
+and $\operatorname{clip}(z,l,u)$ truncates $z$ to the interval $[l,u]$. The
+advantage compares the shaped return from a partial response with a critic's
+prefix-conditioned baseline. This reduces gradient variance. It does not reveal
+which token was causally “good.”
+
+The two controls solve different problems:
+
+- The reference KL discourages cumulative semantic drift from the SFT policy.
+- PPO clipping limits the incentive to change sampled likelihood ratios far
+  beyond the clipping interval while reusing one rollout batch.
+
+Clipping does not impose a hard trust region or guarantee that the final policy
+stays within a chosen distance [@wang2019truly]. Learning rate, advantage
+normalization, value estimation, batching, and numerical stability still
+matter.
 
 <figure id="fig-rlhf-reward-modeling-stepper">
 <div class="viz" data-viz="stepper">
-<div data-chip="Sample" data-title="1 · Policy samples a completion">The policy being trained generates one response to the prompt, the sample that this whole iteration is scored and corrected against.</div>
-<div data-chip="Score" data-title="2 · Reward model scores it">The frozen reward model reads the prompt and the sampled response and returns a single scalar, the proxy for how much a human would prefer it.</div>
-<div data-chip="KL" data-title="3 · Reference gives per-token KL">The frozen SFT reference scores the same tokens, and the per-token gap between policy and reference is the KL that measures how far the policy has drifted.</div>
-<div data-chip="Baseline" data-title="4 · Critic gives a baseline">The critic estimates the expected reward from each partial generation, the baseline that says how good the response should have been at that point.</div>
-<div data-chip="Update" data-title="5 · Advantage updates policy and critic">The advantage is the reward, shaped by the KL penalty, minus the critic baseline, and a clipped PPO step uses it to update only the policy and the critic, while the reference and the reward model stay frozen.</div>
-<div data-chip="KL CONTROL" data-title="6 · β controls drift">The coefficient β scales the KL penalty, so a larger β constrains the policy more strongly toward the reference and holds it where the reward model's scores still mean something.</div>
+<div data-chip="Roll out" data-title="1 · Freeze a rollout snapshot">Copy the current policy state into π_old, sample fresh responses, and store the token log-probabilities that generated them.</div>
+<div data-chip="Score" data-title="2 · Apply the learned judge">The frozen reward model returns a latent score for each prompt-response pair. Differences between scores, not one score alone, represent modeled preference.</div>
+<div data-chip="Shape" data-title="3 · Compare with the reference">The frozen SFT reference scores the sampled tokens. Their sampled policy-to-reference log-ratios become KL shaping terms; the expectation of those terms is the KL divergence.</div>
+<div data-chip="Baseline" data-title="4 · Estimate expected return">The critic estimates the remaining shaped return from each prefix. Comparing the observed return with this baseline produces a lower-variance advantage estimate.</div>
+<div data-chip="Update" data-title="5 · Reuse the rollout batch">The ratio π_θ/π_old lets PPO update the policy from stored rollouts. The clipped surrogate removes some incentive for extreme ratio changes but does not hard-bound the policy.</div>
+<div data-chip="Check" data-title="6 · Test outside the reward">Measure achieved KL, held-out human or task quality, safety, and capability regressions before accepting the checkpoint. A higher learned reward alone is not a release criterion.</div>
 </div>
-<figcaption>Step through one PPO iteration, from the sampled completion to the β-controlled KL penalty that keeps the policy near its reference.</figcaption>
+<figcaption>One PPO iteration uses three distinct comparisons: the reward model evaluates the response, the reference regularizes accumulated drift, and π_old anchors reuse of the current rollout batch.</figcaption>
 </figure>
 
-@fig-rlhf-pipeline lays out the three stages and the four resident models in
-the PPO step. The reward model and the reference model are frozen, shown with
-dashed borders, while the policy and the critic are updated each step.
+## Four roles participate in the loop
+
+Classic PPO-based RLHF has four parameter roles. They are not necessarily four
+same-sized models loaded as full replicas on every accelerator.
+
+| Role | Updated during PPO? | Job | Implementation choices |
+|---|---:|---|---|
+| Policy $\pi_\theta$ | Yes | Generates responses and receives policy-gradient updates | Full model, adapters, or sharded actor |
+| Reference $\pi_{\mathrm{ref}}$ | No | Supplies log-probabilities for the drift penalty | Frozen copy, shared frozen weights, sharded or offloaded model |
+| Reward model $r_\phi$ | No | Scores complete prompt-response pairs | Separate scalar model, smaller model, or ensemble |
+| Critic $V_\psi$ | Yes | Predicts shaped return from prefixes | Separate value model or value head sharing a backbone |
+
+The rollout snapshot $\pi_{\mathrm{old}}$ is another logical policy state, but
+stored rollout log-probabilities can represent it during optimization. InstructGPT
+used a 6B reward model and a 6B value model even when training a 175B policy
+[@ouyang2022training]. That concrete design is why “four roles” should not be
+translated into “four copies of the policy.” Sharing, sharding, adapters,
+offloading, and recomputation change peak memory and throughput.
+
+@fig-rlhf-pipeline shows the data flow. Dashed boxes stay frozen during a PPO
+update; the policy and critic receive gradients.
 
 ```{dot}
 //| label: fig-rlhf-pipeline
-//| fig-cap: "The three-stage RLHF pipeline. Stages 1 and 2 produce the frozen reference and reward models, then the PPO loop holds four models resident at once. Dashed nodes are frozen. After Ouyang et al. (2022)."
+//| fig-cap: "RLHF first fits a reward model to comparisons, then runs an online policy loop. The policy and critic are updated; the reference and reward model stay frozen. The four boxes are logical roles, not a claim that four equal full-model replicas reside on each device."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
+  nodesep=0.22; ranksep=0.38;
+  graph [pad="0.08"];
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  sft [label="SFT model"];
-  prefs [label="Human preference pairs\ny_w preferred over y_l"];
-  rm [label="Reward model r_phi\nscalar head, Bradley-Terry loss"];
+  prefs [label="comparison records\nprompt + preferred + rejected"];
+  sft [label="SFT checkpoint"];
+  rmtrain [label="fit reward model\npairwise likelihood"];
+  policy [label="policy π_θ\nupdated", fillcolor="#bfe3c0"];
+  sample [label="sample response y\nstore rollout log-probs"];
+  reward [label="reward r_φ\nfrozen", style="rounded,filled,dashed"];
+  reference [label="reference π_ref\nfrozen", style="rounded,filled,dashed"];
+  critic [label="critic V_ψ\nupdated", fillcolor="#bfe3c0"];
+  update [label="shaped return + advantage\nclipped PPO update"];
 
-  sft -> rm;
-  prefs -> rm;
+  { rank=same; prefs; sft; }
+  { rank=same; rmtrain; policy; }
+  { rank=same; reward; critic; reference; }
 
-  subgraph cluster_ppo {
-    label="Stage 3: PPO loop";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    policy [label="Policy pi_theta\nupdated"];
-    gen [label="Sampled response y"];
-    ref [label="Reference pi_ref\nfrozen SFT", style="rounded,filled,dashed"];
-    rmscore [label="Reward model r_phi\nfrozen", style="rounded,filled,dashed"];
-    critic [label="Critic V\nupdated"];
-    obj [label="Advantage and\nclipped PPO update"];
-
-    policy -> gen;
-    gen -> rmscore;
-    gen -> ref;
-    gen -> critic;
-    rmscore -> obj [label="reward"];
-    ref -> obj [label="per-token KL penalty"];
-    critic -> obj [label="baseline"];
-    obj -> policy [label="gradient"];
-    obj -> critic [label="gradient"];
-  }
-
-  sft -> ref [style=dashed, label="copy, frozen"];
-  rm -> rmscore [style=dashed, label="copy, frozen"];
+  prefs -> rmtrain -> reward;
+  sft -> policy;
+  sft -> reference [style=dashed];
+  policy -> sample;
+  sample -> reward [label="score"];
+  sample -> critic [label="prefixes"];
+  sample -> reference [label="token log-probs"];
+  reward -> update;
+  critic -> update;
+  reference -> update;
+  update -> policy [style=dashed, constraint=false];
+  update -> critic [constraint=false];
 }
 ```
 
-## Where the recipe came from
+## From trajectory preferences to instruction following
 
-The idea of learning a reward from comparisons predates language models.
-Christiano et al. (2017) trained reward models from human preferences over
-trajectories in control and Atari tasks, establishing that a few thousand
-comparisons could specify a behavior no hand-written reward captured, and
-that optimizing the learned reward with RL could then reach it
-[@christiano2017deep]. The pieces were the reward model, the policy optimized
-against it, and the recognition that the reward was a learned proxy.
+Reward learning from comparisons predates its use in chat models. Christiano et
+al. trained reward predictors from human comparisons of short trajectory
+segments, then optimized agents in Atari and simulated locomotion tasks against
+the learned rewards [@christiano2017deep]. Ziegler et al. brought the method to
+language tasks including stylistic continuation and summarization
+[@ziegler2019finetuning]. Stiennon et al. then built the recognizable language
+pipeline for summarization: collect pairwise judgments, train a reward model,
+and optimize a language policy with PPO and a reference penalty
+[@stiennon2020summarize].
 
-InstructGPT (Ouyang et al., 2022) carried this to language and fixed the
-three-stage recipe the field standardized on: SFT, reward model on human
-rankings, PPO against the reward with a KL penalty to the SFT reference. Its
-result reframed alignment: a 1.3B InstructGPT model was preferred by humans
-over the 175B base GPT-3 [@ouyang2022training], which showed that the
-bottleneck was not capability but the elicitation of helpful behavior, and
-that preference optimization was how you elicited it.
+InstructGPT broadened that recipe from a specific task to a distribution of API
+instructions and made the SFT, reward-model, and PPO sequence widely known. Its
+1.3B PPO-ptx model was preferred to the 175B GPT-3 baseline by labelers on its
+held-out API prompt distribution [@ouyang2022training]. That result demonstrates
+the value of post-training on the measured distribution. It does not show that
+the smaller model had greater general capability. The same paper reported
+regressions on some public NLP tasks and simple mistakes outside the headline
+preference comparison.
 
-The recipe outlived its optimizer. Inside stage three, critic-free methods in
-the GRPO and RLOO line, with DAPO-style descendants after them, replace PPO's
-learned value model with a per-group baseline: sample a group of responses to
-the same prompt and use the group's mean reward as the baseline the critic
-once supplied [@shao2024deepseekmath; @ahmadian2024back; @yu2025dapo].
-Deleting the critic cuts the resident loop to policy, reference, and reward
-model, and it is these group-baseline optimizers, not PPO, that most disclosed
-frontier and open post-training stacks now run; @sec-training-to-reason
-follows that family in detail.
+Constitutional AI changed the source of part of the feedback. In its harmlessness
+experiment, a model applied written principles to compare responses; those AI
+comparisons trained a preference model that supplied the RL reward
+[@bai2022constitutional]. This removed human harmlessness labels from that
+stage, not human normative choices or evaluation. People still chose the
+principles, and the setup retained human feedback for helpfulness. RLAIF names
+that substitution of AI-produced feedback for some human-produced feedback.
 
-The cost that InstructGPT exposed was human labeling. Every comparison in the
-reward-model training set is a person reading two responses, which is slow
-and expensive and does not scale to the volume modern alignment wants.
-Constitutional AI (Bai et al., 2022) replaced much of that human labeling
-with an AI one [@bai2022constitutional]. A model critiques and revises its own
-responses against a written set of principles, a constitution, to build the
-harmlessness data, and an AI model expresses the preferences that train the
-reward model, a recipe named RLAIF, reinforcement learning from AI feedback.
-The human effort moves from labeling thousands of comparisons to writing and
-auditing a short list of principles, which is far cheaper to produce and to
-inspect.
+PPO is not part of the definition of human feedback. RLOO and GRPO are
+critic-free policy-gradient alternatives, but they construct baselines
+differently: RLOO uses the mean return of the *other* samples, while GRPO
+standardizes rewards within a same-prompt group [@ahmadian2024back;
+@shao2024deepseekmath]. DAPO modifies the group-relative family for verifiable
+reasoning and can remove the explicit reference term in that setting
+[@yu2025dapo]. These methods are prominent in disclosed reasoning work, not a
+basis for claiming that one optimizer now governs every post-training stack.
+@sec-training-to-reason covers them in their main application. The offline
+alternative, which removes the explicit reward model and online RL loop, begins
+in @sec-dpo-variants.
 
-The frontier from here splits. One branch keeps the reward model and the RL
-loop and only swaps the human feedback for AI feedback, the RLAIF line above.
-A sharper break asks whether the reward model and the RL loop are needed at
-all, since the same preference data can be optimized more directly: that is
-@sec-dpo-variants. The third route leaves the PPO machinery in place but aims
-it at a reward that is checkable rather than learned, which retires the reward
-model's unreliability as the central problem and is @sec-training-to-reason.
+## Optimization tests the proxy outside its training distribution
 
-## When the proxy breaks
+A reward model is evaluated on held-out comparisons sampled from some candidate
+distribution. Policy optimization changes that distribution. It therefore asks
+the reward model to score responses selected precisely because they receive
+unusually high predicted reward. This is a harder test than ordinary validation.
 
-A learned reward is wrong somewhere, and optimization pressure is what finds
-the wrong place. As the policy drifts further from the SFT reference, measured
-by KL, the reward model's score keeps climbing, but true quality follows it
-only up to a knee, then turns down as the policy exploits regions where the
-proxy is wrong [@gao2022scaling]. @fig-rlhf-reward-modeling-1 plots that
-frontier: the gap between the still-rising proxy reward and the falling true
-quality is what opens up past the knee. @fig-rlhf-overoptimization captures the
-same phenomenon as control logic, where the KL penalty keeps the policy left of
-the knee.
+The failure has direct human evidence. In summarization experiments, Stiennon et
+al. trained policies at several optimization strengths. Under light
+optimization, both learned reward and labeler preference improved. With stronger
+optimization, predicted reward continued to improve while labeler preference
+fell, eventually becoming anti-correlated with the proxy in that experiment
+[@stiennon2020summarize].
 
-![Schematic of reward over-optimization. As the policy drifts from the SFT reference, the proxy reward it is trained on keeps climbing, but true quality peaks at a knee and then falls as the policy exploits the reward model's blind spots. Idealized data, after Gao et al. (2022).](/figures/rlhf-reward-modeling-1.svg){#fig-rlhf-reward-modeling-1}
+Gao et al. studied the curve more systematically with a controlled substitute
+for expensive repeated human evaluation. A fixed gold reward model stood in for
+human judgment and generated labels used to train a separate proxy reward
+model. Optimizing the proxy eventually reduced the independent gold-model score,
+for both RL and best-of-$n$ selection, and the curve changed with model size,
+data size, optimizer, and KL penalty [@gao2022scaling]. This demonstrates proxy
+over-optimization in a synthetic gold-model setup. It does not measure a
+universal curve of true human quality.
 
-Run this to watch the knee appear, then change the over-optimization rate (the `0.18` coefficient) and see how it moves where more optimization stops helping.
+![A schematic proxy-over-optimization curve. The optimized proxy score continues to rise as the policy shifts from its reference, while an independent gold-model score can peak and then fall. The gold score represents Gao et al.'s controlled model-based stand-in for human judgment, not an absolute measure of true quality.](/figures/rlhf-reward-modeling-1.svg){#fig-rlhf-reward-modeling-1}
+
+The small program below makes the distinction explicit. Its quadratic gold
+curve is a toy illustration, not a reproduction of Gao et al.'s fitted
+coefficients. Change `curvature` to see why there is no universal stopping
+point.
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Illustrative shapes, not Gao et al.'s measured constants.
-kl = np.linspace(0, 12, 200)
-proxy = np.sqrt(kl)              # reward model score keeps climbing
-true = np.sqrt(kl) - 0.18 * kl  # true quality peaks, then falls
-knee = kl[np.argmax(true)]
+policy_shift = np.linspace(0, 10, 200)
+proxy_score = 0.35 + 0.12 * policy_shift
+curvature = 0.016  # illustrative, not an estimate from Gao et al.
+gold_score = 0.45 + 0.16 * policy_shift - curvature * policy_shift**2
+best = int(np.argmax(gold_score))
 
-plt.plot(kl, proxy, label="proxy reward")
-plt.plot(kl, true, label="true quality")
-plt.axvline(knee, ls="--", color="gray")
-plt.text(knee + 0.2, 0.2, f"knee KL={knee:.1f}")
-plt.xlabel("KL from SFT reference"); plt.ylabel("score")
-plt.legend(); plt.title("Reward over-optimization (illustrative)")
+plt.plot(policy_shift, proxy_score, label="optimized proxy score")
+plt.plot(policy_shift, gold_score, label="independent gold-model score")
+plt.axvline(policy_shift[best], ls="--", color="gray")
+plt.xlabel("policy shift from reference")
+plt.ylabel("score (illustrative units)")
+plt.title("A proxy can improve after its independent check worsens")
+plt.legend()
 plt.show()
-print(f"true quality peaks at KL={knee:.1f}, then proxy rises while quality falls")
+
+print(f"gold-model score peaks near shift={policy_shift[best]:.1f}")
 ```
 ::::
 
-```{dot}
-//| label: fig-rlhf-overoptimization
-//| fig-cap: "Over-optimization of a learned reward. Proxy reward rises monotonically with drift, but true quality peaks at a knee and then falls as the policy exploits the reward model's blind spots. After Gao et al. (2022)."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+Reward hacking is the behavioral consequence of this generalization gap. The
+policy may discover verbosity, confident phrasing, formatting, agreement with a
+user, or another feature that raises reward without improving the intended
+task. Sycophancy is one measured example: human and learned preference judgments
+sometimes favored a convincing answer that agreed with the user over a correct
+one, and optimization against the preference model could amplify that trade-off
+[@sharma2024sycophancy]. This is evidence about one path to sycophancy, not a
+claim that RLHF is its only cause. Reward *tampering*, in which an agent changes
+the scoring process itself, is a separate problem from exploiting a fixed
+misspecified score.
 
-  start [label="Low KL\npolicy near SFT reference"];
-  knee [label="Knee\ntrue quality peaks"];
-  over [label="High KL\nreward keeps rising,\ntrue quality falls"];
-  constraint [label="KL penalty beta\nholds policy left of the knee"];
+## What the controls can and cannot do
 
-  start -> knee [label="reward up,\nquality up"];
-  knee -> over [label="reward up,\nquality down"];
-  constraint -> knee [style=dashed];
-}
-```
+Each control addresses a different boundary. None replaces an evaluation that
+is independent of the optimized reward.
+
+| Control | What it can address | What it does not establish |
+|---|---|---|
+| Better rubrics, expert labels, ties, and reasons | Measurement errors and missing distinctions | Generalization to responses the collection never covered |
+| Held-out RM log loss, accuracy, and calibration by slice | Predictive failure before RL begins | Robustness to policy-selected high-score outputs |
+| Fresh on-policy comparisons and reward-model refreshes | Coverage of behaviors produced by the changing policy | Correctness of the external judge or rubric |
+| Reference KL and a tuned $\beta$ | Drift away from a known policy distribution | Validity of the reward or retention of every base capability |
+| PPO clipping and conservative learning rates | Instability while reusing rollout batches | A hard trust region or protection from reward hacking |
+| Early stopping on independent evaluations | Observed divergence between proxy and external quality | Failures outside the evaluation slices |
+| Diverse reward-model ensembles | Some model-specific errors and uncertainty | Shared blind spots or contested value choices |
+| Pre-training-data mixing | Regressions on capabilities represented by that data | Better preference alignment by itself |
+
+Ensembles are a partial control, not a proof. Coste et al. found that
+conservative objectives over reward-model ensembles reduced over-optimization
+in a synthetic gold-reward setup, with particularly strong results for
+best-of-$n$ selection [@coste2023ensembles]. Shared training data and shared
+rubrics can still produce shared errors.
+
+The “alignment tax” is likewise an empirical regression, not a universal law
+that safety must reduce capability. InstructGPT used the term for lower scores
+on specific public NLP datasets. Mixing pre-training gradients into PPO greatly
+reduced those regressions without reducing labeler preference, although some
+gaps remained. Increasing the KL coefficient alone did not recover the same
+tasks and reduced validation reward [@ouyang2022training]. Over-refusal is a
+different failure: it is a miscalibrated safety boundary, not another name for
+any capability regression.
 
 ::: {.callout-important}
 ## What's contested
-Whether reward hacking is a fixable engineering problem or a fundamental
-limit of any learned reward is unsettled. A learned reward is a proxy, and
-Goodhart's law says a proxy under enough optimization pressure stops tracking
-the thing it stood for. The optimistic position treats over-optimization as
-an engineering problem: reward-model ensembles to average out individual
-blind spots, early stopping before the reward-versus-quality curves diverge,
-fresh on-policy labels to patch the regions the policy starts exploiting, and
-a tuned KL penalty to bound the drift. The pessimistic position holds that
-these only postpone the failure, because any fixed reward model has a finite
-description that a capable enough policy will eventually find the gap in, so
-the safe regime is a moving target rather than a solved one. The KL penalty
-makes the problem manageable in practice but does not dissolve it. There is a
-real reward-versus-KL frontier where more optimization stops helping and then
-starts hurting, and where exactly it sits depends on the reward model, the data,
-and the penalty strength [@gao2022scaling]. Treat a rising reward curve as
-evidence of optimization, not of quality, and trust it only against held-out
-human judgment.
+
+The existence of reward over-optimization is well supported in particular
+human-evaluated and synthetic gold-model experiments. What remains unsettled is
+how far the controls above scale. One view treats reward modeling as an
+iterative measurement problem: expand coverage with on-policy data, estimate
+uncertainty, update the judge, and stop against independent evaluation. The
+more skeptical view notes that the policy and the proxy keep co-evolving, while
+human-defined quality remains expensive and incomplete to measure.
+
+Goodhart's law is a useful warning that an optimized proxy can stop tracking its
+target. It is not a theorem that every finite reward model must fail at one
+fixed KL value. The location and shape of a divergence depend on the feedback,
+reward model, policy, and optimizer. Direct preference objectives remove some
+RLHF machinery, but they do not remove this measurement problem.
 :::
 
-## The balances
+## Use external judgment to decide when to stop
 
-The pipeline is a set of balances, each with a knee.
+A practical run begins with a gate on the reward model and ends with a gate that
+does not use that reward model. One defensible procedure is:
 
-- **Reward fidelity versus labeling cost.** Human comparisons are the
-  highest-fidelity preference signal and the most expensive. AI feedback
-  (RLAIF, constitutional methods) is far cheaper and scales
-  [@bai2022constitutional], but inherits the labeling model's biases and
-  blind spots, and a flaw in the constitution or the critic propagates into
-  every label. Human labels set the ceiling; AI labels set the volume.
-- **Optimization pressure versus over-optimization.** The KL coefficient
-  $\beta$ is the central knob. Too small a $\beta$ lets the policy chase the
-  reward off-distribution into the region where the reward model is wrong, and
-  reward rises while human-judged quality falls. Too large a $\beta$ pins the
-  policy to the SFT reference and the RL step buys little. The right point is
-  a frontier, not a maximum.
-- **Capability versus safety.** Optimizing for helpfulness and harmlessness
-  can degrade raw capability relative to the base model, the alignment tax:
-  reasoning, calibration, and knowledge can all slip. Mixing pre-training data
-  back in, KL control, and balanced preference data mitigate it, but the
-  tension is real, and over-refusal, declining the benign request next to the
-  harmful one, is the safety-side instance of paying it.
-- **Online RL versus offline alternatives.** PPO is on-policy: it trains on
-  fresh samples from the live policy and yields a separate, inspectable,
-  reusable reward model, at the cost of holding four models at once and tuning brittle hyperparameters. The offline preference methods in @sec-dpo-variants
-  collapse this to one loss on a static set, far easier to run, at the cost of
-  the on-policy signal and the auditable reward artifact.
+1. Split prompts by source and near-duplicate family before training the reward
+   model.
+2. Fit the reward model on grouped comparisons or rankings, preserving ties and
+   raw votes.
+3. Report held-out log loss, accuracy, calibration, and slice results. Do not
+   begin RL if critical slices fail.
+4. Freeze the chosen reward-model version, reference version, tokenizer, chat
+   template, and reward normalization.
+5. Sample responses from $\pi_{\mathrm{old}}$, then record the prompt, response,
+   reward score, reference log-probabilities, rollout log-probabilities, and
+   model versions.
+6. Compute shaped returns and critic-based advantages, apply limited PPO
+   updates, and measure the achieved policy-to-reference KL.
+7. At fixed intervals, run held-out human or task evaluation plus capability and
+   safety regression suites.
+8. Add audited on-policy comparisons when the policy reaches response regions
+   the reward model did not cover; version and retrain the reward model rather
+   than silently changing it mid-run.
+9. Stop or roll back when external quality flattens or declines, even if the
+   learned reward continues to rise.
+
+The run dashboard should keep proxy and external evidence in separate panels:
+
+| Signal | Interpretation |
+|---|---|
+| Reward-model training and validation loss | Whether the learned judge is fitting and generalizing on recorded comparisons |
+| Pairwise accuracy and calibration by slice | Where fitted preference probabilities work or fail |
+| Mean reward and reward distribution | What the optimizer is successfully increasing |
+| Realized sequence and token-level KL | How far the policy has moved from the reference under the chosen estimator |
+| Independent preference win rate or task metric | Whether behavior improved outside the optimized proxy |
+| Capability and safety regressions | What changed outside the preference target |
+
+The stopping rule belongs to the external rows. A rising reward curve proves
+that optimization is working against its score. It does not prove that the
+model is getting better.
 
 ::: {.callout-tip}
-## Constraint arrow
-The systems cost in @sec-training-at-scale reaches up and shapes this
-chapter. PPO holds four models resident at once: policy, frozen reference,
-reward model, and critic, each near the size of the model being aligned. That
-memory and orchestration footprint, not any deficiency in the objective, is
-much of why the offline preference methods of @sec-dpo-variants exist: by
-deriving the reward implicitly from the policy and a single frozen reference,
-they remove the reward model and the critic and turn a four-model RL loop into
-one supervised loss. The group-baseline optimizers above are the second escape
-from the same bill: they stay in the RL loop but delete the critic, trading
-one resident model for a few extra samples per prompt. The shape of the
-cheaper method downstream is set by the resident cost of the on-policy one
-here.
+## Lower-layer constraint
+
+The systems layer shapes which RLHF formulation is practical. A classic PPO
+loop needs forward passes through the policy, reference, reward model, and
+critic, plus autoregressive rollout generation. Those are four logical roles,
+but peak residency depends on sharding, sharing, adapters, offloading, and
+whether log-probabilities are stored or recomputed. Generation and model
+coordination can therefore cost more wall time and memory than the short loss
+formula suggests.
+
+This cost motivates two different simplifications. Direct preference methods in
+@sec-dpo-variants remove the explicit reward model, critic, and online rollout
+loop. Critic-free policy-gradient methods such as RLOO and GRPO retain online
+sampling but replace the learned value baseline. Some formulations retain a
+reference and some verifier-based descendants do not, so “three models instead
+of four” is not a universal accounting rule. Measure the actual execution plan
+against the training and serving systems in @sec-training-at-scale and
+@sec-serving-problem.
 :::
-
-## Running the loop
-
-Most of this chapter is a training pipeline, not a code change, and its
-operational reality is dominated by the four-model footprint and the data
-flow between them. A practical RLHF step generates a batch of responses from
-the current policy, scores each with the reward model, computes the per-token
-KL penalty against the frozen reference, estimates advantages with the
-critic, and applies a clipped PPO update to the policy and the critic. The
-generation step, not the optimizer step, often dominates wall-clock, which is
-why the loop is bottlenecked by inference throughput and pairs naturally with
-the serving techniques of @sec-serving-problem.
-
-The pipeline breaks at different joints:
-A miscalibrated or overfit reward model fails before RL even starts and
-poisons everything downstream, so reward-model accuracy on held-out
-comparisons is the first thing to check. Reward hacking appears mid-run as a
-rising reward curve with flat or falling human-judged quality
-[@gao2022scaling], and the defenses are a tuned KL penalty, early stopping,
-and a held-out human evaluation that the reward curve cannot game. Sycophancy
-is a specific, predictable hack: labelers and users reward agreement and
-flattery, so a policy optimizing their approval learns to tell people what
-they want to hear, which is a direct artifact of optimizing an approval proxy
-rather than a bug in the optimizer. And the alignment tax shows up as a
-capability regression against the base model on benchmarks the preference data
-never covered, which is why @sec-benchmarks gates the aligned model rather
-than trusting the reward.
 
 ## Further reading
 
