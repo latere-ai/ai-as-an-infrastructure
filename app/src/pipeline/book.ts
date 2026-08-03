@@ -11,6 +11,7 @@ import type { Lang, NavChapter, NavPart } from "../types.ts";
 
 export interface BookChapter {
   qmdPath: string; // absolute path to the source .qmd
+  srcRel: string; // the same file, repo-relative, e.g. "en/orientation/01-whole-stack.qmd"
   href: string; // output path, e.g. "p1-foundations/06-....html"
   title: string;
   num: string; // "" for unnumbered
@@ -78,7 +79,7 @@ export function loadBook(lang: Lang, repoRoot: string): Book {
     const unnumbered = opts.forceUnnumbered || heading.unnumbered;
     let num = "";
     if (!unnumbered) num = String(++chapterCounter);
-    return { qmdPath, href: qmdToHref(qmdRel), title: heading.title, num, partLabel, unnumbered, role: opts.role ?? "chapter" };
+    return { qmdPath, srcRel: `${lang}/${qmdRel}`, href: qmdToHref(qmdRel), title: heading.title, num, partLabel, unnumbered, role: opts.role ?? "chapter" };
   };
 
   for (const entry of rawChapters) {

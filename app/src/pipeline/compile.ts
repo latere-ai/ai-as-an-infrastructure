@@ -148,6 +148,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     langHref: langHrefFor(book.lang, ch.href),
     prefix,
     path: ch.href === "index" ? "" : ch.href, // home is the lang root
+    sourcePath: ch.srcRel,
     description: metaDescription(html),
     toc,
   };

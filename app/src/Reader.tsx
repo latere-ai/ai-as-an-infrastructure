@@ -10,6 +10,7 @@ import { runSearch, type SearchDoc } from "./search-match.ts";
 import { Comments } from "./comments.tsx";
 import { BookmarkButton, ChapterStats, HeaderAuth } from "./account.tsx";
 import { REPO_URL, editUrl, issueUrl } from "./repo.ts";
+import { pageUrl } from "./site.ts";
 
 type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
@@ -18,6 +19,7 @@ type Strings = {
   codex: string; manuscript: string; atlas: string; prev: string; next: string; language: string; resize: string;
   author: string; updated: string; readtimeLabel: string; noResults: string;
   aboutAuthor: string; aboutLatere: string; sourceRepo: string;
+  contributePrompt: string; reportIssue: string; editPage: string;
 };
 
 const STRINGS: Record<Lang, Strings> = {
@@ -28,6 +30,7 @@ const STRINGS: Record<Lang, Strings> = {
     codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", language: "语言", resize: "拖动调整宽度",
     author: "作者", updated: "更新于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
     aboutAuthor: "关于作者", aboutLatere: "关于 Latere AI", sourceRepo: "GitHub 源码仓库",
+    contributePrompt: "本书在 GitHub 上公开写作。发现错误或有不清楚的地方：", reportIssue: "提交问题", editPage: "编辑本页",
   },
   en: {
     sidebar: "Sidebar", onThisPage: "On this page", settings: "Reading settings", search: "Search chapters…",
@@ -36,6 +39,7 @@ const STRINGS: Record<Lang, Strings> = {
     codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", language: "Language", resize: "Drag to resize",
     author: "Author", updated: "Updated", readtimeLabel: "Reading time", noResults: "No matching results",
     aboutAuthor: "About Author", aboutLatere: "About Latere AI", sourceRepo: "Source on GitHub",
+    contributePrompt: "This book is written in the open. Found an error, or something unclear?", reportIssue: "Report an issue", editPage: "Edit this page",
   },
 } as const;
 
@@ -411,6 +415,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             <ChapterOpener chapter={chapter} t={t} />
             {articleBody}
             <PrevNextNav chapter={chapter} t={t} />
+            <ContributeStrip chapter={chapter} t={t} />
             <Comments lang={chapter.lang} path={chapter.path} />
           </article>
         </main>
@@ -773,7 +778,30 @@ function PrevNextNav({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   );
 }
 
-function SettingsPanel({ t, s, set, chapter }: { t: Strings; s: ReaderSettings; set: (p: Partial<ReaderSettings>) => void; chapter: ChapterData }) {
+// The book is written in the open, so each page ends by saying so: one line
+// offering the two ways a reader can act on what they just read, both landing
+// on this exact chapter rather than on the repository's front door.
+function ContributeStrip({ chapter, t }: { chapter: ChapterData; t: Strings }) {
+  const here = pageUrl(chapter.lang, chapter.path);
+  const link: React.CSSProperties = { color: "var(--accent)", textDecoration: "none", fontWeight: 500 };
+  return (
+    <aside style={{
+      display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+      marginTop: 22, padding: "12px 16px", borderRadius: 14,
+      border: "1px solid var(--border)", fontSize: 13.5, color: "var(--fg-3)",
+    }}>
+      <span style={{ flex: "none", display: "inline-flex", color: "var(--fg-3)" }}><GitHubMark size={15} /></span>
+      <span>{t.contributePrompt}</span>
+      <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }}>
+        <a href={issueUrl(chapter.title, here)} target="_blank" rel="noreferrer" style={link}>{t.reportIssue} ↗</a>
+        <span aria-hidden style={{ opacity: 0.5 }}>·</span>
+        <a href={editUrl(chapter.sourcePath)} target="_blank" rel="noreferrer" style={link}>{t.editPage} ↗</a>
+      </span>
+    </aside>
+  );
+}
+
+function SettingsPanel({ t, s, set, chapter }:{ t: Strings; s: ReaderSettings; set: (p: Partial<ReaderSettings>) => void; chapter: ChapterData }) {
   const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 14 };
   const label: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".15em", textTransform: "uppercase", fontWeight: 500, color: "var(--fg-3)", flex: "none" };
   const seg: React.CSSProperties = { display: "flex", gap: 2, padding: 3, background: "var(--accent-subtle)", border: "1px solid var(--glass-border)", borderRadius: 999 };

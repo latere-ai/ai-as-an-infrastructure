@@ -4,7 +4,7 @@
 
 import type { ChapterData } from "./types.ts";
 import { DEFAULT_SETTINGS } from "./types.ts";
-import { BASE, SITE_NAME, AUTHOR, OG_W, OG_H, SITE_DESCRIPTION, ogImageUrl } from "./site.ts";
+import { SITE_NAME, AUTHOR, OG_W, OG_H, SITE_DESCRIPTION, ogImageUrl, pageUrl } from "./site.ts";
 
 // Applied before first paint so a returning reader's saved theme/palette/layout
 // (the CSS keys off data-theme/data-palette/data-layout on <html>) is set before
@@ -42,7 +42,7 @@ export function page(opts: {
   // Per-language canonical URLs + hreflang so both languages are independently
   // indexable and Google serves the right one. en/zh share the chapter path.
   const htmlLang = chapter.lang === "zh" ? "zh-Hans" : "en";
-  const url = (lang: string) => `${BASE}/${lang}/${chapter.path}`; // path "" → /<lang>/
+  const url = (lang: string) => pageUrl(lang, chapter.path); // path "" → /<lang>/
   const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   const desc = chapter.description ? `\n<meta name="description" content="${attr(chapter.description)}">` : "";
 

@@ -23,6 +23,7 @@ const baseChapter: ChapterData = {
   langHref: "../zh/foundations/data-curation",
   prefix: "../",
   path: "foundations/data-curation",
+  sourcePath: "en/foundations/02-data-curation.qmd",
   description: "Body.",
   toc: [],
 };

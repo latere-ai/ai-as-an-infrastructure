@@ -6,6 +6,10 @@ export const BASE = "https://aaai.latere.ai";
 export const SITE_NAME = "AI as an Infrastructure";
 export const AUTHOR = "Changkun Ou";
 export const SITE_CARD_EYEBROW = "A design driven technical book";
+
+// A page's absolute address. `path` is the lang-root-relative clean path
+// ("" for a language's home page), the same value ChapterData.path carries.
+export const pageUrl = (lang: string, path: string) => `${BASE}/${lang}/${path}`;
 export const SITE_DESCRIPTION = "The lifecycle of a capability, from compute to deployed, governed behavior.";
 
 // Social share cards are 1200x630 (the de-facto Open Graph / Twitter

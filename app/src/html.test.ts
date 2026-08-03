@@ -14,7 +14,7 @@ const base: ChapterData = {
   isPartIntro: false, eyebrow: "Part I · Chapter 3", crumbChapter: "Chapter 3",
   title: "Scaling Laws & Compute", author: "Changkun Ou", updated: "2026-06-01",
   readtime: "~14 min", contentHtml: "<p>body</p>", headings: [], prev: null, next: null,
-  langHref: "../zh/p1/03", prefix: "../", path: "p1-foundations/03-scaling-laws",
+  langHref: "../zh/p1/03", prefix: "../", path: "p1-foundations/03-scaling-laws", sourcePath: "en/foundations/01-scaling-laws.qmd",
   description: "First paragraph snippet.", toc: [],
 };
 const render = (ch: ChapterData, share?: Parameters<typeof page>[0]["share"]) =>

@@ -23,6 +23,7 @@ const chapter: ChapterData = {
   langHref: "../../en/foundations/",
   prefix: "../",
   path: "foundations",
+  sourcePath: "zh/foundations/index.qmd",
   description: "Part intro.",
   toc: [],
 };

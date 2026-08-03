@@ -23,6 +23,7 @@ const chapter: ChapterData = {
   langHref: "../zh/",
   prefix: "",
   path: "",
+  sourcePath: "en/index.qmd",
   description: "Preface.",
   toc: [
     {
