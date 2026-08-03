@@ -1,365 +1,385 @@
 # Synthetic Data and Self-Improvement {#sec-synthetic-data}
 
-Human-written training data is finite, and the best of it is the most
-expensive. When fresh human labels stop scaling, the training signal must come
-from somewhere else: a stronger model, the model's own filtered outputs, an AI
-critic, or a verifier. Distillation, rejection sampling, self-play (the model
-generates its own training problems and solutions, then learns from them), and
-AI feedback are four answers to one question. Iterating any of them creates a data
-flywheel, and each loop has its own ceiling.
+Synthetic data is useful because generation is cheap. It is dangerous for the same
+reason: a model can produce millions of plausible records long before anyone knows
+whether those records are correct, diverse, or legally usable. The central engineering
+problem is therefore not generation. It is deciding what evidence makes a generated
+record safe to train on.
 
-![Schematic of self-training over rounds. Filtering and verification can turn model-generated data into a useful loop, while unfiltered recycling drifts toward collapse. Idealized curves, not measured data.](/figures/synthetic-data-self-improvement-1.svg){#fig-synthetic-data-self-improvement-1}
+The phrase *self-improvement* needs similar care. A model does not improve merely because
+it trains on model-written text. Improvement is a claim about a later model on an
+independent evaluation. Between those two points sit a task source, a candidate generator,
+an acceptance signal, an update rule, and a schedule. Any one of them can supply useful
+pressure or quietly corrupt the loop.
 
-## The upstream question
+![Schematic of training over several rounds. A selective loop may improve held-out quality, while indiscriminate recursive replacement may degrade it. Both curves are illustrative rather than measured results.](/figures/synthetic-data-self-improvement-1.svg){#fig-synthetic-data-self-improvement-1}
 
-Post-training needs labeled examples: prompts paired with good responses, or
-responses paired with a judgment of which is better. @sec-behavior-specs
-describes the policy and rubric layer that gives those judgments meaning. The
-supervised and preference methods that consume those labels live in @sec-sft-peft
-and @sec-rlhf; @sec-dpo-variants covers the direct-preference family, and
-@sec-verifiable-rewards separates checkable rewards from learned ones. The
-upstream problem sits before all of them. Human demonstrations
-and human preference labels are slow, costly, and bounded by the skill of
-the annotator. A frontier model is often already better than the median
-labeler at the task you want to teach, so paying humans to produce its
-training data caps the result at human-median quality and exhausts the
-budget long before the data does.
+## Synthetic data is provenance, not an algorithm
 
-So one question sits under everything that follows: who decides a response is
-good enough to train on? If the answer can be something cheaper than a human,
-post-training scales with compute instead of with annotation headcount, and
-the data stops being the wall that @sec-data-curation describes for
-pre-training. The catch is that a self-produced signal is only as trustworthy
-as whatever filters it, and a bad filter teaches the model its own mistakes.
+A record is synthetic when a model or simulator generated some material part of it. That
+description says where the record came from, not how it will be used. The same generated
+response can become an SFT target, one side of a preference pair, a rollout for
+reinforcement learning, an evaluation candidate, or nothing at all.
 
-There turn out to be four answers, and they form a single lineage: a steady
-retreat from the human labeler, removing the human from one role at a time.
-The rest follows that retreat, source of judgment by source of judgment, and
-each step both buys something and gives something up.
+Several research lines now meet under this label. Hinton, Vinyals, and Dean formalized
+knowledge distillation in 2015 by training a student on a teacher's softened output
+distribution [@hinton2015distillation]. STaR later selected model-generated rationales
+whose answers could be checked, then repeated the process [@zelikman2022star].
+Constitutional AI used model-generated critiques, revisions, and preferences
+[@bai2022constitutional]. Self-Instruct generated instructions, inputs, and responses,
+filtered invalid or overly similar examples, and fine-tuned on the remainder
+[@wang2023selfinstruct]. These are related ideas, not stages in one historical ladder.
 
-## One loop, four answers
+LIMA supplies an important but narrower result. It showed that 1,000 carefully curated
+demonstrations could produce strong instruction-following behavior in its setting
+[@zhou2023lima]. LIMA did not test a self-training loop. Its evidence supports careful
+data selection and the value of high-quality demonstrations, not the stronger claim that
+model-generated data or best-of-$n$ filtering automatically works.
 
-Before the four answers, the shape they share. Every method here is the same
-loop: generate candidates, filter them, train on what survives, and possibly
-repeat. The methods differ in exactly one place, the source of judgment that
-drives the filter, as @fig-synthetic-data-loop shows.
+A useful design review separates six questions:
+
+| Design choice | Common options | What can go wrong |
+|---|---|---|
+| Prompt source | Human corpus, templates, environment, teacher, current model | Narrow tasks, benchmark leakage, missing rare cases |
+| Response generator | Teacher, current policy, older policy, search, model mixture | Correlated errors, weak candidate support, stale behavior |
+| Transferred signal | Soft token distribution, response, ranking, scalar reward, acceptance bit | The signal may omit uncertainty or reward shortcuts |
+| Acceptance signal | None, human review, learned critic, deterministic checker | False acceptance, false rejection, evaluator bias |
+| Update rule | SFT, distillation loss, preference optimization, policy-gradient RL | A suitable signal can still be used by the wrong objective |
+| Iteration schedule | One pass, refreshed rounds, replay, self-play | Feedback errors and distribution drift can compound |
+
+Methods compose across these columns. A teacher can generate candidates that a reward
+model ranks before a smaller student receives SFT. A current policy can generate both
+problems and answers while an executor supplies rewards to RL. Calling either pipeline
+“synthetic training” hides the distinctions that determine its behavior.
 
 ```{dot}
 //| label: fig-synthetic-data-loop
-//| fig-cap: "The shared generate, filter, train loop."
+//| fig-cap: "An auditable synthetic-data loop. A selection-independent validation gate evaluates the update without supplying examples, rewards, or thresholds to the generation and acceptance stages."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  rankdir=TB;
+  nodesep=0.22; ranksep=0.32;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=8.5, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=8.5, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  P [label="Prompts"];
-  G [label="Generate candidates"];
-  F [label="Filter", shape=diamond];
-  D [label="Training data"];
-  X [label="Discard"];
-  T [label="Fine-tune model"];
+  source [label="Task and data sources\nhuman · teacher · model\nenvironment"];
+  generate [label="Generate candidates\nversioned model + sampling recipe"];
+  gate [label="Acceptance pipeline\nchecks · critic · sampled human audit"];
+  mix [label="Curated training mixture\nreal-data anchor + synthetic records"];
+  update [label="Update model\nSFT · preference optimization · RL"];
+  holdout [label="Selection-independent\nvalidation gate", fillcolor="#f2c2c2"];
+  decision [label="Promote, revise, stop,\nor start the next round"];
 
-  P -> G;
-  G -> F;
-  F -> D [label="kept"];
-  F -> X [label="rejected"];
-  D -> T;
-  T -> G [style=dashed, label="iterate"];
-
-  subgraph cluster_judge {
-    label="Source of judgment";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    TE [label="Stronger teacher"];
-    SC [label="Reward / scorer"];
-    AC [label="AI critic + principles"];
-    VE [label="Verifier / ground truth"];
-  }
-  TE -> F;
+  source -> generate -> gate -> mix -> update -> holdout -> decision;
+  decision -> generate [style=dashed];
 }
 ```
 
-When that loop is run repeatedly, each round's improved model generating the
-next round's data, it is a **data flywheel**: the model's current capability
-becomes the engine that produces the data for its next increment. The
-flywheel is not a fifth method. It is what you get by iterating any of the
-four.
+## Sampling creates opportunity, not correctness
 
-Filtering is the engine under every answer, and it works for a plain reason:
-a model that cannot reliably produce a correct answer on the first try can
-often produce one somewhere in $n$ tries, and a cheap filter can find it.
-Training on the filtered winners moves probability
-mass onto behavior the model was already capable of but did not reliably
-emit. This is the same elicitation framing that explains why a few thousand
-curated examples move behavior so much: the capability is latent, and the
-data selects for it rather than installing it. LIMA is the clean evidence,
-showing that a small, carefully filtered set outperforms a large noisy one
-[@zhou2023lima].
+Suppose a prompt $x$ has a set of acceptable responses. Let $q_\theta(y \mid x)$ be the
+generator's probability of response $y$, and let $z(x,y) \in \{0,1\}$ denote whether an
+independent oracle would judge that response acceptable. Here the per-sample success
+probability is
 
-Vary the per-try success rate $p$ and watch how fast pass@$n$, the chance at
-least one of $n$ samples is correct, climbs toward one as $n$ grows.
+$$
+p_x = \Pr_{y \sim q_\theta(\cdot \mid x)}[z(x,y)=1].
+$$
+
+If $n$ candidates are conditionally independent draws with the same $p_x$, their
+**candidate coverage**, the probability that at least one is acceptable, is
+
+$$
+C_n(x) = 1 - (1 - p_x)^n.
+$$
+
+Here $x$ is the prompt, $y$ is a candidate response, $\theta$ denotes the generator
+parameters, $q_\theta$ is its response distribution, $z$ is the independent acceptability
+test, $p_x$ is one-draw success probability, $n$ is the number of draws, and $C_n(x)$ is
+the resulting coverage. The equation describes opportunity under independent draws. It
+does not say that a practical selector will find the acceptable candidate, that samples
+are truly independent, or that more samples add much diversity.
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 
-rng = np.random.default_rng(0)
-ns = np.arange(1, 21)
-for p in (0.1, 0.3, 0.5):                # per-try success probability
-    analytic = 1 - (1 - p) ** ns         # pass@n if tries are independent
-    sims = [(rng.random((3000, n)) < p).any(axis=1).mean() for n in ns]
-    line, = plt.plot(ns, analytic, label=f"p={p}")
-    plt.scatter(ns, sims, s=10, color=line.get_color())
-plt.xlabel("samples n"); plt.ylabel("pass@n (at least one correct)")
-plt.legend(); plt.title("Why filtering works: best-of-n success"); plt.show()
-print("p=0.10: a model right 10% of the time succeeds within 20 tries",
-      round(1 - 0.9 ** 20, 2), "of the time")
+counts = np.arange(1, 21)
+for p in (0.1, 0.3, 0.5):
+    coverage = 1 - (1 - p) ** counts
+    plt.plot(counts, coverage, marker="o", markersize=3, label=f"p={p}")
+
+plt.xlabel("independent candidates n")
+plt.ylabel("candidate coverage C_n")
+plt.title("Oracle coverage under independent sampling")
+plt.ylim(0, 1.02)
+plt.legend()
+plt.show()
+
+print("With p=0.10 and n=20, candidate coverage is",
+      round(1 - (1 - 0.10) ** 20, 2))
 ```
 ::::
 
-@fig-synthetic-data-lineage lays the four sources out as one stepwise
-withdrawal, each step removing a human from a different role. The sections
-below follow it in order.
+Now replace the oracle with a practical filter $\hat z$. Here $\alpha_x$ is its true-positive
+rate and $\beta_x$ its false-positive rate on prompt $x$. Its **selection precision** is
 
-```{dot}
-//| label: fig-synthetic-data-lineage
-//| fig-cap: "The retreat from the human labeler. Each step replaces a human in one role with a cheaper source of judgment, and the source of the next round's data shifts accordingly."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+$$
+\Pr[z=1 \mid \hat z=1,x]
+= \frac{\alpha_x p_x}{\alpha_x p_x + \beta_x(1-p_x)}.
+$$
 
-  H [label="Human writes demonstrations\nand preference labels"];
-  T [label="Borrow a teacher\ndistillation\nceiling: the teacher"];
-  R [label="Filter your own outputs\nrejection sampling\nsignal goes on-policy"];
-  A [label="Replace the labeler\nAI feedback / RLAIF\nproxy judge, exploitable"];
-  V [label="Improve against a checker\nverifier bootstrap\nceiling rises with the model"];
+In this expression, $\hat z=1$ means that the filter accepts a response,
+$\alpha_x=\Pr[\hat z=1\mid z=1,x]$, and
+$\beta_x=\Pr[\hat z=1\mid z=0,x]$ is the false-positive rate. Even a small $\beta_x$ can
+pollute the accepted set when truly acceptable samples are rare. False negatives create
+the opposite problem: they discard good but unfamiliar responses and can narrow the
+training distribution.
 
-  H -> T [label="human stops demonstrating"];
-  T -> R [label="teacher stops demonstrating"];
-  R -> A [label="human stops labeling"];
-  A -> V [label="proxy becomes ground truth"];
-}
+Selection reweights the generator rather than creating correctness from nothing. If
+$a(x,y) \in [0,1]$ is the probability that the pipeline retains response $y$, the
+**retained distribution** is
+
+$$
+\widetilde q_\theta(y \mid x)
+= \frac{q_\theta(y \mid x)a(x,y)}{Z_\theta(x)},
+\qquad
+Z_\theta(x)=\mathbb{E}_{y\sim q_\theta(\cdot\mid x)}[a(x,y)].
+$$
+
+Here $a$ represents all acceptance stages, $Z_\theta(x)$ is the overall acceptance
+probability for prompt $x$, and $\widetilde q_\theta$ is the normalized distribution of
+retained responses. More sampling helps only when the generator sometimes reaches useful
+responses and the acceptance pipeline distinguishes them reliably.
+
+## Five patterns that use generated data differently
+
+### Teacher distillation
+
+In classical knowledge distillation, a fixed teacher supplies a probability distribution
+over tokens and a student is trained to match it. In response or sequence distillation,
+the teacher instead decodes complete text and the student learns those hard targets with
+ordinary token-level likelihood [@kim2016sequence]. The second form is common for language
+models, but it discards most of the teacher's uncertainty.
+
+A teacher is usually the response generator, not a judge applied after generation. Its
+outputs can transfer formatting, style, domain behavior, and reasoning patterns. They can
+also transfer refusals, systematic errors, and missing coverage. There is no universal
+theorem that a student must score below its teacher on every downstream evaluation;
+students have exceeded their teachers in some distillation settings
+[@furlanello2018bornagain]. The defensible limitation is narrower: teacher-only examples
+provide no direct corrective evidence for blind spots that useful teacher outputs never
+cover.
+
+### Synthetic tasks and demonstrations
+
+A model can generate the prompts as well as the responses. Self-Instruct begins with seed
+tasks, asks a model to create new instructions and instances, removes invalid or similar
+items, and then generates answers for the retained tasks [@wang2023selfinstruct]. This can
+expand a small seed set cheaply, but the generator still shapes which tasks exist. A
+pipeline that produces thousands of paraphrases of familiar tasks has increased row count,
+not coverage.
+
+Task synthesis therefore needs separate checks for prompt novelty, answer quality,
+difficulty, and relevance to the target population. Prompt generation and response
+generation should also have distinct provenance. Otherwise an erroneous model-written
+premise can be mistaken for a hard task with a valid answer.
+
+### Filtered self-training
+
+Filtered self-training samples candidates, scores or checks them, and applies SFT to the
+selected responses. STaR used answer correctness to select generated rationales and then
+iterated [@zelikman2022star]. RAFT samples several candidates per prompt, retains a
+reward-ranked winner, and fine-tunes on the selected set [@dong2023raft]. Here best-of-$n$
+inference stops after selection; rejection-sampling fine-tuning materializes selected
+responses as training data and updates the model.
+
+Policy provenance matters here. Candidate collection is on-policy at that moment only if
+the current learner generated the samples. RAFT can also use a separate generator, and any
+stored selected set becomes stale as the learner changes. Calling all selected SFT data
+“on-policy” confuses the collection source with the update algorithm. The selected records
+are demonstrations, not preference pairs, unless winners and losers are both retained for
+a preference objective.
+
+### AI feedback
+
+An AI critic extends selection to qualities without deterministic checkers, such as tone,
+helpfulness, or adherence to written principles. Constitutional AI contains two distinct
+uses. Its supervised phase generates critiques and revisions, then fine-tunes on revised
+answers. Its RLAIF phase generates AI preferences, trains a preference model, and uses
+that model as the reward for RL [@bai2022constitutional]. It reduced human harmlessness
+labels in that experiment; it did not remove human-written principles, prompts, or all
+human helpfulness supervision.
+
+This breadth comes from approximation. A learned judge can have position, verbosity,
+self-preference, and domain biases. Optimizing harder against a proxy can raise the proxy
+score while an independent measure falls [@gao2023overoptimization]. Agreement with the
+judge used to build the data is therefore not evidence that the resulting model improved.
+
+### Verifier-guided learning and self-play
+
+A deterministic checker can provide stronger evidence than a learned critic, but only for
+the property encoded in the checker. Let $C(x,y) \in \{0,1\}$ mean that response $y$ meets
+the intended requirement for prompt $x$, and let $V(x,y) \in \{0,1\}$ mean that the
+implemented verifier accepts it. The verifier is sound when
+
+$$
+V(x,y)=1 \Longrightarrow C(x,y)=1,
+$$
+
+Completeness here means
+
+$$
+C(x,y)=1 \Longrightarrow V(x,y)=1.
+$$
+
+Soundness prevents accepted wrong answers; completeness prevents valid answers from being
+discarded. Unit tests, answer extractors, proof statements, and sandboxed executors can all
+mis-specify the intended requirement. EvalPlus, for example, expanded HumanEval's tests
+and rejected programs that the original tests had accepted [@liu2023evalplus]. A correct
+final number also does not certify every step of a generated rationale.
+
+A learned process reward model remains a proxy. *Let's Verify Step by Step* trained
+outcome and process reward models, including a process model based on 800,000 human
+step-level labels, and compared them for best-of-$n$ selection. That experiment did not
+RL-train the generator [@lightman2023lets].
+
+RL with verifiable rewards (RLVR) is a different update. It applies automated rewards
+directly to policy rollouts instead of necessarily storing accepted traces for SFT.
+DeepSeek-R1-Zero began RL from a pretrained base with no supervised reasoning
+demonstrations, but it still used curated training questions and rule-based accuracy and format
+rewards. Full DeepSeek-R1 then combined cold-start data, RL, rejection sampling, SFT, and
+another RL stage [@guo2025deepseek]. It is evidence for verifier-guided RL, not proof that
+every such system is a generate-filter-SFT flywheel.
+
+Self-play changes who creates the task distribution. Absolute Zero uses one pretrained
+policy in proposer and solver roles, human-designed task schemas, and a code executor.
+Its “zero data” setting means zero task data from an external post-training dataset, not
+zero pretraining data or zero human design [@zhao2025absolutezero]. R-Zero instead co-trains
+Challenger and Solver models using majority-vote pseudo-labels. Those labels are not an
+exact verifier, and the paper reports degradation after repeated rounds
+[@huang2025rzero]. The two systems should not be treated as equivalent simply because
+both generate curricula.
+
+## Iteration changes the data distribution
+
+One synthetic-data pass and recursive replacement pose different risks. Let $r$ index the
+training round, $M_r$ be the model at that round, $S_r$ be data generated by $M_r$, and $R$
+be retained real or independently verified data. Three regimes are often conflated:
+
+| Regime | Next-round data | Operational meaning |
+|---|---|---|
+| Replacement regime | $D_{r+1}=S_r$ | Each generation replaces the previous source |
+| Fixed-anchor regime | $q_{r+1}=\alpha p_R+(1-\alpha)p_{S_r}$ | Every batch preserves a chosen real-data sampling weight |
+| Accumulation regime | $D_{r+1}=R\cup S_0\cup\cdots\cup S_r$ | Earlier real and synthetic records remain available |
+
+Here $D_{r+1}$ is the next training dataset, $q_{r+1}$ is its sampling distribution,
+$p_R$ and $p_{S_r}$ are the distributions over real and current-round synthetic data, and
+$\alpha\in[0,1]$ is the real-data sampling probability. In practice, accumulation also
+needs explicit weights; a set union does not determine how often each source is sampled.
+
+Shumailov et al. show model collapse under indiscriminate recursive training, with rare
+parts of the original distribution disappearing before later broad degradation
+[@shumailov2024collapse]. That result should not be shortened to “synthetic data causes
+collapse.” Gerstgrasser et al. confirm collapse in a replacement regime but avoid it in
+their studied accumulation regimes [@gerstgrasser2024collapse]. These are
+regime-dependent results, not a universal safe mixing ratio. A real-data anchor helps
+preserve evidence that the current generator cannot recreate, especially rare modes.
+
+Recursive loops have other failure modes that aggregate quality can hide:
+
+| Failure | Early symptom | Required check |
+|---|---|---|
+| False acceptance | Loop score rises while independent score stalls | Audit accepted-set precision by slice |
+| False rejection | Unusual valid answers disappear | Measure recall on rare but valid cases |
+| Diversity loss | Repeated phrasing, syntax, or solution paths | Track semantic clusters and tail coverage [@guo2024diversity] |
+| Benchmark contamination | Implausibly sharp held-out gains | Exact, near-duplicate, and semantic decontamination [@yang2023contamination] |
+| Curriculum drift | Generated tasks become trivial or malformed | Compare difficulty and validity against a fixed task specification |
+| Recursive dependence | A few generators dominate many descendants | Record parent IDs and recursive depth |
+
+## Build an auditable loop
+
+The production unit is not “the synthetic dataset.” It is a versioned round with an
+admission record and an exit decision. A minimal implementation looks like this:
+
+```text
+INPUT: frozen task specification, source mixture R, generator M_r, acceptance pipeline A_r
+1. Create prompts from approved sources; exclude private evaluation material.
+2. Generate candidates with recorded model, template, retrieval, decoding, and seed versions.
+3. Deduplicate and decontaminate prompts and responses before quality filtering.
+4. Apply deterministic checks, learned critics, and policy rules as separate decisions.
+5. Estimate false-positive and false-negative rates on a stratified independent audit.
+6. Build D_(r+1) from accepted records plus a deliberate real-data anchor.
+7. Train candidate M_(r+1) with the declared update rule.
+8. Compare M_(r+1) with M_r on a validation gate that the generator and selector never saw.
+9. Promote only if capability, safety, diversity, and contamination gates pass.
+10. If any predeclared rollback threshold is crossed, stop the loop and quarantine the round.
 ```
 
-## Answer one: borrow a teacher
+In this procedure, $R$, $M_r$, and $D_{r+1}$ have the meanings defined above, while $A_r$
+is the complete acceptance pipeline at round $r$. A row-level provenance record should
+include the source and license, generator checkpoint, prompt template, retrieval corpus,
+decoding parameters, random seed, parent records, recursive depth, judge or verifier
+version, threshold, transformations, decontamination results, and acceptance reason.
+Without that lineage, a later failure cannot be traced or removed.
 
-The first move was to **borrow a teacher**. A more capable model generates
-the responses, and a weaker student trains on them. The judgment is implicit:
-the teacher's output is taken as the target. This is response distillation,
-learning from the teacher's text, not its logits (the raw scores it assigns to
-every possible next token), and once a strong aligned
-model existed, it was the cheapest way to align a weaker one: have the strong
-model write the instruction-following data. This made capable open models
-possible without each lab running its own human-preference pipeline, and it
-remains the default way open models are aligned.
+The independent holdout used as the validation gate must sit outside data construction.
+It cannot appear in generation prompts, retrieval, judge training, verifier construction,
+or acceptance-threshold tuning. It may govern promotion and early stopping, so reserve a
+separate private final test for less frequent claims. The validation evaluator should fail
+differently from the selector; using the same judge for selection and certification only
+measures self-consistency.
 
-Its limit is structural. A student trained only on a teacher's distilled
-outputs rarely exceeds the teacher on those skills, and it inherits the
-teacher's biases and refusals along with its competence. Distillation is
-off-policy: cheaper and more stable than learning from the model's own
-samples, but it drifts from the live model and caps at the teacher. The data
-is borrowed, and so is the ceiling it imposes.
+Track at least four groups of metrics each round:
 
-## Answer two: filter your own outputs
+| Group | Examples |
+|---|---|
+| Data composition | Real/synthetic ratio, recursive-depth histogram, provenance completeness |
+| Filter behavior | Acceptance rate, false-positive rate, false-negative rate, selection precision by slice |
+| Coverage | Task, language, difficulty, rare-category, and semantic-cluster coverage |
+| External outcome | Independent capability and safety deltas, contamination rate, selector-evaluator disagreement |
 
-The next move was to **filter your own outputs**, so the model could improve
-without a stronger teacher to copy. Sample $n$ responses from the current
-model, score them, keep the best, and fine-tune on the winners. The judging
-now comes from a scorer applied to the model's own samples. Iterated, this is
-rejection-sampling fine-tuning: on-policy preference data without a full RL
-loop. @gls-raft formalized it, ranking sampled responses by a reward and
-fine-tuning on the top of each group [@dong2023raft].
+Predeclare stop and rollback thresholds. If the external score regresses, tail coverage
+shrinks, or selector disagreement grows beyond its limit, stop the loop, quarantine the
+new records, revert the checkpoint, and inspect accepted false positives and rejected
+valid examples before generating another round.
 
-The gain is that the signal is on-policy, drawn from the model itself, which
-closes the gap between what the model trains on and what it actually
-generates. The model stops imitating a foreign distribution and starts
-selecting from its own. The cost is that the ceiling is now set by the scorer
-rather than by a teacher, which moves the problem rather than removing it: the
-loop is only as good as whatever scores the samples.
+## What self-improvement can and cannot establish
 
-## Answer three: replace the labeler
-
-The third move reached past the demonstrator to **replace the labeler**. A
-model, prompted with written principles, produces the preference signal that
-a human annotator would otherwise provide.
-Constitutional AI is the canonical form: an AI critiques and revises
-responses against a short written constitution, and the resulting pairs train
-the model, cutting the human cost of the preference signal down to the
-principles themselves [@bai2022constitutional]. The judge here is a model
-reading rules. This is @gls-rlaif; the RL
-machinery that consumes that preference signal is @sec-rlhf, but the signal's
-origin is here.
-
-The reach is what makes it attractive: an AI critic can score open-ended
-responses, helpfulness and style and tone, where no ground-truth checker
-exists. The cost is that the judge is a proxy. Push on it and the model finds
-outputs the critic rates highly and humans do not. Replacing the labeler
-removes the human from the labeling role but installs an exploitable stand-in
-where the human used to be.
-
-## Answer four: improve against a checker
-
-Most recently, the move has been to **improve against a checker**. Generate
-many candidate solutions, run each through a checker, a unit-test suite, an
-answer checker, a proof checker, and keep the ones that pass. The judgment is
-ground truth, not a proxy, which makes this the cleanest loop, because the filter
-cannot be manipulated by style or confidence. When the filter is a verifier rather than a learned
-scorer, the loop can bootstrap on math and code: generate solutions, keep the
-verified-correct traces, train on them, and repeat.
-
-DeepSeek-R1 is the open data point, including an R1-Zero variant that
-bootstraps reasoning from a base model with no supervised cold start
-[@guo2025deepseek]. The reinforcement-learning mechanics that turn verified
-traces into a reasoning model belong to @sec-training-to-reason; what belongs
-here is the narrower observation that a sound verifier turns the model's own
-correct outputs into a renewable training set. Where the verifier is a
-learned @gls-prm rather than an exact checker, the signal can be
-made finer-grained by scoring each reasoning step rather than only the final
-answer [@lightman2023lets], though a learned scorer reintroduces the proxy
-problem the exact checker had escaped.
-
-The reason this loop bootstraps where the others cap is that the ceiling
-rises with the model. The model can be pushed to produce correct outputs it
-could not reliably produce before, and the verified-correct set grows with
-each round. That is the cleanest version of the data flywheel: capability
-generating the data for its own next increment, with a filter that does not
-accept a wrong answer.
-
-With a sound executor as the verifier, even the prompts can come from the
-model. Absolute Zero has a single policy propose its own tasks and then solve
-them, with a code executor checking both roles, and trains from no external
-data at all [@zhao2025absolutezero]; R-Zero co-evolves a Challenger that
-invents problems and a Solver that answers them, again from zero external
-data [@huang2025rzero]. This is the self-play the opening glossed, taken to
-its limit: the human is gone from the demonstrations, the labels, and now the
-questions, and the verifier is the only input left to bound the bootstrap.
-
-## How far does the bootstrap go?
-
-Walking the four answers leaves one tension unresolved, and it is the real
-question. Can self-improvement create genuinely new
-capability, or is it bounded by whatever does the judging?
+Filtered training can make a behavior more reliable when useful responses already appear
+occasionally. Task generation can expand a curriculum. RL can discover policies that were
+not present as demonstration text. Distillation can transfer behavior to a different
+model. None of these observations establishes unlimited autonomous improvement.
 
 ::: {.callout-important}
 ## What's contested
-Whether self-improvement can create genuinely new capability, or is bounded
-by whatever does the judging, is unsettled, and the source supports both
-poles. On the distillation side the ceiling looks hard: a student rarely
-beats its teacher on a distilled skill, so copying a teacher cannot, on its
-own, exceed the teacher. On the verifier side the loop looks open-ended: a
-sound verifier is a genuine bootstrap, because the model can be pushed to
-produce correct outputs it could not reliably produce before and then train
-on them, and the verified-correct set grows with the model. The unresolved
-question is how far this goes. A verifier amplifies whatever it can check and
-amplifies its blind spots just as faithfully, so an unsound verifier teaches
-the model to satisfy the checker rather than solve the problem. Treat
-"self-improvement" as bounded by the quality of the judge, with the bound
-tight for a fixed teacher and loose, but not infinite, for a sound verifier.
-:::
 
-The answer to how far it goes is decided one layer down, by whether the
-domain is verifiable at all. That is the constraint that shapes everything
-above it.
+It remains unsettled how far iterative model-generated training can extend capability.
+A fixed teacher limits the direct evidence available to imitation, but not every possible
+downstream student score. A sound verifier can support improvement beyond a demonstrator
+on the property it checks, but its specification and task distribution remain boundaries.
+A learned critic covers broader behavior but introduces a proxy that may be optimized
+away from human judgment. Claims of self-improvement therefore require gains across
+rounds on an independent holdout, not merely higher scores from the selector that built
+the training set.
+:::
 
 ::: {.callout-tip}
 ## Constraint arrow
-Whether the flywheel closes at all is decided one layer down, by whether the
-domain is verifiable. Math, code, and formal proof come with cheap,
-near-unspoofable checkers, so their loops close: the model generates, the
-checker filters, and the verified-correct set feeds the next round without a
-human in it. Open-ended domains, helpfulness, style, judgment, taste, have no
-ground-truth checker, so the strongest filter available is a learned scorer
-or an AI critic, both of which are proxies the model can learn to exploit. A
-data-layer property, the existence of a verifier, decides whether an
-upper-layer training loop can run unattended. This is why the recent
-capability jumps cluster in checkable domains and why open-ended quality
-still leans on human preference data from @sec-rlhf.
+
+Verifiability determines how much of the loop can be automated safely. Formal proof,
+program execution, and answer checking can provide strong evidence when the specification
+is complete and the checker is sound. Open-ended helpfulness, taste, and social judgment
+usually require learned evaluators or people. The upper-layer training method cannot make
+the lower-layer evidence stronger than it is. When the evidence is partial, keep human
+audits, independent tests, and runtime controls in the system.
 :::
 
-The four answers therefore fall along a single antidiagonal between two ends:
-cheap-and-broad coverage that buys an exploitable proxy, and trustworthy-but-narrow
-ground truth that costs coverage. A learned reward model or an AI critic can
-score any response, including open-ended ones, but it is a proxy. A verifier
-cannot be manipulated by style or confidence, but it only exists where ground truth is checkable, and
-its coverage is the new attack surface. @fig-synthetic-data-tradeoff places
-the four sources on that axis.
-
-```{dot}
-//| label: fig-synthetic-data-tradeoff
-//| fig-cap: "The four sources of judgment in the coverage-versus-trust space. Broad coverage buys exploitable proxies, near-unspoofable ground truth costs coverage, and the methods lie along the antidiagonal between them."
-digraph tradeoff {
-  bgcolor="transparent";
-  rankdir=LR;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", arrowhead=none, style=dashed];
-
-  broad   [label="Broad coverage,\nexploitable proxy", fillcolor="transparent"];
-  narrow  [label="Narrow coverage,\nunspoofable truth", fillcolor="transparent"];
-
-  teacher  [label="Stronger teacher\n(distillation)"];
-  rej      [label="Reward / scorer\n(rejection sampling)"];
-  critic   [label="AI critic + principles\n(AI feedback)"];
-  verifier [label="Verifier / ground truth\n(self-improvement)", color="#3b82f6", fontcolor="#3b82f6"];
-
-  broad -> teacher -> rej -> critic -> verifier -> narrow;
-}
-```
-
-Two more trade-offs cut across the antidiagonal. On-policy filtering
-(rejection sampling, self-play) trains on what the model actually generates
-and closes the train-serve gap, where distilling a teacher is off-policy,
-cheaper and more stable but drifting from the live model. And a single
-generate-filter-train pass is simple and bounded, where iterating compounds
-gains but also compounds errors: a small bias in the filter, applied every
-round, becomes a learned habit, and the model can collapse onto whatever the
-filter rewards (model collapse: quality degrades as it trains on its own
-outputs [@shumailov2024collapse]). The flywheel needs a filter sound enough to survive
-repetition. Distillation has one further cost the others do not: it may
-violate the teacher's terms of service, and from-scratch alignment, expensive
-as it is, remains the only path to surpassing the available teachers.
-
-## The one line that decides everything
-
-The minimal loop is short enough to state directly, and writing it out shows
-why the four answers are one method. Rejection-sampling fine-tuning, the RAFT
-recipe [@dong2023raft], makes the loop concrete:
-
-```python
-# Rejection-sampling fine-tuning, one round (sketch).
-data = []
-for prompt in prompts:
-    cands = [model.sample(prompt) for _ in range(n)]
-    scored = [(judge(prompt, c), c) for c in cands]
-    best = max(scored)[1]            # judge: reward model, AI critic, or verifier
-    if keep(best):                   # threshold or verified-correct
-        data.append((prompt, best))
-model = finetune(model, data)        # iterate: next round samples from this model
-```
-
-The single line that determines everything is `judge`. Swap in a stronger
-model and the loop is distillation; a reward model or AI critic and it is
-rejection sampling or AI feedback; a unit-test or answer checker and it is
-verifier-based self-improvement. The surrounding machinery is identical; the
-trust you can place in the result is entirely a property of `judge`. The four
-answers of this chapter are four bindings of one variable.
-
-Two operational realities follow from that. First, the filter's false
-negatives starve the loop: a verifier that rejects correct-but-unusual
-answers, or a scorer miscalibrated against good outputs, removes exactly the
-data you wanted. Second, the loop's failures are quiet. A flywheel running on
-a filter that can be exploited shows rising filtered-set quality by the filter's own
-measure while held-out quality stalls or regresses, the same Goodhart
-signature that reward over-optimization produces in @sec-rlhf. The defense is
-to keep an independent evaluation outside the loop, which is the job of
-@sec-benchmarks, and to prefer a verifier wherever the domain admits one.
+The practical question is not whether the data came from a person or a model. It is which
+parts of the record are synthetic, what independent evidence admitted them, which
+distribution they represent, and what would stop the next round. A loop that can answer
+those questions is a data pipeline. One that cannot is only automated self-repetition.
 
 ## Further reading
 

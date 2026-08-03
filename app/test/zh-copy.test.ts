@@ -648,7 +648,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/adaptation/07-synthetic-data-self-improvement.qmd",
-      ["fresh human labels stop scaling", "a stronger model, the model's own", "filtered outputs", "critic, or a verifier", "data flywheel", "bounded by the quality of the judge"],
+      ["generation is cheap", "evidence makes a generated record safe to train on", "Methods compose across these columns", "Sampling creates opportunity", "independent holdout"],
     ],
     [
       "zh/adaptation/07-synthetic-data-self-improvement.qmd",
