@@ -5,9 +5,9 @@ import numpy as np
 
 # Schematic shape of two preference-optimization losses as a function of the
 # implicit reward gap (chosen minus rejected). The DPO log-sigmoid loss keeps
-# decreasing as the gap grows, so on clean, near-deterministic data the optimum
-# pushes the gap toward infinity. The IPO squared loss is bounded with a minimum
-# at a fixed positive target, so the optimum stays finite. These are the loss
+# decreasing as the gap grows, so on clean, near-deterministic data its infimum
+# is approached as the gap tends to infinity. The IPO squared loss has a minimum
+# at a fixed positive target, so its optimizing gap stays finite. These are the loss
 # functions themselves, evaluated on idealized inputs, not measured data.
 
 INK = "#6b7280"
@@ -16,21 +16,21 @@ DATA = "#3b82f6"
 # Implicit reward gap = beta * (log-ratio_chosen - log-ratio_rejected).
 gap = np.linspace(-2.0, 8.0, 400)
 
-# DPO: -log sigmoid(gap). Monotonically decreasing toward zero, never flat.
+# DPO: -log sigmoid(gap). Monotonically decreasing toward zero.
 dpo = -np.log(1.0 / (1.0 + np.exp(-gap)))
 
-# IPO: (gap - tau)^2, bounded parabola with minimum at a fixed target tau.
+# IPO: (gap - tau)^2, an unbounded-above parabola with a finite minimum.
 tau = 3.0
 ipo = (gap - tau) ** 2
 
 fig, ax = plt.subplots(figsize=(5, 3))
 
 ax.plot(gap, dpo, color=DATA, lw=1.8, linestyle="-",
-        label="DPO log-sigmoid (unbounded pull)")
+        label="DPO log-sigmoid (no finite target)")
 ax.plot(gap, ipo, color=INK, lw=1.8, linestyle="--",
-        label="IPO squared loss (target at τ)")
+        label="IPO squared loss (finite target)")
 
-# Mark the IPO target: the gap the bounded loss settles on.
+# Mark the IPO target: the gap at the squared loss minimum.
 ax.axvline(tau, color=INK, lw=0.9, alpha=0.4)
 ax.annotate("IPO optimum\nstays finite", xy=(tau, 0.0),
             xytext=(tau, 2.4), color=INK, fontsize=8,

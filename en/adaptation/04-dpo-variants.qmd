@@ -1,272 +1,608 @@
 # Direct Preference Optimization and Its Variants {#sec-dpo-variants}
 
-There is a recurring moment in an alignment pipeline. A team has a static file of
-preference pairs, a chosen response and a rejected one for each prompt, and it wants an
-aligned model out the other end. The textbook route is RLHF, and RLHF is
-resource-intensive. The direct-preference line asks whether that cost is
-necessary, collapses the apparatus into a single classification loss, then
-builds a family of variants on top of that loss. The controlled result is that
-none of the variants reliably beats the plain loss they all descend from.
+Suppose a team already has prompts with two candidate responses and a judgment about which
+response is better. Classical RLHF would fit an explicit reward model, generate new responses,
+and optimize a policy against that reward. Direct Preference Optimization (@gls-dpo) takes a
+shorter route. DPO fits a preference classifier without an explicit reward model. Under a
+specific model of preferences, its loss trains the language model directly [@rafailov2023dpo].
 
-## A static file of preferences
+This simplification matters. DPO collapses the reward-model and policy-optimization
+apparatus into a single classification loss over a static dataset. It does not, however,
+turn alignment into ordinary supervised fine-tuning or make the assumptions behind RLHF
+disappear. DPO still needs paired judgments, a frozen reference policy, a model of how
+preferences arise, and evaluation outside the training pairs.
 
-RLHF, covered in @sec-rlhf, aligns a model in three stages: supervised fine-tuning, a
-reward model fit to human preferences, then a policy-gradient run with @gls-ppo [@schulman2017proximal]
-that optimizes the policy against that reward under a @gls-kl constraint to the reference. The
-machinery is costly to run. PPO keeps four models in play at once, the policy, a frozen reference,
-the reward model, and a critic, and its result is sensitive to reward-model quality and to a
-handful of brittle hyperparameters. For the team with a static set of preference pairs, the
-question is whether all of that apparatus is necessary, or whether the preference signal can
-be optimized directly.
+## What DPO removes, and what it keeps
 
-## The reduction: a language model is an implicit reward model
-
-The reduction rests on one fact about the RLHF objective. Maximizing reward under a KL
-penalty to a reference policy,
+Let the preference dataset be
 
 $$
-\max_{\pi_\theta}\; \mathbb{E}_{x,\,y\sim\pi_\theta}\big[r(x,y)\big]
-\;-\; \beta\, \mathrm{KL}\!\left(\pi_\theta(\cdot\mid x)\,\|\,\pi_{\text{ref}}(\cdot\mid x)\right),
+\mathcal{D}=\{(x_i,y_{w,i},y_{l,i})\}_{i=1}^{N},
 $$
 
-has a closed-form optimal policy, meaning the single best policy this objective implies can be
-written as a formula rather than found by search: it is the reference reweighted by the exponentiated
-reward, $\pi^*(y\mid x) \propto \pi_{\text{ref}}(y\mid x)\exp(r(x,y)/\beta)$. Rafailov et al.
-invert this [@rafailov2023dpo]. Solving for the reward in terms of the optimal policy
-expresses $r$ as a log-ratio, so the reward that any policy implies is
+where $x_i$ is a prompt, $y_{w,i}$ is the response preferred by the rater, $y_{l,i}$ is
+the rejected response, and $N$ is the number of comparisons. Starting from an instruction-
+tuned model, DPO trains one policy $\pi_\theta$ and compares it with a frozen reference
+$\pi_{\mathrm{ref}}$, usually a copy of that starting model.
 
-$$
-r_\theta(x,y) \;=\; \beta\,\log\frac{\pi_\theta(y\mid x)}{\pi_{\text{ref}}(y\mid x)} \;+\; \beta\log Z(x).
-$$
+Compared with PPO-based RLHF in @sec-rlhf, DPO removes three components from the training
+loop:
 
-Here $Z(x)$ is the partition term, the normalizing sum over every response the model could
-produce that turns the reweighted reference back into a probability; it is intractable because
-that sum runs over all possible sequences, far too many to compute. Substitute that implicit
-reward into the Bradley-Terry model of pairwise preference and $Z(x)$ cancels between the chosen
-response $y_w$ and the rejected $y_l$. What remains is a supervised loss on preference pairs,
+- no separately trained scalar reward model;
+- no rollouts from the changing policy during the preference-training stage;
+- no critic or policy-gradient optimizer.
 
-$$
-\mathcal{L}_{\text{DPO}} = -\,\mathbb{E}_{(x,y_w,y_l)}\,\log \sigma\!\left(
-\beta\log\frac{\pi_\theta(y_w\mid x)}{\pi_{\text{ref}}(y_w\mid x)}
-- \beta\log\frac{\pi_\theta(y_l\mid x)}{\pi_{\text{ref}}(y_l\mid x)}\right).
-$$
-
-<figure id="fig-dpo-variants-stepper">
-<div class="viz" data-viz="stepper">
-<div data-chip="RLHF obj" data-title="1 · Objective">Maximize reward under a KL penalty that keeps the policy close to a frozen reference.</div>
-<div data-chip="Optimal π" data-title="2 · Closed form">This objective has one optimal policy: the reference reweighted by exp(r/β), so π* ∝ π_ref · exp(r/β).</div>
-<div data-chip="Solve r" data-title="3 · Implicit reward">Inverting that relation solves for the reward, writing it as β times the log-ratio of policy to reference, plus a term β log Z(x).</div>
-<div data-chip="B-T" data-title="4 · Substitute">Put this implicit reward into the Bradley-Terry model of which response is preferred.</div>
-<div data-chip="Z cancels" data-title="5 · Z(x) cancels">The β log Z(x) term is the same for both responses, so it cancels between the chosen and the rejected one, leaving a log-σ on the gap between their log-ratios.</div>
-<div data-chip="One loss" data-title="6 · What remains">The RLHF machinery of a reward model, a critic, and a PPO loop is gone, and what remains is one loss.</div>
-</div>
-<figcaption>The reduction is six algebraic steps from the RLHF objective to a single classification loss. Step through each line, or let it play.</figcaption>
-</figure>
-
-The reward model and the RL loop are gone. The policy is trained to assign higher implicit
-reward to the preferred response, where implicit reward is the log-ratio of the policy to a
-frozen reference, how much more likely the tuned model makes this answer than the frozen
-starting model does. The title of the paper states the point: the language model is
-an implicit reward model. @fig-dpo-variants-reduction shows the machinery that
-this substitution deletes.
+What remains is important. The reference policy defines what counts as movement, the data
+contains only the candidate responses that were collected, and the pairwise loss specifies
+how one observed comparison should constrain the policy. The language model is an implicit
+reward model only in the precise sense derived below. It is not a general-purpose judge that
+can be queried independently of its reference.
 
 ```{dot}
 //| label: fig-dpo-variants-reduction
-//| fig-cap: "RLHF runs a reward model and a PPO loop over four models; DPO substitutes the implicit reward into the Bradley-Terry model, the partition term cancels, and what remains is one classification loss over preference pairs. After Rafailov et al. (2023)."
+//| fig-cap: "PPO-based RLHF learns a reward and then optimizes against it. DPO substitutes a policy-to-reference log-ratio into the preference likelihood and trains on stored pairs."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.85;
-  compound=true;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  nodesep=0.35; ranksep=0.65;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  pairs [label="Preference pairs"];
 
   subgraph cluster_rlhf {
-    label="RLHF (PPO)";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    pref1 [label="Preference pairs"];
-    rm [label="Reward model\nfit to preferences", fillcolor="#f2c2c2"];
-    ppo [label="PPO loop", fillcolor="#f2c2c2"];
-    pol1 [label="Policy"];
-    ref1 [label="Frozen reference"];
-    crit [label="Critic", fillcolor="#f2c2c2"];
-    aligned1 [label="Aligned policy"];
-    pref1 -> rm;
-    rm -> ppo;
-    pol1 -> ppo;
-    ref1 -> ppo;
-    crit -> ppo;
-    ppo -> aligned1;
+    label="PPO-based RLHF";
+    style=rounded; color="#6b7280"; fontcolor="#6b7280";
+    rm [label="Fit reward model", fillcolor="#f2c2c2"];
+    roll [label="Sample policy rollouts"];
+    ppo [label="Optimize reward\nwith PPO + critic", fillcolor="#f2c2c2"];
+    out1 [label="Updated policy", fillcolor="#bfe3c0"];
+    rm -> roll -> ppo -> out1;
   }
+
   subgraph cluster_dpo {
     label="DPO";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    pref2 [label="Preference pairs"];
-    loss [label="Log-sigmoid loss on\nimplicit reward gap", fillcolor="#bfe3c0"];
-    pol2 [label="Policy"];
-    ref2 [label="Frozen reference"];
-    aligned2 [label="Aligned policy"];
-    pref2 -> loss;
-    pol2 -> loss;
-    ref2 -> loss;
-    loss -> aligned2;
+    style=rounded; color="#6b7280"; fontcolor="#6b7280";
+    score [label="Policy/reference\nlog-ratios"];
+    loss [label="Pairwise\nlog-sigmoid loss"];
+    out2 [label="Updated policy", fillcolor="#bfe3c0"];
+    score -> loss -> out2;
   }
-  aligned1 -> pref2 [ltail=cluster_rlhf, lhead=cluster_dpo, label="implicit reward\nZ(x) cancels"];
+
+  pairs -> rm;
+  pairs -> score;
 }
 ```
 
-## Four edits to one loss
+## The derivation and its assumptions
 
-Once the loss exists, every later method is an edit to it. Each variant removes one
-assumption or one piece of machinery the previous line of the loss carried.
-@fig-dpo-variants-map lays out which piece each one changes.
+The derivation starts from a KL-regularized reward objective. For one prompt $x$, consider
+all probability distributions $\pi(\cdot\mid x)$ over possible responses:
+
+$$
+\max_{\pi}\;
+\mathbb{E}_{y\sim\pi(\cdot\mid x)}[r(x,y)]
+-\beta\,\mathrm{KL}\!\left(
+\pi(\cdot\mid x)\,\|\,\pi_{\mathrm{ref}}(\cdot\mid x)
+\right),
+$$
+
+where $r(x,y)$ is a scalar reward, $\beta>0$ is the KL coefficient, and
+$\pi_{\mathrm{ref}}$ is the reference policy. If the reward is finite, its normalizer exists,
+and $\pi$ puts probability only on the support of the reference policy, the maximizing distribution is
+
+$$
+\pi^*(y\mid x)
+=\frac{1}{Z(x)}\,\pi_{\mathrm{ref}}(y\mid x)
+\exp\!\left(\frac{r(x,y)}{\beta}\right),
+$$
+
+with
+
+$$
+Z(x)=\sum_y \pi_{\mathrm{ref}}(y\mid x)
+\exp\!\left(\frac{r(x,y)}{\beta}\right).
+$$
+
+The closed form is over distributions, not neural-network parameters. A finite language model
+$\pi_\theta$ may not represent $\pi^*$ exactly, and gradient descent may not find the global
+optimum. The formula tells us what the ideal KL-regularized solution looks like; it does not
+solve for $\theta$.
+
+Rearranging the optimal-policy equation gives
+
+$$
+r(x,y)=\beta\log\frac{\pi^*(y\mid x)}
+{\pi_{\mathrm{ref}}(y\mid x)}+\beta\log Z(x).
+$$
+
+The last term depends on the prompt but not on the response. More generally, reward is
+identified only up to a prompt-only constant: adding any $c(x)$ to every response reward for
+the same prompt changes neither pairwise reward differences nor the optimal normalized policy.
+The policy-to-reference log-ratio is therefore one representative of an equivalent class of
+rewards, not a uniquely recovered human utility.
+
+DPO next assumes a Bradley-Terry preference model:
+
+$$
+p(y_w\succ y_l\mid x)=
+\sigma\!\left(r(x,y_w)-r(x,y_l)\right),
+\qquad
+\sigma(z)=\frac{1}{1+e^{-z}}.
+$$
+
+Here $y_w\succ y_l$ means that $y_w$ is preferred to $y_l$. The Bradley-Terry assumption
+represents each response with one scalar score and turns the score difference into a logistic
+choice probability. It cannot directly express ties, cyclic preferences, different rater
+populations, or judgments that depend on unrecorded context.
+
+Substitute the implicit reward into the Bradley-Terry model. The prompt-only constant cancels between
+$y_w$ and $y_l$, leaving the DPO loss
+
+$$
+\mathcal{L}_{\mathrm{DPO}}(\theta)=
+-\mathbb{E}_{(x,y_w,y_l)\sim\mathcal{D}}
+\log\sigma\!\left(\beta A_\theta(x,y_w,y_l)\right),
+$$
+
+where
+
+$$
+A_\theta=
+\underbrace{\left[\log\pi_\theta(y_w\mid x)-\log\pi_{\mathrm{ref}}(y_w\mid x)\right]}_{\text{chosen movement}}
+-\underbrace{\left[\log\pi_\theta(y_l\mid x)-\log\pi_{\mathrm{ref}}(y_l\mid x)\right]}_{\text{rejected movement}}.
+$$
+
+Here $A_\theta$ is the preferred response's movement relative to the reference minus the rejected
+response's movement relative to the reference. Exact equivalence to the idealized RLHF solution
+requires the Bradley-Terry model to be well specified, adequate data coverage, compatible
+reference and behavior-policy support, and successful optimization. DPO removes an explicit
+reward-model and PPO loop under these assumptions. It is not exactly equivalent for arbitrary
+neural models, misspecified preferences, or finite off-support data.
+
+<figure id="fig-dpo-variants-stepper">
+<div class="viz" data-viz="stepper">
+<div data-chip="Objective" data-title="1 · Start with KL-regularized reward">For each prompt, maximize expected reward while penalizing divergence from a reference distribution.</div>
+<div data-chip="Distribution" data-title="2 · Solve over distributions">The unrestricted optimum reweights the reference by exp(r/β). This statement is about probability distributions, not a closed-form neural-network parameter vector.</div>
+<div data-chip="Log-ratio" data-title="3 · Invert the relationship">The reward can be represented by β times the policy/reference log-ratio plus a prompt-only normalizer.</div>
+<div data-chip="Preference" data-title="4 · Choose a comparison model">Bradley-Terry maps the difference between two scalar rewards through a sigmoid to model which response wins.</div>
+<div data-chip="Cancel" data-title="5 · Remove the unknown normalizer">The same prompt-only term appears in both rewards, so it cancels from their difference.</div>
+<div data-chip="Fit" data-title="6 · Optimize the policy">The resulting log-sigmoid loss fits stored comparisons directly, while the frozen reference defines relative movement.</div>
+</div>
+<figcaption>DPO is an algebraic reduction plus modeling assumptions. Each step is necessary for the final loss.</figcaption>
+</figure>
+
+## Interpreting relative movement
+
+The margin equation is easy to misread. DPO does not merely ask whether the chosen response
+has a larger probability than the rejected response. It asks whether training has moved the
+chosen response upward *relative to the reference* more than it has moved the rejected response.
+Consequently, a positive DPO margin does not guarantee
+$\pi_\theta(y_w\mid x)>\pi_\theta(y_l\mid x)$. A response that was already unlikely under the
+reference can win the relative comparison while remaining unlikely in absolute terms.
+
+The per-example gradient makes the update clearer:
+
+$$
+\nabla_\theta\mathcal{L}_{\mathrm{DPO}}
+=-\beta\,\mathbb{E}_{\mathcal{D}}
+\left[
+\sigma(-\beta A_\theta)
+\left(
+\nabla_\theta\log\pi_\theta(y_w\mid x)
+-\nabla_\theta\log\pi_\theta(y_l\mid x)
+\right)
+\right].
+$$
+
+Here pairs with a negative or small margin receive the greatest weight. Once the margin is large,
+the sigmoid saturates and the pair contributes little. Because the two sequences share model
+parameters, this contrast does not promise that the chosen-response log-probability will rise
+monotonically at every checkpoint. Track it instead of inferring it from training loss.
+
+Sequence log-probability is a token sum,
+
+$$
+\log\pi_\theta(y\mid x)=
+\sum_{t=1}^{|y|}\log\pi_\theta(y_t\mid x,y_{<t}),
+$$
+
+where $|y|$ is the number of response tokens and $y_{<t}$ is the prefix before token $t$.
+The DPO margin therefore sums policy-to-reference changes across all response tokens. Length
+can confound the margin when the data has systematic length differences, but the sign of each
+token log-ratio can be positive or negative. DPO reward is not mathematically guaranteed to
+increase with response length.
+
+The role of $\beta$ also has two layers. In the KL-regularized objective, larger $\beta$ means stronger
+theoretical regularization toward the reference. In the implemented DPO loss, $\beta$ also
+sets the logit temperature and multiplies the gradient. Finite-step training need not produce
+a monotonic relationship between $\beta$ and measured policy drift. Tune it, then report the
+achieved policy/reference divergence and task quality rather than treating the configured value
+as the achieved constraint.
+
+## The four variants solve different constraints
+
+IPO, KTO, ORPO, and SimPO are often arranged as a sequence of upgrades. That framing hides
+their actual purpose. Each changes a different part of the problem: the loss shape, the label
+format, the use of an SFT term, or the response score. They also require different data and
+different training resources.
 
 ```{dot}
 //| label: fig-dpo-variants-map
-//| fig-cap: "Each variant edits one part of the DPO loss. IPO bounds the objective; KTO drops the paired-data requirement; ORPO folds alignment into SFT and removes the reference; SimPO removes the reference and normalizes by length."
+//| fig-cap: "The variants change different design choices. They are alternatives for different data and pipeline constraints, not successive versions of one algorithm."
 digraph {
-  rankdir=TB;
+  rankdir=LR;
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fillcolor="#f1ece1", color="#6b7280", fontcolor="#6b7280", fontname="Helvetica", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", fontname="Helvetica", fontsize=10];
+  nodesep=0.35; ranksep=0.6;
+  node [shape=box, style="rounded,filled", fillcolor="#f1ece1", color="#6b7280",
+        fontcolor="#6b7280", fontname="Helvetica", fontsize=10, penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280", fontname="Helvetica", fontsize=9];
 
-  dpo [label="DPO\nlog-sigmoid on log-ratio\nreward, paired data,\nfrozen reference"];
+  dpo [label="DPO\npaired labels · reference\nlog-sigmoid on log-ratio gap"];
+  ipo [label="IPO\npaired labels · reference\nfinite-target squared loss"];
+  kto [label="KTO\nbinary labels · reference\nutility around a KL baseline"];
+  orpo [label="ORPO\npaired labels · no reference\nchosen SFT + odds-ratio penalty"];
+  simpo [label="SimPO\npaired labels · no reference\naverage log-probability + margin"];
 
-  ipo [label="IPO\nbounded squared loss\nregress reward gap\nto a fixed target"];
-  kto [label="KTO\nunpaired good/bad labels\nprospect-theory utility"];
-  orpo [label="ORPO\nodds-ratio penalty\nadded to SFT\nno reference model"];
-  simpo [label="SimPO\nreference-free reward\nlength-normalized\ntarget margin"];
+  { rank=same; ipo; kto; orpo; simpo; }
 
-  dpo -> ipo [label="bound the\nobjective"];
-  dpo -> kto [label="drop\npaired data"];
-  dpo -> orpo [label="merge into SFT,\ndrop reference"];
-  dpo -> simpo [label="drop reference,\nnormalize length"];
+  dpo -> ipo [label="change loss shape"];
+  dpo -> kto [label="change label format"];
+  dpo -> orpo [label="combine with SFT"];
+  dpo -> simpo [label="change response score"];
 }
 ```
 
-**Where the log-sigmoid is unbounded, @gls-ipo bounds the objective with a squared target for the reward gap.** Azar et al. target a weakness in the derivation
-[@azar2023ipo]: the Bradley-Terry substitution assumes pairwise preferences can be replaced by
-a pointwise reward, and when the sampled preferences are deterministic or nearly so, the
-log-sigmoid loss drives the implicit reward gap toward infinity, overfitting the preference
-set at the expense of the KL term.
-IPO replaces the log-sigmoid with a bounded squared objective that regresses the implicit
-reward gap toward a fixed target, so the optimum stays finite even when preferences are clean.
-@fig-dpo-variants-1 contrasts the two loss shapes.
+### IPO: keep pairs and the reference, change the loss shape
 
-![Schematic illustration of the bounded IPO objective versus the unbounded DPO log-sigmoid loss as a function of the implicit reward gap, after Azar et al. (2023). The log-sigmoid keeps decreasing as the gap grows, so its optimum pushes the gap toward infinity; the squared loss has a minimum at a fixed target, so its optimum stays finite.](/figures/dpo-variants-1.svg){#fig-dpo-variants-1}
+Identity Preference Optimization (@gls-ipo) starts from a theoretical problem with DPO's
+Bradley-Terry reduction. If observed preferences are deterministic or nearly deterministic,
+the negative log-sigmoid loss has its infimum at an ever-larger preference margin. The loss
+itself is bounded below by zero; the *optimizing margin* is what tends toward infinity on
+separable comparisons [@azar2023ipo].
 
-Run a few gradient steps on a single reward gap under each loss and watch the DPO gap climb without bound while the IPO gap settles at its target.
+IPO bypasses the pointwise Bradley-Terry reward assumption and regresses the policy/reference
+log-ratio gap to a finite target. With
+
+$$
+h_\theta(x,y_w,y_l)=
+\log\frac{
+\pi_\theta(y_w\mid x)\,\pi_{\mathrm{ref}}(y_l\mid x)
+}{
+\pi_\theta(y_l\mid x)\,\pi_{\mathrm{ref}}(y_w\mid x)
+},
+$$
+
+Here $h_\theta$ denotes the chosen-versus-rejected gap in policy/reference log-ratios. The
+sampled IPO objective is
+
+$$
+\mathcal{L}_{\mathrm{IPO}}(\theta)=
+\mathbb{E}_{\mathcal{D}}
+\left[
+\left(h_\theta(x,y_w,y_l)-\frac{1}{2\beta}\right)^2
+\right].
+$$
+
+Here this chapter uses $\beta$ for the paper's positive KL-regularization parameter $\tau$.
+The target is therefore fixed by the theory as $1/(2\beta)$, not chosen independently. IPO
+still needs paired responses and a frozen reference. Its source paper demonstrates the behavior
+mainly in illustrative bandit problems, so the derivation should not be read as evidence that
+IPO wins broadly on language-model tasks.
+
+![For a separable comparison, the DPO negative log-sigmoid approaches zero as the gap grows, whereas IPO's squared loss has a finite minimizing gap. The curves are schematic; the IPO target is fixed by the regularization coefficient.](/figures/dpo-variants-1.svg){#fig-dpo-variants-1}
+
+The runnable below isolates this difference. It optimizes one scalar gap rather than a language
+model, so it demonstrates loss geometry, not expected model quality.
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 
-def sigmoid(z): return 1.0 / (1.0 + np.exp(-z))
+def sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-z))
 
-beta, lr, target, steps = 1.0, 0.5, 5.0, 60
-gd, gi = [0.0], [0.0]
-for t in range(steps):
-    # DPO gradient on the gap never reaches zero, so the gap keeps growing
-    gd.append(gd[-1] + lr * beta * sigmoid(-beta * gd[-1]))
-    # IPO regresses the gap to a fixed target, so it settles there
-    gi.append(gi[-1] - lr * 2.0 * beta * (beta * gi[-1] - target))
-print(f"DPO gap after {steps} steps: {gd[-1]:.2f} and still rising")
-print(f"IPO gap converges to target: {gi[-1]:.2f}")
-plt.plot(gd, label="DPO log-sigmoid"); plt.plot(gi, label="IPO bounded")
-plt.axhline(target, ls="--", c="gray"); plt.xlabel("step"); plt.ylabel("implicit reward gap")
-plt.legend(); plt.show()
+beta = 0.2
+learning_rate = 0.1
+steps = 100
+ipo_target = 1.0 / (2.0 * beta)
+
+dpo_gap = [0.0]
+ipo_gap = [0.0]
+for _ in range(steps):
+    # d[-log sigmoid(beta*h)]/dh = -beta*sigmoid(-beta*h)
+    dpo_gradient = -beta * sigmoid(-beta * dpo_gap[-1])
+    dpo_gap.append(dpo_gap[-1] - learning_rate * dpo_gradient)
+
+    # d[(h - 1/(2*beta))**2]/dh = 2*(h - target)
+    ipo_gradient = 2.0 * (ipo_gap[-1] - ipo_target)
+    ipo_gap.append(ipo_gap[-1] - learning_rate * ipo_gradient)
+
+print(f"IPO target: {ipo_target:.2f}")
+print(f"DPO gap after {steps} steps: {dpo_gap[-1]:.2f}")
+print(f"IPO gap after {steps} steps: {ipo_gap[-1]:.2f}")
+
+plt.plot(dpo_gap, label="DPO gap")
+plt.plot(ipo_gap, label="IPO gap")
+plt.axhline(ipo_target, color="gray", linestyle="--", label="IPO target")
+plt.xlabel("gradient step")
+plt.ylabel("policy/reference log-ratio gap")
+plt.legend()
+plt.show()
 ```
 ::::
 
-**@gls-kto drops the paired-data requirement by learning from good/bad labels.** @gls-dpo needs a chosen and a rejected response for
-the same prompt; KTO learns from unpaired binary good or bad labels by scoring each response
-against a reference point with a prospect-theory utility [@ethayarajh2024kto], the same
-human-value-of-gains-and-losses shape Kahneman and Tversky used. This trades the paired-data
-constraint for a utility model, which matters because thumbs-up and thumbs-down logs are far
-more abundant than curated pairs.
+### KTO: replace pairs with desirable and undesirable examples
 
-**@gls-orpo merges alignment with SFT through an odds-ratio penalty.** Instead of a separate alignment stage with a reference
-model, Hong et al. add an odds-ratio penalty to the SFT cross-entropy [@hong2024orpo] (the
-SFT stage itself is @sec-sft-peft), so one pass both teaches the format and down-weights the
-rejected response. It carries no reference model at all.
+**@gls-kto drops the paired-data requirement by learning from good/bad labels.**
+Kahneman-Tversky Optimization changes the data requirement. Each example is a
+triple $(x,y,d)$, where $d$ says whether response $y$ is desirable or undesirable. A positive
+and a negative response for the same prompt are not required [@ethayarajh2024kto]. This fits
+logs built from approvals, rejections, or thresholded ratings, although the meaning and
+calibration of those labels still matter.
 
-**@gls-simpo goes reference-free, normalizing the reward by length.** Meng et al. drop the reference
-policy from the implicit reward [@meng2024simpo], using the average log-probability of a
-sequence as the reward, and add a target margin between chosen and rejected. The length
-normalization is the deliberate part: DPO's log-ratio reward correlates with sequence length,
-which lets a policy raise its score by getting wordier, and dividing by length removes that
-lever. @fig-dpo-variants-2 shows the reward against response length under both rewards.
+KTO retains a reference model. It defines
 
-![Schematic illustration of how SimPO's length normalization flattens the implicit reward against response length, after Meng et al. (2024). The DPO log-ratio reward sums per-token terms and so grows with length, which a policy can exploit by getting wordier; the length-normalized SimPO reward is the per-token average and stays flat.](/figures/dpo-variants-2.svg){#fig-dpo-variants-2}
+$$
+r_\theta(x,y)=\log\frac{\pi_\theta(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)},
+\qquad
+z_0(x)=\mathrm{KL}\!\left(
+\pi_\theta(\cdot\mid x)\,\|\,\pi_{\mathrm{ref}}(\cdot\mid x)
+\right),
+$$
 
-## Controlled comparison
+Here $r_\theta$ represents the response's policy/reference log-ratio, while $z_0$ denotes the
+KL reference point. KTO then scores the example relative to that point:
 
-Read in sequence, the four edits look like a ladder of improvements, each variant fixing
-what the last one missed. A controlled comparison undercuts that reading.
+$$
+v(x,y)=
+\begin{cases}
+\lambda_D\,\sigma\!\left(\beta(r_\theta(x,y)-z_0(x))\right),
+& d=\text{desirable},\\
+\lambda_U\,\sigma\!\left(\beta(z_0(x)-r_\theta(x,y))\right),
+& d=\text{undesirable}.
+\end{cases}
+$$
+
+Its loss is $\mathcal{L}_{\mathrm{KTO}}=\mathbb{E}[\lambda_d-v(x,y)]$, where $\lambda_D$
+and $\lambda_U$ weight the desirable and undesirable classes. In practice, exact computation
+of $z_0$ is expensive. The paper uses a stopped-gradient, biased microbatch estimate constructed
+from mismatched prompts and responses. Class imbalance therefore affects both the weights and
+the quality of the baseline estimate.
+
+The prospect-theory connection supplies an inductive bias: gains and losses are evaluated
+relative to a reference point with a saturating value function. It is not evidence that this
+formula is a faithful psychological model of how people judge text. KTO's practical advantage
+is narrower and useful: it can train from independently labeled responses without pretending
+that those labels form same-prompt pairs.
+
+### ORPO: combine chosen-response SFT with a preference penalty
+
+Odds Ratio Preference Optimization (@gls-orpo) removes the frozen reference and the separate
+preference stage. It trains on pairs, uses the chosen response as an SFT target, and adds a term
+that separates chosen and rejected sequence scores [@hong2024orpo]. For a response of $m$ tokens,
+ORPO first defines the geometric-mean token probability
+
+$$
+P_\theta(y\mid x)=
+\exp\!\left(
+\frac{1}{m}\sum_{t=1}^{m}
+\log P_\theta(y_t\mid x,y_{<t})
+\right),
+$$
+
+Here $P_\theta(y\mid x)$ represents the geometric mean of the token probabilities. Its odds are
+$\operatorname{odds}_\theta(y\mid x)=P_\theta(y\mid x)/(1-P_\theta(y\mid x))$.
+The objective is
+
+$$
+\mathcal{L}_{\mathrm{ORPO}}=
+\mathbb{E}_{\mathcal{D}}
+\left[
+\mathcal{L}_{\mathrm{SFT}}(x,y_w)
++\lambda\mathcal{L}_{\mathrm{OR}}(x,y_w,y_l)
+\right],
+$$
+
+Here $\mathcal{L}_{\mathrm{SFT}}$ denotes chosen-response negative log-likelihood and $\lambda$
+sets the weight of the odds-ratio term, defined as
+
+$$
+\mathcal{L}_{\mathrm{OR}}=
+-\log\sigma\!\left(
+\log\frac{
+\operatorname{odds}_\theta(y_w\mid x)
+}{
+\operatorname{odds}_\theta(y_l\mid x)
+}
+\right).
+$$
+
+This formula means that minimizing $\mathcal{L}_{\mathrm{OR}}$ increases the chosen response's
+odds relative to the rejected response. $\lambda>0$ balances demonstration learning against
+preference separation. ORPO is one stage,
+not literally one pass over the data. It saves reference inference or cached reference scores,
+but it also couples SFT and preference learning through $\lambda$. Those two signals cannot be
+tuned or audited as independently as a staged SFT-then-DPO pipeline.
+
+### SimPO: use average log-probability and a target margin
+
+Simple Preference Optimization (@gls-simpo) also removes the reference, but it retains a pure
+pairwise objective. Its response score is the policy's average token log-probability:
+
+$$
+r_{\mathrm{SimPO}}(x,y)=
+\frac{\beta}{|y|}\log\pi_\theta(y\mid x)
+=\frac{\beta}{|y|}\sum_{t=1}^{|y|}
+\log\pi_\theta(y_t\mid x,y_{<t}).
+$$
+
+Here $|y|$ denotes response length and $\beta$ scales the average log-probability. The training
+loss is
+
+$$
+\mathcal{L}_{\mathrm{SimPO}}(\theta)=
+-\mathbb{E}_{\mathcal{D}}
+\log\sigma\!\left(
+\frac{\beta}{|y_w|}\log\pi_\theta(y_w\mid x)
+-\frac{\beta}{|y_l|}\log\pi_\theta(y_l\mid x)
+-\gamma
+\right),
+$$
+
+where $\beta>0$ scales the score difference and $\gamma>0$ is the target margin
+[@meng2024simpo]. Unlike its role in the original KL objective, $\beta$ is not a KL coefficient
+here because SimPO has no reference-policy KL term.
+
+The per-token average reduces sensitivity to response length when length and preference are
+correlated in the dataset. It does not eliminate all length bias, and the SimPO paper notes that
+DPO's policy/reference ratio can itself counteract some length effects. The original experiments
+also found that an overly large $\gamma$ could reduce generation quality. Reference-free does
+not mean regularization-free; initialization, learning rate, data coverage, and early stopping
+still limit drift.
+
+## What the comparison can establish
+
+The original papers report gains in particular settings. KTO reports competitive results with
+unpaired labels, ORPO reports benefits from its joint objective, and SimPO reports wins over its
+DPO baselines on chat evaluations. These results use different initial models, datasets,
+hyperparameter searches, and evaluators. They do not form one common tournament.
 
 ::: {.callout-important}
 ## What's contested
-The variant family is usually presented as a ladder of improvements, but a controlled
-multi-scale study (arXiv:2603.19335) finds no variant reliably beats vanilla DPO once
-confounds are corrected for. When tuning budget, data, and model are held equal, the gaps
-between methods shrink into the noise, and the apparent ranking inverts across model scale:
-a variant that leads at one size trails at another. The practical reading is that reported
-wins for a new objective often reflect a better-tuned baseline-versus-variant comparison
-rather than a property of the loss, and that the choice among these methods should be driven
-by pipeline and data constraints rather than by a claimed accuracy edge.
+
+A 2026 preprint tested 20 DPO variants on synthetic GSM8K preference data at 1.5B parameters
+and reported that none of the variants reliably beats the plain loss after Bonferroni correction
+[@li2026posttraining]. In that experiment, SimPO was the only statistically significant difference
+and performed worse. The same paper's broader scale study, however, found SimPO ahead of DPO at
+7B. Its variant sweep used one model family, one main training domain, published defaults rather
+than equal per-method tuning, and initially contained a seed-propagation fault that the authors
+later checked on a subset of methods.
+
+This does not prove that DPO is universally best. It shows why an objective-level win should be
+treated as conditional on scale, data, initialization, tuning, and evaluation. Broader empirical
+comparisons likewise find rankings that vary by setting [@spangher2025rlhf; @saeidi2025systematic].
 :::
 
-If accuracy does not separate the variants, then something else has to decide between them,
-and that something is the shape of the pipeline and the data.
+The defensible conclusion is not that the losses are interchangeable. It is that there is no
+established universal winner. Compare them with the same starting checkpoint, data, optimization
+budget, decoding settings, and external evaluator. Report uncertainty across seeds when the
+decision matters.
 
-## What actually decides the choice
+## Choose from data and pipeline constraints
 
-With the accuracy edge gone, the real axes are the engineering ones the variants trade
-along. Four of them recur.
+The pipeline and data constraints often narrow the choice before benchmark scores do:
 
-- **Reference model versus none.** Keeping the frozen reference (DPO, IPO) anchors the
-  policy and gives the KL constraint a meaning, at the cost of a second resident model and forward
-  pass. Dropping it (ORPO, SimPO) halves the alignment-stage memory and simplifies the
-  pipeline, but removes the explicit anchor that limits drift from the starting policy.
-- **Paired versus unpaired data.** DPO, IPO, ORPO, and SimPO all need a chosen and a rejected
-  response per prompt. KTO accepts unpaired binary signals, which fits production feedback
-  logs but substitutes a utility model for the pairwise comparison the others optimize.
-- **Bounded versus unbounded objective.** IPO's bounded regression resists the overfitting
-  that DPO's log-sigmoid invites on clean, near-deterministic preferences. The price is a
-  loss that no longer matches Bradley-Terry exactly and a target margin to set.
-- **Two stages versus one.** ORPO merges alignment into SFT, saving a stage and a reference
-  model, at the cost of entangling format learning and preference learning so they can no
-  longer be tuned or audited separately.
+| Method | Feedback format | Frozen reference during training | Chosen SFT term | Response score | Main extra controls |
+|---|---|---:|---:|---|---|
+| DPO | paired | yes | no | summed policy/reference log-ratio | $\beta$ |
+| IPO | paired | yes | no | policy/reference log-ratio gap | $\beta$ and finite target $1/(2\beta)$ |
+| KTO | desirable/undesirable | yes | no | log-ratio relative to KL baseline | $\beta,\lambda_D,\lambda_U$ |
+| ORPO | paired | no | yes | odds of geometric-mean token probability | $\lambda$ |
+| SimPO | paired | no | no | average policy log-probability | $\beta,\gamma$ |
 
-The first of these axes is not only a modeling choice. It is forced from below.
+Use this table as a filter, not a leaderboard:
+
+- Start with DPO when same-prompt pairs and a suitable reference are available. It is the clearest
+  baseline and keeps SFT separate from preference learning.
+- Consider IPO when separable comparisons drive margins upward and reference anchoring is still
+  desirable. Validate the theory-derived target in the actual model regime.
+- Consider KTO when feedback is genuinely pointwise. Audit label semantics, class balance, and
+  the microbatch KL estimate before comparing quality with pairwise methods.
+- Consider ORPO when a one-stage SFT-plus-preference recipe is operationally useful. Measure how
+  $\lambda$ trades chosen imitation against rejection rather than assuming the two cooperate.
+- Consider SimPO when avoiding reference inference and using a per-token score fit the pipeline.
+  Tune both $\beta$ and $\gamma$, and measure drift because there is no explicit reference anchor.
+
+Reference-free methods remove reference inference and storage overhead. They do not necessarily
+halve peak memory: optimizer states, activations, sharding, offload, and whether reference scores
+are precomputed determine the realized saving. DPO and IPO can compute frozen-reference log-
+probabilities before training and store two scalar scores per pair, trading disk and preprocessing
+for lower training-time memory and compute.
 
 ::: {.callout-tip}
-## Constraint arrow
-The memory budget of @sec-training-at-scale reaches up and shapes the loss. DPO and IPO keep
-a frozen reference model resident alongside the policy and pay a second forward pass through
-it on every step. At large model size that doubled footprint is the cost that ORPO (no
-reference) and SimPO (reference-free) exist to remove. The reference-free design is not
-primarily an accuracy claim, it is a response to the systems cost of holding two models.
+## Lower-layer constraint
+
+The systems design in @sec-training-at-scale reaches into the objective choice. If reference
+scores can be precomputed, DPO's extra model need not remain resident. If pairs are regenerated
+between rounds, cached scores become stale and reference inference returns. Decide the data refresh
+schedule, storage format, sharding plan, and precision policy before using “reference-free” as a
+systems argument.
 :::
 
-## Running it
+## A practical DPO run
 
-DPO is the smallest of the family to run: one loss, a frozen copy of the SFT model as the
-reference, and a static file of preference triples. The core is the log-ratio difference
-inside a log-sigmoid, computed from per-token log-probabilities of the chosen and rejected
-responses under the policy and the reference; see the loss derivation in `DPO loss,
-Rafailov et al. (arXiv:2305.18290), Sec. 4` [@rafailov2023dpo]. The reference forward pass
-can be precomputed once because the reference never updates, which is the standard memory
-optimization.
+A reliable first run is deliberately plain. It establishes whether the preference data carries
+useful signal before adding a variant.
 
-The one hyperparameter that matters across the family is $\beta$, the strength of the KL
-constraint that also scales the implicit reward. Too small and the policy drifts off the
-reference and degrades; too large and it barely moves. Because vanilla DPO is off-policy,
-trained on a fixed set rather than on samples from the live policy, its ceiling is the fixed
-data, and the common remedy is iterated or online DPO that regenerates pairs from the
-current model between rounds. That on-policy variant, and the broader RLHF apparatus it
-approaches, belong to @sec-rlhf.
+1. **Freeze the starting point.** Save the SFT or instruction checkpoint as
+   $\pi_{\mathrm{ref}}$ and initialize $\pi_\theta$ from the same weights. Record tokenizer,
+   chat template, truncation rules, and end-of-sequence handling.
+2. **Validate every triple.** Require one prompt, one chosen response, and one rejected response.
+   Remove exact duplicates, contradictory duplicate labels, empty responses, and pairs made
+   identical by truncation. Split by prompt or source group to prevent near-duplicate leakage.
+3. **Inspect the preference signal.** Measure response lengths, label sources, topic mixture,
+   rater agreement where available, and the starting model's margins. A dataset in which the
+   chosen answer is almost always longer can train style as a shortcut.
+4. **Compute sequence scores correctly.** Mask prompt tokens and padding. Sum response-token
+   log-probabilities under the policy and reference. Use the same tokenization and truncation for
+   both models. Precompute reference scores only after these choices are frozen.
+5. **Run a small sweep.** Vary learning rate, $\beta$, and epochs. Learning rate and stopping time
+   can matter as much as the named objective. Keep the data order and evaluation protocol fixed
+   across methods.
+6. **Evaluate checkpoints, not only the last step.** Training preference accuracy can keep rising
+   after held-out task quality peaks. Select with external evaluation defined before the sweep.
+
+The minimal batch computation is
+
+$$
+\begin{aligned}
+\ell_w &= \log\pi_\theta(y_w\mid x)-\log\pi_{\mathrm{ref}}(y_w\mid x),\\
+\ell_l &= \log\pi_\theta(y_l\mid x)-\log\pi_{\mathrm{ref}}(y_l\mid x),\\
+\mathcal{L}_{\mathrm{batch}} &= -\operatorname{mean}\!\left[
+\log\sigma\!\left(\beta(\ell_w-\ell_l)\right)
+\right].
+\end{aligned}
+$$
+
+$\ell_w$ and $\ell_l$ are sums over response tokens only. Keeping them as named diagnostics
+makes several failures visible that a single loss curve would hide.
+
+## Failure modes and checks
+
+Preference optimization is offline: it only constrains responses represented in the stored
+comparisons. As the policy changes, it can enter regions where those labels provide little
+coverage. No loss variant can infer missing behavior requirements from absent data.
+
+Track at least the following on a held-out split and on generated responses:
+
+- **Measure held-out preference accuracy and margin.** These show whether the loss generalizes to unseen
+  pairs, but they do not by themselves measure open-ended generation quality.
+- **Chosen-response log-probability and rejected-response log-probability.** A widening relative
+  margin can coexist with falling likelihood for both responses. That may be acceptable, but it
+  should be observed rather than assumed away.
+- **Policy/reference divergence.** Estimate token-level KL or policy/reference log-ratios on fresh
+  generations. The configured $\beta$ is not a measurement of achieved drift.
+- **Response length and format compliance.** Compare distributions, not just their means. Length,
+  refusal rate, and formatting can become shortcuts for the preference label.
+- **Held-out task quality.** Use human evaluation, verifiable tasks, or a judge protocol with known
+  limitations. Include safety and capability regressions that are not represented by the training
+  pairs.
+- **Slice results.** Break out prompt source, language, difficulty, response-length gap, and label
+  provenance. Aggregate wins can conceal a severe regression on one group.
+
+If training accuracy approaches one while external quality falls, first shorten training or lower
+the learning rate. Then inspect data leakage, contradictory labels, length shortcuts, and policy
+drift. Switching objectives before diagnosing those causes can merely move the same failure to a
+different loss.
+
+Static preference optimization is valuable precisely because it is simple. Its limit is the same
+simplicity: the model never asks for a new comparison while it changes. Iterated or online methods
+refresh candidates from the current policy and collect or generate new judgments, improving
+coverage at the cost of bringing sampling and feedback infrastructure back into the loop. That
+tradeoff connects this chapter to the online RLHF system in @sec-rlhf.
 
 ## Further reading
 
