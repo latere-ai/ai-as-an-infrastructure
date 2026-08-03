@@ -231,6 +231,18 @@ test("wave-5 components are used in their chapters, both languages", () => {
   }
 });
 
+test("the SSM comparison visualizes state shape without inventing recall accuracy", () => {
+  const start = rt.indexOf("R['ssm-vs-attention']");
+  const end = rt.indexOf("R['rl-timeline']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("attention records grow with length");
+  expect(component).toContain("recurrent state slots stay fixed");
+  expect(component).not.toContain("exact");
+  expect(component).not.toContain("far recall");
+  expect(component).not.toContain("Math.exp");
+});
+
 test("the viz runtime registers the ROI balance component", () => {
   expect(rt).toMatch(/R\['roi-balance'\]\s*=\s*function/);
 });

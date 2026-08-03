@@ -536,7 +536,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/foundations/05-moe-ssm-hybrids.qmd",
-      ["router", "almost for free", "starving experts"],
+      ["router", "store more expert weights than one token evaluates", "under-train some experts"],
     ],
     [
       "zh/foundations/05-moe-ssm-hybrids.qmd",

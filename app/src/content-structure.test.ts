@@ -540,6 +540,57 @@ test("transformer architecture separates equations, cache state, and kernels", (
   );
 });
 
+test("MoE and recurrent architectures separate parameters, routing, and state", () => {
+  const chapter = src("en/foundations/05-moe-ssm-hybrids.qmd");
+
+  for (const heading of [
+    "## Two independent architecture axes",
+    "## MoE routes tokens through conditional FFNs",
+    "## State-space layers replace a growing history with a recurrence",
+    "## Hybrids choose a layer schedule",
+    "## Record sparse and recurrent architecture as a contract",
+    "## Validate each axis before scaling",
+  ]) {
+    expect(chapter).toContain(heading);
+  }
+
+  for (const contract of [
+    "P_{\\mathrm{stored}}",
+    "C_e=\\left\\lceil c\\frac{kT}{E}\\right\\rceil",
+    "\\mathcal{L}_{\\mathrm{bal}}",
+    "\\mathcal{L}_{z}",
+    "(\\Delta_t,B_t,C_t)=s_\\theta(x_t)",
+    "M_{\\mathrm{rec}}",
+    "@gale2023megablocks",
+    "@minimax2025m2attention",
+  ]) {
+    expect(chapter).toContain(contract);
+  }
+
+  for (const rejected of [
+    "capacity and knowledge",
+    "total parameters scale capacity and knowledge",
+    "the only way to know more is to compute more",
+    "This tiny map is the only genuinely new component",
+    "drops the auxiliary loss entirely",
+    "common default for large open MoE models",
+    "k=2 is the common sweet spot",
+    "MoE loss curves are spikier",
+    "every strong long-context system",
+    "attention keeps every past token exactly",
+    "SSM's recall of far-back tokens decays",
+    "hybrid systems below are what retired the objection",
+    "the frontier does not choose",
+  ]) {
+    expect(chapter).not.toContain(rejected);
+  }
+
+  const figure = src("figures-src/moe-ssm-hybrids-2.py");
+  expect(figure).toContain("3 * model_width * expert_width");
+  expect(figure).not.toContain("arbitrary unit");
+  expect(figure).not.toContain("capacity grows");
+});
+
 test("scaling-laws separates forecasting, allocation, deployment, and execution", () => {
   const chapter = src("en/foundations/01-scaling-laws.qmd");
 

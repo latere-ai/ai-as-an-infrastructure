@@ -1,262 +1,590 @@
 # Beyond Dense Transformers: MoE, SSMs, Hybrids {#sec-moe-ssm-hybrids}
 
-@sec-transformer-architecture treated the dense block as the default. That
-default runs every token through every parameter, and it hides two walls a
-frontier builder eventually hits. One wall is in the feed-forward block:
-capacity and per-token compute are welded together, so the only way to know
-more is to compute more. The other is in attention: mixing every token with
-every other costs the square of the sequence length and leaves behind a
-key-value cache that grows without bound. A mixture-of-experts layer breaks the
-first wall by routing a token to only a few of its many experts. Against the
-second, a state-space model swaps attention's quadratic mixing for a linear
-recurrence. Hybrids keep both moves in the same stack. The sparse bet only pays
-off if the router can add parameters almost for free without starving experts,
-collapsing load, or making communication dominate the saved compute.
+@sec-transformer-architecture described a causal decoder with two dense
+sublayers: attention mixes positions, and a feed-forward network (FFN)
+transforms each position. This chapter varies those two sublayers along
+independent axes.
 
-## The two walls of the dense block
+A mixture-of-experts (MoE) FFN stores many expert networks but evaluates only
+a selected subset for each token. It changes parameter activation; it does not
+make attention sparse. A state-space or linear-recurrent layer changes how the
+sequence is mixed and what state is retained during decoding; it does not by
+itself add expert routing. A hybrid can use either change, or both, in one
+stack. Keeping the axes separate prevents three quantities from being confused:
+stored parameters, arithmetic executed for one token, and state retained for
+one sequence.
 
-A dense feed-forward block runs every token through all of its parameters. That couples two things a frontier builder wants to separate: the model's capacity, how much it can know, and its per-token compute, how much each forward and backward step costs. Under that coupling, the only way to add knowledge is to add FLOPs, and FLOPs are the budget @sec-scaling-laws spends. A model that wants more capacity than its compute budget can afford has no move inside the dense design. Call this the capacity wall.
+## Two independent architecture axes
 
-The second wall is attention's own. Self-attention mixes every token with every other, so its cost grows with the square of sequence length, and the key-value cache it leaves behind grows linearly with context and dominates serving memory (@sec-serving-problem). For long context that quadratic is the wall. The dense transformer therefore carries two separate inefficiencies: a feed-forward block that spends compute on capacity it may not need per token, and an attention block that spends compute and memory on a mixing pattern that may be denser than the task requires. The rest of this chapter takes the two walls in turn. MoE attacks the first, state-space models the second, and hybrids decline to choose.
+For a dense Transformer block, every token evaluates the same FFN weights, and
+every attention layer retains keys and values for every cached position. That
+is a specific design, not a definition of a language model. Alternatives ask
+two different questions:
 
-## Breaking the capacity wall: mixture-of-experts
+| Axis | Dense choice | Alternative | Resource primarily changed |
+|---|---|---|---|
+| FFN parameter activation | Evaluate one dense FFN | Route each token through a few experts | Stored parameters relative to expert-path arithmetic |
+| Sequence mixing | Attend to cached positions | Update a recurrent state | Work and persistent state as context grows |
 
-### Decoupling parameters from FLOPs
+These substitutions introduce new costs. MoE routing creates dispatch,
+imbalance, and communication. A recurrence compresses history into a state
+whose width is fixed by the architecture, so past positions are no longer
+individually represented in a growing key-value cache. The relevant comparison
+is therefore a workload-level one: quality, training arithmetic, memory,
+communication, batch shape, and serving latency all count.
 
-The mixture-of-experts answer is to decouple parameters from active FLOPs. An MoE layer holds $N$ expert feed-forward networks but routes each token to only $k$ of them, with $k \ll N$. The identity that matters: *total* parameters scale capacity and knowledge, while *active* parameters, the $k$ chosen experts plus the always-on parts of the model, scale per-token compute and step cost. Capacity becomes cheap relative to FLOPs, which is the whole frontier appeal. The same arithmetic cuts inference FLOPs too, though serving an MoE is its own problem and out of scope here. @fig-moe-ssm-hybrids-2 makes the split visible: as the expert count $N$ grows, total parameters climb while the active count that sets per-token FLOPs stays flat with $k$ fixed.
+## MoE routes tokens through conditional FFNs
 
-![Schematic of how a mixture-of-experts layer decouples capacity from per-token compute. Total parameters grow with the expert count $N$, while active parameters, the FLOPs paid per token, stay flat because only $k$ experts fire. Idealized counts, not measured data, after Shazeer et al. (2017) and Fedus et al. (2021).](/figures/moe-ssm-hybrids-2.svg){#fig-moe-ssm-hybrids-2}
+Sparse expert models predate Transformers. Shazeer et al. introduced a
+sparsely gated MoE layer at large scale in 2017 inside recurrent language
+models [@shazeer2017outrageously]. GShard then combined conditional experts
+with Transformer models and automatic sharding [@lepikhin2020gshard], while
+Switch Transformer studied top-1 routing and trillion-parameter models
+[@fedus2021switch]. The durable idea is narrower than the surrounding scale
+claims: store more expert weights than one token evaluates.
 
-Sweep the expert count $N$ and watch total capacity climb while the active params that set per-token FLOPs stay almost flat.
+### Routing is a defined mathematical operation
 
-:::: {.runnable}
-```python
-import numpy as np, matplotlib.pyplot as plt
+In one common top-$k$ formulation, used by Mixtral, the first two terms score
+and select experts [@jiang2024mixtral]:
 
-# MoE decouples total params (capacity) from active params (per-token FLOPs).
-d, ffn = 4096, 14336           # hidden size and one expert's FFN width
-k = 2                          # experts fired per token
-per_expert = 2 * d * ffn       # up + down projection of one expert
-N = np.arange(1, 65)           # number of experts in the layer
-total  = N * per_expert                    # all experts are stored
-active = k * per_expert + N * d            # k fired experts + router map
+$$
+z_t=W_rh_t,
+\qquad
+\mathcal{S}_t=\operatorname{TopK}(z_t,k).
+$$
 
-plt.figure(figsize=(5, 3))
-plt.plot(N, total / 1e9,  label="total params (capacity)")
-plt.plot(N, active / 1e9, label="active params (per-token FLOPs)")
-plt.xlabel("experts N"); plt.ylabel("billions of params"); plt.legend()
-plt.tight_layout(); plt.show()
+The normalized gate for each selected expert is
 
-print(f"N=64, k={k}: {total[-1]/1e9:.1f}B total but only {active[-1]/1e9:.2f}B active")
-print(f"capacity-to-compute ratio: {total[-1]/active[-1]:.0f}x")
-```
-::::
+$$
+g_{t,e}=
+\begin{cases}
+\dfrac{\exp(z_{t,e})}
+{\sum_{j\in\mathcal{S}_t}\exp(z_{t,j})}, & e\in\mathcal{S}_t,\\[6pt]
+0, & e\notin\mathcal{S}_t,
+\end{cases}
+$$
 
-The new learned object is the router, also called the gate. It is a small linear map from a token's hidden state to one score per expert. A softmax or sigmoid turns scores into weights, the top-$k$ experts are selected, and their outputs are combined weighted by the renormalized gate values. In sketch form:
+Each selected expert then contributes to the output:
 
-```python
-# router: a linear map h -> scores over N experts
-scores = h @ W_gate                  # (tokens, N)
-weights = softmax(scores)            # or sigmoid per-expert
-top = topk(weights, k)               # indices and gate values
-y = sum(g_i * Expert_i(h) for i, g_i in top)
-```
+$$
+m_t=\sum_{e=1}^{E}g_{t,e}F_e(h_t).
+$$
 
-This tiny map is the only genuinely new component, and it is the source of almost every MoE pathology. The whole rest of the design exists to keep the router in check. @fig-moe-routing traces one token through the layer: the gate scores all experts, top-$k$ are selected and combined, while a shared expert (a later refinement) stays always-on in parallel.
+Here $h_t\in\mathbb{R}^{d}$ is the hidden vector at token position $t$;
+$E$ is the number of routed experts; $W_r\in\mathbb{R}^{E\times d}$ is the
+router matrix; $z_{t,e}$ is expert $e$'s routing logit;
+$\mathcal{S}_t$ is the set of $k$ selected expert indices;
+$g_{t,e}$ is the selected expert's normalized gate weight;
+$F_e:\mathbb{R}^{d}\rightarrow\mathbb{R}^{d}$ is expert $e$; and
+$m_t\in\mathbb{R}^{d}$ is the MoE output. A residual connection and any
+shared expert are outside this equation.
+
+This is one router contract, not a universal definition. Switch uses top-1
+routing; some systems apply softmax before selection, some after it, and some
+use sigmoid affinities. The gate value may or may not be renormalized after
+top-$k$. These choices change gradients and checkpoint semantics, so a model
+description must state them.
 
 ```{dot}
 //| label: fig-moe-routing
-//| fig-cap: "One token through an MoE layer. The router scores all N experts, the top-k routed experts are weighted and summed, and an always-on shared expert runs in parallel. After Shazeer et al., 2017 and Dai et al., 2024."
-digraph {
+//| fig-cap: "One top-2 MoE path. The router scores all routed experts, selects two, and combines their FFN outputs with gate weights. An optional shared expert is evaluated separately and added without a routed gate."
+digraph moe {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
+  nodesep=0.32; ranksep=0.42;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  h [label="Token hidden state h"];
-  gate [label="Router W_gate\nscores over N experts"];
-  sm [label="softmax / sigmoid\nthen top-k select"];
-  e1 [label="Expert i\n(routed)"];
-  e2 [label="Expert j\n(routed)"];
-  eN [label="Experts ...\n(idle, no FLOPs)"];
-  shared [label="Shared expert\n(always-on)"];
-  sum [label="Weighted sum\nby gate values"];
-  y [label="Output y"];
+  h [label="token state h_t"];
+  r [label="router W_r\nE scores"];
+  k [label="top-2 selection"];
+  e1 [label="routed expert i"];
+  e2 [label="routed expert j"];
+  idle [label="other experts\nnot evaluated", style="rounded,dashed"];
+  mix [label="g_i F_i(h_t) + g_j F_j(h_t)"];
+  shared [label="optional shared expert\n(always evaluated)"];
+  out [label="MoE output"];
 
-  h -> gate;
-  gate -> sm;
-  sm -> e1 [label="selected"];
-  sm -> e2 [label="selected"];
-  sm -> eN [style=dashed, label="not selected"];
+  h -> r -> k;
+  k -> e1 [label="g_i"];
+  k -> e2 [label="g_j"];
+  k -> idle [style=dashed];
+  e1 -> mix;
+  e2 -> mix;
   h -> shared;
-  e1 -> sum;
-  e2 -> sum;
-  shared -> sum;
-  sum -> y;
+  mix -> out;
+  shared -> out [label="add", style=dashed];
 }
 ```
 
-### The router and its pathologies
+### Stored parameters, selected weights, and runtime are different
 
-The first thing the router gets wrong on its own is balance. Left alone, the gate collapses onto a few favored experts in a winner-take-all loop: an expert that is chosen gets more gradient, improves, and is chosen more, while the rest starve and become dead parameters. Two families of fix exist. The auxiliary load-balancing loss, from Shazeer et al. (2017) [@shazeer2017outrageously] and refined in GShard [@lepikhin2020gshard] and Switch [@fedus2021switch], adds a penalty term on the product of the fraction of tokens routed to each expert and the gate mass placed on it, pushing the distribution toward uniform. It works, but it injects a loss whose weight trades balance against task quality. The newer answer, loss-free or bias-based balancing from DeepSeek-V3 [@deepseek2024deepseekv3], drops the auxiliary loss entirely. Instead it keeps a per-expert routing *bias*, nudged up for under-used experts and down for over-used ones between steps, steering selection without adding an interfering gradient [@wang2024auxiliaryfree]. That sidesteps the balance-versus-quality tension the auxiliary loss creates.
+Suppose every expert is a bias-free SwiGLU FFN with model width $d$ and expert
+hidden width $d_f$. From @sec-transformer-architecture, one expert contains
+approximately
 
-Two refinements change what an "expert" is. *Fine-grained* experts slice each expert into smaller ones and raise $k$ proportionally, so the same active FLOPs buy far more routing combinations and sharper specialization. *Shared* experts are a few that every token always passes through, absorbing the common, domain-general computation so the routed experts can specialize instead of each re-learning the basics. DeepSeekMoE combines both [@dai2024deepseekmoe], and the pair is now a common default for large open MoE models.
+$$
+P_e=3dd_f
+$$
 
-One systems fact intrudes on this otherwise clean picture. Routing is dynamic, but hardware wants fixed-shape buffers, so each expert is given a *capacity* cap, roughly `capacity_factor * (tokens / experts)`. Tokens routed to an over-full expert are *dropped*, passed through on the residual or rerouted to a second choice. The capacity factor is a direct knob: set it low and you save memory and communication but drop more tokens, losing compute and adding training noise; set it high and you waste padding on under-full experts.
+parameters, where $P_e$ counts the gate, value, and down projections; $d$ is
+the input and output width; and $d_f$ is the expert's intermediate width.
+With $E$ routed experts and no shared expert, the layer stores and evaluates
+
+$$
+P_{\mathrm{stored}}=EP_e+Ed,
+\qquad
+P_{\mathrm{evaluated}}(t)=kP_e+Ed.
+$$
+
+Here $Ed$ is the router matrix, whose $E$ scores are all evaluated for token
+$t$; $EP_e$ counts every stored expert; and $kP_e$ counts only the selected
+expert weights. Biases and always-on block parameters are omitted. Reported
+"active parameter" counts often include additional embeddings, attention,
+normalization, and shared experts, so the reporting convention must be stated.
+
+@fig-moe-ssm-hybrids-2 evaluates these equations for
+$d=4096$, $d_f=14336$, and $k=2$. The selected-expert term stays fixed as
+$E$ grows, but the router term grows, and neither line measures wall-clock
+time. Runtime also depends on token dispatch, padding or ragged kernels,
+all-to-all communication, memory traffic, and the slowest expert shard.
+
+![Stored versus evaluated parameter values for one bias-free SwiGLU MoE layer with model width 4096, expert width 14336, and top-2 routing. Stored parameters include every expert and the router. Evaluated parameters include two experts and all router scores. Attention and other always-on weights are excluded.](/figures/moe-ssm-hybrids-2.svg){#fig-moe-ssm-hybrids-2}
+
+The runnable cell prints the same accounting without requiring plotting
+libraries. Change $E$, $k$, or either width to inspect another layer.
+
+:::: {.runnable}
+```python
+model_width = 4096
+expert_width = 14_336
+selected_experts = 2
+
+def moe_parameter_counts(experts):
+    if not 1 <= selected_experts <= experts:
+        raise ValueError("selected_experts must be between 1 and experts")
+    per_expert = 3 * model_width * expert_width  # bias-free SwiGLU
+    router = experts * model_width
+    stored = experts * per_expert + router
+    evaluated = selected_experts * per_expert + router
+    return stored, evaluated
+
+for experts in (8, 16, 32, 64):
+    stored, evaluated = moe_parameter_counts(experts)
+    print(
+        f"E={experts:2d}, k={selected_experts}: "
+        f"stored={stored / 1e9:.3f}B, "
+        f"evaluated/token={evaluated / 1e9:.3f}B, "
+        f"ratio={stored / evaluated:.2f}x"
+    )
+```
+::::
+
+### Routing creates a dispatch problem
+
+Expert weights are commonly partitioned across an expert-parallel group. A
+forward pass then has four stages: compute router scores, group token copies by
+destination expert, exchange those copies to the expert owners, and return the
+expert outputs to their original token order. Implementations often use one
+all-to-all collective for dispatch and another for the return path, but an
+all-to-all is not intrinsic when all experts are local or the placement differs.
+
+The arithmetic saved inside expert FFNs can therefore be replaced by network
+time or small, poorly utilized matrix multiplications. Useful measurements
+include bytes dispatched, tokens per expert, padded versus useful expert slots,
+collective time, overlap with computation, and tail latency. "Active
+parameters" alone proves none of these.
+
+For a routing group with $T$ tokens, $E$ experts, and $k$ assignments per token,
+the even-share load is $kT/E$ assignments per expert. A fixed-capacity
+implementation may reserve
+
+$$
+C_e=\left\lceil c\frac{kT}{E}\right\rceil
+$$
+
+slots per expert, where $c>0$ is the capacity factor; $C_e$ is the assignment
+capacity of expert $e$; $T$ is the number of tokens in the routing group; $kT$
+is the total number of routed assignments; and $E$ is the expert count. An
+overflow policy may skip, reroute, or defer assignments. Switch's published
+formula is the $k=1$ case [@fedus2021switch]. Other systems use dropless ragged
+or block-sparse execution instead of a fixed cap [@gale2023megablocks].
 
 <figure id="fig-moe-ssm-hybrids-moe-routing">
 <div class="viz" data-viz="moe-routing"></div>
-<figcaption>Tokens stream through the gate to their top-2 experts, and each expert’s load grows. Toggle the router to collapsed and the load piles onto two experts while the rest starve, the winner-take-all loop that load balancing exists to prevent. The dashed capacity line is the capacity factor times the even-share load; tokens routed past it are dropped. Drag the capacity factor to trade dropped tokens against wasted padding. Illustrative.</figcaption>
+<figcaption>A toy top-2 dispatcher with six experts. Balanced mode spreads assignments; collapsed mode concentrates them. The dashed line is a fixed capacity factor times the current even-share assignment count. Assignments above that illustrative limit are marked dropped. Production routers and dropless kernels can use different policies.</figcaption>
 </figure>
 
-### How the layer reached this form
+### Balance losses change optimization, not just utilization
 
-Sparse experts predate the transformer era as a general idea, but the line that matters here begins with Shazeer et al. (2017) [@shazeer2017outrageously], who introduced top-$k$ gating and the auxiliary balancing loss inside an LSTM language model. GShard (Lepikhin et al., 2020) [@lepikhin2020gshard] carried the layer into the transformer and into automatic sharding across devices. Switch Transformers (Fedus et al., 2021) [@fedus2021switch] pushed to the cheapest possible router, $k=1$, and to trillion-parameter scale, showing top-1 routing could train stably with the right stabilizers. GLaM (Du et al., 2022) [@du2022glam] made the efficiency case at scale, and Mixtral (Jiang et al., 2024) [@jiang2024mixtral] brought a strong open $k=2$ model into wide use.
-
-Two threads then refined the layer. On routing, expert-choice (Zhou et al., 2022) [@zhou2022expert] inverted the question: instead of each token picking its experts, each expert picks its tokens, which makes per-expert load exact by construction and removes dropping, at the cost of some tokens getting no expert at all. BASE Layers (Lewis et al., 2021) [@lewis2021base] framed routing as a balanced assignment problem outright. On specialization, DeepSeekMoE (Dai et al., 2024) [@dai2024deepseekmoe] introduced fine-grained and shared experts, and DeepSeek-V3 (2024) [@deepseek2024deepseekv3] replaced the auxiliary loss with bias-based balancing at frontier scale, with the standalone method documented separately by Wang et al. (2024) [@wang2024auxiliaryfree].
-
-A parallel thread made MoE practical without paying for a from-scratch run. Sparse upcycling (Komatsuzaki et al., 2022) [@komatsuzaki2022sparse] initializes each expert as a copy of a trained dense feed-forward block, adds a fresh router, and continues training; the experts diverge as routing specializes them. It buys strong quality for a fraction of from-scratch compute, with the failure mode that experts can stay near-identical if routing pressure is too weak, leaving MoE's cost without its benefit.
-
-### Stabilizing the router in practice
-
-The router is the part to get right, and its instabilities have a specific cause. The top-$k$ selection is an argmax, it picks the highest-scoring experts, and argmax is discontinuous: a small change in scores flips a token's expert, making the loss landscape jagged and spike-prone, worse in low precision. The standard mitigations are narrow and worth naming. The router z-loss from ST-MoE (Zoph et al., 2022) [@zoph2022stmoe] penalizes large router logits to keep the gate numerically well-behaved; note this is distinct from the output-logit z-loss in the stability kit of @sec-scaling-laws. Keeping the router in fp32 under a bf16 or fp8 body (numeric precision formats, where fewer bits mean less memory but coarser arithmetic, defined in @sec-training-at-scale) costs little and removes a class of spikes. And early routing decisions can lock in before experts have differentiated, so a run is worth watching for that in its first phase. MoE loss curves are spikier than dense curves at the same scale; an unguarded router, with no z-loss and bf16 logits, can spike and fail to recover days into a run.
-
-Three routing failures dominate practice: *Routing collapse* funnels most tokens to a few experts and leaves the rest dead; it is exactly what load balancing exists to prevent, and it returns if balance is mis-weighted or disabled. *Load imbalance and token dropping*, short of collapse, overflows some experts' capacity and silently discards their tokens' compute while adding noise, and it stalls the slowest expert's device, a systems cost paid in @sec-training-at-scale. *Expert under-training* leaves rarely-chosen experts too few tokens to specialize, the exact risk mode of upcycling when routing pressure is too weak.
-
-### When the bet pays off
-
-- **Sparse versus dense.** MoE buys more capacity per training FLOP and per active FLOP, but pays in memory, since all experts are stored and sharded, in communication, since expert parallelism needs an all-to-all (every device exchanges data with every other, @sec-training-at-scale), in fragility, and in a harder serving story. At small scale or under tight memory, dense wins. The crossover favors MoE as total scale grows.
-- **top-1 versus top-k.** A router with $k=1$ is cheapest and simplest but more brittle and less expressive [@fedus2021switch]; $k=2$ is the common sweet spot [@jiang2024mixtral]; higher $k$ approaches dense cost and erodes the advantage.
-- **Capacity factor.** Lower is cheaper but drops more tokens and adds noise; higher wastes padding. There is no single right value, and it is often raised at evaluation and inference, where dropping a token is unacceptable.
-
-## Breaking the context wall: state-space models
-
-### A fixed state instead of an addressable past
-
-State-space models answer the other wall, attention's quadratic. An SSM maintains a fixed-size hidden state and updates it token by token through a linear recurrence, where each step's state feeds into the next, then reads an output from it:
+Unregularized routing can concentrate assignments, under-train some experts,
+and make overloaded expert ranks into stragglers. Shazeer et al. used separate
+importance and load objectives [@shazeer2017outrageously]. Switch introduced a
+simpler top-1 auxiliary loss
 
 $$
-h_t = A\, h_{t-1} + B\, x_t, \qquad y_t = C\, h_t
+\mathcal{L}_{\mathrm{bal}}
+=\alpha E\sum_{e=1}^{E}f_eq_e,
+\qquad
+f_e=\frac{1}{T}\sum_{t=1}^{T}
+\mathbf{1}\!\left[\arg\max_j p_{t,j}=e\right],
+\qquad
+q_e=\frac{1}{T}\sum_{t=1}^{T}p_{t,e}.
 $$
 
-Because the state is fixed in size, the cost is linear in sequence length and there is no growing key-value cache to serve, only a constant-size state. The price is that all of a token's past must be summarized into that fixed state, where attention keeps every past token addressable. The design question is whether a learned, input-dependent recurrence can compress the past well enough to compete. Mamba's contribution was to make the recurrence selective, letting $A$, $B$, and $C$ depend on the input so the model can choose what to keep and what to forget, recovering much of what content-based attention does while staying linear [@gu2023mamba].
+Here $p_t=\operatorname{softmax}(z_t)$ is the full router distribution for
+token $t$; $f_e$ is the realized fraction of tokens sent to expert $e$;
+$q_e$ is its mean router probability; $T$ is the routing-group token count;
+$E$ is the expert count; $\alpha\ge0$ is the loss coefficient; and
+$\mathbf{1}[\cdot]$ is an indicator. The product penalizes jointly large
+traffic and probability mass. Top-$k$ systems use related but not identical
+definitions.
 
-### From S4 to Mamba
+The coefficient is a real optimization choice: too little balance can create
+poor utilization, while too much pressure can override task-driven routing.
+DeepSeek-V3 primarily steers top-$k$ selection with per-expert biases that are
+adjusted from recent load, while retaining a small sequence-wise auxiliary
+loss to prevent extreme imbalance [@deepseek2024deepseekv3;
+@wang2024auxiliaryfree]. The bias affects selection, not the gate weight used
+to combine expert outputs. This is more precise than saying the model removed
+all balancing losses.
 
-The state-space line is younger as a serious attention competitor. The structured state-space model S4 (Gu et al., 2021) [@gu2021s4] showed a carefully parametrized linear recurrence could handle very long sequences, and Mamba (Gu and Dao, 2023) [@gu2023mamba] made the recurrence selective and hardware-efficient, bringing it within reach of language modeling at scale. Mamba-2 (Dao and Gu, 2024) [@dao2024mamba2] tied state-space models back to attention through a duality that let them reuse attention's hardware.
+ST-MoE also introduced a router z-loss [@zoph2022stmoe]:
 
-Mamba is not the only linear line. Linear attention reaches the same shape from the other side: drop the softmax from attention, and the past can be folded into a fixed-size running state, updated token by token like an SSM. Gated DeltaNet is the current refinement, pairing Mamba-2's gated forgetting, which erases the running state quickly, with the delta rule, a targeted write that edits only the part of the state a new key touches [@yang2024gateddeltanet], and MiniMax's lightning attention is the same family run at production scale. For years the practical objection to all of these was tooling: the recurrence needs a hardware-efficient scan to be fast, and that path was thinner than the dense-transformer one. The hybrid systems below are what retired the objection.
+$$
+\mathcal{L}_{z}
+=\frac{\beta}{T}\sum_{t=1}^{T}
+\left(\log\sum_{e=1}^{E}\exp z_{t,e}\right)^2.
+$$
 
-### Recall is the catch
+Here $z_{t,e}$ is the router logit defined earlier; the log-sum-exp term is the
+router log-partition for token $t$; $T$ and $E$ retain their earlier meanings;
+and $\beta\ge0$ controls the penalty. Switch also reported selectively using
+float32 for router computations inside a bfloat16 model
+[@fedus2021switch]. Those are experiment-backed stabilizers, not proof that
+hard top-$k$ selection or low precision is the sole cause of every MoE failure.
 
-Attention keeps every past token exactly addressable and excels at precise recall, at quadratic cost and a growing key-value cache. An SSM is linear in length with a constant-size state, but must compress the past, and tends to lag attention on tasks that need exact long-range lookup. @fig-moe-ssm-hybrids-1 is the cost side of that trade: the two curves part ways as context grows, which is what makes the recall penalty worth paying at long context. Hybrids, the subject of the next section, exist precisely because neither pure form dominates.
+### Refinements solve different routing problems
 
-![Schematic of sequence-mixing cost as context length grows. Attention's total mixing cost grows with the square of the sequence length, and the key-value cache it leaves behind grows linearly, while a state-space recurrence holds a fixed-size state and its cost grows only linearly. Idealized curves, not measured data, after Gu and Dao (2023).](/figures/moe-ssm-hybrids-1.svg){#fig-moe-ssm-hybrids-1}
+Several named designs are alternatives, not a single progression toward one
+default:
+
+- **Top-1 and top-$k$.** Switch evaluates one expert; Mixtral evaluates two.
+  Increasing $k$ raises expert arithmetic and communication, approaching dense
+  expert evaluation only as $k$ approaches $E$.
+- **Expert-choice and balanced assignment.** Expert Choice gives each expert a
+  fixed token bucket, eliminating expert-side overflow but giving tokens a
+  variable number of selected experts, possibly zero [@zhou2022expert]. BASE
+  Layers instead formulate routing as a balanced assignment problem
+  [@lewis2021base].
+- **Fine-grained and shared experts.** DeepSeekMoE divides expert capacity into
+  smaller routed experts and adds always-evaluated shared experts
+  [@dai2024deepseekmoe]. In that construction, shared outputs are added without
+  a routed gate. The paper reports improved specialization in its experiments;
+  the label "shared" does not guarantee that a network has learned only general
+  knowledge.
+- **Sparse upcycling.** A dense FFN can be copied into several experts, followed
+  by continued training with a new router [@komatsuzaki2022sparse]. This changes
+  initialization cost, not the eventual dispatch and serving contract.
+
+GLaM and Mixtral demonstrate other points in the design space
+[@du2022glam; @jiang2024mixtral]. Their results do not establish a universal
+best expert count, $k$, capacity factor, or routing loss. Those values depend on
+the training budget, batch shape, topology, memory, kernels, and target latency.
+
+## State-space layers replace a growing history with a recurrence
+
+The second axis concerns sequence mixing. State-space models (SSMs) originate
+in dynamical-systems and control formulations, long before their use in neural
+sequence models. S4 showed in 2022 that a structured linear state-space layer
+could model long sequences efficiently [@gu2021s4]. Mamba then made key parts
+of the recurrence input-dependent and supplied a hardware-aware selective scan
+[@gu2023mamba].
+
+### From a continuous system to a discrete layer
+
+A linear time-invariant state-space system is
+
+$$
+\frac{dh(t)}{dt}=Ah(t)+Bx(t),
+\qquad
+y(t)=Ch(t)+D_{\mathrm{skip}}x(t).
+$$
+
+Here continuous time is $t$; $x(t)\in\mathbb{R}^{d_{in}}$ is the input;
+$h(t)\in\mathbb{R}^{n}$ is the state; $y(t)\in\mathbb{R}^{d_{out}}$ is the
+output; $A\in\mathbb{R}^{n\times n}$ is the state transition;
+$B\in\mathbb{R}^{n\times d_{in}}$ writes the input into state;
+$C\in\mathbb{R}^{d_{out}\times n}$ reads the state; and
+$D_{\mathrm{skip}}\in\mathbb{R}^{d_{out}\times d_{in}}$ is a direct input
+path. The dimensions $d_{in}$, $n$, and $d_{out}$ are fixed by the layer.
+
+After discretization at a fixed step, the same layer can be written
+
+$$
+h_t=\bar A h_{t-1}+\bar Bx_t,
+\qquad
+y_t=Ch_t+D_{\mathrm{skip}}x_t.
+$$
+
+Here integer $t$ is a token position; $x_t$, $h_t$, and $y_t$ are the sampled
+input, state, and output; and $\bar A$ and $\bar B$ are the discretized
+transition and input matrices. They are not the continuous matrices $A$ and
+$B$, even when an implementation derives them from those parameters.
+
+### Fixed coefficients give recurrence-convolution equivalence
+
+With $h_0=0$ and fixed $\bar A$, $\bar B$, and $C$, the terms in the unrolled
+recurrence are
+
+$$
+K_i=C\bar A^{i}\bar B,
+\qquad
+y_t=\sum_{j=1}^{t}K_{t-j}x_j+D_{\mathrm{skip}}x_t.
+$$
+
+Here $i\ge0$ is a lag; $K_i\in\mathbb{R}^{d_{out}\times d_{in}}$ is the
+convolution kernel at that lag; $\bar A^i$ is the $i$-th matrix power; $j$ is
+an earlier token position; and all other symbols retain their definitions
+above. The recurrent and convolutional views compute the same linear operator.
+S4 exploits structure in $A$ to generate and apply long kernels efficiently;
+its theoretical filter-generation and FFT costs should not be collapsed into a
+blanket claim that every SSM implementation is simply $O(S)$.
+
+### Mamba makes the recurrence selective
+
+For one simplified Mamba channel, the token-dependent terms produced by the
+selection mechanism are
+
+$$
+(\Delta_t,B_t,C_t)=s_\theta(x_t),
+\qquad
+\bar A_t=\exp(\Delta_tA),
+\qquad
+\bar B_t=
+\int_{0}^{\Delta_t}\exp\!\bigl((\Delta_t-\tau)A\bigr)B_t\,d\tau,
+$$
+
+These terms define the discrete recurrence:
+
+$$
+h_t=\bar A_th_{t-1}+\bar B_tx_t,
+\qquad
+y_t=C_th_t+D_{\mathrm{skip}}x_t.
+$$
+
+Here $s_\theta$ is a learned projection with parameters $\theta$;
+$\Delta_t>0$ is an input-dependent discretization step; $B_t$ and $C_t$ are
+input-dependent write and read maps; $A$ remains a learned but
+input-independent continuous transition; $\exp$ is the matrix exponential;
+$\tau$ is the integration variable; and $\bar A_t$ and $\bar B_t$ are the
+token-dependent discrete maps. Production Mamba layers batch many channels and
+use structured parameterizations, but the distinction is the same:
+$\Delta_t$, $B_t$, and $C_t$ are selective; continuous $A$ is not
+[@gu2023mamba].
+
+Input dependence removes the single stationary convolution kernel $K$ from the
+previous section. Mamba recovers parallel training through a fused associative
+scan over affine recurrence updates, then uses the recurrent form for
+autoregressive decoding. Mamba-2 relates a restricted class of SSM transitions
+to semiseparable mixing matrices and uses chunked matrix multiplication; its
+paper reports a 2 to 8 times faster core layer than Mamba's selective scan in
+the tested settings [@dao2024mamba2]. That is a measured result under those
+implementations, not an architecture-independent speed ratio.
+
+### Linear attention is another fixed-state route
+
+Kernelized causal attention can also reorder its computation into a recurrent
+state. A simplified gated form is
+
+$$
+S_t=\lambda_tS_{t-1}+\phi(k_t)v_t^{\top},
+\qquad
+z_t=\lambda_tz_{t-1}+\phi(k_t),
+\qquad
+y_t=\frac{\phi(q_t)^{\top}S_t}
+{\phi(q_t)^{\top}z_t+\varepsilon}.
+$$
+
+Here $q_t$, $k_t$, and $v_t$ are query, key, and value vectors;
+$\phi$ is a feature map that makes the kernel factorable;
+$S_t$ is a fixed-shape key-value summary matrix; $z_t$ is its normalizer state;
+$\lambda_t\in[0,1]$ is an optional learned forgetting gate;
+$\varepsilon>0$ prevents division by zero; and $y_t$ is the output. The
+associative factorization, not merely removing softmax, eliminates the need to
+form every query-key pair. Gated DeltaNet adds targeted delta-rule updates to
+this family [@yang2024gateddeltanet].
+
+### Linear sequence scaling is not automatic speed
+
+With model dimensions fixed, dense full-sequence attention forms a number of
+query-key relationships proportional to $S^2$, while a recurrent scan performs
+a number of state updates proportional to $S$. @fig-moe-ssm-hybrids-1 plots
+only that sequence-length growth, normalized at 1,000 tokens. It does not plot
+FLOPs or measured runtime; projection width, state size, kernel fusion, memory
+traffic, and hardware determine the constants.
+
+![Growth of the dominant sequence-length term, normalized at a 1,000-token context. Dense attention relationships grow quadratically with context length; recurrent state updates grow linearly when model dimensions are fixed. The curves are asymptotic accounting, not a runtime benchmark.](/figures/moe-ssm-hybrids-1.svg){#fig-moe-ssm-hybrids-1}
+
+During decode, one dense attention layer compares a new query with a retained
+key for each cached position. A recurrent layer instead updates a state whose
+shape is independent of context length. "Independent of context length" does
+not mean small or free. In the original Mamba implementation, a useful
+approximation for persistent decode state is
+
+$$
+M_{\mathrm{rec}}
+=B_{\mathrm{batch}}L_{\mathrm{rec}}d_{\mathrm{inner}}
+\bigl(n_{\mathrm{state}}+d_{\mathrm{conv}}\bigr)b
+\quad\text{bytes}.
+$$
+
+Here $B_{\mathrm{batch}}$ is the number of resident sequences;
+$L_{\mathrm{rec}}$ is the number of recurrent layers;
+$d_{\mathrm{inner}}$ is the number of recurrent channels;
+$n_{\mathrm{state}}$ is the SSM state width per channel;
+$d_{\mathrm{conv}}$ is the short-convolution buffer length; and $b$ is bytes
+per stored element. Exact layouts vary by implementation. The state scales
+with batch, layers, channel width, state width, convolution width, and
+precision, but not with cached context length.
 
 <figure id="fig-moe-ssm-hybrids-ssm-vs-attention">
 <div class="viz" data-viz="ssm-vs-attention"></div>
-<figcaption>The recall side of the same trade. Attention keeps every past token as an addressable cache that grows with length and stays exact; an SSM compresses the past into a fixed-size state, so distant tokens fade and grow harder to recall. Grow the sequence and watch the attention cache swell while the SSM's recall of far-back tokens decays. Illustrative.</figcaption>
+<figcaption>Persistent decode-state shape as sequence length changes. An attention layer retains one key-value record per cached position. A recurrent layer keeps a fixed number of state slots chosen by its architecture. This figure compares storage structure only; it makes no claim that attention retrieves perfectly or that every recurrent model forgets distant tokens at a fixed rate.</figcaption>
 </figure>
+
+The trade is representational. Attention retains a separate cached
+representation for each past position and permits direct content-based access.
+A recurrent layer repeatedly compresses prior information into a fixed-shape
+state, so information can interfere or be lost. Neither mechanism guarantees
+recall. Retrieval quality must be measured on the target distribution, at the
+target length, after matched training.
+
+## Hybrids choose a layer schedule
+
+MoE and recurrent sequence mixing compose because they occupy different block
+slots. A hybrid may use attention in some layers, a recurrence in others, and
+either dense or expert FFNs after each mixer. There is no required ratio.
+
+```{dot}
+//| label: fig-moe-hybrid-stack
+//| fig-cap: "An illustrative 3:1 hybrid cycle. Three recurrent mixers and one attention mixer each feed an MoE FFN. The mixer schedule and FFN choice are independent configuration fields, not a universal block order."
+digraph hybrid {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.26; ranksep=0.30;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  x [label="input residual stream"];
+  r1 [label="recurrent mixer 1"];
+  f1 [label="MoE FFN 1"];
+  r2 [label="recurrent mixer 2"];
+  f2 [label="MoE FFN 2"];
+  r3 [label="recurrent mixer 3"];
+  f3 [label="MoE FFN 3"];
+  a [label="causal attention mixer"];
+  f4 [label="MoE FFN 4"];
+  y [label="next residual group"];
+
+  x -> r1 -> f1 -> r2 -> f2 -> r3 -> f3 -> a -> f4 -> y;
+}
+```
+
+Released models illustrate different schedules and reporting conventions:
+
+| Model | Sequence mixers | FFN sparsity | Scope of the reported evidence |
+|---|---|---|---|
+| Jamba | One attention layer per seven Mamba layers in its main configuration | 16 experts, top-2 in selected layers | The authors report stronger throughput and lower KV memory than named baselines under specified hardware and context settings [@lieber2024jamba] |
+| MiniMax-01 | Seven Lightning Attention blocks per softmax-attention block | 32 experts, top-2; 456B total and 45.9B activated | The report trained to 1M-token contexts and evaluated extrapolation to 4M [@minimax2025minimax01] |
+| Qwen3-Next-80B-A3B | Twelve repetitions of three Gated DeltaNet layers and one gated-attention layer | 512 routed experts, 10 selected, plus one shared expert | The official card reports 80B total, 3B activated, and a native 262,144-token context [@qwen2025qwen3next] |
+| Nemotron-H | Mamba-2, attention, and dense FFN layers | Dense FFNs | The authors report 8B, 56B, and distilled 47B variants, with throughput comparisons scoped to their benchmark setup [@nvidia2025nemotronh] |
+
+These examples prove that the components can be trained and implemented at
+large scale. They do not prove that a hybrid dominates full attention on every
+quality measure or serving workload. MiniMax later chose full attention for M2
+and reported that hybrid weaknesses appeared on complex multi-hop tasks at
+larger scale, while low-precision state, prefix caching, speculative decoding,
+kernel maturity, and evaluation remained practical concerns
+[@minimax2025m2attention]. That first-party retrospective is one team's
+evidence, not a universal verdict against recurrent or hybrid models.
 
 ::: {.callout-important}
 ## What's contested
-Whether state-space and hybrid models should displace the dense attention transformer is not settled. The case for them is the linear cost and the constant-size state, which matter most at long context and at serving time. The case against is recall: pure SSMs still trail attention on tasks that need exact retrieval from far back in the sequence, which is why every strong long-context system so far keeps some full-attention layers rather than going pure-recurrent. How few attention layers a stack can keep, and whether a future selective recurrence closes the recall gap entirely, are open questions. The test is now running in production, and the evidence cuts both ways: hybrid stacks shipped at frontier scale through 2025, yet MiniMax's follow-up model M2 reverted to full attention, its team reporting that the hybrid's deficits surfaced only at scale, on multi-hop reasoning, and in an inference stack tuned for full attention [@minimax2025m2attention]. Treat "attention is replaceable" as a live hypothesis the frontier is testing, not a settled result.
+
+The open question is not whether subquadratic mixers can run. It is where their
+quality, state capacity, and implementation costs cross the full-attention
+baseline for a particular workload. Small or saturated benchmarks can hide
+retrieval and multi-step reasoning deficits; theoretical linear work can still
+be memory-bound; and an attention-heavy software stack may erase an
+architecture's nominal advantage. Comparisons need matched data, tokens,
+parameters, training compute, kernels, hardware, context lengths, and serving
+features.
 :::
 
 ::: {.callout-tip}
 ## Constraint arrow
-The serving layer reaches up and sets sequence-mixing design. The key-value cache footprint and the quadratic cost of attention at long context (@sec-serving-problem) are what make a linear-cost, constant-state recurrence worth its recall penalty in the first place. A choice that looks like pure architecture, attention versus state-space, is driven by what inference will cost over the model's life, the same arrow that justified over-training in @sec-scaling-laws.
+
+Architecture now fixes two contracts for @sec-training-at-scale. MoE fixes
+expert placement, dispatch volume, and load imbalance across the device
+topology. Recurrent and hybrid mixers fix scan kernels, state precision, and
+which layers still allocate a KV cache. Those choices then constrain batching,
+prefix reuse, speculative decoding, and memory scheduling in
+@sec-serving-problem. An asymptotic saving is useful only if the distributed
+and serving implementations can realize it.
 :::
 
-## Neither alone: the hybrid stack
+## Record sparse and recurrent architecture as a contract
 
-In practice the frontier does not choose one or the other. *Hybrid* stacks interleave a minority of full-attention layers with a majority of SSM or linear-recurrence layers, so a few global-mixing layers preserve exact recall while the linear layers carry the bulk of the sequence cheaply. MoE and SSM are also orthogonal: a hybrid can put its feed-forward blocks behind an MoE router and its sequence-mixing behind a state-space recurrence at the same time. Jamba (Lieber et al., 2024) [@lieber2024jamba] interleaved Mamba and attention layers and added MoE on top, demonstrating that the three ideas compose into one stack. What Jamba demonstrated, the 2025 generation shipped at scale: MiniMax-01 interleaved lightning attention with softmax attention at 456B total parameters in January 2025 [@minimax2025minimax01], Qwen3-Next runs Gated DeltaNet against gated full attention at roughly three linear layers per attention layer [@qwen2025qwen3next], and Nemotron-H does the same with Mamba layers [@nvidia2025nemotronh]. @fig-moe-hybrid-stack shows the three ideas composing: the sequence-mixing slot alternates SSM and attention, while the feed-forward slot is an MoE layer.
+A reproducible architecture description should name at least:
 
-```{dot}
-//| label: fig-moe-hybrid-stack
-//| fig-cap: "A hybrid stack composes all three ideas. Most layers mix the sequence with a linear SSM recurrence, a minority use full attention for exact recall, and the feed-forward slot is an MoE layer. After Lieber et al., 2024."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+- which layers use attention, an SSM, linear attention, or another mixer;
+- every attention mask, head layout, position rule, and KV-cache data type;
+- recurrent state shapes, discretization or gate parameterization,
+  convolution width, reset semantics, and state precision;
+- expert count, shared-expert count, selected routed experts, expert FFN
+  shapes, and which layers are sparse;
+- router scoring, normalization, top-$k$ tie-breaking, gate renormalization,
+  and output-combination rule;
+- balance and z-loss equations with coefficients, plus any bias-update rule;
+- routing-group size, capacity factor, overflow or dropless policy, and token
+  ordering after combine;
+- expert placement, expert-parallel group, dispatch collective, router
+  precision, and reported total/activated-parameter convention.
 
-  in [label="Input sequence"];
-  rep [label="...block repeats..."];
-  out [label="Output"];
+Names such as "MoE," "Mamba hybrid," or "80B-A3B" leave most of this contract
+undefined. Checkpoint tensors, training code, inference kernels, and model cards
+must agree on it.
 
-  subgraph cluster_block {
-    label="Repeated block";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    L1 [label="SSM layer\n(linear, cheap mixing)"];
-    L2 [label="SSM layer\n(linear, cheap mixing)"];
-    L3 [label="Attention layer\n(global, exact recall)"];
-    L4 [label="MoE feed-forward\n(routed experts)"];
-    L1 -> L2;
-    L2 -> L3;
-    L3 -> L4;
-  }
+## Validate each axis before scaling
 
-  in -> L1;
-  L4 -> rep;
-  rep -> out;
-}
-```
+1. **Check parameter accounting.** Reconcile stored, selected, shared, router,
+   and always-on parameters with the serialized checkpoint.
+2. **Test routing exactly.** On a small batch, compare sharded dispatch and
+   combine with a single-device reference, including ties, overflow, padding,
+   and zero-token experts.
+3. **Measure the load distribution.** Report assignments per expert, imbalance,
+   dropped or rerouted assignments, padding, entropy, and the slowest expert
+   rank over training and evaluation data.
+4. **Measure communication.** Record dispatch and combine bytes, collective
+   time, compute overlap, and end-to-end tokens per second at realistic batch
+   sizes.
+5. **Compare scan and recurrence.** Confirm the parallel training path and
+   token-by-token recurrent path agree within declared numerical tolerances.
+6. **Test state boundaries.** Reset state at document and sequence boundaries;
+   test packed samples, prefix reuse, state copying, and speculative rollback.
+7. **Stress retrieval and state tracking.** Evaluate direct lookup, order,
+   repeated keys, distractors, and multi-hop use across the deployed length,
+   rather than relying on one needle test.
+8. **Benchmark the complete workload.** Compare quality, training throughput,
+   prefill, decode, memory, batch capacity, and failure recovery against dense
+   and attention-only baselines under matched budgets.
 
-The few attention layers in a hybrid still carry a key-value cache, so a hybrid does not escape attention's costs entirely; it pays them on a minority of layers instead of all of them. @fig-moe-lineage lays out the threads of this chapter as a genealogy: a routing line, a specialization line, the upcycling shortcut, and the separate state-space line, all converging on the hybrid stack.
-
-```{dot}
-//| label: fig-moe-lineage
-//| fig-cap: "Genealogy of the ideas in this chapter. A routing thread and a specialization thread refine the MoE layer, sparse upcycling is a training shortcut into it, and a state-space and linear-attention line converges with attention and MoE at the hybrid stack, which shipped at frontier scale in 2025."
-digraph lineage {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
-
-  shazeer [label="Shazeer 2017\ntop-k gating"];
-  gshard [label="GShard 2020"];
-  switch [label="Switch 2021\nk=1"];
-  glam [label="GLaM / Mixtral\n2022 to 2024"];
-  echoice [label="Expert-choice 2022"];
-  base [label="BASE Layers 2021"];
-
-  dsmoe [label="DeepSeekMoE 2024\nfine-grained + shared"];
-  dsv3 [label="DeepSeek-V3 2024\nbias balancing"];
-
-  upcycle [label="Sparse upcycling 2022\ndense to MoE"];
-
-  s4 [label="S4 2021"];
-  mamba [label="Mamba 2023\nselective"];
-  mamba2 [label="Mamba-2 2024\nSSM-attention duality"];
-  gdn [label="Gated DeltaNet 2024\nlinear attention"];
-
-  jamba [label="Jamba 2024\nhybrid stack", color="#3b82f6", penwidth=1.6];
-  scale [label="Hybrids at scale 2025\nMiniMax-01 / Qwen3-Next / Nemotron-H"];
-
-  shazeer -> gshard -> switch -> glam;
-  switch -> echoice;
-  switch -> base;
-  glam -> dsmoe -> dsv3;
-  switch -> upcycle;
-  s4 -> mamba -> mamba2;
-  mamba2 -> gdn;
-  dsv3 -> jamba;
-  mamba -> jamba;
-  jamba -> scale;
-  gdn -> scale;
-}
-```
-
-Two trade-offs span the whole chapter and frame the rest of the book's view of these architectures.
-
-- **Attention versus state-space.** Attention keeps every past token exactly addressable and excels at precise recall, at quadratic cost and a growing key-value cache. An SSM is linear in length with a constant-size state, but must compress the past, and tends to lag attention on tasks that need exact long-range lookup. Hybrids exist precisely because neither pure form dominates [@lieber2024jamba].
-- **Train and serve complexity.** Every choice here adds operational surface: a router to tune, balance to monitor, expert placement to lay out, and a memory and communication profile that @sec-training-at-scale must absorb. The quality win is real but never free engineering.
+MoE and recurrent layers each remove one dense assumption, but neither removes
+resource accounting. The useful abstraction is a contract: which weights a
+token evaluates, where those weights live, how sequence state evolves, and
+which costs move into communication or serving.
 
 ## Further reading
 

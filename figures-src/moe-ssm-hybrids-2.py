@@ -3,47 +3,37 @@ matplotlib.use("svg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Schematic: how a mixture-of-experts layer decouples capacity from
-# per-token compute. A dense layer welds the two together, so total
-# parameters and active (per-token) parameters rise as one line. An
-# MoE layer holds N experts but routes each token to only k of them,
-# so total parameters (capacity) climb with N while active parameters
-# (the FLOPs paid per token) stay almost flat. Idealized counts.
+# Exact parameter accounting for one bias-free SwiGLU MoE layer:
+#   model width 4096, expert width 14336, and top-2 routing.
+# Stored parameters include every expert and the router. Evaluated parameters
+# include two experts and the router scores for every expert. Attention and
+# other always-on weights are deliberately excluded.
 
 GRAY = "#6b7280"
 BLUE = "#3b82f6"
 
-N = np.arange(1, 33)             # number of experts in the layer
-k = 2                            # experts activated per token
+model_width = 4096
+expert_width = 14_336
+selected_experts = 2
+experts = np.arange(selected_experts, 65)
 
-per_expert = 1.0                 # params per expert, arbitrary unit
-always_on = 1.0                  # shared / attention params, always active
+per_expert = 3 * model_width * expert_width
+router = experts * model_width
+stored = experts * per_expert + router
+evaluated = selected_experts * per_expert + router
 
-total = always_on + N * per_expert          # capacity grows with N
-active = always_on + k * per_expert          # active stays flat (k fixed)
-active = np.full_like(total, active)
+fig, ax = plt.subplots(figsize=(5.2, 3.1))
 
-fig, ax = plt.subplots(figsize=(5, 3))
+ax.plot(experts, stored / 1e9, color=BLUE, linewidth=2.0,
+        label="Stored parameters")
+ax.plot(experts, evaluated / 1e9, color=GRAY, linewidth=2.0,
+        linestyle="--", label="Parameters evaluated per token")
 
-ax.plot(N, total, color=BLUE, linewidth=2.0,
-        label="Total parameters (capacity)")
-ax.plot(N, active, color=GRAY, linewidth=2.0, linestyle="--",
-        label="Active parameters (per-token FLOPs)")
-
-ax.fill_between(N, active, total, color=BLUE, alpha=0.08)
-
-ax.set_xlabel("Number of experts N (k = 2 active)")
-ax.set_ylabel("Parameters")
-
-ax.set_xlim(1, 32)
-ax.set_ylim(0, total.max() * 1.05)
-
-ax.annotate("capacity grows\nalmost for free",
-            xy=(26, total[25]), xytext=(6, total.max() * 0.72),
-            color=GRAY, fontsize=9,
-            arrowprops=dict(arrowstyle="->", color=GRAY, lw=1.0))
-
-ax.legend(frameon=False, loc="upper left", fontsize=9,
+ax.set_xlabel("Routed experts E (k = 2 selected)")
+ax.set_ylabel("Parameters in one MoE layer (billions)")
+ax.set_xlim(selected_experts, experts[-1])
+ax.set_ylim(0, stored.max() / 1e9 * 1.05)
+ax.legend(frameon=False, loc="upper left", fontsize=8,
           labelcolor=GRAY)
 
 for spine in ("top", "right"):
@@ -54,7 +44,6 @@ for spine in ("left", "bottom"):
 ax.tick_params(colors=GRAY)
 ax.xaxis.label.set_color(GRAY)
 ax.yaxis.label.set_color(GRAY)
-ax.set_yticklabels([])
 
 fig.tight_layout()
 from common import save_bilingual

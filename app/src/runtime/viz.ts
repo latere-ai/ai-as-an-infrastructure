@@ -1252,32 +1252,33 @@
     watchTheme(host, draw);
   };
 
-  // SSM vs attention recall: attention keeps every past token exactly
-  // addressable (a cache that grows with length), while an SSM compresses the
-  // past into a fixed-size state, so distant tokens fade. Grow the sequence and
-  // watch the attention cache grow while the SSM's recall of old tokens decays.
+  // Attention vs recurrent decode state: attention retains one record per past
+  // position, while a recurrent layer keeps a fixed number of state slots.
+  // This visualizes storage shape only; it does not invent a recall curve.
   R['ssm-vs-attention'] = function (host) {
-    var len = 12;
+    var len = 12, stateSlots = 6;
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 230);
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
-      var half = W / 2, y = H / 2, S = 4;
+      var half = W / 2, y = H / 2;
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('attention: addressable cache', half / 2, pd);
-      ctx.fillText('SSM: fixed state', half + half / 2, pd);
+      ctx.fillText('attention: per-position records', half / 2, pd);
+      ctx.fillText('recurrent layer: fixed state', half + half / 2, pd);
       var cw = Math.min(16 * cv.dpr, (half - 2 * pd) / len);
       for (var i = 0; i < len; i++) {
         var x = pd + i * cw;
-        ctx.globalAlpha = 1; ctx.fillStyle = t.accent; ctx.fillRect(x, y - cw / 2, cw - 2 * cv.dpr, cw - 2 * cv.dpr);
-        var x2 = half + pd + i * cw;
-        ctx.globalAlpha = Math.max(0.08, Math.exp(-(len - 1 - i) / S));
-        ctx.fillStyle = t.accent2; ctx.fillRect(x2, y - cw / 2, cw - 2 * cv.dpr, cw - 2 * cv.dpr);
+        ctx.fillStyle = t.accent;
+        ctx.fillRect(x, y - cw / 2, Math.max(1 * cv.dpr, cw - 2 * cv.dpr), cw - 2 * cv.dpr);
       }
-      ctx.globalAlpha = 1;
-      var fid = Math.min(1, S / len);
-      read.textContent = 'length ' + len + ' · attention caches ' + len + ' tokens, exact · SSM state fixed, far recall ' + Math.round(fid * 100) + '%';
+      var sw = Math.min(22 * cv.dpr, (half - 2 * pd) / stateSlots);
+      for (var j = 0; j < stateSlots; j++) {
+        var sx = half + pd + j * sw;
+        ctx.fillStyle = t.accent2;
+        ctx.fillRect(sx, y - sw / 2, sw - 3 * cv.dpr, sw - 3 * cv.dpr);
+      }
+      read.textContent = 'length ' + len + ' · attention records grow with length (' + len + ') · recurrent state slots stay fixed (' + stateSlots + ')';
     }
     host.appendChild(slider('sequence length', 4, 40, 1, len, function (v) { len = Math.round(v); draw(); }).wrap);
     draw();

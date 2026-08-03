@@ -12,32 +12,35 @@
 
 ### 把参数与 FLOPs 解耦
 
-混合专家的答案，是把参数与活跃 FLOPs 解耦。一个 MoE 层持有 $N$ 个专家@gls-ffn，却只把每个词元路由到其中 $k$ 个，且 $k \ll N$。关键的恒等关系在这里：*总*参数决定容量与知识，*活跃*参数，即被选中的这 $k$ 个专家加上模型里始终在线的部分，决定每词元的计算量与单步成本。相对于 FLOPs，容量变得廉价，这正是 MoE 之所以吸引前沿的全部理由。同样的算术也削减推断 FLOPs，不过服务一个 MoE 自有一套问题，不在此处讨论。@fig-moe-ssm-hybrids-2 把这种分离画了出来：随着专家数 $N$ 增长，总参数不断攀升，而决定每词元 FLOPs 的活跃参数量，因 $k$ 固定而保持平坦。
+混合专家层存储多个专家@gls-ffn，但每个词元只选择其中 $k$ 个。这里必须分清存储参数、该词元实际经过的参数和真实运行时间。@fig-moe-ssm-hybrids-2 按照无偏置 SwiGLU 专家的精确公式，比较专家数量增加时的存储参数与每词元实际计算的参数；后者还包含为所有专家计算得分的路由矩阵，因此并非严格不变，也不能直接等同于 FLOPs 或延迟。
 
-![一个混合专家层如何把容量与每词元计算量解耦的示意图。总参数随专家数 $N$ 增长，而活跃参数，即每词元付出的 FLOPs，因为只有 $k$ 个专家被激活而保持平坦。理想化计数，并非实测数据，取材自 Shazeer 等（2017）与 Fedus 等（2021）。](/figures/moe-ssm-hybrids-2.svg){#fig-moe-ssm-hybrids-2}
+![一个无偏置 SwiGLU MoE 层的参数计数。模型宽度为 4096，专家宽度为 14336，并采用 top-2 路由。存储参数包括所有专家和路由器；每词元实际计算的参数包括两个专家以及所有路由得分。图中不含注意力和其他始终在线的参数。](/figures/moe-ssm-hybrids-2.svg){#fig-moe-ssm-hybrids-2}
 
-扫一遍专家数 $N$，看总容量攀升，而决定每词元 FLOPs 的活跃参数几乎保持平坦。
+下面的可运行示例打印同一组参数计数，不依赖绘图库。
 
 :::: {.runnable}
 ```python
-import numpy as np, matplotlib.pyplot as plt
+model_width = 4096
+expert_width = 14_336
+selected_experts = 2
 
-# MoE 把总参数（容量）与激活参数（每词元 FLOPs）解耦。
-d, ffn = 4096, 14336           # 隐藏维度与单个专家的 FFN 宽度
-k = 2                          # 每个词元激活的专家数
-per_expert = 2 * d * ffn       # 单个专家的上投影 + 下投影
-N = np.arange(1, 65)           # 这一层的专家数
-total  = N * per_expert                    # 全部专家都要存储
-active = k * per_expert + N * d            # k 个激活专家 + 路由映射
+def moe_parameter_counts(experts):
+    if not 1 <= selected_experts <= experts:
+        raise ValueError("selected_experts 必须介于 1 和 experts 之间")
+    per_expert = 3 * model_width * expert_width  # 无偏置 SwiGLU
+    router = experts * model_width
+    stored = experts * per_expert + router
+    evaluated = selected_experts * per_expert + router
+    return stored, evaluated
 
-plt.figure(figsize=(5, 3))
-plt.plot(N, total / 1e9,  label="总参数（容量）")
-plt.plot(N, active / 1e9, label="激活参数（每词元 FLOPs）")
-plt.xlabel("专家数 N"); plt.ylabel("参数量（十亿）"); plt.legend()
-plt.tight_layout(); plt.show()
-
-print(f"N=64, k={k}: 总计 {total[-1]/1e9:.1f}B，但激活仅 {active[-1]/1e9:.2f}B")
-print(f"容量/计算比：{total[-1]/active[-1]:.0f}x")
+for experts in (8, 16, 32, 64):
+    stored, evaluated = moe_parameter_counts(experts)
+    print(
+        f"E={experts:2d}, k={selected_experts}: "
+        f"存储={stored / 1e9:.3f}B, "
+        f"每词元实际计算={evaluated / 1e9:.3f}B, "
+        f"比值={stored / evaluated:.2f}x"
+    )
 ```
 ::::
 
@@ -139,13 +142,13 @@ Mamba 不是唯一的线性路线。线性注意力从另一头收敛到同一�
 
 ### 召回是主要难点
 
-注意力让每一个过去词元都精确可寻址，擅长精确召回，代价是二次方成本和不断增长的 KV 缓存。一个 SSM 在长度上是线性的，带一个常数大小的状态，但必须压缩过去，在需要精确长程查找的任务上往往落后于注意力。@fig-moe-ssm-hybrids-1 是这一取舍的成本一侧：随着上下文增长，两条曲线分道扬镳，正是这一点，让召回的代价在长上下文下值得付出。下一节要谈的混合体之所以存在，恰恰是因为两种纯形式都不占绝对上风。
+注意力为每个过去位置保留独立的缓存表示，而 SSM 把历史反复压入固定形状的状态。两者都不保证召回质量。@fig-moe-ssm-hybrids-1 只比较模型维度固定时，注意力关系数的二次增长与递归更新数的线性增长；它不是 FLOPs 或运行时间基准。
 
-![序列混合代价随上下文长度增长的示意图。注意力的总混合代价随序列长度的平方增长，它留下的 KV 缓存则随之线性增长；状态空间递归持有一个固定大小的状态，代价只随之线性增长。理想化曲线，并非实测数据，取材自 Gu 与 Dao（2023）。](/figures/moe-ssm-hybrids-1.svg){#fig-moe-ssm-hybrids-1}
+![以 1,000 词元上下文为基准的序列长度增长项。模型维度固定时，稠密注意力关系数随上下文长度二次增长，递归状态更新数线性增长。这是渐近计数，不是运行时间基准。](/figures/moe-ssm-hybrids-1.svg){#fig-moe-ssm-hybrids-1}
 
 <figure id="fig-moe-ssm-hybrids-ssm-vs-attention">
 <div class="viz" data-viz="ssm-vs-attention"></div>
-<figcaption>同一取舍的召回一侧。注意力把每个过去词元都留作可寻址的缓存，随长度增长而精确；SSM 把过去压进一个固定大小的状态，于是越远的词元越淡、越难召回。拉长序列，就能看到注意力的缓存一路变大，而 SSM 对远处词元的召回逐渐褪去。示意性。</figcaption>
+<figcaption>序列增长时的持久解码状态形状。注意力层为每个缓存位置保留一条键值记录；递归层保留由架构规定数量的固定状态槽。此图只比较存储结构，不声称注意力能完美检索，也不假设所有递归模型都以固定速率遗忘远处词元。</figcaption>
 </figure>
 
 ::: {.callout-important}

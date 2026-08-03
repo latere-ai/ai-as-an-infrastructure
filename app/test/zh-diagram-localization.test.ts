@@ -82,6 +82,17 @@ test("generated zh SVG figures use localized visible labels", () => {
   expect(transformerCache).toContain("KV 有效载荷（GiB）");
   expect(transformerCache).toContain("7B 权重（每参数 2 字节）");
   expect(transformerCache).not.toContain("KV payload (GiB)");
+
+  const sequenceGrowth = read("zh/figures/moe-ssm-hybrids-1.svg");
+  expect(sequenceGrowth).toContain("注意力关系（二次增长）");
+  expect(sequenceGrowth).toContain("相对 1K 词元的增长倍数");
+  expect(sequenceGrowth).not.toContain("Attention relationships (quadratic)");
+
+  const moeParameters = read("zh/figures/moe-ssm-hybrids-2.svg");
+  expect(moeParameters).toContain("存储的参数");
+  expect(moeParameters).toContain("每词元实际计算的参数");
+  expect(moeParameters).toContain("路由专家数 E（选中 k = 2）");
+  expect(moeParameters).not.toContain("Parameters evaluated per token");
 });
 
 test("localized zh bar-chart ticks are positioned from zh label widths", () => {
