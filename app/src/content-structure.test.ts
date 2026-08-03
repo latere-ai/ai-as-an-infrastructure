@@ -487,6 +487,20 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("zh/summary.qmd")).toContain("我们从基座模型的形成开始");
 });
 
+test("the English field map separates process, dependency, evidence, and reading order", () => {
+  const chapter = src("en/orientation/02-field-map.qmd");
+  expect(chapter).toContain("The **model-development process**");
+  expect(chapter).toContain("The **request-execution process**");
+  expect(chapter).toContain("Neither one specifies the order");
+  expect(chapter).toContain("Specified mechanism");
+  expect(chapter).toContain("Empirical regularity");
+  expect(chapter).toContain("Open interpretation or design question");
+  expect(chapter).toContain('data-xlabel="Normalized training compute"');
+  expect(chapter).not.toContain("Solid ground and swamp");
+  expect(chapter).not.toContain("training is paid once and inference is paid forever");
+  expect(chapter).not.toContain("the same control structure at three timescales");
+});
+
 test("serving cost references are anchored to the inference and serving part", () => {
   expect(src("en/inference/06-serving-multimodal.qmd")).not.toContain("Part IV built a serving stack");
 
@@ -578,7 +592,7 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
       // Back matter carries no argument, so it owes no contested box or
       // constraint arrow.
       if (path.endsWith("references.qmd") || path.endsWith("glossary.qmd")) continue;
-      if (path.endsWith("changelog.qmd")) continue;
+      if (path.endsWith("changelog.qmd") || path.endsWith("contribute.qmd")) continue;
 
       const text = src(path);
       if (!contestedExceptions.has(path)) {
