@@ -326,7 +326,7 @@ test("early-book glossary first uses are readable without leaving the page", () 
     ["zh/orientation/01-whole-stack.qmd", "配上@gls-mla这种压缩推断时缓存的注意力设计"],
     ["en/orientation/02-field-map.qmd", "@gls-scaling-law, an empirical formula that predicts loss from model size, data, and compute"],
     ["zh/orientation/02-field-map.qmd", "@gls-scaling-law 给训练定规模，也就是用一条把损失同模型规模、数据量与算力联系起来的经验公式"],
-    ["en/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding, which emits fractional-probability symbols as one near-optimal bit stream"],
+    ["en/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding, which turns sequence probabilities into one near-optimal bit stream"],
     ["zh/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding把带小数概率的符号写成一条近似最优的比特码流"],
     ["en/orientation/03-borrowed-ideas.qmd", "@gls-two-part-code, an accounting that charges for the model description"],
     ["zh/orientation/03-borrowed-ideas.qmd", "用@gls-two-part-code来算，也就是先付模型描述长度"],
@@ -340,6 +340,28 @@ test("early-book glossary first uses are readable without leaving the page", () 
   for (const [path, snippet] of required) {
     expect(flat(path), `${path} should keep early first-use explanation: ${snippet}`).toContain(snippet);
   }
+});
+
+test("borrowed-ideas chapter distinguishes evidence from analogy", () => {
+  const chapter = src("en/orientation/03-borrowed-ideas.qmd");
+
+  for (const relationship of [
+    "Formal identity",
+    "Computational correspondence",
+    "Mathematical import",
+    "Heuristic analogy",
+  ]) {
+    expect(chapter).toContain(relationship);
+  }
+
+  for (const test of ["Mapping:", "Preservation:", "Transfer:", "Boundary:"]) {
+    expect(chapter).toContain(test);
+  }
+
+  expect(chapter).toContain("\\delta_t=r_{t+1}+\\gamma V_w(s_{t+1})-V_w(s_t)");
+  expect(chapter).not.toContain("/figures/borrowed-ideas-1.svg");
+  expect(chapter).not.toContain("fire in proportion to exactly that quantity");
+  expect(chapter).not.toContain("training minimizes description length");
 });
 
 test("generative adaptation and reasoning first uses define the method locally", () => {
