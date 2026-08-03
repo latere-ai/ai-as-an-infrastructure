@@ -20,6 +20,12 @@ test("viz theme reads palette vars from .reader, not body's default-black color"
   expect(theme).not.toContain("getComputedStyle(document.body)");
 });
 
+test("canvas visualizations redraw after a viewport resize clears the backing buffer", () => {
+  const watcher = rt.slice(rt.indexOf("function watchTheme("), rt.indexOf("var R = {}"));
+  expect(watcher).toContain("window.addEventListener('resize', schedule)");
+  expect(watcher).toContain("requestAnimationFrame(function () { raf = 0; draw(); })");
+});
+
 test("ch32 mechanistic-interpretability uses superposition in both languages", () => {
   expect(src("en/safety/01-mechanistic-interpretability.qmd")).toContain('data-viz="superposition"');
   expect(src("zh/safety/01-mechanistic-interpretability.qmd")).toContain('data-viz="superposition"');
@@ -125,6 +131,13 @@ test("the viz runtime registers judge-kappa, outlier-quant, minhash-buckets, bla
   for (const name of ["judge-kappa", "outlier-quant", "minhash-buckets", "blast-radius"]) {
     expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
   }
+});
+
+test("the MinHash viz uses the LSH banding probability rather than hidden clusters", () => {
+  expect(rt).toContain("1 - Math.pow(1 - Math.pow(s, rows), bands)");
+  expect(rt).toContain("rows per band");
+  expect(rt).not.toContain("function bucketOf(c)");
+  expect(rt).not.toContain("var clusters = [0, 0, 0, 0");
 });
 
 test("wave-3 components are used in their chapters, both languages", () => {

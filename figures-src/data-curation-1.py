@@ -3,11 +3,10 @@ matplotlib.use("svg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Schematic: why MinHash with LSH avoids the all-pairs blow-up at corpus scale.
-# All-pairs fuzzy dedup compares every document with every other document, so
-# the number of comparisons grows like O(n^2). LSH routes only documents that
-# share a band-bucket into a comparison, so the candidate count grows close to
-# linearly. These are idealized counts, not measured throughput.
+# Schematic: indexed candidate generation can avoid the all-pairs blow-up when
+# each document emits a bounded number of candidates. This is a favorable
+# operating assumption, not an LSH worst-case bound; a degenerate bucket can
+# still contain all document pairs. These are idealized counts, not throughput.
 
 GRAY = "#6b7280"
 BLUE = "#3b82f6"
@@ -18,8 +17,8 @@ n = np.logspace(3, 9, 200)
 # All-pairs comparisons: n*(n-1)/2 ~ O(n^2).
 all_pairs = n * (n - 1) / 2.0
 
-# LSH candidate comparisons: near-linear. A small constant of candidate pairs
-# per document survives the band-bucket routing.
+# Indexed candidate comparisons under the explicit assumption that eight
+# candidate pairs survive per document.
 candidates_per_doc = 8.0
 lsh = candidates_per_doc * n
 
@@ -28,7 +27,7 @@ fig, ax = plt.subplots(figsize=(5, 3))
 ax.loglog(n, all_pairs, color=GRAY, linewidth=1.8, linestyle="--",
           label="All-pairs O(n^2)")
 ax.loglog(n, lsh, color=BLUE, linewidth=2.0,
-          label="MinHash + LSH ≈ O(n)")
+          label="Indexed example (8 candidates/doc)")
 
 ax.set_xlabel("Documents in corpus (n)", color=GRAY)
 ax.set_ylabel("Pairwise comparisons", color=GRAY)

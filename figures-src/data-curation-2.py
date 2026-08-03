@@ -3,12 +3,10 @@ matplotlib.use("svg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-# Schematic: the quantity-versus-quality trade-off. Raw web tokens carry
-# duplicates and junk, so held-out loss flattens early as added volume repeats
-# content the model has already seen. The same compute spent on deduplicated
-# and quality-filtered tokens keeps every added token informative, so loss
-# keeps falling. The crossing point is the regime where filtering beats raw
-# volume. These curves are idealized, not measured loss.
+# Conceptual useful-token scenario. The curated stream is assumed to yield more
+# relevant, non-redundant signal per sampled token than the unfiltered stream.
+# This is not a universal empirical ordering: a filter that removes useful
+# coverage can reverse it. These curves are idealized, not measured loss.
 
 GRAY = "#6b7280"
 BLUE = "#3b82f6"
@@ -32,9 +30,9 @@ loss_clean = floor_clean + 1.7 * (t + 1.0) ** (-0.28)
 fig, ax = plt.subplots(figsize=(5, 3))
 
 ax.semilogx(t, loss_raw, color=GRAY, linewidth=1.8, linestyle="--",
-            label="Raw web (duplicated, noisy)")
+            label="Unfiltered stream (lower useful-token yield)")
 ax.semilogx(t, loss_clean, color=BLUE, linewidth=2.0,
-            label="Deduplicated + filtered")
+            label="Curated stream (higher useful-token yield)")
 
 ax.set_xlabel("Tokens consumed (log scale)", color=GRAY)
 ax.set_ylabel("Held-out loss", color=GRAY)

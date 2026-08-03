@@ -53,14 +53,21 @@
     return { c: c, ctx: c.getContext('2d'), dpr: dpr };
   }
   function watchTheme(host, draw) {
-    if (!window.MutationObserver) return;
     var raf = 0;
-    var obs = new MutationObserver(function () {
-      if (!host.isConnected) { obs.disconnect(); return; }
+    function schedule() {
+      if (!host.isConnected) {
+        if (obs) obs.disconnect();
+        window.removeEventListener('resize', schedule);
+        return;
+      }
       if (raf) cancelAnimationFrame(raf);
       raf = requestAnimationFrame(function () { raf = 0; draw(); });
-    });
-    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette'] });
+    }
+    // Resizing a canvas resets its backing buffer. The canvas helper resizes
+    // first, then this listener redraws the visualization on the next frame.
+    window.addEventListener('resize', schedule);
+    var obs = window.MutationObserver ? new MutationObserver(schedule) : null;
+    if (obs) obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette'] });
   }
 
   var R = {};
@@ -1039,44 +1046,51 @@
     watchTheme(host, draw);
   };
 
-  // MinHash + LSH bucketing: each document collapses to a short signature; LSH
-  // bands route similar signatures into shared buckets; a full Jaccard check
-  // runs only for the few documents that collide in a bucket, so the cost is
-  // sub-quadratic, not all-pairs. More buckets (more bands) sharpen the
-  // threshold and cut false collisions; near-duplicates still land together.
+  // MinHash + LSH candidate probability. For b bands of r rows and true
+  // Jaccard similarity s, the probability that at least one band matches is
+  // 1 - (1 - s^r)^b. Increasing rows per band makes the gate stricter; it does
+  // not remove the false-positive/false-negative tradeoff.
   R['minhash-buckets'] = function (host) {
-    var clusters = [0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 4, 5, 6, 7, 8];
-    var B = 6;
+    var rows = 5, bands = 20;
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 250);
-    // One bucket per document, keyed only by its cluster id, so near-duplicates
-    // (same cluster) always share a bucket. A spreading hash keeps distinct
-    // clusters apart without the (c*5)%B aliasing that collapsed several
-    // clusters into one giant bucket at small B; candidate pairs now fall
-    // monotonically toward the true near-duplicate pairs as buckets increase.
-    function bucketOf(c) { return (c * 97 + 13) % B; }
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var bins = {}; clusters.forEach(function (c) { var b = bucketOf(c); (bins[b] = bins[b] || []).push(c); });
-      var bw = (W - 2 * pd) / B, cand = 0;
-      for (var b = 0; b < B; b++) {
-        var x = pd + b * bw, ds = bins[b] || [];
-        if (ds.length > 1) cand += ds.length * (ds.length - 1) / 2;
-        ctx.strokeStyle = ds.length > 1 ? t.accent : t.grid; ctx.lineWidth = (ds.length > 1 ? 1.6 : 1) * cv.dpr;
-        ctx.strokeRect(x + 3 * cv.dpr, pd, bw - 6 * cv.dpr, H - 2 * pd - 16 * cv.dpr);
-        ds.forEach(function (c, j) {
-          var cy = pd + 16 * cv.dpr + j * 17 * cv.dpr;
-          ctx.fillStyle = ds.length > 1 ? t.accent : 'rgba(128,128,128,0.5)';
-          ctx.beginPath(); ctx.arc(x + bw / 2, cy, 5.5 * cv.dpr, 0, 7); ctx.fill();
-        });
-      }
-      var all = clusters.length * (clusters.length - 1) / 2;
-      ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(B + ' buckets', W / 2, H - 4 * cv.dpr);
-      read.textContent = cand + ' candidate pairs vs ' + all + ' all-pairs';
+    function candidateProbability(s) {
+      return 1 - Math.pow(1 - Math.pow(s, rows), bands);
     }
-    host.appendChild(slider('buckets (bands)', 3, 14, 1, B, function (v) { B = Math.round(v); draw(); }).wrap);
+    function draw() {
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
+      var left = 45 * cv.dpr, right = 16 * cv.dpr, top = 18 * cv.dpr, bottom = 38 * cv.dpr;
+      ctx.clearRect(0, 0, W, H);
+      function X(s) { return left + s * (W - left - right); }
+      function Y(p) { return H - bottom - p * (H - top - bottom); }
+
+      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
+      for (var tick = 0; tick <= 4; tick++) {
+        var value = tick / 4, x = X(value), y = Y(value);
+        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, H - bottom); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(W - right, y); ctx.stroke();
+      }
+
+      ctx.strokeStyle = t.accent; ctx.lineWidth = 2.2 * cv.dpr; ctx.beginPath();
+      for (var i = 0; i <= 200; i++) {
+        var s = i / 200, xCurve = X(s), yCurve = Y(candidateProbability(s));
+        if (i === 0) ctx.moveTo(xCurve, yCurve); else ctx.lineTo(xCurve, yCurve);
+      }
+      ctx.stroke();
+
+      var s50 = Math.pow(1 - Math.pow(0.5, 1 / bands), 1 / rows);
+      ctx.strokeStyle = t.accent2; ctx.setLineDash([4 * cv.dpr, 3 * cv.dpr]);
+      ctx.beginPath(); ctx.moveTo(X(s50), Y(0)); ctx.lineTo(X(s50), Y(0.5)); ctx.lineTo(X(0), Y(0.5)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(X(s50), Y(0.5), 4 * cv.dpr, 0, 7); ctx.fill();
+
+      ctx.fillStyle = t.ink; ctx.font = (10.5 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText('Jaccard similarity', (left + W - right) / 2, H - 8 * cv.dpr);
+      ctx.save(); ctx.translate(12 * cv.dpr, (top + H - bottom) / 2); ctx.rotate(-Math.PI / 2);
+      ctx.fillText('candidate probability', 0, 0); ctx.restore();
+      read.textContent = bands + ' bands × ' + rows + ' rows · 50% candidate at J=' + s50.toFixed(2);
+    }
+    host.appendChild(slider('rows per band', 1, 12, 1, rows, function (v) { rows = Math.round(v); draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };

@@ -1,424 +1,525 @@
-# Data Curation and Quality {#sec-data-curation}
+# Data Curation and the Training Distribution {#sec-data-curation}
 
-@sec-scaling-laws fixed the compute budget; this chapter asks what fills it.
-At fixed compute and architecture, the corpus is what separates a strong model
-from a mediocre one. The path from raw web bytes to token-id shards decides
-which distribution the model will learn, which capabilities will be over- or
-under-fed, and whether later evaluation numbers can be trusted at all.
+@sec-scaling-laws turns a compute budget into a model size and a number of
+training tokens. It does not say which tokens to use. That choice is the job of
+data curation.
 
-## A corpus is a system, not a script
+At fixed architecture, optimizer, and token budget, selection and sampling are
+major determinants of the model that training produces. They decide which
+languages, domains, styles, and repeated patterns the model sees. They also
+decide whether later evaluations measure generalization or accidental exposure
+to benchmark answers. These effects must be measured for the target model and
+evaluation suite; no universal quality score can choose the corpus in advance.
 
-A pre-training run consumes a fixed compute budget set by @sec-scaling-laws.
-That budget buys a token count, and the corpus that fills it is the single
-biggest lever on final quality and the one least transferable from open
-recipes. The difficulty is that the failures here are silent. A duplicated
-shard, a filter that strips a dialect, a benchmark question that leaked
-through a synthetic-data step: none of these throw an error, and all of them
-surface only at evaluation, where they are expensive to diagnose and often
-impossible to undo without re-running. So the corpus must be built as a
-system whose every stage is auditable and whose hand-offs to the rest of the
-stack are explicit contracts.
+The output of curation is therefore more than a directory of text. It is a
+versioned training distribution: source-specific shards, a sampling policy,
+exclusion decisions, lineage records, and an **@gls-decontamination report**
+that states which benchmark-overlap checks were run and what they removed.
 
-Two of those hand-offs bind the rest of the book. The **vocabulary** is
-consumed by the architecture in @sec-tokenization (this chapter treats the
-@gls-tokenizer only as a pointer; its design lives there). The
-**@gls-decontamination report**, the audit showing which benchmark overlaps were
-removed from training data, is consumed by evaluation in @sec-benchmarks, which
-supplies the eval registry this chapter checks against.
+## The run consumes a distribution, not a folder
 
-This is not just a scripting problem. Everything below runs at petabyte volume
-as distributed batch or stream jobs (Apache Spark, Ray, or custom
-MapReduce-style clusters) across large CPU fleets, separate from and ahead of
-the GPU training cluster. The hard parts are throughput, determinism, and
-resumability, not the per-document algorithms. A re-run must produce
-byte-identical shards, or the mixture and decontamination contracts become
-unverifiable.
+Four quantities are easy to confuse:
 
-With those contracts in view, the next sections follow a byte from the open web
-through the narrowing filters that decide whether it survives, then step back to
-the three decisions that are locked early, the contract that protects the
-numbers, and the histories that explain why the field still argues about all of
-it.
+1. The **acquisition pool** is everything collected from source snapshots.
+2. The **retained corpus** is what remains after policy, extraction,
+   deduplication, and quality decisions.
+3. The **mixture** assigns sampling probabilities to retained sources.
+4. The **training stream** is the ordered sequence of token instances actually
+   consumed by the run.
 
-## A byte's journey through the narrowing filters
+A source can occupy 20 percent of stored bytes but receive 5 percent of sampled
+tokens. A small source can be sampled for several effective epochs, while a
+large source is only partly read. Corpus inventory is therefore not the same as
+the distribution learned by the model.
 
-The pipeline is a sequence of narrowing filters, each cheap relative to the
-training run it feeds, arranged so the cheapest cuts come first.
+The useful unit also changes by stage. Acquisition works with files, pages, and
+repository revisions. Deduplication may work with documents, paragraphs, or
+spans. The model ultimately consumes tokens. Every report should name its unit
+instead of moving silently between documents, bytes, and tokens.
+
+## Build lineage into every stage
+
+The pipeline narrows the acquisition pool, but each rejection also creates
+evidence. Counts, reason codes, policy versions, and stable record identifiers
+must travel with the data.
 
 ```{dot}
 //| label: fig-data-curation-pipeline
-//| fig-cap: "The curation pipeline as a sequence of narrowing filters, cheapest cuts first, ending in token-id shards. Each stage is an auditable hand-off."
+//| fig-cap: "A traceable curation pipeline. Provenance enters with each source, synthetic records retain their parentage, and a frozen evaluation registry constrains decontamination before tokenization."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
+  rankdir=TB;
+  nodesep=0.35; ranksep=0.38;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  A [label="Raw web\nCommonCrawl"];
-  B [label="Extract +\nlanguage ID"];
-  C [label="Curated /\ncode / multilingual"];
-  D [label="Clean +\nnormalize"];
-  E [label="Dedup\nexact / fuzzy"];
-  F [label="Quality filter\nheuristic + classifier"];
-  G [label="Synthetic\naugmentation"];
-  H [label="Mixture +\ncurriculum"];
-  I [label="Decontaminate\nvs eval registry"];
-  J [label="Tokenize\nsee sec-tokenization"];
-  K [label="Token-id shards", shape=cylinder];
-  A -> B;
-  C -> D;
-  B -> D;
-  D -> E;
-  E -> F;
-  F -> G;
-  G -> H;
-  H -> I;
-  I -> J;
-  J -> K;
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  A [label="Source registry\nprovenance + policy"];
+  B [label="Immutable snapshots\nweb / books / code / papers"];
+  C [label="Extract + normalize\nkeep raw identity"];
+  D [label="Policy gates\nrights / privacy / safety"];
+  E [label="Deduplicate\nexact / span / fuzzy"];
+  F [label="Quality + coverage\nfilters with slice audits"];
+  G [label="Decontaminate\nagainst frozen eval registry"];
+  H [label="Per-source text shards\nmanifested membership"];
+  I [label="Tokenize + pack\nsee sec-tokenization"];
+  J [label="Token shards +\nsampling policy", shape=cylinder];
+  S [label="Synthetic records\ngenerator + parent lineage"];
+  R [label="Evaluation registry\nversions + protected items"];
+
+  A -> B -> C -> D -> E -> F -> G -> H -> I -> J;
+  S -> D;
+  R -> G;
 }
 ```
 
-### Where the byte comes from
+The contract can be stated as an algorithm:
 
-The bulk substrate is the web. CommonCrawl is the raw input: WARC/WET
-extraction, boilerplate stripping, language identification, and
-URL/host-level filtering. CommonCrawl is raw and noisy, and the value is in
-the pipeline applied to it, not the crawl itself. Around that web core sit
-curated sources, books, papers, encyclopedic and reference text, source code
-with license and quality signals, and non-English text at deliberate ratios.
-Each source has different licensing, quality, and dedup characteristics, and
-each competes for the same token budget.
+```text
+1. Freeze every acquired source as an immutable snapshot.
+2. Attach provenance and a policy decision before content filtering.
+3. Preserve stable record IDs through extraction and normalization.
+4. Apply versioned policy, deduplication, and quality transforms.
+5. Compare every retained stage, including synthetic data, with the
+   frozen evaluation registry.
+6. Write per-source shards, membership manifests, rejection statistics,
+   and the sampling schedule.
+7. Tokenize and pack with a pinned tokenizer and deterministic ordering.
+```
 
-Before any filtering, the bytes are made uniform. Cleaning and normalization
-covers Unicode normalization, repair of text extraction artifacts, PII
-handling, and toxicity and safety pre-filtering. The goal is to remove
-garbage without scrubbing legitimate distributional variety: the registers,
-dialects, and domains that a model needs to see to generalize.
+This work usually runs on CPU-heavy batch infrastructure before the accelerator
+training job begins. Throughput matters, but resumability matters just as much.
+A failed stage should restart from immutable inputs without changing which
+records survive.
 
-### The first cut: deduplication
+## Decide whether a source may enter
 
-Deduplication runs three mechanisms at three granularities. Exact hashing
-removes identical documents. Suffix-array or substring methods remove
-near-duplicate spans inside otherwise distinct documents. @gls-minhash with
-@gls-lsh does fuzzy document-level dedup at corpus
-scale: it estimates Jaccard similarity between documents (the fraction of pieces two
-documents share) from a small set of hashed shingles (the overlapping k-word
-pieces of a document), so the cost is sub-quadratic rather than all-pairs. Dedup
-recovers wasted compute and reduces verbatim memorization. The standing
-tension is aggressiveness against losing genuinely distinct content.
+Publicly reachable, crawlable, licensed, and consented are different
+properties. Common Crawl supplies timestamped web captures; it does not grant a
+single license over every captured page. Books, papers, code repositories,
+licensed collections, and model-generated records need the same source-level
+review.
 
-Dedup is not merely a cost optimization, and the evidence says so. Lee et al.
-showed that deduplicating training data makes models better, not just
-cheaper: it cuts memorization and improves held-out loss (error measured on data the
-model was not trained on) [@lee2022deduplicating].
-SemDeDup pushed the idea into embedding space, removing semantic
-near-duplicates that surface-form hashing misses [@abbas2023semdedup]. The
-through-line is that redundancy is not neutral; it actively degrades the
-model, so the filter that removes it is a quality filter in disguise.
+A provenance record should include the source URL or repository revision,
+retrieval time, raw-content digest, creator or publisher when known, stated
+license and its evidence URL, and dated observations of relevant site terms or
+crawl preferences. It should also record the project's documented basis for
+use. Unknown or incompatible cases go to quarantine rather than quietly
+entering the corpus. Longpre et al. found widespread missing and incorrectly
+categorized licenses in their audit of more than 1,800 text datasets, which is
+why a dataset-level label is not enough [@longpre2023provenance]. Legal
+permissibility remains policy- and jurisdiction-dependent; @sec-data-rights-economics
+develops that boundary.
 
-@fig-data-curation-minhash shows why MinHash with LSH avoids the all-pairs
-blow-up: each document collapses to a short signature, LSH bands route similar
-signatures into shared buckets, and a full Jaccard estimate is computed only
-for the few documents that already collide in a bucket.
+Personal-information controls are also a process, not a regular expression.
+Define which classes are excluded, combine rules and model-based detectors,
+review locale-specific samples, and record detector versions and error rates.
+No detector proves that a corpus contains no personal information. Flagged
+content needs restricted access, and a complaint or removal request must be
+traceable forward to every derived shard and training run. Audits of public
+corpora have found personal information alongside duplicates, synthetic text,
+and benchmark material [@elazar2024wimbd].
 
-<figure id="fig-data-curation-minhash-buckets">
+## Extract and normalize without erasing the source
+
+Web captures contain markup, menus, cookie notices, broken character encodings,
+and boilerplate copied across many pages. Extraction identifies the main text
+and document boundaries. Normalization then applies a documented Unicode form,
+repairs chosen extraction artifacts, and standardizes only the features the
+pipeline has explicitly decided are irrelevant.
+
+The raw and normalized content digests should both remain in lineage. A change
+in Unicode handling, boilerplate removal, or whitespace rules changes exact
+identity and can change later deduplication. Rebuilding with a new extractor is
+a new corpus version, not an invisible implementation update.
+
+Language identification is similarly fallible. A low confidence score may mean
+mixed-language text, code switching, transliteration, or simply a language the
+classifier represents poorly. Kreutzer et al. found severe labeling and content
+quality problems in the multilingual web corpora they audited, especially for
+lower-resource languages [@kreutzer2022quality]. Report retention by language
+and review affected samples with relevant language knowledge.
+
+Filtering can also erase legitimate varieties while appearing to remove only
+undesirable text. Dodge et al. showed that C4's blocklist disproportionately
+removed text from and about minority groups [@dodge2021documenting]. Rules are
+easier to inspect than learned scorers, but neither is inherently unbiased.
+
+## Deduplicate at the unit that matters
+
+Deduplication serves several different purposes:
+
+- **Exact document deduplication** hashes canonicalized document bytes and
+  removes identical records.
+- **Exact span deduplication** uses a suffix array or another repeated-substring
+  index to find long copied passages inside otherwise different documents.
+- **Fuzzy document deduplication** compares sets of shingles, such as
+  overlapping word sequences, to find documents with small edits.
+- **Semantic deduplication** uses embeddings to find meaning-level similarity.
+  It can catch rewrites that lexical methods miss, but it also imports the
+  embedding model's definition of similarity [@abbas2023semdedup].
+
+Removing redundancy can reduce memorization and save training steps. Lee et al.
+found a tenfold reduction in verbatim memorization in their experiments, as well
+as the same or better accuracy with fewer steps [@lee2022deduplicating]. The
+result does not imply that more deduplication is always better. A global policy
+can remove useful recurring material or leave an unusual remainder. FineWeb,
+for example, selected per-crawl rather than global fuzzy deduplication after
+controlled ablations [@penedo2024fineweb].
+
+### Jaccard similarity and MinHash
+
+Represent a document $d$ as a set of shingles $S(d)$. The Jaccard similarity of
+documents $a$ and $b$ is
+
+$$
+J(a,b)=\frac{|S(a)\cap S(b)|}{|S(a)\cup S(b)|}.
+$$
+
+Here $S(a)$ and $S(b)$ are the distinct shingle sets, $\cap$ is set
+intersection, $\cup$ is set union, and $|\cdot|$ counts set elements. The value
+is zero for disjoint sets and one for identical sets.
+
+The formula requires $n(n-1)/2$ comparisons when applied to every pair of $n$
+documents. @gls-minhash, introduced for document resemblance by Broder in 1997,
+replaces each shingle set with a short randomized signature
+[@broder1997resemblance]. For random permutation $\pi_i$ of the shingle
+universe, define
+
+$$
+h_i(S)=\min_{x\in S}\pi_i(x),
+\qquad
+\widehat J(a,b)=\frac{1}{m}\sum_{i=1}^{m}
+\mathbf{1}\!\left[h_i(S(a))=h_i(S(b))\right].
+$$
+
+The terms have the following meanings: $h_i(S)$ is the minimum permuted rank in
+set $S$ under permutation $i$; $x$ is a shingle; $m$ is the signature length;
+$\mathbf{1}[\cdot]$ is one when its
+condition is true and zero otherwise; and $\widehat J$ is the estimated Jaccard
+similarity. For ideal independent permutations,
+$\mathbb{E}[\widehat J]=J$ and
+$\operatorname{Var}(\widehat J)=J(1-J)/m$. More signature entries reduce
+variance, although one realized estimate need not improve monotonically.
+
+@gls-lsh (LSH) splits each signature into $b$ bands of $r$ rows, so $m=br$. If two
+documents have Jaccard similarity $s$, the idealized probability that at least
+one band matches is
+
+$$
+P_{\mathrm{candidate}}(s)=1-\left(1-s^r\right)^b.
+$$
+
+The symbols mean the following: $P_{\mathrm{candidate}}(s)$ is the probability
+of becoming a candidate pair; $s\in[0,1]$ is true Jaccard similarity; $b$ is the
+number of bands; and $r$ is
+the rows per band. More bands at fixed signature length increase candidate
+recall and false positives. More rows per band make the gate stricter and can
+increase false negatives. LSH produces candidates, not proof of duplication;
+an implementation may verify candidates with exact Jaccard or another pinned
+rule before forming duplicate clusters.
+
+<figure id="fig-data-curation-lsh-probability">
 <div class="viz" data-viz="minhash-buckets"></div>
-<figcaption>Fifteen documents, a few of them near-duplicates, sorted into LSH buckets by their MinHash signatures. Only documents that share a bucket (accent) become candidate pairs for a full Jaccard check, so the cost is sub-quadratic, not all-pairs. Add buckets to sharpen the threshold and cut false collisions; the true near-duplicates still land together. Illustrative.</figcaption>
+<figcaption>Idealized LSH candidate probability with twenty bands. Increasing rows per band makes a band match stricter and moves the transition toward higher Jaccard similarity. No setting eliminates both false positives and false negatives.</figcaption>
 </figure>
 
-Run this to see how a @gls-minhash signature estimates Jaccard similarity from a
-handful of hashes, and how the estimate sharpens as `num_perm` grows.
+The cell below uses a shared random ordering of the union of two sets. That is
+equivalent to drawing a random permutation for MinHash. The sets have exact
+Jaccard similarity $0.6$; the estimate is the fraction of permutations whose
+minimum element agrees.
 
 :::: {.runnable}
 ```python
-import numpy as np
+from math import sqrt
+from random import Random
 
-rng = np.random.default_rng(0)
-universe = 5000                       # vocabulary of shingles
-A = set(rng.choice(universe, 800, replace=False).tolist())
-B = set(A) ^ set(rng.choice(universe, 400, replace=False).tolist())
-true_j = len(A & B) / len(A | B)      # exact Jaccard
+rng = Random(18)
+universe = list(range(5000))
 
-def minhash_estimate(A, B, num_perm):
-    seeds = rng.integers(1, 2**31 - 1, size=num_perm)
-    a = np.array(sorted(A)); b = np.array(sorted(B))
-    hits = 0
-    for s in seeds:                   # min of a hashed permutation = MinHash
-        if (a * s % universe).min() == (b * s % universe).min():
-            hits += 1
-    return hits / num_perm            # P(min collides) = Jaccard
+# Two 800-element sets with 600 shared elements: J = 600 / 1000 = 0.6.
+A = set(rng.sample(universe, 800))
+outside_A = [x for x in universe if x not in A]
+B = set(rng.sample(sorted(A), 600) + rng.sample(outside_A, 200))
 
-for num_perm in [16, 64, 256, 1024]:
-    est = minhash_estimate(A, B, num_perm)
-    print(f"num_perm={num_perm:>5}  est={est:.3f}  true={true_j:.3f}")
+true_j = len(A & B) / len(A | B)
+elements = sorted(A | B)
+max_perm = 1024
+matches = []
+
+for _ in range(max_perm):
+    order = elements.copy()
+    rng.shuffle(order)  # one shared random permutation of the union
+    min_a = next(x for x in order if x in A)
+    min_b = next(x for x in order if x in B)
+    matches.append(min_a == min_b)
+
+for m in [16, 64, 256, 1024]:
+    estimate = sum(matches[:m]) / m
+    standard_error = sqrt(true_j * (1 - true_j) / m)
+    print(
+        f"m={m:>4}  estimate={estimate:.3f}  "
+        f"true={true_j:.3f}  standard error={standard_error:.3f}"
+    )
 ```
 ::::
 
-@fig-data-curation-1 makes the cost argument quantitative. Naive all-pairs
-comparison grows as the square of the corpus size, which is hopeless at
-petabyte scale, while LSH keeps the candidate count close to linear by only
-ever comparing documents that already share a bucket.
+@fig-data-curation-1 separates the all-pairs baseline from one favorable indexed
+case. The terms in its bound are signature construction, which costs $O(nm)$,
+and the $K$ candidate pairs emitted by the index, giving roughly $O(nm+K)$ work.
+It is close to linear only when candidates per document stay bounded. In a degenerate
+bucket, $K$ can still approach $n(n-1)/2$.
 
-![Schematic comparison of fuzzy-dedup cost. All-pairs comparison grows as O(n squared) in the corpus size, while MinHash with LSH stays close to linear by only comparing documents that collide in a band-bucket. Idealized counts, after Broder (1997) and Lee et al. (2022).](/figures/data-curation-1.svg){#fig-data-curation-1}
+![Schematic comparison of fuzzy-dedup work. All-pairs comparison grows quadratically. The indexed line assumes eight candidates per document and illustrates a favorable operating regime, not an LSH worst-case guarantee.](/figures/data-curation-1.svg){#fig-data-curation-1}
 
-```{dot}
-//| label: fig-data-curation-minhash
-//| fig-cap: "MinHash with LSH for corpus-scale fuzzy dedup. Only documents that share an LSH bucket are compared, so the cost is sub-quadratic rather than all-pairs. After Broder (1997) and Lee et al. (2022)."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  A [label="Document text"];
-  B [label="Shingles\n(k-gram set)"];
-  C [label="MinHash signature\n(num_perm hashes)"];
-  D [label="Split into LSH bands"];
-  E [label="Shares a bucket\nwith a kept doc?", shape=diamond];
-  F [label="Insert signature,\nkeep document"];
-  G [label="Estimate Jaccard\non bucket candidates"];
-  H [label="Above\nthreshold?", shape=diamond];
-  I [label="Drop as near-duplicate,\ncount in manifest"];
-  A -> B;
-  B -> C;
-  C -> D;
-  D -> E;
-  E -> F [label="No"];
-  E -> G [label="Yes"];
-  G -> H;
-  H -> F [label="No"];
-  H -> I [label="Yes"];
-}
-```
+Duplicate clusters must also be resolved deterministically. Sort records by a
+stable identity, build all verified similarity edges, compute connected
+components, and choose one representative by a pinned policy. Dropping a
+document merely because it collided in an LSH bucket can delete distinct text;
+choosing the first record seen makes the corpus depend on partition order.
 
-### The second cut: quality filtering
+## Quality is a measured property
 
-What survives dedup still has to clear a quality bar, and two families set
-it. Heuristic gates are rule-based: length, symbol-to-word ratio, repetition,
-stop-word presence, and a perplexity threshold from a reference model (how
-surprised that model is by the text, with low perplexity meaning fluent). They
-are cheap, auditable, and high-recall for obvious junk, but brittle at the
-margins. Classifier filters are learned: a model scores each document against
-a reference of "good" text, for example a classifier trained to distinguish
-curated text from raw web. Classifiers have higher precision but carry a
-structural risk, they encode the reference set's notion of quality into the
-entire corpus. The reference perplexity filter traces directly to CCNet,
-which paired language identification with a perplexity score from a reference
-language model [@wenzek2020ccnet].
+There is no context-free label called “high-quality text.” A filter can favor
+fluent prose while harming code, favor Wikipedia-like language while removing
+conversation, or improve one evaluation while narrowing another domain.
 
-## The decisions locked early
+Two broad tool families are common:
 
-By the time the byte clears quality filtering, the per-document work is done.
-What remains is global: how to combine sources, how to order them, and
-whether to manufacture more. These decisions are cheap to state and expensive
-to change, because each one constrains the others.
+- **Rules** measure length, repetition, symbol ratios, boilerplate patterns,
+  language confidence, or other inspectable features.
+- **Learned scorers** estimate similarity to a reference set or predict a label
+  such as educational value.
 
-**Mixture** is the ratios across web, code, curated, and multilingual, plus
-per-source weights. It can be hand-tuned, scaled from small-proxy ablations
-(controlled runs that change one thing to measure its effect),
-or optimized directly. DoReMi frames mixture selection as group
-distributionally robust optimization: train a small proxy, use it to find
-weights that minimize worst-case excess loss across domains, then apply those
-weights to the full run [@xie2023doremi]. The mixture is locked early and
-expensive to revisit, because changing it means re-deriving the curriculum
-and often re-running proxy ablations.
+Neither family is inherently high-recall, high-precision, or unbiased until the
+target is defined and checked against reviewed data. CCNet's reference-model
+perplexity score, for example, measures similarity to its Wikipedia-derived
+reference distribution, not an objective property called fluency
+[@wenzek2020ccnet]. Report retention and error rates by relevant language,
+dialect, geography, source, and topic slices. Inspect excluded records as well
+as accepted ones.
 
-**Curriculum** is the ordering and phasing of data over training:
-easy-to-hard, domain phasing, or saving a high-quality slice for late. This
-is the ordering *within* the data plane. It is distinct from the annealing
-*phase*, which up-weights high-quality data near the end of training and
-belongs to mid-training, covered in @sec-mid-training.
+The strongest validation is a fixed-budget training ablation. Hold the raw
+pool, tokenizer, model, optimizer, token budget, and evaluation suite constant;
+change one curation decision; then compare loss and downstream slices. FineWeb
+publicly ablated extraction, filtering, and deduplication choices. DataComp-LM
+later provided a 240-trillion-token raw pool and standardized model training to
+compare data recipes, finding model-based filtering important in its baseline
+setting [@penedo2024fineweb; @li2024dclm]. These are controlled results, not
+universal rankings of datasets.
 
-**Synthetic data** is model-generated and templated text: rephrasing or
-augmenting web text, textbook-style generation, and distillation targets. The
-principle is that a small amount of dense, clean, on-distribution text can be
-worth far more than its token count in raw web. It is powerful for filling
-capability gaps, and @sec-synthetic-data treats it as a first-class
-post-training tool. The risks are distributional collapse, factual drift, and
-laundering eval content back into training. Because the last risk feeds
-directly into the contract that follows, synthetic data is also where the
-pipeline most needs the next stage to be strict.
+@fig-data-curation-2 shows the intended mechanism as a thought experiment. A
+curated stream helps only if it yields more useful signal for the target
+distribution per token consumed. Filtering that removes useful coverage can
+move the curve the other way.
 
-## Decontamination as a contract
-
-Decontamination is N-gram or substring overlap detection against the eval
-registry, an overlap threshold, a drop-or-flag decision, and a report emitted
-as the contract to evaluation. This is the stage that earns the chapter its
-place in the stack. The report, not a shared implementation, is the hand-off.
-
-The threshold is not a free parameter. N-gram overlap detection is itself
-evadable: rephrased benchmark samples slip past surface-level matching, which
-is exactly why the threshold and method are a negotiated contract rather than
-a private default [@yang2023rethinking]. A loose threshold leaks benchmarks
-and inflates scores. A strict one over-removes legitimate near-duplicates and
-shrinks the corpus. Either way the decision belongs to the boundary between
-this chapter and @sec-benchmarks, not inside the data team.
-
-::: {.callout-tip}
-## Constraint arrow
-The evaluation layer reaches down and sets a hard constraint on this one. The
-decontamination threshold is not a data-team preference: it is dictated by
-the eval registry that @sec-benchmarks defines and must supply. If evaluation
-does not hand down which held-out sets to protect, this chapter cannot
-guarantee the numbers reported later are real. The worst-case failure, a
-contamination leak through a dedup gap, a synthetic pipeline, or an agent
-transcript that embedded a benchmark task, inflates every downstream score at
-once. The decontamination contract exists precisely so a lower layer cannot
-silently corrupt an upper one.
-:::
-
-## How the recipe got here: two histories
-
-### From assembled corpora to pipeline-as-product
-
-Early corpora were assembled, not engineered. The Pile curated 800GB from
-twenty-two diverse sources and made the components explicit [@gao2020pile].
-C4, built for T5, showed that a handful of heuristic cleaning rules over
-CommonCrawl already moved downstream quality [@raffel2020t5]. The pivot to
-pipeline-as-product came with CCNet, which combined language identification
-with a perplexity filter from a reference language model
-[@wenzek2020ccnet], and then with RefinedWeb, whose claim was sharper: web
-data alone, filtered and deduplicated hard enough, can match or beat curated
-corpora [@penedo2023refinedweb]. FineWeb carried this further with public
-ablations that fixed compute and architecture and varied only the data,
-turning corpus construction into a measurable science rather than folklore
-[@penedo2024fineweb].
-
-### The synthetic turn
-
-The synthetic turn arrived through two results. TinyStories showed that a
-narrow, fully synthetic corpus could teach small models coherent English
-[@eldan2023tinystories]. The phi line, opened by "Textbooks Are All You
-Need," argued that textbook-quality synthetic and filtered data could reach
-strong reasoning at a fraction of the usual token count
-[@gunasekar2023textbooks]. Rephrasing the Web (WRAP) made the cheaper version
-of the bet: rephrase existing web text into cleaner styles rather than
-generating from scratch, gaining compute and data efficiency without
-inventing content [@maini2024rephrasing]. The newest and least-documented
-source is agent transcripts, tool-use traces and verified multi-step
-trajectories recycled as training signal, foreshadowed by datasets like
-ToolBench [@qin2023toolllm]. The open questions there are provenance, dedup
-against the source model's own outputs, and contamination from embedded eval
-tasks.
+![Conceptual useful-token tradeoff. Under the illustrated assumption, a curated stream provides more relevant, non-redundant signal per sampled token than an unfiltered stream. The curves are not measured loss and are not a universal ordering of corpora.](/figures/data-curation-2.svg){#fig-data-curation-2}
 
 ::: {.callout-important}
 ## What's contested
-Whether to chase scale or quality is not settled. One camp, traced through
-RefinedWeb and FineWeb, holds that aggressively filtered and deduplicated web
-data is sufficient and that curated corpora add little once filtering is good
-enough. The other, traced through the phi line, holds that synthetic
-textbook-quality data is worth a large multiple of its token count and that
-the future of the corpus is generated, not crawled. The disagreement is live
-because the two positions imply different infrastructure, different cost
-structures, and different contamination risks, and because synthetic-heavy
-recipes are the hardest to evaluate cleanly: the same models that generate
-the data also sit near the benchmarks. Treat the synthetic share as a bet on
-diversity versus control, not a solved ratio.
+
+Scale and quality are not opposing camps. FineWeb is both very large and heavily
+filtered; FineWeb-Edu is a learned-filtered subset of crawled text, not a fully
+generated corpus. RefinedWeb showed that filtered web-only data could outperform
+several public mixed corpora in its experiments, while Dolma made a different
+bet on documented source diversity [@penedo2023refinedweb; @soldaini2024dolma].
+The open question is which acquisition pool, retention policy, mixture, and
+schedule work for a stated model, budget, and evaluation target.
 :::
 
-@fig-data-curation-debate traces why the choice is structural, not a single
-tunable ratio: each camp branches into a different stack, cost structure, and
-contamination risk.
+## Turn retained sources into sampled tokens
 
-```{dot}
-//| label: fig-data-curation-debate
-//| fig-cap: "Why the scale-versus-quality debate is unsettled: each camp implies a different stack, cost structure, and contamination risk, so the choice is not a single tunable ratio."
-digraph {
-  rankdir=TB;
-  bgcolor="transparent";
-  node [shape=box, style=rounded, fontsize=11, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
+Suppose the retained corpus has $K$ sources. Each static mixture defines
 
-  Q ["label"="Where do the next tokens come from?", shape=box, style="rounded,filled", fillcolor="#f1ece1"];
+$$
+P_{\mathrm{train}}(x)=\sum_{k=1}^{K}w_kP_k(x),
+\qquad
+w_k\geq 0,
+\qquad
+\sum_{k=1}^{K}w_k=1.
+$$
 
-  Scale ["label"="Scale camp\n(RefinedWeb, FineWeb)\nfilter and dedup the web hard"];
-  Quality ["label"="Quality camp\n(phi line)\ngenerate textbook-grade data"];
+The symbols mean the following: $P_{\mathrm{train}}(x)$ is the probability of
+sampling token sequence $x$ for training; $P_k(x)$ is the sampling distribution
+within source $k$; $w_k$ is
+that source's mixture weight; and $K$ is the number of sources. With a total
+budget of $D$ sampled tokens, source $k$ contributes an expected
+$D_k=w_kD$ tokens.
 
-  Q -> Scale;
-  Q -> Quality;
+If source $k$ contains $U_k$ retained token instances, the following formula
+defines its expected effective epochs:
 
-  ScaleInfra ["label"="Infra: large CPU\nfilter and dedup fleets"];
-  ScaleCost ["label"="Cost: crawl plus\nclassifier passes"];
-  ScaleRisk ["label"="Risk: leaks survive\na dedup gap"];
+$$
+e_k=\frac{D_k}{U_k}=\frac{w_kD}{U_k}.
+$$
 
-  QualInfra ["label"="Infra: generator models\nin the data loop"];
-  QualCost ["label"="Cost: inference to\nsynthesize tokens"];
-  QualRisk ["label"="Risk: eval laundering,\ndrift, collapse"];
+The terms mean the following: $e_k$ is the expected number of full passes over
+source $k$; $D_k$ is its sampled-token allocation; and $U_k$ is its unique
+retained-token count. This
+quantity exposes accidental oversampling that a table of mixture percentages
+can hide.
 
-  Scale -> ScaleInfra;
-  Scale -> ScaleCost;
-  Scale -> ScaleRisk;
-  Quality -> QualInfra;
-  Quality -> QualCost;
-  Quality -> QualRisk;
-}
+Weights can come from expert judgment or compute-matched proxy experiments.
+DoReMi first trains a small reference model on initial domain weights, then
+trains a same-size proxy with group distributionally robust optimization on
+per-domain excess loss. It averages the evolving weights and uses them to
+resample data for a larger model [@xie2023doremi]. The reported transfer from a
+280M proxy to an 8B model is evidence for that experiment, not a guarantee
+across tokenizers, domain definitions, model families, or scales.
+
+A static mixture holds each $w_k$ fixed. A curriculum uses time-dependent weights
+$w_k(t)$ or changes example ordering as training progresses. Late up-weighting
+of a high-quality or domain-specific slice is one form of curriculum, often
+called data annealing or a cool-down mixture when paired with the final
+learning-rate phase. Its interaction with the training schedule is
+covered in @sec-mid-training.
+
+## Treat synthetic data as a derived source
+
+Synthetic data can rephrase existing text, generate textbook-style examples,
+distill a stronger model, or create verified exercises. TinyStories showed that
+a narrow synthetic story distribution could teach coherent English to models
+below ten million parameters [@eldan2023tinystories]. The phi-1 experiments
+reported strong code-generation results from a 1.3B model trained on a curated
+mixture containing synthetic textbook and exercise data
+[@gunasekar2023textbooks]. WRAP mixed real C4 text with model-generated
+rephrasings and improved efficiency in its tested setting [@maini2024rephrasing].
+
+These results do not make generated tokens automatically cheap, factual, novel,
+or useful. Generation consumes inference compute; verification adds cost; and a
+generator can reproduce benchmark content, source errors, or a narrow style.
+Recursive replacement of original data by outputs from successive model
+generations is the high-risk collapse setting studied by Shumailov et al.;
+synthetic augmentation with preserved original data is a different regime
+[@shumailov2024collapse].
+
+Every generated record should retain its parent source IDs, generator provider
+and checkpoint, prompt or template version, decoding settings, timestamp,
+verifier result, and applicable usage terms. Evaluate factual fidelity,
+diversity, source coverage, contamination, and downstream performance before
+assigning a synthetic mixture weight.
+
+## Decontamination protects an evaluation claim
+
+Deduplication asks whether training records repeat one another. Decontamination
+asks whether training data contains protected evaluation material. The second
+question needs a frozen registry of benchmark versions before curation begins.
+
+Whole-document Jaccard is a poor detector when a short benchmark item is copied
+into a long page. For evaluation item $e$ and training document $d$, the
+following formula defines an evaluation-side $n$-gram containment score:
+
+$$
+C_n(e,d)=\frac{|G_n(e)\cap G_n(d)|}{|G_n(e)|}.
+$$
+
+The symbols mean the following: $G_n(z)$ is the set of normalized token
+$n$-grams in text $z$; $n$ is the chosen sequence length; $C_n(e,d)$ is the
+fraction of the evaluation item's
+$n$-grams found in the training document. A policy may flag a pair when
+$C_n(e,d)\geq\tau$, where $\tau$ is a benchmark-specific threshold. The
+normalization, $n$, common-gram suppression, retrieval method, threshold, and
+adjudication rule all belong in the report.
+
+Lexical matching has a known boundary. Paraphrases, translations, code rewrites,
+and synthetic restatements can preserve the answer while sharing few surface
+strings. Yang et al. demonstrated such evasions and found overlap in synthetic
+datasets [@yang2023rethinking]. Semantic or model-assisted review can increase
+coverage, but it introduces its own errors. A decontamination report proves what
+was checked and removed; it cannot prove that no leakage exists.
+
+::: {.callout-tip}
+## Constraint arrow
+
+Evaluation constrains data preparation. @sec-benchmarks must supply protected
+item versions and registry digests before the final corpus build. The data and
+evaluation teams jointly specify matching and adjudication rules. Confirmed
+matches are removed or quarantined before training; after training, suspect
+evaluation items can only be excluded and disclosed, not retroactively removed
+from the model.
+:::
+
+The hand-off should contain benchmark and corpus version hashes, detector and
+normalization versions, thresholds, reviewed samples, removal counts by source
+and benchmark, removed token totals, and before-and-after corpus manifests. Use
+opaque record IDs for restricted material rather than copying private data or
+benchmark answers into a broadly visible report.
+
+## Make every accepted record traceable
+
+Reproducibility does not require pretending that a live URL will never change.
+Freeze raw snapshots and accepted shards as immutable, content-addressed
+objects. Rebuilding from those inputs with pinned code should reproduce the
+recorded membership and shard checksums. Re-fetching a live source creates a new
+corpus version.
+
+A machine-readable manifest should contain at least:
+
+```yaml
+corpus:
+  id: <stable corpus name>
+  version: <semantic version>
+  owner: <responsible team>
+  intended_uses: [...]
+  excluded_uses: [...]
+source_record:
+  uri_or_revision: <WARC record, URL, or repository commit>
+  retrieved_at: <timestamp>
+  raw_digest: <content hash>
+  origin: <human, model-generated, or unknown>
+  rights_evidence: <license, terms, consent, and dated evidence>
+pipeline:
+  code_commit: <revision>
+  environment_digest: <container and dependency digest>
+  transforms: <models, thresholds, seeds, and configurations>
+  stage_counts: <accepted and rejected counts by reason>
+lineage:
+  parent_record_ids: [...]
+  dedup_cluster_id: <stable cluster>
+  retained_representative: <stable record ID>
+evaluation:
+  registry_digest: <protected benchmark versions>
+  detector_policy: <normalization, matching, thresholds, review>
+output:
+  tokenizer_digest: <pinned tokenizer>
+  shard_digests: [...]
+  sampling_policy: <weights and schedule>
+  consumed_by_runs: [...]
+  tombstones: <removals and affected descendants>
 ```
 
-## What you trade, and what breaks
+The public datasheet can summarize purpose, sources, transforms, known
+limitations, and slice statistics. Sensitive raw records, personal information,
+and protected benchmark material remain access-controlled. Dolma illustrates
+the value of publishing both corpus documentation and curation tooling
+[@soldaini2024dolma]; Datasheets for Datasets provides a broader documentation
+framework [@gebru2021datasheets].
 
-Every stage above is a dial, and turning it the wrong way fails silently.
-The dials are worth naming together because they interact.
+## Validate the corpus before the full run
 
-- **Quantity versus quality.** More tokens help only if they are not junk or
-  duplicates. Past a point, aggressive filtering and dedup beat raw volume,
-  as sketched in @fig-data-curation-2: held-out loss on raw web flattens once
-  added tokens mostly repeat content the model has already seen, while the
-  same compute on deduplicated and filtered tokens keeps falling. The hard
-  part is knowing where that point is for a given compute budget, and that
-  point moves with the budget set in @sec-scaling-laws.
+A corpus earns a training budget through evidence at several scales:
 
-![Schematic of the quantity-versus-quality trade-off. Held-out loss on raw web flattens early because duplicated and noisy tokens add little new signal, while the same compute spent on deduplicated and filtered tokens keeps descending. Idealized curves, not measured loss, after Lee et al. (2022) and Penedo et al. (2024).](/figures/data-curation-2.svg){#fig-data-curation-2}
-- **Dedup aggressiveness.** Stronger fuzzy dedup removes memorization risk
-  and wasted compute, but can delete legitimately rare-but-distinct content.
-  The threshold is a recall-precision dial with no universally right setting.
-- **Heuristic versus classifier filtering.** Heuristics are cheap, auditable,
-  and bias-light but coarse. Classifiers are precise but import the biases of
-  their reference set into the entire corpus, stripping registers, dialects,
-  or domains wholesale.
-- **Synthetic share.** Synthetic data fills gaps cheaply but risks collapse,
-  factual drift, and eval laundering. The ratio trades diversity against
-  control.
-- **Decontamination strictness.** A loose threshold leaks benchmarks and
-  inflates scores. A strict one over-removes legitimate near-duplicates and
-  shrinks the corpus. The threshold is a contract term, not an internal
-  detail.
+1. **Stage accounting.** Reconcile document, byte, and token counts before and
+   after every transform. Investigate unexpected retention jumps.
+2. **Reviewed samples.** Sample accepted and rejected records by source,
+   language, score band, and policy reason. Estimate errors with uncertainty.
+3. **Distribution comparisons.** Measure which domains, languages, hosts,
+   licenses, and document types each stage adds or removes.
+4. **Duplicate audits.** Report exact, span, and fuzzy cluster distributions,
+   including the largest clusters and representative policy.
+5. **Contamination audits.** Run the frozen registry against every path into the
+   corpus, including synthetic and imported datasets.
+6. **Sampler tests.** Generate a dry-run stream and verify realized weights,
+   effective epochs, ordering, packing, and shard balance.
+7. **Compute-matched ablations.** Train small models with one data decision
+   changed at a time, then compare held-out loss and target slices.
+8. **Replay and removal.** Trace sampled records backward to sources and a
+   source forward to all descendants and consuming runs.
 
-What goes wrong here is quiet, and the failure modes do not all surface together.
-Contamination leaks inflate results and are detected late, if at all. The
-dedup dial cuts both ways: too loose, it wastes compute and raises
-memorization risk; too tight, it quietly removes rare content. Broader still
-is filter bias amplification, which strips legitimate variety across the whole
-corpus, while synthetic collapse or drift narrows the distribution or
-propagates the generator's errors. Worst of all is a mixture mistake: it
-under- or over-trains a capability, and because the mixture is locked early
-and surfaces only at evaluation, it is the costliest to diagnose and redo.
-
-## The determinism discipline
-
-After the design choices comes the operational requirement: determinism. Because
-mixture and decontamination are contracts, every stage must be reproducible to
-the byte. In practice that means
-content-addressed inputs, pinned filter thresholds and model versions, and a
-manifest that records, for each output shard, the exact transforms that
-produced it. A representative dedup step is fuzzy document matching by MinHash
-and LSH, sketched here against its method rather than any one codebase:
-
-```python
-# Fuzzy dedup: bucket by LSH, then drop near-duplicates within a bucket.
-def dedup(docs, threshold=0.8, num_perm=128):
-    seen = LSHIndex(threshold=threshold, num_perm=num_perm)
-    for doc in docs:
-        sig = minhash(shingles(doc.text), num_perm=num_perm)
-        if not seen.query(sig):      # no near-duplicate already kept
-            seen.insert(doc.id, sig)
-            yield doc                 # else: drop, counted in the manifest
-```
-
-The decontamination step is the same shape with a different index: build
-n-gram signatures for every item in the eval registry, then drop or flag any
-training document whose overlap exceeds the contract threshold, and write the
-count and identities of removed documents into the report that evaluation
-consumes.
+Before committing the full run, record the acquisition snapshots, policy basis,
+retained membership, filter audits, mixture weights, schedule, effective epochs,
+decontamination limitations, tokenizer version, and output shard hashes. That
+record makes the learned distribution inspectable and gives later evaluation a
+defensible account of what the model could have seen.
 
 ## Further reading
 

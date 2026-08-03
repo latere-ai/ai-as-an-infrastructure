@@ -393,6 +393,47 @@ test("infrastructure-before separates inherited practice from workload differenc
   expect(chapter).not.toContain("far ahead in measured trust");
 });
 
+test("data curation separates acquisition, retention, sampling, and evaluation contracts", () => {
+  const chapter = src("en/foundations/02-data-curation.qmd");
+
+  for (const heading of [
+    "## The run consumes a distribution, not a folder",
+    "## Build lineage into every stage",
+    "## Decide whether a source may enter",
+    "## Deduplicate at the unit that matters",
+    "## Quality is a measured property",
+    "## Turn retained sources into sampled tokens",
+    "## Treat synthetic data as a derived source",
+    "## Decontamination protects an evaluation claim",
+    "## Make every accepted record traceable",
+    "## Validate the corpus before the full run",
+  ]) {
+    expect(chapter).toContain(heading);
+  }
+
+  expect(chapter).toContain("P_{\\mathrm{train}}(x)");
+  expect(chapter).toContain("P_{\\mathrm{candidate}}(s)");
+  expect(chapter).toContain("C_n(e,d)");
+  expect(chapter).toContain("registry_digest:");
+  expect(chapter).toContain("@longpre2023provenance");
+  expect(chapter).toContain("@li2024dclm");
+
+  for (const rejected of [
+    "single biggest lever",
+    "bias-light",
+    "classifier filters are learned",
+    "Scale camp",
+    "Quality camp",
+    "byte-identical shards",
+    "a * s % universe",
+    "if not seen.query(sig)",
+  ]) {
+    expect(chapter).not.toContain(rejected);
+  }
+
+  expect(src("figures-src/data-curation-1.py")).not.toContain("MinHash + LSH ≈ O(n)");
+});
+
 test("scaling-laws separates forecasting, allocation, deployment, and execution", () => {
   const chapter = src("en/foundations/01-scaling-laws.qmd");
 
@@ -522,7 +563,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
 
 test("audited leftover first uses define the role of the term in place", () => {
   const required = [
-    ["en/foundations/02-data-curation.qmd", "**@gls-decontamination report**, the audit showing which benchmark overlaps were removed"],
+    ["en/foundations/02-data-curation.qmd", "**@gls-decontamination report** that states which benchmark-overlap checks were run"],
     ["zh/foundations/02-data-curation.qmd", "**@gls-decontamination报告**，也就是说明哪些基准重叠已从训练语料中移除"],
     ["zh/foundations/03-tokenization.qmd", "@gls-bpe是这套构造的主力：它反复合并语料中最常见的相邻符号"],
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod is Google's accelerator cluster counterpart"],
