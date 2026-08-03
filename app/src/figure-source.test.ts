@@ -44,7 +44,7 @@ test("scatter labels sit top-right by default and only flip left on overflow", (
   expect(landscape).toMatch(/text-anchor: end;[^>]*>闭源前沿/);
 });
 
-test("figure 2.2 (field-map-stack) is an inline SVG with all 12 substantive parts", () => {
+test("figure 2.1 (field-map-stack) is an inline SVG with all 12 substantive parts", () => {
   for (const lang of ["en", "zh"]) {
     const qmd = readFileSync(join(repoRoot, lang, "orientation", "02-field-map.qmd"), "utf8");
     // A fixed inline SVG keeps labels selectable while avoiding Graphviz's
@@ -73,6 +73,15 @@ test("figure 2.2 (field-map-stack) is an inline SVG with all 12 substantive part
   // Heading reflects the real part count (was "eleven parts" before the Part IX split).
   expect(readFileSync(join(repoRoot, "en", "orientation", "02-field-map.qmd"), "utf8")).toContain("twelve parts");
   expect(readFileSync(join(repoRoot, "zh", "orientation", "02-field-map.qmd"), "utf8")).toContain("十二个部分");
+});
+
+test("English figure 2.1 distinguishes dependencies from reading order", () => {
+  const qmd = readFileSync(join(repoRoot, "en", "orientation", "02-field-map.qmd"), "utf8");
+  const figure = qmd.match(/<figure id="fig-field-map-stack">[\s\S]*?<\/figure>/)?.[0] ?? "";
+  expect(figure).toContain("Selected dependencies among the twelve substantive parts");
+  expect(figure).toContain("Solid arrows show technical dependencies");
+  expect(figure).toContain("The layout is not a reading sequence");
+  expect(figure).not.toContain("The substantive parts read as a stack");
 });
 
 test("figure 1.3 return arcs do not carry overlap-prone labels", () => {
