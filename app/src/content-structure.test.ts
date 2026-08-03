@@ -679,7 +679,7 @@ test("generative adaptation and reasoning first uses define the method locally",
   const required = [
     ["en/generative/01-diffusion-flow-matching.qmd", "@gls-diffusion, the train-by-adding-noise and generate-by-denoising recipe"],
     ["zh/generative/01-diffusion-flow-matching.qmd", "@gls-diffusion，也就是训练时加噪、生成时去噪的配方"],
-    ["en/generative/01-diffusion-flow-matching.qmd", "@gls-ddpm, the original denoising-diffusion objective"],
+    ["en/generative/01-diffusion-flow-matching.qmd", "@gls-ddpm, Ho et al.'s 2020 denoising-diffusion formulation"],
     ["zh/generative/01-diffusion-flow-matching.qmd", "@gls-ddpm这个早期去噪扩散目标"],
     ["en/generative/04-multimodal-models.qmd", "@gls-clip is the paired image-text training recipe"],
     ["zh/generative/04-multimodal-models.qmd", "@gls-clip是一种成对图文训练配方"],
@@ -701,6 +701,46 @@ test("generative adaptation and reasoning first uses define the method locally",
   for (const [path, snippet] of required) {
     expect(flat(path), `${path} should define ${snippet} locally`).toContain(snippet);
   }
+});
+
+test("the diffusion and flow chapter keeps model path sampler and cost distinct", () => {
+  const chapter = flat("en/generative/01-diffusion-flow-matching.qmd");
+
+  for (const required of [
+    "An autoregressive model waits for the previous output position",
+    "q(x_t\\mid x_{t-1})",
+    "p_\\theta(x_{t-1}\\mid x_t)",
+    "\\bar\\alpha_t=\\frac{f(t)}{f(0)}",
+    "becomes ill-conditioned at high noise",
+    "becomes ill-conditioned at low noise",
+    "It is not, without a time conversion, the flow-matching velocity",
+    "\\epsilon^*(x_t,t)=\\mathbb E[\\epsilon\\mid x_t]",
+    "they do not share individual stochastic paths or transition laws",
+    "normally requires both network predictions per sampling step",
+    "Sampler step count and network-function evaluations (NFE) are not synonyms",
+    "have the same gradient with respect to $\\theta$",
+    "v^*(x,t)=\\mathbb E[x_1-x_0\\mid x_t=x]",
+    "One Euler step is exact only for an exactly constant learned trajectory",
+    "Text changes the state space",
+  ]) {
+    expect(chapter, `missing diffusion/flow contract: ${required}`).toContain(required);
+  }
+
+  for (const rejected of [
+    "almost all non-text media",
+    "images have no meaningful left-to-right order",
+    "the loss collapses to",
+    "the score network is therefore",
+    "one Euler step can follow it exactly",
+    "flow matching generalizes diffusion",
+  ]) {
+    expect(chapter).not.toContain(rejected);
+  }
+
+  // Regression: the previous left-to-right relation graph exceeded the reading
+  // column and clipped its solver, consistency, and flow-matching branches.
+  expect(chapter).toContain("rankdir=TB;");
+  expect(chapter).not.toContain("rankdir=LR;");
 });
 
 test("serving retrieval and evaluation first uses explain operational terms locally", () => {

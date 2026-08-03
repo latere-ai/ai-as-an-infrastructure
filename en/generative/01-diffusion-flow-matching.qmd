@@ -1,313 +1,619 @@
 # Diffusion and Flow Matching {#sec-diffusion}
 
-Part II begins where next-token prediction stops being the natural generative
-order. Image, audio, and video models mostly do not produce one item after
-another from left to right; they start from noise and remove it. @gls-diffusion,
-the train-by-adding-noise and generate-by-denoising recipe, and its
-@gls-flow-matching generalization are the generative principle behind
-almost all non-text media, and they are now reaching back into text. The central
-shift is simple but deep: generation becomes a path from disorder to structure,
-with the same network readable as denoiser, score, or velocity. EDM and flow
-matching are two ways of making that path better conditioned, and the frontier
-pressure is to collapse a long denoising chain, sometimes a thousand evaluations,
-toward one.
+Part I followed models that assign probability by predicting the next token.
+Part II begins with another choice: define a simple corruption or transport path
+between data and a known reference distribution, then learn how to travel back
+to data. @gls-diffusion, the train-by-adding-noise and generate-by-denoising
+recipe, is a major model family for image, audio, and video generation.
+@gls-flow-matching trains a continuous transport velocity instead. The two
+families overlap mathematically, but neither is a universal replacement for the
+other or for autoregression.
 
-![Schematic of generation as a path from noise to data. A diffusion sampler removes noise through many denoising steps, while a flow-matching view learns a direct transport path. Idealized curves, not measured data.](/figures/diffusion-flow-matching-1.svg){#fig-diffusion-flow-matching-1}
+The important change is where sequential dependence lives. An autoregressive
+model waits for the previous output position. A diffusion or flow sampler can
+update all positions in its current state together, but it repeats that full
+network evaluation over several noise levels or solver steps. Each evaluation
+still pays for the representation's size and the model's architecture. Fewer
+sampling steps help only when quality and per-step cost are held in view.
 
-## Why not autoregression
+![Schematic paths from reference noise to data. A diffusion probability-flow trajectory can curve, while a chosen conditional interpolation can be linear. The geometry is illustrative and does not determine the required number of network evaluations.](/figures/diffusion-flow-matching-1.svg){#fig-diffusion-flow-matching-1}
 
-Autoregressive generation is sequential by construction: one token after another,
-left to right, a serial chain whose length is the output. For text that ordering
-is natural. For an image it is not: pixels have no canonical order, and forcing
-one wastes the structure. Diffusion takes a different route. Corrupt data into
-noise by a fixed, known process, then learn to reverse it, denoising the whole
-signal in parallel at each step. There is no left-to-right, the output size is
-fixed up front, and the model can attend to the entire partially-denoised signal
-at once. The cost moves from sequence length to step count, and most of this
-chapter is about driving that step count down.
+## Choose a factorization, not a camp
 
-## The forward and reverse processes
-
-The forward process gradually adds Gaussian noise to a datum over $T$ steps until
-little but noise remains, a fixed Markov chain (each step depends only on the one
-before it) with no parameters. Gaussian composition gives its marginal, the
-distribution of $x_t$ on its own with the intervening steps summed out, in closed
-form, so any noise level is reachable in one shot,
+For an ordered representation $x=(x_1,\ldots,x_n)$, where $x$ denotes the
+complete output, autoregression writes
 
 $$
-q(x_t \mid x_0) = \mathcal{N}\!\left(x_t;\, \sqrt{\bar{\alpha}_t}\,x_0,\;
-(1-\bar{\alpha}_t)\,\mathbf{I}\right), \qquad
-x_t = \sqrt{\bar{\alpha}_t}\,x_0 + \sqrt{1-\bar{\alpha}_t}\,\boldsymbol{\epsilon},
+p(x)=\prod_{i=1}^{n}p(x_i\mid x_{<i}).
 $$
 
-where $\bar{\alpha}_t$ is the surviving signal fraction. Generation runs the chain
-backwards, learning to undo one noising step at a time. The surprise of @gls-ddpm,
-the original denoising-diffusion objective, is that the variational bound on this reverse
-process collapses, once the time-dependent weights are dropped, to an ordinary
-regression: predict the noise $\boldsymbol{\epsilon}$ that was added at a randomly
-chosen step [@ho2020ddpm],
+Here, $x_i$ is output position $i$, $x_{<i}$ is every earlier position, and
+$p$ is the modeled probability distribution. This factorization gives text a
+natural streaming interface and lets an end-of-sequence symbol choose the output
+length. Images and audio can also be serialized into tokens, so the issue is not
+that they lack any order. It is that no single serialization is always the best
+inductive bias for their spatial or temporal structure.
+
+Diffusion and flow models choose a state shape first, then revise that state as
+a whole. That makes editing, infilling, and global coordination natural, but
+usually requires a fixed or separately predicted shape. The contrast is
+operational:
+
+| Property | Autoregressive model | Diffusion or flow model |
+|---|---|---|
+| Serial axis | output positions | denoising or solver steps |
+| Work per serial step | usually one new token with cached history | one full-state network evaluation |
+| Length | emitted until a stop condition | chosen before or outside the path |
+| Revision | earlier outputs are normally fixed | all current positions may change |
+| Common strengths | streaming, variable length, token likelihood | fixed-shape generation, editing, infilling |
+
+These are tendencies, not boundaries. Blockwise and speculative methods mix
+them, while latent representations change what one “position” costs.
+
+## Build the discrete diffusion process
+
+Diffusion probabilistic models were introduced by Sohl-Dickstein et al. in 2015
+as a learned reversal of a gradual noising process inspired by nonequilibrium
+thermodynamics [@sohldickstein2015]. The widely used @gls-ddpm, Ho et al.'s 2020
+denoising-diffusion formulation, chooses a prescribed Gaussian Markov chain
+[@ho2020ddpm]:
 
 $$
-\mathcal{L}_{\text{simple}} = \mathbb{E}_{\,t,\,\mathbf{x}_0,\,\boldsymbol{\epsilon}}
-\left\lVert \boldsymbol{\epsilon} - \boldsymbol{\epsilon}_\theta\!\left(
-\sqrt{\bar{\alpha}_t}\,\mathbf{x}_0 + \sqrt{1-\bar{\alpha}_t}\,\boldsymbol{\epsilon},\; t
-\right) \right\rVert^2.
+q(x_t\mid x_{t-1})
+=\mathcal N\!\left(x_t;\sqrt{\alpha_t}\,x_{t-1},\beta_t\mathbf I\right),
+\qquad
+\alpha_t=1-\beta_t,
+\qquad
+\bar\alpha_t=\prod_{s=1}^{t}\alpha_s.
 $$
 
-Two design choices inside this loop turned out to matter more than they look.
-The first is the noise schedule. The original linear $\beta_t$ destroys
-information too fast at high resolution, and a cosine schedule that keeps more
-signal late in the chain, $\bar{\alpha}_t = \cos^2\!\big(\frac{t/T + s}{1+s}\cdot
-\frac{\pi}{2}\big)$ with a small offset $s$, improves likelihood and sample
-quality, alongside learning the reverse variances rather than fixing them
-[@nichol2021improvedddpm]. The second is what the network predicts. The same
-target can be expressed three ways, and they are not numerically equal across the
-schedule: predicting $\boldsymbol{\epsilon}$ degenerates at high noise where the
-target carries little signal, predicting $x_0$ degenerates at low noise, and the
-$v$-prediction $v = \sqrt{\bar{\alpha}_t}\,\boldsymbol{\epsilon} -
-\sqrt{1-\bar{\alpha}_t}\,x_0$ stays balanced across the whole range, which is why
-it became the parameterization of choice once distillation made each step span a
-wide band of signal-to-noise [@salimans2022progressive]. The toy below makes the
-loop concrete: for one-dimensional Gaussian data the optimal noise-predictor is
-analytic, so we can sample from noise and watch the distribution come back.
+Here, $x_0$ is a data sample; $x_t$ is its corrupted state at step
+$t\in\{1,\ldots,T\}$; $q$ is the fixed forward process; $\beta_t\in(0,1)$ is
+the variance added at step $t$; $\alpha_t$ is the retained fraction for that
+step; $\bar\alpha_t$ is the cumulative retained fraction; $\mathbf I$ is the
+identity covariance; and $\mathcal N(x;m,C)$ is a Gaussian density over $x$
+with mean $m$ and covariance $C$. The schedule has hyperparameters, but no
+learned parameters.
+
+Gaussian composition makes the marginal at any step available without running
+the intervening chain:
+
+$$
+q(x_t\mid x_0)
+=\mathcal N\!\left(x_t;\sqrt{\bar\alpha_t}\,x_0,
+(1-\bar\alpha_t)\mathbf I\right),
+\qquad
+x_t=\sqrt{\bar\alpha_t}\,x_0
++\sqrt{1-\bar\alpha_t}\,\epsilon,
+\quad \epsilon\sim\mathcal N(0,\mathbf I).
+$$
+
+Here, $\epsilon$ is fresh standard Gaussian noise. If $\bar\alpha_T$ is close
+to zero, the terminal marginal $q(x_T)$ is approximately standard normal. It is
+not exactly standard normal for an arbitrary finite schedule.
+
+Generation needs a learned reverse transition,
+
+$$
+p_\theta(x_{t-1}\mid x_t)
+=\mathcal N\!\left(x_{t-1};\mu_\theta(x_t,t),
+\Sigma_\theta(x_t,t)\right),
+$$
+
+where $p_\theta$ is the model with parameters $\theta$,
+$\mu_\theta$ is its reverse mean, and $\Sigma_\theta$ is a fixed or learned
+reverse covariance. In the common noise-prediction parameterization, the mean is
+
+$$
+\mu_\theta(x_t,t)
+=\frac{1}{\sqrt{\alpha_t}}
+\left(x_t-\frac{\beta_t}{\sqrt{1-\bar\alpha_t}}
+\epsilon_\theta(x_t,t)\right).
+$$
+
+Here, $\epsilon_\theta(x_t,t)$ estimates the noise component in $x_t$. Ho et
+al. derive a variational objective and then use a practical reweighted version
+that drops its timestep-dependent coefficients:
+
+$$
+\mathcal L_{\mathrm{simple}}
+=\mathbb E_{t,x_0,\epsilon}
+\left[
+\left\|\epsilon-
+\epsilon_\theta\!\left(
+\sqrt{\bar\alpha_t}x_0+\sqrt{1-\bar\alpha_t}\epsilon,t
+\right)\right\|_2^2
+\right].
+$$
+
+In this expectation, $x_0$ comes from the data, $t$ is sampled from the
+training steps, and $\epsilon$ is standard Gaussian noise. The loss teaches the
+mean needed for the reverse transition; the reverse variance remains a separate
+design choice.
+
+The runnable example removes the neural approximation so the reversal itself
+can be checked. For one-dimensional Gaussian data, every forward marginal and
+reverse conditional is analytic. Starting from the exact terminal marginal and
+applying those reverse conditionals recovers the original distribution.
 
 :::: {.runnable}
 ```python
 import numpy as np
+
 rng = np.random.default_rng(0)
+data_mean, data_variance = 3.0, 1.0
+steps = 1000
+beta = np.linspace(1e-4, 0.02, steps)
+alpha = 1.0 - beta
+alpha_bar = np.cumprod(alpha)
 
-mu, v0 = 3.0, 1.0                          # data ~ N(mu, v0)
-T = 1000
-beta = np.linspace(1e-4, 0.02, T)         # noise schedule
-alpha = 1 - beta
-abar = np.cumprod(alpha)                   # surviving signal fraction
 
-def eps_star(x, t):                        # optimal epsilon-prediction (analytic)
-    var = abar[t] * v0 + (1 - abar[t])
-    return np.sqrt(1 - abar[t]) * (x - np.sqrt(abar[t]) * mu) / var
+def marginal(alpha_bar_t):
+    """Mean and variance of q(x_t) for Gaussian data."""
+    mean = np.sqrt(alpha_bar_t) * data_mean
+    variance = alpha_bar_t * data_variance + (1.0 - alpha_bar_t)
+    return mean, variance
 
-x = rng.normal(size=5000)                  # start from pure noise
-for t in range(T - 1, -1, -1):
-    mean = (x - beta[t] / np.sqrt(1 - abar[t]) * eps_star(x, t)) / np.sqrt(alpha[t])
-    x = mean + (np.sqrt(beta[t]) * rng.normal(size=x.shape) if t > 0 else 0.0)
 
-print(f"data N(mu={mu}, var={v0});  samples: mean={x.mean():.2f}, var={x.var():.2f}")
+# Start from q(x_T), which is nearly N(0, 1) for this schedule.
+terminal_mean, terminal_variance = marginal(alpha_bar[-1])
+x = rng.normal(terminal_mean, np.sqrt(terminal_variance), size=10_000)
+
+for t in range(steps - 1, -1, -1):
+    previous_alpha_bar = alpha_bar[t - 1] if t > 0 else 1.0
+    previous_mean, previous_variance = marginal(previous_alpha_bar)
+    current_mean, current_variance = marginal(alpha_bar[t])
+
+    # Exact Gaussian conditional q(x_{t-1} | x_t).
+    gain = np.sqrt(alpha[t]) * previous_variance / current_variance
+    reverse_mean = previous_mean + gain * (x - current_mean)
+    reverse_variance = previous_variance - gain**2 * current_variance
+    x = reverse_mean + np.sqrt(max(reverse_variance, 0.0)) * rng.normal(size=x.shape)
+
+print(f"terminal signal fraction: {alpha_bar[-1]:.6f}")
+print(f"target mean={data_mean:.2f}, variance={data_variance:.2f}")
+print(f"recovered mean={x.mean():.2f}, variance={x.var():.2f}")
 ```
 ::::
 
-## One framework: scores and SDEs
+## Keep schedules and prediction targets distinct
 
-This section reaches the same model from the mathematics of random processes, where
-the denoiser becomes an arrow at every noise level pointing toward where data is
-dense and generation becomes a differential equation that carries a sample from
-noise back to data; it is the most mathematical stretch of the chapter and can be
-skimmed. A second lineage arrived at the same place from a different direction.
-Score-based models learn the @gls-score, the gradient of the log-density
-$\nabla_x \log p(x)$, at many noise levels and sample by Langevin dynamics,
-repeatedly nudging a sample along the score and adding a little random noise each
-step until it settles into the distribution [@song2019ncsn]. The link to the
-denoiser above is exact and worth seeing: by Tweedie's formula the optimal noise
-predictor *is* the score up to a scale, $\nabla_{x_t} \log q_t(x_t) =
--\boldsymbol{\epsilon}_\theta(x_t, t) / \sqrt{1-\bar{\alpha}_t}$, and the theorem
-that licenses training a score model by denoising rather than by the intractable
-marginal is older than diffusion itself [@vincent2011dsm]. Song et al. then showed
-the two lineages are one object: the forward process is a @gls-sde
-carrying data to noise, generation is the reverse-time SDE, whose drift
-contains exactly that score [@anderson1982reverse], and both DDPM (a
-variance-preserving SDE) and score matching (a variance-exploding one) are
-discretizations of it [@song2020sde]. The same work derives an equivalent
-deterministic probability-flow @gls-ode,
+The noise schedule decides which signal-to-noise ratios receive training and
+sampling effort. Nichol and Dhariwal found the original linear schedule
+suboptimal for their $32\times32$ and $64\times64$ experiments because its late
+steps were already almost pure noise. Their cosine schedule, where cumulative
+signal follows a normalized squared cosine, is
+[@nichol2021improvedddpm]
 
 $$
-\frac{dx}{dt} = f(x, t) - \tfrac{1}{2}\,g(t)^2\,\nabla_x \log p_t(x),
+f(t)=\cos^2\!\left(
+\frac{t/T+s}{1+s}\frac{\pi}{2}
+\right),
+\qquad
+\bar\alpha_t=\frac{f(t)}{f(0)},
+\qquad s=0.008.
 $$
 
-with the same marginals as the SDE. That ODE is the bridge to everything fast:
-the deterministic samplers below, and flow matching at the end of the chapter.
+Here, $T$ is the number of noising steps, $t$ is the step index, $s$ is the
+paper's small offset, and $f(0)$ normalizes the cumulative signal fraction to
+one. This is one documented schedule, not a universal best setting.
+
+The network target is another choice. Let
+
+$$
+a_t=\sqrt{\bar\alpha_t},
+\qquad
+\sigma_t=\sqrt{1-\bar\alpha_t},
+\qquad
+x_t=a_t x_0+\sigma_t\epsilon.
+$$
+
+Here, $a_t$ is the signal coefficient and $\sigma_t$ is the noise coefficient.
+The model can predict $\epsilon$, $x_0$, or the variance-preserving target
+
+$$
+v_t=a_t\epsilon-\sigma_t x_0,
+\qquad
+x_0=a_t x_t-\sigma_t v_t,
+\qquad
+\epsilon=\sigma_t x_t+a_t v_t.
+$$
+
+Here, $v_t$ contains the same denoising information for this specified path.
+Recovering $x_0$ from an $\epsilon$ prediction divides by $a_t$ and becomes
+ill-conditioned at high noise. Recovering $\epsilon$ from an $x_0$ prediction
+divides by $\sigma_t$ and becomes ill-conditioned at low noise. The conversions
+from $v_t$ keep bounded coefficients, which made it useful in progressive
+distillation [@salimans2022progressive]. This $v_t$ is tied to the angular
+parameterization of a variance-preserving diffusion path. It is not, without a
+time conversion, the flow-matching velocity introduced later.
+
+## Connect denoising to scores, SDEs, and ODEs
+
+A score is a spatial derivative of log density. At noise level $t$, define
+
+$$
+s_t(x)=\nabla_x\log p_t(x).
+$$
+
+Here, $p_t$ is the marginal density of the noisy data, $x$ is a point in its
+state space, $\log$ is the natural logarithm, and $\nabla_x$ differentiates
+with respect to $x$. Noise prediction and score prediction coincide only at the
+population optimum:
+
+$$
+\epsilon^*(x_t,t)=\mathbb E[\epsilon\mid x_t],
+\qquad
+s_t(x_t)=-\frac{\epsilon^*(x_t,t)}{\sigma_t}.
+$$
+
+Here, $\epsilon^*$ is the conditional mean of the injected noise and
+$\sigma_t=\sqrt{1-\bar\alpha_t}$. A trained network approximates this relation;
+an arbitrary $\epsilon_\theta$ is not the exact score. This denoising-score
+connection predates DDPM [@vincent2011dsm] and underlies noise-conditional score
+networks sampled with annealed Langevin dynamics [@song2019ncsn].
+
+Continuous time puts the common constructions in one stochastic framework. A
+forward @gls-sde can be written as
+
+$$
+dx=f(x,t)\,dt+g(t)\,dW_t.
+$$
+
+Here, $f(x,t)$ is the drift, $g(t)$ is a scalar diffusion coefficient, $dt$ is
+an infinitesimal time increment, and $W_t$ is standard Brownian motion. Under
+the conditions used by Song et al., the reverse-time process is
+[@anderson1982reverse; @song2020sde]
+
+$$
+dx=\left[f(x,t)-g(t)^2\nabla_x\log p_t(x)\right]dt
++g(t)\,d\bar W_t,
+\qquad dt<0.
+$$
+
+Here, $\bar W_t$ is Brownian motion when time is integrated from noise back to
+data. The DDPM perturbation converges to a variance-preserving SDE, while the
+perturbation used by score matching with Langevin dynamics converges to a
+variance-exploding SDE. Generic score matching is a training principle, not
+itself one of those discretizations.
+
+The same exact score defines a deterministic probability-flow @gls-ode:
+
+$$
+\frac{dx}{dt}=f(x,t)-\frac{1}{2}g(t)^2\nabla_x\log p_t(x).
+$$
+
+Here, the symbols retain their SDE meanings. The ODE and SDE share the same
+one-time marginal densities under the exact score and regularity assumptions;
+they do not share individual stochastic paths or transition laws. A learned
+score makes the equivalence approximate.
 
 ::: {.callout-note}
-## Where this came from
-This whole construction was derived from non-equilibrium thermodynamics rather
-than borrowed as a loose metaphor, and the modern recipe then shed almost all of
-the physics it started from. @sec-borrowed-ideas follows that borrowing and the
-point where the engineering left the source behind.
+## Where the physics stops
+
+The 2015 construction was inspired by nonequilibrium thermodynamics. The modern
+recipe also depends on denoising score matching, reverse-time stochastic
+processes, numerical ODE solvers, and learned neural parameterizations. The
+physics is part of the lineage, not a complete derivation of every later method.
+@sec-borrowed-ideas examines that boundary.
 :::
 
-## The recipe, put in order
+## Separate the model from the sampler
 
-For a few years the design space was a thicket of schedules, parameterizations,
-and scalings, each paper choosing differently. EDM cut through it by writing every
-diffusion model as one denoiser $D_\theta(x; \sigma)$ at a continuous noise level
-$\sigma$ and separating three choices that had been tangled together
-[@karras2022edm]. Preconditioning wraps the raw network so its input and output
-stay unit-variance at every noise level, $D_\theta(x;\sigma) = c_{\text{skip}}(
-\sigma)\,x + c_{\text{out}}(\sigma)\,F_\theta(c_{\text{in}}(\sigma)\,x;\,
-c_{\text{noise}}(\sigma))$, which makes the loss weight uniform across $\sigma$ and
-removes a class of tuning. The noise levels are sampled from a log-normal during
-training and laid on a schedule $\sigma_i = (\sigma_{\max}^{1/\rho} +
-\frac{i}{N-1}(\sigma_{\min}^{1/\rho} - \sigma_{\max}^{1/\rho}))^{\rho}$ with
-$\rho = 7$ at sampling, and the probability-flow ODE is integrated with a
-second-order Heun step rather than Euler, reaching strong quality in about
-thirty-five evaluations. The lasting lesson is the disentangling: schedule,
-preconditioning, and sampler are orthogonal axes, and naming them separately is
-what let the rest of the field stop re-deriving the same choices.
+A deployed diffusion system is not identified by “uses diffusion.” At least six
+choices must be recorded separately:
 
-## Making it cheap and steerable
+| Layer | Examples | What it changes |
+|---|---|---|
+| Representation | pixels, waveform, autoencoder latent tensor | state size and information bottleneck |
+| Backbone | U-Net, transformer | cost and receptive field per evaluation |
+| Training target | $\epsilon$, $x_0$, diffusion $v$, score | numerical conditioning and loss weighting |
+| Conditioning | class label, text cross-attention, guidance | which conditional distribution is sampled |
+| Path and schedule | $\beta_t$, $\bar\alpha_t$, continuous $\sigma$ | where training and sampling effort is spent |
+| Sampler | ancestral, DDIM, ODE/SDE solver, distilled model | network evaluations, stochasticity, and error |
 
-Three more moves turned a slow research method into a deployed one. Fewer steps
-came first: DDIM is a non-Markovian sampler that reuses the trained model but, at
-its deterministic setting, integrates the probability-flow ODE directly, reaching
-comparable quality 10 to 50 times faster [@song2020ddim], and dedicated high-order
-solvers go further by analytically handling the linear part of that ODE in
-log-signal-to-noise coordinates, cutting good samples to roughly ten to twenty
-network evaluations [@lu2022dpmsolver]. Cost fell next. An *autoencoder* is a network that compresses an image to a small
-vector and reconstructs it; latent diffusion runs the whole process in that
-compressed *latent space* of a pretrained autoencoder rather than on pixels,
-cutting compute by a large factor, and injects text or layout through
-cross-attention, the recipe behind Stable Diffusion [@rombach2022ldm]. Control,
-the third move, took two forms. Classifier guidance steers a sample
-with the gradient of a separately trained noised classifier [@dhariwal2021], and
-@gls-cfg removes that classifier by training one model both with
-and without the conditioning signal and extrapolating between them at sampling,
+Latent diffusion reduces the denoiser's state from pixels to a lower-resolution
+spatial tensor produced by a pretrained autoencoder; the encoder and final
+decoder sit outside the denoising chain. Cross-attention can inject text, boxes,
+or other conditions [@rombach2022ldm]. A latent bottleneck saves compute but can
+also discard detail, so the autoencoder reconstruction error belongs in the
+evaluation contract.
+
+The backbone is independent of that representation choice. A U-Net uses
+multi-resolution convolutional blocks. @gls-dit replaces it with a transformer
+over latent patches. In the paper's class-conditional ImageNet experiments,
+increasing forward-pass compute through depth, width, or more patches correlated
+with lower FID [@peebles2022dit]. That is controlled evidence within one model
+family, not a universal scaling law.
+
+Conditioning also changes inference cost. @gls-cfg trains a single model with
+the condition sometimes replaced by a null input, then combines two predictions
+at sampling [@ho2022cfg]:
 
 $$
-\tilde{\boldsymbol{\epsilon}}_\theta(x_t, c) =
-(1 + w)\,\boldsymbol{\epsilon}_\theta(x_t, c) - w\,\boldsymbol{\epsilon}_\theta(x_t),
+\hat\epsilon_{\mathrm{cfg}}(x_t,c)
+=\epsilon_\theta(x_t,\varnothing)
++w\left[
+\epsilon_\theta(x_t,c)-\epsilon_\theta(x_t,\varnothing)
+\right].
 $$
 
-trading diversity for fidelity with a single weight $w$ [@ho2022cfg]. Progressive
-distillation then halves the step count repeatedly by training a student so one of
-its steps matches two of a deterministic teacher's, which is exactly where
-$v$-prediction earns its keep [@salimans2022progressive]. The backbone caught up
-with the rest of the book last: @gls-dit replaces the U-Net, the convolutional network shape diffusion
-models originally used, with a transformer over latent patches and finds sample
-quality improving as compute rises, putting
-diffusion on the same scaling curve as everything else [@peebles2022dit].
+Here, $c$ is the condition; $\varnothing$ is the null condition used during
+dropout training; $\epsilon_\theta(x_t,c)$ and
+$\epsilon_\theta(x_t,\varnothing)$ are the conditional and unconditional noise
+predictions; and $w$ is guidance strength. With this convention, $w=1$ returns
+the ordinary conditional prediction and larger values extrapolate away from the
+unconditional result. The method removes a separate classifier, but normally
+requires both network predictions per sampling step, whether run separately or
+batched together.
 
-## Flow matching: learn a velocity, not a denoiser
+Sampler step count and network-function evaluations (NFE) are not synonyms. A
+first-order step may use one denoiser call; a second-order method may use two.
+DDIM defines non-Markovian forward processes with the same DDPM training
+objective, and its deterministic setting produced 10 to 50 times lower
+wall-clock sampling time in the paper's experiments [@song2020ddim]. In the
+continuous limit and with an optimal predictor, its ODE matches a
+probability-flow ODE after reparameterization. A coarse finite DDIM update is
+not simply Euler's method on the usual time coordinate. DPM-Solver instead
+constructs high-order updates in a log signal-to-noise coordinate and reports
+strong samples in roughly 10 to 20 NFE for its tested models
+[@lu2022dpmsolver]. Neither number transfers automatically to another model,
+resolution, or guidance setting.
 
-Flow matching reframes the problem in the cleanest terms the field has found.
-Think of generation as an ODE $dx/dt = v_t(x)$ that transports a noise
-distribution into the data distribution, and recall that a velocity field
-generates a given path of densities exactly when it satisfies the continuity
-equation $\partial_t p_t + \nabla \cdot (p_t v_t) = 0$, mass transported, never
-created. The catch is that the marginal velocity is an intractable average over
-all data points. The resolution is the conditional flow matching objective:
-regress the network onto the *conditional* field that transports noise to one
-fixed data point $x_1$,
+EDM made this separation explicit for a broad class of Gaussian diffusion
+models [@karras2022edm]. It combines input, output, skip, and noise
+preconditioning with a chosen training distribution over continuous noise
+levels. Its power-law sampling grid is
 
 $$
-\mathcal{L}_{\text{CFM}} = \mathbb{E}_{t,\,x_1,\,x_t}
-\left\lVert v_\theta(x_t, t) - u_t(x_t \mid x_1) \right\rVert^2,
+\sigma_i=\left(
+\sigma_{\max}^{1/\rho}
++\frac{i}{N-1}
+\left[\sigma_{\min}^{1/\rho}-\sigma_{\max}^{1/\rho}\right]
+\right)^\rho,
+\qquad i=0,\ldots,N-1.
 $$
 
-Here $t$ chooses a point along the path, $x_1$ is a data point, $x_t$ is the
-intermediate sample on the path to it, $v_\theta$ is the network's velocity, and
-$u_t(\cdot \mid x_1)$ is the analytic velocity of that conditional path. The
-loss asks for the same thing a denoising loss asks for in diffusion, but in the
-language of motion: at every noisy point, point in the direction that would carry
-this sample toward data. Lipman et al. prove it has the same gradient as
-regressing the intractable marginal field, because the marginal target is itself
-the conditional expectation
-of the per-sample targets [@lipman2022fm]. Training becomes simulation-free:
-sample a data point, sample a point on the path to it, regress onto a closed-form
-velocity, never integrate the ODE. Diffusion paths fall out as one choice of
-conditional path; straight, constant-speed optimal-transport paths fall out as a
-more efficient other.
+Here, $\sigma_i$ is noise level $i$; $\sigma_{\max}$ and $\sigma_{\min}$ are
+the finite endpoints; $N$ is the number of nonzero levels; and $\rho$ controls
+where the grid is dense. The paper used $\rho=7$ in reported settings and then
+added a final $\sigma_N=0$ step. These are paper-specific settings. EDM's
+reported 35-NFE result also belongs to its stated benchmark configuration, not
+to the definition of EDM.
 
-That straight-path choice is the lever. @gls-rectified-flow learns the velocity of the
-linear interpolant $x_t = (1-t)\,x_0 + t\,x_1$, whose target is the constant
-$x_1 - x_0$, and adds a "reflow" step that re-couples noise to the data the model
-itself generates and retrains, straightening the trajectories further; a straight
-trajectory is integrated exactly by a single Euler step, which is the path to
-one-step sampling [@liu2022rectified]. Stochastic interpolants are the umbrella
-over all of this, showing that one fixed interpolation between noise and data
-yields both a deterministic transport and a noisy diffusion as a free choice, so
-flow matching, rectified flow, and diffusion are reframings of a single
-construction [@albergo2022interpolants; @albergo2023interpolants].
+## Flow matching learns transport directly
 
-The last step is to collapse the path entirely. Consistency models train a network
-with a self-consistency property, that every point on a probability-flow ODE
-trajectory maps to the same origin, so one forward pass jumps from noise to data;
-it can be distilled from a diffusion teacher or trained standalone
-[@song2023consistency]. The same one-step target is reached by other routes:
-distilling in latent space [@luo2023lcm], matching the output *distribution* of a
-multi-step teacher rather than its per-trajectory points [@yin2024dmd], or adding
-an adversarial loss to reach few-step photorealism [@sauer2023add]. A successor
-line drops the diffusion teacher altogether: shortcut models, inductive moment
-matching, and MeanFlow train few- and one-step generators from scratch, the last
-by exploiting an identity between the average velocity over an interval and the
-instantaneous velocity that flow matching learns [@geng2025meanflow]. The arc across
-this section is a single quantity coming down, the number of sequential network
-evaluations a sample costs, from a thousand for DDPM toward one.
+Flow matching starts from a continuous normalizing flow rather than a reverse
+Markov chain. Let an ODE move samples as
+
+$$
+\frac{dx}{dt}=v_t(x),
+$$
+
+where $t\in[0,1]$ is path time, $x$ is the current state, and $v_t(x)$ is a
+time-dependent velocity field. A sufficiently regular density path $p_t(x)$ is
+transported by this field when it satisfies the continuity equation
+
+$$
+\partial_t p_t(x)+\nabla_x\!\cdot\!\left(p_t(x)v_t(x)\right)=0.
+$$
+
+Here, $\partial_t$ is the time derivative and $\nabla_x\cdot$ is divergence in
+state space. The equation conserves probability mass, but it does not select a
+unique velocity field by itself.
+
+Marginal flow matching would regress against the velocity of $p_t$, which is
+usually unavailable. Conditional flow matching (CFM) chooses tractable
+conditional paths instead [@lipman2022fm]:
+
+$$
+\mathcal L_{\mathrm{CFM}}(\theta)
+=\mathbb E_{t,z,x}
+\left[
+\left\|v_\theta(x,t)-u_t(x\mid z)\right\|_2^2
+\right],
+$$
+
+where $t\sim\mathcal U[0,1]$; $z$ identifies the sampled conditioning data for
+one path; $x\sim p_t(\cdot\mid z)$ is a point on that conditional path;
+$u_t(x\mid z)$ is its analytic conditional velocity; and $v_\theta$ is the
+learned marginal velocity. Under the paper's regularity and integrability
+conditions, the CFM and inaccessible marginal objectives have the same gradient
+with respect to $\theta$; their scalar losses need not be identical.
+
+A simple paired linear path makes the training target concrete:
+
+$$
+x_0\sim p_0,
+\qquad
+x_1\sim p_{\mathrm{data}},
+\qquad
+x_t=(1-t)x_0+t x_1,
+\qquad
+u_t=x_1-x_0.
+$$
+
+Here, $p_0$ is the reference distribution, usually Gaussian;
+$p_{\mathrm{data}}$ is the data distribution; and $(x_0,x_1)$ comes from a
+declared coupling, often independent sampling unless another coupling is
+constructed. The target $x_1-x_0$ is constant for one pair. The population
+regressor is instead
+
+$$
+v^*(x,t)=\mathbb E[x_1-x_0\mid x_t=x].
+$$
+
+Here, $v^*$ averages all pairwise targets that can pass through state $x$ at
+time $t$. Its marginal trajectories can therefore curve even when every
+conditional interpolation is straight. Flow-matching training is
+simulation-free because these training points and targets require no ODE solve;
+sampling still integrates the learned ODE.
+
+The “optimal transport” phrase also needs scope. Lipman et al. study conditional
+Gaussian optimal-transport paths. That does not mean independent noise-data
+pairs form the globally optimal coupling between the two marginal
+distributions. Coupling choice, path choice, and solver choice are separate.
+
+## Straighten or collapse the sampling path
+
+@gls-rectified-flow uses the linear paired target above and can apply reflow:
+integrate the learned model, pair each reference sample with its generated
+endpoint, and train again on those new pairs [@liu2022rectified]. Reflow tends to
+straighten the model-induced coupling and the paper proves non-increasing convex
+transport costs. It does not guarantee the globally optimal data coupling. One
+Euler step is exact only for an exactly constant learned trajectory; empirical
+straightness makes coarse integration useful, not automatically exact.
+
+Stochastic interpolants expose a broader shared construction
+[@albergo2022interpolants; @albergo2023interpolants]:
+
+$$
+X_t=I(t,X_0,X_1)+\gamma(t)Z.
+$$
+
+Here, $I$ is a chosen interpolation satisfying the endpoint conditions;
+$X_0$ and $X_1$ are endpoint random variables; $Z$ is independent standard
+Gaussian noise; and $\gamma(t)$ controls extra stochasticity and vanishes at the
+endpoints. Under suitable regularity, one interpolant supports a deterministic
+ODE and families of SDEs. The SDE construction additionally needs a score and a
+chosen diffusion coefficient, so “unified” does not mean that every algorithm
+is interchangeable.
+
+There are three distinct routes to fewer evaluations:
+
+| Route | What changes | Representative methods |
+|---|---|---|
+| Better integration | keep the trained model; reduce numerical error per NFE | DDIM, DPM-Solver, EDM Heun sampler |
+| Teacher distillation | train a new student against a multi-step model | progressive distillation, LCM, DMD, ADD |
+| Direct few-step objective | train a model whose consistency or interval target supports large jumps | consistency training, MeanFlow |
+
+Progressive distillation repeatedly trains one student step to reproduce two
+deterministic teacher steps [@salimans2022progressive]. Latent Consistency Models
+apply consistency distillation to a classifier-free-guided latent diffusion
+probability-flow ODE and target two to four steps [@luo2023lcm]. Distribution
+Matching Distillation uses approximate distribution matching plus a regression
+term [@yin2024dmd], while Adversarial Diffusion Distillation combines teacher
+score distillation with an adversarial loss for one to four steps
+[@sauer2023add]. Their objectives and failure modes are not interchangeable.
+
+Consistency models learn a function that maps any point on one
+probability-flow ODE trajectory to the same data-side boundary, with an identity
+condition at that boundary. They support one-step generation by design and can
+also use several steps to trade compute for quality; training may distill a
+pretrained diffusion model or use standalone consistency training
+[@song2023consistency]. MeanFlow is a later teacher-free route that learns an
+interval-average velocity from a relation to the instantaneous flow field
+[@geng2025meanflow]. It is not the claim that average and instantaneous
+velocities are equal.
 
 ```{dot}
 //| label: fig-diffusion-lineage
-//| fig-cap: "Genealogy of the ideas in this chapter. A denoising line (DDPM) and a score line (NCSN) are unified by the SDE framework and its probability-flow ODE; that ODE is the bridge to fast samplers, to the EDM recipe, and to flow matching, whose straight-path and consistency descendants drive the sampling step count toward one. After Song et al. (2021) and Lipman et al. (2023)."
-digraph lineage {
-  rankdir=LR;
+//| fig-cap: "A relation map, not a strict publication genealogy. DDPM and noise-conditional scores meet in the SDE framework; its probability-flow ODE supports deterministic solvers and consistency methods. Flow matching can use diffusion or linear conditional paths, while rectified flow is a related linear-path formulation."
+digraph relations {
+  rankdir=TB;
+  ranksep=0.45;
+  nodesep=0.30;
   bgcolor="transparent";
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
   edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
 
-  ddpm [label="DDPM 2020\ndenoiser"];
-  ncsn [label="NCSN 2019\nscore"];
-  sde [label="Score SDE 2021\nunifies + PF-ODE"];
-  edm [label="EDM 2022\nthe recipe"];
-  ddim [label="DDIM / DPM-Solver\nfew-step ODE"];
-  fm [label="Flow matching 2023\nlearn a velocity"];
-  rf [label="Rectified flow 2023\nstraight paths"];
-  cm [label="Consistency 2023\none step", color="#3b82f6", penwidth=1.6];
+  ddpm [label="DDPM\ndenoising"];
+  ncsn [label="NCSN\nscore learning"];
+  sde [label="Score SDE\nreverse SDE + PF-ODE"];
+  solver [label="DDIM / DPM-Solver / EDM\ndeterministic sampling"];
+  cm [label="Consistency models\none or few steps", color="#3b82f6", penwidth=1.6];
+  fm [label="Conditional flow matching\nlearned velocity"];
+  linear [label="Linear conditional paths\npaired velocity targets"];
+  rf [label="Rectified flow\nreflow straightening"];
 
+  ddpm -> ncsn [style=invis, weight=10];
   ddpm -> sde;
   ncsn -> sde;
-  sde -> edm;
-  sde -> ddim;
-  sde -> fm;
-  fm -> rf -> cm;
-  ddim -> cm;
+  sde -> solver;
+  solver -> cm [style=invis, weight=10];
+  sde -> cm;
+  cm -> fm [style=invis, weight=10];
+  sde -> fm [style=dashed];
+  fm -> linear [style=dashed];
+  linear -> rf [style=dashed];
 }
 ```
 
-## The loop back to language
+## Evaluate the whole generation contract
 
-Diffusion is now returning to text. The discrete analogue replaces Gaussian noise
-with a categorical corruption: D3PM diffuses over a transition matrix, and its
-absorbing-state kernel, which sends each token to a `[MASK]` with growing
-probability, is the bridge that makes a masked language model a diffusion model
-[@austin2021d3pm]. SEDD carries the score idea across by learning ratios of the
-data distribution rather than a Gaussian score, reaching autoregressive quality at
-GPT-2 scale [@lou2023sedd]. LLaDA scales the masked-denoising objective to train a
-language model from scratch, predicting masked tokens by a reverse process rather
-than left to right, and reports it competitive with an autoregressive LLaMA3-8B at
-in-context learning [@nie2025llada]; commercial diffusion language models have
-since appeared, trading some quality for parallel decoding speed. @sec-nar-lm takes
-up this thread in full; here it is enough that the denoising principle has come
-back to the modality this book began with.
+Training loss alone cannot compare two deployed generators. A useful evaluation
+holds the prompt or class distribution, output resolution, sample count, and
+random-seed policy fixed, then reports:
+
+- **Distribution quality and coverage:** FID or another declared feature-space
+  statistic, together with a coverage or diversity measure. The feature encoder
+  and sample count are part of the result.
+- **Conditional correctness:** prompt alignment, class accuracy, or task-specific
+  constraints, plus human evaluation when the automatic proxy is incomplete.
+- **Representation loss:** reconstruction quality of the autoencoder separately
+  from denoising quality in latent space.
+- **Efficiency:** solver steps, NFE, wall-clock latency, throughput, peak memory,
+  batch size, hardware, precision, and whether conditional and unconditional
+  guidance passes were batched.
+- **Stability:** variation across seeds and guidance scales, plus failure rates
+  for malformed outputs, saturation, or mode loss.
+
+The checkpoint is only one part of the reproducibility record. Also preserve the
+autoencoder and its scaling constant, prediction parameterization, training noise
+distribution, loss weighting, conditioning dropout, sampler equations, time or
+noise grid, solver tolerances, guidance convention, output shape, and decoding
+post-processing.
+
+Common symptoms point to different layers:
+
+| Symptom | First comparison | Likely layer |
+|---|---|---|
+| samples improve with more NFE | coarse solver against a fine reference | sampler or path curvature |
+| details are missing even with many steps | latent reconstruction against input | autoencoder bottleneck |
+| prompts align only at high guidance and diversity collapses | guidance sweep at fixed seeds | conditioning or CFG |
+| training loss falls but samples remain poor | fixed evaluation suite and target conversion | objective weighting or parameterization |
+| one-step model is sharp but drops modes | precision and coverage against teacher | distillation or adversarial objective |
+| reported steps are low but latency is high | NFE and per-evaluation profile | backbone, guidance, or runtime |
+
+## Hand continuous states to discrete text
+
+Text changes the state space. D3PM replaces Gaussian noise with categorical
+transition matrices; one option sends tokens to an absorbing `[MASK]` state
+[@austin2021d3pm]. That connects diffusion to mask-based generation, but an
+ordinary fixed-mask-rate language model is not automatically a complete
+diffusion generator. SEDD learns ratios between discrete-state probabilities
+and reports competitive results against GPT-2-scale autoregressive models in
+its evaluated settings [@lou2023sedd]. LLaDA trains an 8B masked-diffusion model
+from scratch and reports broadly competitive results on selected zero- and
+few-shot tasks, with important differences in data and evaluation from external
+autoregressive models [@nie2025llada].
+
+Length control, likelihood bounds, cache reuse, and iterative unmasking now
+become central. @sec-nar-lm develops those discrete objectives and their serving
+tradeoffs rather than compressing a fast-moving language-model literature into
+this continuous-state chapter.
 
 ::: {.callout-important}
 ## What's contested
-Whether non-autoregressive diffusion language models can match autoregressive
-LLMs at scale is unsettled. LLaDA shows competitiveness at 8B, but against the
-authors' own controlled baselines rather than external frontier models, and the
-strongest "surpasses" result is narrow, a reversal task GPT-4o handles poorly
-[@nie2025llada]. The case for diffusion text rests on parallel decoding and
-bidirectional context; the case against is that autoregression still owns every
-frontier model and has the more mature scaling and serving story. By 2026 such
-systems had reached tens of billions of parameters, so scale itself is no longer
-the gap; treat diffusion for language as promising and unproven at frontier
-quality.
+
+“Diffusion” and “flow matching” are not cleanly opposed camps. A flow-matching
+objective can use diffusion probability paths, and diffusion sampling can be
+written as a reverse SDE or a probability-flow ODE. Straight conditional paths
+do not guarantee straight learned marginal trajectories, and one-step objectives
+do not guarantee parity with a multi-step teacher. Claims must name the path,
+target, sampler, NFE, and evaluation setting.
 :::
 
 ::: {.callout-tip}
-## Constraint arrow
-The sampler's step count is a serving-cost lever that reaches back into the
-training objective. A thousand-step DDPM is too slow to serve at scale, so the
-field trains specifically for few-step sampling, rectified flow's straight paths
-and consistency distillation, rather than treating sampling as an afterthought.
-The inference budget per image, paid on every generation, dictates which
-generative objective is worth training, the same constraint @sec-scaling-laws
-draws for tokens, here drawn for denoising steps.
+## Lower-layer constraint
+
+Serving cost is approximately the number of network evaluations multiplied by
+the cost of each evaluation, plus autoencoder and post-processing work. Guidance
+may add another prediction per step; larger latent grids increase attention or
+convolution work; higher-order solvers may call the network more than once per
+step. A “four-step” model is therefore not a latency claim until the backbone,
+NFE accounting, batch, hardware, precision, and output shape are fixed. The
+training objective and the serving system meet at that measurement contract.
 :::
 
 ## Further reading

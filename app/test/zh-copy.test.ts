@@ -552,7 +552,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/generative/01-diffusion-flow-matching.qmd",
-      ["almost all non-text media", "denoiser, score, or velocity", "thousand evaluations"],
+      ["fixed-shape generation", "probability-flow ODE", "network-function evaluations"],
     ],
     [
       "zh/generative/01-diffusion-flow-matching.qmd",
