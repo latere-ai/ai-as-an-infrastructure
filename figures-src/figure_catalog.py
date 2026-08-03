@@ -215,15 +215,15 @@ SPECS = {
     },
     "multimodal-models-1": {
         "type": "line",
-        "x": [1, 2, 4, 8, 16, 32],
+        "x": [224, 336, 448, 672],
         "series": [
-            {"label": "modular", "y": [0.34, 0.46, 0.57, 0.65, 0.70, 0.72], "color": DATA},
-            {"label": "unified", "y": [0.20, 0.33, 0.50, 0.68, 0.82, 0.90], "color": ACCENT},
+            {"label": "patch size 14", "y": [256, 576, 1024, 2304], "color": DATA},
+            {"label": "patch size 16", "y": [196, 441, 784, 1764], "color": ACCENT},
         ],
-        "xlabel": "paired multimodal data (relative)",
-        "ylabel": "cross-modal task quality",
-        "logx": True,
-        "ylim": (0.15, 0.95),
+        "xlabel": "image edge (pixels)",
+        "ylabel": "visual patch positions",
+        "xint": True,
+        "ylim": (0, 2400),
     },
     "beyond-text-1": {
         "type": "scatter",

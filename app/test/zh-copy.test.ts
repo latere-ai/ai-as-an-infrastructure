@@ -576,7 +576,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/generative/04-multimodal-models.qmd",
-      ["image token count", "classifier-free guidance", "continuous representation fight"],
+      ["Multimodality creates interfaces, not one architecture", "Visual token count is a serving decision", "Modularity and representation are separate decisions"],
     ],
     [
       "zh/generative/04-multimodal-models.qmd",
