@@ -1869,8 +1869,8 @@
     var zh = host.getAttribute('data-lang') === 'zh';
     var rel = 0.82;
     var labels = zh
-      ? { rel: '选择器可靠性', x: '候选数 N', y: '期望真实质量', ideal: '可靠检查器', proxy: '当前选择器', peak: '峰值' }
-      : { rel: 'selector reliability', x: 'candidates N', y: 'expected true quality', ideal: 'reliable checker', proxy: 'current selector', peak: 'peak' };
+      ? { rel: '选择器可靠性', x: '候选数 N', y: '期望真实质量', ideal: '理想核查器', proxy: '当前选择器', peak: '峰值' }
+      : { rel: 'selector reliability', x: 'candidates N', y: 'expected true quality', ideal: 'ideal oracle', proxy: 'current selector', peak: 'peak' };
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 270);
     function ideal(n) { return 0.42 + 0.50 * (1 - Math.exp(-n / 16)); }

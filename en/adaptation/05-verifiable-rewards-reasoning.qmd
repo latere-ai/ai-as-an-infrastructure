@@ -1,198 +1,350 @@
 # Verifiable Rewards and Reasoning Transfer {#sec-verifiable-rewards}
 
-The previous chapters treated reward as a learned proxy for preference. That is
-the right tool for open-ended behavior: helpfulness, taste, tone, refusal
-calibration, and many forms of judgment. But some domains contain a different
-kind of signal. A code solution passes the tests or it does not. A math answer
-matches the checker or fails it, and a verifier either accepts a proof or
-rejects it. In those domains, post-training can train against an outcome rather
-than a person's estimate of quality.
+A preference model can tell a policy which answer people tend to favor. It cannot tell
+the policy that a program actually passed its tests or that two algebraic expressions
+are equal. For those tasks, the training system can run a check and turn the result into
+a reward. That small change removes one learned judge from the loop, but it does not
+remove specification errors. The policy learns to satisfy the implemented check, which
+may be narrower than the task people intended.
 
-That distinction is the hinge between this part and Part IV. Here the question
-is what kind of reward source enters the post-training loop. @sec-training-to-reason
-then follows the algorithms that exploit that reward to train reasoning behavior.
+The decisive boundary is reward provenance. An executable checker runs an implemented
+contract; a learned verifier estimates a judgment. Selection and training are separate
+uses of either signal, just as outcome rewards and process rewards differ in timing. The
+optimization algorithms belong to @sec-training-to-reason. Here the central question comes
+first: what fact, judgment, or proxy produces the number that training will optimize?
 
-## A reward that is not a judge
+## The checker is an implemented specification
 
-A learned reward model estimates a preference:
-
-$$
-r_\phi(x,y) \approx \text{human or AI judgment of } y \text{ for } x.
-$$
-
-Here, by contrast, a verifiable reward is a predicate:
+Let $x$ be a task, $y$ a candidate response, and $q(x,y)\in\{0,1\}$ the correctness
+standard people intend. A checker $C$ is the program that the training system can
+actually run. In the simplest binary case,
 
 $$
-r_{\text{ver}}(x,y) =
-\mathbf{1}[\operatorname{check}(x,y)=\text{pass}].
+r_{\mathrm{ver}}(x,y)=C(x,y)\in\{0,1\}.
 $$
 
-Here $r_{\text{ver}}$ is one when the task checker passes and zero otherwise.
-The difference looks small in notation and large in practice. A learned reward
-can be wrong because it liked the style, missed the factual error, or never saw
-that region of the response distribution. A verifier can still be incomplete or
-mis-specified, but where it is sound it does not care whether the answer sounds
-confident. The model either satisfies the check or it does not.
+Here $r_{\mathrm{ver}}$ is the verifiable reward, and $C(x,y)=1$ means that the
+checker accepts $y$ for task $x$. RLVR systems can also use graded rule-based rewards,
+such as the fraction of tests passed or a separate format score. Binary acceptance is
+the cleanest case, not the definition of the whole method.
+
+A learned reward model has a different contract:
+
+$$
+r_\phi(x,y)\approx \mathbb{E}[J(x,y)\mid x,y].
+$$
+
+In this expression, $J(x,y)$ is a human or AI judgment, $\phi$ denotes the learned
+parameters, and the expectation represents the judgment the model predicts. The learned
+model can generalize beyond labeled examples, but it can also reward confident style,
+miss a factual error, or fail off distribution. An executable checker avoids those
+particular judge errors. It can still implement the wrong contract perfectly.
+
+The useful formal distinction is soundness and completeness. Relative to intended
+correctness $q$:
+
+$$
+C(x,y)=1\Rightarrow q(x,y)=1
+\qquad\text{and}\qquad
+q(x,y)=1\Rightarrow C(x,y)=1.
+$$
+
+Here the first implication is soundness: every accepted response is genuinely correct, so
+there are no false positives. The second is completeness: every genuinely correct
+response is accepted, so there are no false negatives. A formal proof kernel may provide
+a strong soundness argument relative to its axioms and trusted implementation. A unit
+test is executable, not a complete specification of behavior. A weak suite can be
+unsound relative to $q$ because incorrect programs pass; a brittle suite can also be
+incomplete because valid implementations fail. Exact string matching has the latter
+problem when equivalent answers use different forms.
+
+The checker is the specification the optimizer sees. If a generated program can read the
+hidden answers, modify the harness, exploit undefined behavior, or hard-code visible test
+cases, passing the check does not establish the intended property. Sandboxing protects the
+checker from the candidate. Hidden tests, fuzzing, metamorphic tests, and manual review
+increase coverage. None of them turns an incomplete specification into ground truth.
+
+| Check | What it can establish | Typical gap |
+|---|---|---|
+| Normalized answer match | The extracted answer has an accepted equivalent form | A right endpoint can follow a wrong argument |
+| Unit or property test | The program behaves correctly on tested inputs | Untested inputs, side effects, and harness exploits |
+| Formal proof kernel | Every submitted inference follows the formal rules | The formal statement may omit the real requirement |
+| Environment-state check | The requested state transition occurred | Unsafe or wasteful actions may also have occurred |
+| Learned verifier | A model predicts that the response is correct | Calibration, distribution shift, and proxy gaming |
+
+The last row explains a terminology trap. Papers often call a learned correctness model a
+*verifier*. Cobbe et al.'s 2021 GSM8K work, for example, trained a model to score sampled
+solutions and used that score for reranking [@cobbe2021verifiers]. That is not the same
+reward source as an answer-equivalence program, even when the scorer's training labels
+came from an executable answer check.
 
 ```{dot}
 //| label: fig-verifiable-rewards-map
-//| fig-cap: "Two reward sources in post-training. Learned rewards cover open-ended behavior but are proxy signals; verifiable rewards are narrower but give direct pass/fail supervision. Mixed systems often use both."
+//| fig-cap: "Reward provenance and reward use are separate choices. A learned scorer or an executable checker can rank samples, filter training data, or supply a policy update. Only the executable path is a verifiable reward in the strict sense."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  rankdir=TB;
+  nodesep=0.35; ranksep=0.5;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  prompt [label="Prompt x"];
-  sample [label="Sample responses y_1 ... y_n"];
-  learned [label="Learned reward\npreference proxy", fillcolor="#f2c2c2"];
-  verifier [label="Verifier\nunit test, answer check,\nproof checker", fillcolor="#bfe3c0"];
-  pref [label="Preference training\nRLHF, DPO, filtering"];
-  rlvr [label="RL with verifiable rewards\nRLVR / rejection sampling"];
-  eval [label="Held-out evaluation\nhuman and checker"];
+  pair [label="Task x + candidate y"];
+  source [shape=diamond, label="Reward source", fillcolor="#e8e1d2"];
+  learned [label="Learned scorer\njudgment or correctness proxy", fillcolor="#f2c2c2"];
+  checker [label="Executable checker\nimplemented task contract", fillcolor="#bfe3c0"];
+  use [shape=diamond, label="How is the signal used?", fillcolor="#e8e1d2"];
+  select [label="Select one response"];
+  filter [label="Filter data for SFT"];
+  update [label="Update an on-policy model"];
 
-  prompt -> sample;
-  sample -> learned;
-  sample -> verifier;
-  learned -> pref;
-  verifier -> rlvr;
-  pref -> eval;
-  rlvr -> eval;
+  pair -> source;
+  source -> learned [label="estimate"];
+  source -> checker [label="execute"];
+  learned -> use;
+  checker -> use;
+  use -> select;
+  use -> filter;
+  use -> update;
 }
 ```
 
-This is why verifiable domains have become the proving ground for reasoning
-post-training. The expensive part of reasoning data is not merely the trace. It
-is knowing whether the trace got to a correct endpoint. Where a checker exists,
-the model can generate many candidates, the system can keep only those that pass,
-and training can move probability mass toward behavior the model already
-occasionally produced.
+## Coverage comes before selection
+
+Selection is not training. Suppose one independent sample from a policy is correct with
+probability $p$, and the system draws $n$ samples under the same decoding distribution.
+The probability that at least one candidate is correct is
+
+$$
+P(\text{at least one correct})=1-(1-p)^n.
+$$
+
+Here $P$ denotes probability. This is oracle coverage for one prompt. It assumes
+independent draws with the same success probability. It also assumes that a perfect
+selector can identify a correct candidate whenever one is present. Such a selector can
+turn coverage into a correct returned answer; it cannot create coverage. If the
+policy assigns negligible probability to every successful path, increasing $n$ becomes
+prohibitively expensive before it becomes useful.
+
+A learned selector changes the conclusion. Its best-of-$n$ response is
+
+$$
+y^*=\underset{1\le i\le n}{\operatorname{argmax}}\;s(x,y_i),
+\qquad y_i\sim\pi(\cdot\mid x).
+$$
+
+Here $s(x,y_i)$ is the selector's score, $y_i$ is candidate $i$, and $\pi$ is the
+generating policy. More samples expose more correct candidates, but they also expose more
+unusual mistakes that a learned score may rank too highly. Cobbe et al. reported this
+directly: learned-verifier selection improved as the candidate count rose to 400, then
+degraded beyond that point [@cobbe2021verifiers]. Best-of-$n$ with an imperfect proxy is
+therefore not guaranteed to improve monotonically.
 
 ```{=html}
 <figure id="fig-verifiable-rewards-threshold">
 <div class="viz" data-viz="verifier-threshold"></div>
-<figcaption>More selection pressure helps when the selector is reliable and can hurt when the selector is a proxy. Increase the selector reliability and the best-of-n curve stays useful longer; lower it and over-optimization appears earlier. Idealized.</figcaption>
+<figcaption>A synthetic selector model. The ideal oracle curve keeps benefiting from more
+candidates. A proxy selector eventually finds false positives that score better than true
+solutions. The slider is qualitative, not a calibrated estimate of verifier accuracy.</figcaption>
 </figure>
 ```
 
-## From selection to training
-
-The first step is selection. Cobbe et al. showed that sampling many reasoning
-solutions and using a trained verifier to choose among them could substantially
-improve math word-problem performance [@cobbe2021verifiers]. The mechanism is
-simple: if a model has a nonzero chance of producing a correct solution, then
-best-of-$n$ (sample $n$ candidates and keep the best) can expose that latent
-capability, provided the selector can find it.
-@sec-eliciting-reasoning describes the inference-time version of that idea.
-
-The second step is to train on the selected behavior. Rejection sampling
-fine-tunes on candidates that pass a scorer or verifier, which @sec-synthetic-data
-treats as a data flywheel. Reinforcement learning with verifiable rewards,
-@gls-rlvr, goes further: sample on-policy completions (responses generated by
-the current model, not a fixed dataset), assign rewards from the checker, and
-update the policy. DeepSeekMath introduced GRPO, a lighter policy-gradient method
-for this setting that @sec-training-to-reason takes up in detail
-[@shao2024deepseekmath]. Tülu 3 coined the name RLVR and demonstrated it as one
-component of an open post-training recipe alongside SFT and DPO
-[@lambert2024tulu], and DeepSeek-R1 then made the recipe visible at frontier
-scale: a base or cold-started model generates reasoning traces, receives
-rewards from answer checkers, and acquires longer deliberative behavior
-through RL [@guo2025deepseek].
-
-The object being optimized can be sparse. A final answer checker gives a single
-bit at the end of a long trace. If the model never stumbles into a correct
-answer, no gradient can teach it where to go. If it sometimes gets there, the
-reward can amplify those paths. This is why cold-start data, curriculum, and
-prompt distributions matter. They place the policy close enough to successful
-trajectories that the verifier can begin selecting them.
-
-## Outcome rewards and process rewards
-
-Outcome rewards score only the final answer. Process rewards score steps. For a
-trace $z_1, \ldots, z_T$ ending in answer $y$, an outcome reward is
+Pass@$k$ measures oracle coverage rather than the quality of one selected response. If
+$n$ samples contain $c$ successful completions, the usual finite-sample estimator for
+$k\le n$ is
 
 $$
-r_{\text{out}}(x,z_{1:T},y) = \mathbf{1}[\operatorname{check}(x,y)=\text{pass}].
+\widehat{\operatorname{pass@}k}
+=1-\frac{\binom{n-c}{k}}{\binom{n}{k}}.
 $$
 
-Here the outcome reward ignores the intermediate path except for its final
-answer. A process reward is denser:
+Here the estimator asks whether at least one of $k$ draws would pass. It does not say that a
+deployed selector could find that draw. Report the sampling temperature, nucleus threshold,
+maximum response length, number of generated samples, and checker whenever comparing
+pass@$k$ values. Otherwise the metric does not specify a reproducible experiment.
+
+## Three ways to reuse checked samples
+
+Once a system can score candidates, it can use that information without changing the
+model, turn accepted responses into a dataset, or update the current policy directly.
+Those are different algorithms with different failure modes.
+
+| Method | What changes | Where samples come from | Main limitation |
+|---|---|---|---|
+| Best-of-$n$ selection | Nothing in the model | The deployed policy at inference time | Pays generation and checking cost on every request |
+| Rejection-sampling fine-tuning | A model is behavior-cloned on accepted responses | A fixed batch from a generator checkpoint | Imitates accepted traces, including irrelevant or accidental features |
+| RLVR | The current policy is updated from checked rollouts | On-policy completions from the model being trained | Sparse rewards, unstable optimization, and checker exploitation |
+
+Rejection-sampling fine-tuning freezes accepted responses into an ordinary supervised
+dataset. After collection, they are off-policy relative to later checkpoints. RLVR means
+reinforcement learning with verifiable rewards: it repeatedly samples from the current
+policy, runs the checker, estimates an advantage, and updates that policy. Tülu 3 introduced
+the RLVR label for a rule-reward stage in its open SFT, DPO, and RL recipe
+[@lambert2024tulu]. The underlying pattern of filtering or optimizing automatically checked
+samples is older than the label.
+
+DeepSeekMath introduced Group Relative Policy Optimization (GRPO), which replaces PPO's
+learned critic with a baseline estimated from multiple completions for the same prompt
+[@shao2024deepseekmath]. Its reported GRPO experiment used learned reward models, so GRPO
+is an optimizer, not a synonym for RLVR. DeepSeek-R1-Zero later paired GRPO with rule-based
+accuracy and format rewards directly on a base model. The full DeepSeek-R1 pipeline was
+broader: it added cold-start SFT, rejection sampling, another SFT stage, and a later mixture
+of rule-based reasoning rewards with learned helpfulness and safety rewards
+[@guo2025deepseek].
+
+The skeleton below shows where the checker enters a group-relative RLVR loop. It omits
+optimizer details that @sec-training-to-reason develops.
+
+```text
+for each task x:
+    sample g responses y_1, ..., y_g from the current policy
+    compute r_i = C_train(x, y_i) for every response
+    turn r_1, ..., r_g into relative advantages A_1, ..., A_g
+    update the policy to increase high-advantage responses
+    constrain drift and record diagnostics
+```
+
+Here $g$ is the number of responses sampled for one task, $C_{\mathrm{train}}$ is the
+training checker, $r_i$ is response $i$'s reward, and $A_i$ is its advantage relative to
+the group baseline. With independent binary rewards and per-sample success probability
+$p$, the chance that a group contains both a pass and a failure is
 
 $$
-r_{\text{proc}}(x,z_{1:T},y) = \sum_{t=1}^{T} \gamma^{t-1} r_t(x,z_{\le t}).
+P(\text{mixed group})=1-p^g-(1-p)^g.
 $$
 
-Here $r_t$ scores a prefix step and $\gamma$ discounts later step scores.
-Lightman et al.'s "Let's Verify Step by Step" showed that process supervision
-can outperform outcome supervision on math reasoning, and released PRM800K,
-roughly 800,000 step-level labels [@lightman2023lets]. The appeal is obvious:
-the model gets a training signal before the final answer. The cost is just as
-important. Step labels are harder to define, harder to collect, and more likely
-to encode a style of reasoning rather than correctness itself. A learned PRM is
-also a reward model, so it can reintroduce the proxy failures that verifiable
-outcome rewards tried to avoid. @sec-verifiers-process-supervision covers that
-boundary in more detail.
+An informative group needs reward variation. If every response fails or every response
+passes, a purely group-relative correctness advantage is zero. Other terms, such as a KL
+penalty or a format reward, may still produce an update, but the correctness signal did not
+distinguish the samples. For $p=0.05$ and $g=8$, only about 34 percent of groups are mixed.
+Curricula, prompt filtering, larger groups, and cold-start data can move training toward a
+range where mixed outcomes occur more often. R1-Zero also shows that cold-start data is
+not a universal prerequisite.
 
-The practical rule is to separate the source of truth from the density of the
-signal. An exact final checker is sparse but grounded. A learned process model
-is dense but fallible. A strong system may use both: a verifier to anchor final
-correctness and a process model to guide search or credit assignment, with
-held-out checks to make sure the dense signal has not become the target.
+## Outcome and process are a different axis
 
-## What verifiers buy, and what they do not
+Outcome rewards describe feedback attached to a completed response. Process rewards
+describe feedback attached to intermediate steps. That timing says nothing by itself about
+whether the scorer is executable or learned. Outcome and process are one axis; executable
+and learned are another.
 
-Verifiers buy four things.
+| Feedback timing | Executable or rule-based | Learned |
+|---|---|---|
+| Outcome | Rule-based outcome checker: answer equivalence, unit tests, final environment state | Learned outcome reward model that predicts whether the whole response succeeds |
+| Process | Formal proof-step checker, compiler feedback, or validated intermediate state | A process reward model (PRM) trained to judge natural-language steps |
 
-- **Less reward hacking.** A unit test or exact answer checker is harder to
-  flatter than a learned judge. It can still be incomplete, but it is not
-  impressed by style.
-- **Cheaper data.** Correct traces can be discovered by sampling and filtering
-  rather than written by humans.
-- **On-policy improvement.** The model trains on its own successful samples,
-  not only on a teacher's distribution.
-- **A bridge to inference.** The same checker can train the policy, select
-  among samples at inference, and evaluate held-out performance.
+Here, consider a reasoning trace $\tau=(z_1,\ldots,z_T,y)$. A rule-based outcome
+checker may use only the final answer:
 
-They do not buy universality. Many important tasks are not checkable. A helpful
-legal explanation, a nuanced research synthesis, and a product-support answer
-do not have a single executable truth predicate. Even in code, tests can be weak
-or leaked; in math, a final answer can be right for the wrong reason.
-Recent work on CoT-Pass@K, a stricter score that also requires the reasoning
-path to be sound, makes this point directly: ordinary pass@k (the fraction of
-problems solved within $k$ attempts) can count a sample as successful when the
-final answer is right but the reasoning path is not [@wen2025cotpass].
+$$
+R_{\mathrm{out}}(x,\tau)=C(x,y).
+$$
 
-Between the checkable reward and the learned preference reward now sits a
-third option. Rubric-based rewards decompose an open-ended judgment into
-per-criterion checks, each graded by a model against a written rubric, and
-train on the aggregate score [@gunjal2025rubrics]. That extends RLVR-style
-training into domains with no executable checker: medicine, law, research
-synthesis. It is how frontier labs grade such work, OpenAI's HealthBench
-among the examples; the price is that the grader is a model again, so each
-criterion re-imports a measure of the proxy risk the checker had removed.
+Here $z_t$ is reasoning step $t$, $T$ is the number of steps, $y$ is the final answer,
+and $R_{\mathrm{out}}$ is the outcome reward. Every token in a successful trace may be
+reinforced together, including detours and mistakes. Useful prefixes inside a failed trace
+may receive no positive credit.
 
-The result is a mixed post-training stack. Use verifiable rewards where the
-world supplies a checker. Use learned rewards where it does not. Keep the
-boundary explicit, because the failure mode changes when the reward changes.
+A learned PRM instead estimates step quality:
+
+$$
+s_t=\widehat{P}_\phi(S_t=1\mid x,z_{\le t}),
+\qquad
+R_{\mathrm{proc}}=A(s_1,\ldots,s_T).
+$$
+
+Here $S_t=1$ means that step $t$ is judged correct, $s_t$ is the PRM's
+estimated probability, $\phi$ denotes its learned parameters, $z_{\le t}$ is the trace
+prefix, and $A$ is an aggregation rule.
+The aggregation might use a product, a minimum, a learned value, or another shaping rule.
+There is no universal discounted-sum definition of process supervision.
+
+Lightman et al. trained learned outcome and process reward models for MATH. In their
+best-of-$n$ experiments, the process-supervised model outperformed the outcome-supervised
+one, and PRM800K supplied roughly 800,000 human step labels [@lightman2023lets]. That is
+evidence for one difficult math setting, not a theorem that process supervision always
+wins. Natural-language step labels are costly and subjective. A PRM also restores the
+proxy risk that an executable endpoint check had removed.
+
+The two sources can be combined. An exact endpoint checker can anchor task success while a
+PRM guides search or assigns denser credit. Keep their metrics separate. A higher process
+score must not be allowed to compensate for a failed endpoint unless that trade-off is an
+explicit part of the task contract.
+
+## What improvement does the reward establish?
+
+Rule rewards made reasoning tasks unusually scalable because sampled trajectories could be
+checked without asking a person to label every one. DeepSeek-R1-Zero showed large gains on
+mathematics, coding, and related verifiable tasks while using rule-based final-prediction
+and format rewards rather than a neural outcome or process reward model
+[@guo2025deepseek]. That result does not settle three stronger questions:
+
+1. Did the policy learn a path that the base model could not produce, or did it concentrate
+   probability on rare paths already present?
+2. Did reasoning improve, or only the probability of reaching a checked endpoint?
+3. Does the gain transfer to prompts whose reward structure differs from training?
+
+Evidence cuts in both directions. Spurious-reward experiments found that random or even
+incorrect rewards recovered much of the MATH-500 gain for Qwen2.5-Math-7B, while the same
+signals often failed for Llama and OLMo models [@shao2025spurious]. That does not show that
+correct rewards are unnecessary. It shows that benchmark improvement alone may not identify
+which information the reward supplied, and that conclusions can depend on the base model.
+
+Pass@$k$ comparisons can also mislead. A correct final answer may be reached through an
+invalid chain. CoT-Pass@$k$ counts a completion only when both the endpoint and a separate
+chain-of-thought verifier accept it [@wen2025cotpass]. This is stricter than endpoint-only
+pass@$k$, but the path verifier is learned and fallible, so the new metric exchanges one
+blind spot for another source of measurement error.
+
+Treat reasoning transfer as an empirical claim with three levels: improvement on held-out
+instances from the training task family, transfer to a related task family, and improvement
+on a genuinely different domain. Evidence for the first does not establish the third.
+Measure all three when a system is meant to be general-purpose.
+
+## Build and audit the reward contract
+
+A training run should begin with checker design, not with optimizer selection.
+
+1. **Write the intended contract.** State what counts as correct, which equivalent outputs
+   are accepted, which side effects are forbidden, and how time or resource limits matter.
+2. **Harden the training checker.** Canonicalize answers, isolate execution, make grader
+   files immutable, and test adversarial candidates. Record false positives and false
+   negatives against a manually audited set.
+3. **Separate train and evaluation checkers.** Use hidden cases, different test generators,
+   or a stronger audit checker for evaluation. Reusing the exact training harness only
+   measures how well the policy learned that harness.
+4. **Test the initial reward distribution.** Track reward rate by prompt and reward variance
+   within each sampled group. All-fail groups provide no positive correctness example;
+   all-pass groups provide no relative correctness signal.
+5. **Monitor the policy, not only reward.** Log response length, entropy or diversity,
+   invalid-format rate, execution failures, and drift from the reference policy. Longer
+   traces and higher training reward are not proofs of better reasoning.
+6. **Evaluate outside the reward.** Report held-out pass rate under the audit checker,
+   manually inspect accepted traces, and measure out-of-domain quality, instruction
+   following, and safety. A narrow reasoning gain can coexist with broad regressions.
+
+Rubric rewards can extend on-policy training to tasks without an executable truth predicate.
+Rubrics as Rewards, for example, used prompt-specific criteria and an LLM judge on medical
+and science benchmarks [@gunjal2025rubrics]. This is structured learned feedback, not a
+verifiable reward in the strict sense. The rubric makes the proxy easier to inspect, but the
+judge can still misread or be gamed by the response.
 
 ::: {.callout-important}
 ## What's contested
-Verifiable rewards are sometimes described as if they solve alignment by
-removing the human from the loop. They solve a narrower problem: how to train on
-tasks with checkable outcomes. The moment the task asks for judgment, taste,
-policy, or harm reduction, the system returns to specifications, rubrics,
-human labels, AI judges, and the proxy failures of the earlier chapters.
+RLVR can increase the probability of checked success. Whether a given run expands the
+model's reasoning support, sharpens behavior already latent in the base model, or exploits
+an optimizer bias remains task-, model-, recipe-, and metric-dependent. Do not infer
+capability expansion from pass@1 alone.
 :::
 
 ::: {.callout-tip}
 ## Constraint Arrow
-A verifiable reward is only as strong as the environment that supplies the
-check. For math the check may be an answer equivalence test, for code a unit
-test suite, for agents a state transition in the environment. That ties this chapter
-downward to @sec-verifiers-process-supervision and @sec-evaluating-agents, and
-sideways to @sec-serving-problem: sampling many candidates is useful only if the
-checker is reliable and cheap enough to run at the required scale.
+Verifier quality is an infrastructure constraint. Math needs robust equivalence checks,
+code needs isolated execution and hidden tests, formal proofs need a trusted kernel, and
+agents need environment-state assertions. Sampling cost then links the reward contract to
+@sec-serving-problem, while path-level verification continues in
+@sec-verifiers-process-supervision and policy optimization continues in
+@sec-training-to-reason.
 :::
 
 ::: {#further-reading}
