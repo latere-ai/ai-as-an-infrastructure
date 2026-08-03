@@ -876,10 +876,10 @@
     render();
   };
 
-  // Three nested loops: training (paid once) wrapped by inference (per token)
-  // wrapped by the agentic loop (per tool call). Concentric rings; the inner
-  // inference ring spins fast, the outer agentic ring slow, and the training
-  // ring sweeps once then freezes into an artifact: the rates the chapter names.
+  // Three process cadences shown as concentric rings. The geometry compares
+  // their rates; it does not claim that training is nested inside runtime.
+  // Training sweeps before release, decoding advances per generated token, and
+  // an agent task advances through model and tool steps.
   R['nested-loops'] = function (host) {
     var cv = canvas(host, 340);
     var t0 = 0, sweep = 0, timer = null;
@@ -888,9 +888,9 @@
       var cx = W / 2, cy = H / 2 + 8 * cv.dpr, R = Math.min(W * 0.5, H * 0.43);
       ctx.clearRect(0, 0, W, H);
       var rings = [
-        { r: 0.96, speed: 0.5, accent: false, label: 'agentic · per tool call' },
-        { r: 0.62, speed: 2.3, accent: false, label: 'inference · per token' },
-        { r: 0.28, speed: 0, accent: true, label: 'training · paid once' }
+        { r: 0.96, speed: 0.5, accent: false, label: 'agent loop · per task step' },
+        { r: 0.62, speed: 2.3, accent: false, label: 'decoding · per token' },
+        { r: 0.28, speed: 0, accent: true, label: 'training · before release' }
       ];
       rings.forEach(function (ring) {
         var rr = R * ring.r;
@@ -911,8 +911,8 @@
     function loop() { timer = requestAnimationFrame(loop); t0 += 0.016; if (sweep < 1.2) sweep += 0.004; draw(); }
     // No hover-pause: this is an ambient illustration with no controls to
     // inspect, so freezing it on hover only reads as the animation breaking.
-    // (Training still sweeps once then rests: it is "paid once" by design,
-    // while inference and the agentic loop keep orbiting.)
+    // Training sweeps and rests to represent an upstream released artifact;
+    // decoding and agent execution continue at runtime.
     loop();
   };
 

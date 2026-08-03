@@ -77,6 +77,13 @@ test("the viz runtime registers nested-loops and bandwidth-tiers", () => {
   expect(rt).toMatch(/R\['bandwidth-tiers'\]\s*=\s*function/);
 });
 
+test("the three-cadence viz does not present training as a nested runtime cost", () => {
+  expect(rt).toContain("agent loop · per task step");
+  expect(rt).toContain("decoding · per token");
+  expect(rt).toContain("training · before release");
+  expect(rt).not.toContain("training · paid once");
+});
+
 test("ch01 whole-stack uses nested-loops in both languages", () => {
   expect(src("en/orientation/01-whole-stack.qmd")).toContain('data-viz="nested-loops"');
   expect(src("zh/orientation/01-whole-stack.qmd")).toContain('data-viz="nested-loops"');

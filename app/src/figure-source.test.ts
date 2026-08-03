@@ -75,7 +75,7 @@ test("figure 2.2 (field-map-stack) is an inline SVG with all 12 substantive part
   expect(readFileSync(join(repoRoot, "zh", "orientation", "02-field-map.qmd"), "utf8")).toContain("十二个部分");
 });
 
-test("figure 1.3 nested-loop return arcs do not carry overlap-prone labels", () => {
+test("figure 1.3 return arcs do not carry overlap-prone labels", () => {
   for (const lang of ["en", "zh"]) {
     const qmd = readFileSync(join(repoRoot, lang, "orientation", "01-whole-stack.qmd"), "utf8");
     const block = qmd.match(/```\{dot\}\n\/\/\| label: fig-whole-stack-loops[\s\S]*?\n```/)?.[0] ?? "";
@@ -84,6 +84,17 @@ test("figure 1.3 nested-loop return arcs do not carry overlap-prone labels", () 
     expect(block).not.toMatch(/tok -> prompt\s*\[label=/);
     expect(block).not.toMatch(/tool -> prompt\s*\[label=/);
   }
+});
+
+test("English figure 1.2 separates model development from request execution", () => {
+  const qmd = readFileSync(join(repoRoot, "en", "orientation", "01-whole-stack.qmd"), "utf8");
+  const block = qmd.match(/```\{dot\}\n\/\/\| label: fig-whole-stack-pipeline[\s\S]*?\n```/)?.[0] ?? "";
+  expect(block).toContain('label="MODEL LIFECYCLE"');
+  expect(block).toContain('label="REQUEST RUNTIME"');
+  expect(block).toContain('W -> S [style=dashed, label="loaded by"]');
+  expect(block).toContain('G -> E [label="permitted action"]');
+  expect(block).toContain('E -> G [label="observation"]');
+  expect(block).not.toContain('G -> S [label="observe, act, repeat"]');
 });
 
 test("English static SVG labels stay as selectable text nodes", () => {

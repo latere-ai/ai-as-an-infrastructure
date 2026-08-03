@@ -1,194 +1,261 @@
 # The Whole Stack in One Pass {#sec-whole-stack}
 
-This book is long, and its table of contents can make it look like a list of
-unrelated techniques. Start instead with one thread that can be followed again
-and again: an ordinary request moving from raw text on the open web to the
-deployed agent that finally answers it, with each step landing in a layer and a
-chapter. The point is orientation, not depth. Every mechanism here is a forward
-pointer, deliberately left for its own chapter.
+AI systems have two histories. The first happens before a user arrives: data is
+collected, a model is trained, its behavior is refined, and its weights are
+deployed. The second begins when a request reaches the deployed system: a model
+service generates tokens, an agent runtime invokes tools, and tests or other
+observations determine what happens next. These histories meet at deployment,
+but they are not the same process.
 
-![Schematic of the five stations in the stack and the three pressures each station exposes. Capability dominates training, efficiency dominates serving, and trust becomes more important as the loop acts through tools. Idealized relative weights, not measured data.](/figures/whole-stack-1.svg){#fig-whole-stack-1}
+This chapter follows both. The distinction matters because the expected runtime
+workload can change earlier design choices. A model that is cheap to train may
+be expensive to serve. An agent that can call tools needs stronger evaluation
+and security boundaries than a model that only produces text. Later chapters
+develop each mechanism in detail; here the aim is to establish the connections.
 
-Pick one task and refuse to let go of it: *a user asks an assistant to
-find the bug in a small repository, propose a fix, and explain it.* That one
-request touches every layer this book covers. Rather than survey the layers
-abstractly, this chapter follows the request as if it were a traveler, and
-treats each layer it must pass through as a station on the route. Following
-it once, in order, is the fastest way to see why the stack has the shape it
-does. Two running models ride alongside the request the whole way, chosen
-because they answer the same questions with opposite engineering: Llama 3, a
-dense Transformer (the standard model architecture, defined in
-@sec-transformer-architecture) [@grattafiori2024llama], and DeepSeek-V3, a @gls-moe model
-that activates only a few expert sub-networks for each token
-[@deepseek2024deepseekv3]. Both lineages have since converged on sparse
-designs: Llama 4 (April 2025) is Meta's first mixture-of-experts family
-[@meta2025llama4], and DeepSeek-V4 followed in April 2026 [@deepseek2026v4];
-that convergence is itself the verdict of the constraint arrow drawn later in
-this chapter.
+![Schematic of five layers in the stack and the three pressures each layer exposes. Capability dominates training, efficiency dominates serving, and trust becomes more important when a system acts through tools. Idealized relative weights, not measured data.](/figures/whole-stack-1.svg){#fig-whole-stack-1}
 
-## Station one: from web bytes to tokens
+The running task is simple: *a user asks an assistant to find a bug in a small
+repository, propose a fix, and explain it.* Building that capability requires
+training. Executing the request requires serving, tools, and feedback from the
+repository. Keeping those phases separate will make their dependencies easier
+to see.
 
-The task begins long before the user types it, in a corpus. The model that
-will eventually read the repository learned what code looks like from
-trillions of tokens scraped, filtered, and deduplicated from the web and
-from public repositories. Llama 3's largest model was pre-trained on 15.6
-trillion tokens [@grattafiori2024llama]; DeepSeek-V3 on 14.8 trillion
-[@deepseek2024deepseekv3]. Those numbers are not the interesting part. The
-interesting part is everything done to the raw bytes before they counted as
-a token at all: source selection, quality filtering, near-duplicate removal,
-and decontamination against the very benchmarks the model will later be
-graded on. That work belongs to @sec-data-curation. The step that turns a
-filtered byte stream into the integer tokens the model actually consumes, and
-the vocabulary that decides how a variable name or a Chinese sentence is
-split, belongs to @sec-tokenization.
+Two released systems provide concrete architecture examples. Llama 3 uses a
+dense Transformer, which applies nearly all of the model's layers and parameters
+to every token [@grattafiori2024llama]. DeepSeek-V3 is a @gls-moe model that
+activates only a few expert sub-networks for each token: 37 billion of its 671
+billion parameters are active for that token [@deepseek2024deepseekv3]. These
+models are not a
+controlled comparison of equal capability. They are useful because they expose
+two different cost structures. Later releases continued the move toward sparse
+capacity: Meta introduced its first mixture-of-experts Llama models in April
+2025 [@meta2025llama4], and DeepSeek released a preview of its sparse V4 family
+in April 2026 [@deepseek2026v4].
 
-## Station two: base-model formation turns compute into a base model
+## Building the capability: data and tokens
 
-With a token stream in hand, the first large phase is pre-training: compute is
-spent to minimize next-token loss and produce a base model. The model guesses
-the next chunk of text, and the error in that guess is the loss it is trained to
-reduce. How large a model
-to train on how many tokens, for a fixed budget, is the question of
-@sec-scaling-laws, first posed as a set of power laws relating loss to model
-size, data, and compute
-[@kaplan2020scaling] and later sharpened into a compute-optimal balance
-between parameters and tokens [@hoffmann2022chinchilla]. What the network
-itself is built from, attention and residual streams and normalization, goes
-back to the original Transformer [@vaswani2017attention] and is the subject
-of @sec-transformer-architecture.
+The user's request does not pass through a training corpus. The capability to
+handle it was built from one. A training corpus combines text, code, and other
+data, then removes low-quality records and repeated material. Near-duplicate
+removal matters because copying the same repository many times would give it
+more influence than intended. Decontamination checks whether evaluation
+problems, or close copies of them, have entered the training set. Without that
+check, a benchmark may measure recall rather than generalization. These choices
+are the subject of @sec-data-curation.
 
-Here the two running examples already diverge, and the divergence is the book
-in miniature. Llama 3's 405B model is a dense Transformer: every parameter
-participates in every token [@grattafiori2024llama]. DeepSeek-V3 is a mixture
-of experts, 671B total parameters but only 37B activated per token, paired
+Llama 3's largest model was pre-trained on 15.6 trillion tokens
+[@grattafiori2024llama], and DeepSeek-V3 on 14.8 trillion
+[@deepseek2024deepseekv3]. A token is an integer identifier for a piece of the
+input, not necessarily a word. The tokenizer and its vocabulary determine
+whether a variable such as `readUserConfig` becomes one familiar unit or several
+smaller pieces. That representation affects sequence length, multilingual text,
+and how efficiently the model can learn code. @sec-tokenization develops this
+step from bytes to token identifiers.
+
+## Pre-training produces a base model
+
+Pre-training repeatedly gives the model a prefix and asks it to predict the next
+token. Given `if err != nil {`, for example, a model that assigns high probability to
+`return` incurs less loss than one that assigns the probability elsewhere. A
+training step computes this prediction error, propagates it backward, and
+updates the model's parameters. Repeating the process over a large corpus
+produces a base model: a general predictor of likely continuations, not yet a
+reliable assistant.
+
+For a fixed compute budget, model size and training-token count cannot both grow
+without limit. Empirical scaling laws estimate how loss changes with parameters,
+data, and compute [@kaplan2020scaling]. Hoffmann et al. then studied the balance
+between parameters and tokens that minimizes loss under a training-compute
+budget [@hoffmann2022chinchilla]. @sec-scaling-laws explains what these fits can
+and cannot predict. The Transformer components that perform the prediction,
+including attention, residual connections, and normalization, begin with
+Vaswani et al. [@vaswani2017attention] and are developed in
+@sec-transformer-architecture.
+
+Architecture changes the cost of this process. Llama 3's 405-billion-parameter
+model is dense, so most parameterized computation runs for every token
+[@grattafiori2024llama]. DeepSeek-V3 stores a larger pool of expert parameters
+but activates only part of it for each token. DeepSeek-V3 combines this routing
 with @gls-mla, an attention design that shrinks the inference-time cache
-[@deepseek2024deepseekv3]. That choice, dense versus sparse, is
-@sec-moe-ssm-hybrids. Running either training job across thousands of
-accelerators without the run diverging or the hardware idling is
-@sec-training-at-scale, where DeepSeek-V3's FP8 mixed-precision recipe and
-its 2.788 million H800 GPU-hours of total training live
+[@deepseek2024deepseekv3]. Sparse activation reduces arithmetic per token, but
+the full expert pool must remain available across the serving system's
+accelerator memory, and routing tokens among experts adds communication and
+load-balancing work.
+@sec-moe-ssm-hybrids examines that trade-off.
+
+At this scale, the training system is part of the model design. Thousands of
+accelerators must exchange gradients, recover from hardware faults, and avoid
+waiting on slow workers. @sec-training-at-scale develops these problems using,
+among other examples, DeepSeek-V3's FP8 mixed-precision training and its reported
+2.788 million H800 GPU-hours for the full training pipeline
 [@deepseek2024deepseekv3].
 
-Many modern runs do not jump directly from this broad base to post-training.
-They add a @gls-mid-training phase: late high-quality annealing, specialist
-code or math mixtures, instruction-formatted next-token data, or long-context
-extension. That bridge is @sec-mid-training. It still belongs to base-model
-construction, because it changes the distribution the model has internalized
-before adaptation starts changing behavior.
+Many training runs add @gls-mid-training before post-training. This phase shifts
+the data mixture toward high-quality or specialized material, such as code and
+mathematics, or extends the sequence length. For the running example, a
+code-heavy mixture can improve repository understanding before instruction
+tuning begins. @sec-mid-training explains why this phase is distinct from both
+broad pre-training and later behavior shaping.
 
-## Station three: adaptation teaches the model to want the task
+Part I calls this full sequence *base-model formation*: data preparation,
+pre-training, and the mid-training bridge that produces the raw model later
+adapted for use.
 
-A base model predicts plausible continuations of text. It does not yet want
-to fix your bug. Turning a next-token predictor into something that follows
-instructions, respects a behavior specification, refuses harmful requests, and
-uses verifiable rewards where the task permits them is adaptation, the second
-great expense after base-model formation. Supervised fine-tuning on
-demonstrations is @sec-sft-peft, and the data layer underneath preferences is
-@sec-behavior-specs. To learn from human or automated preference
-signals, a model either trains a reward model and optimizes a policy against it
-or takes the direct-preference route that skips the explicit reward model: that
-fork is @sec-rlhf and @sec-dpo-variants. Safety tuning and instruction hierarchy
-belong to @sec-safety-tuning. And teaching a model to spend tokens thinking
-before it commits to an answer, then deciding when that thinking should be
-prompted, searched, verified, distilled, or paid for at inference time, is the
-arc of Part IV from @sec-eliciting-reasoning through @sec-inference-time-scaling.
+## Post-training shapes behavior
 
-## Station four: serving turns weights into a service
+A base model continues text. A deployed assistant must instead interpret a
+request, follow constraints, and present a useful result. Supervised fine-tuning
+(@sec-sft-peft) begins this change by training on demonstrations of desired
+responses. A behavior specification and preference dataset then state which
+responses annotators or automated graders prefer (@sec-behavior-specs).
 
-Now the model exists and the user has typed the request. Serving it is its
-own engineering discipline, because a trained model is a pile of weights, not
-a service. The core tension is that generation is memory-bound and the
-@gls-kv-cache (the key-value cache) grows with every token, which is where @sec-serving-problem
-starts. Batching many users and paging that cache falls to
-@sec-memory-scheduling. Two further levers cut the bill directly: decoding
-more than one token per forward pass (@sec-faster-decoding), and lowering
-precision so each weight and each cache entry gets cheaper
-(@sec-quantization-kernels).
+Preference training follows two common routes. In reinforcement learning from
+human feedback, a reward model learns to score responses, and the language model
+is optimized as a policy to receive higher scores (@sec-rlhf). Direct preference
+methods train from preferred and rejected response pairs without a separate
+reward model (@sec-dpo-variants). Safety tuning adds rules about which
+instructions take priority and when the model should refuse
+(@sec-safety-tuning).
 
-## Station five: the agent loop closes
+For the bug-fixing task, post-training turns plausible code completion into a
+sequence of useful behaviors: inspect the repository, state a plan, use tools,
+and explain a patch. Reasoning-oriented training and test-time methods may also
+allocate more computation to difficult steps. Part IV follows that path from
+elicitation and search to verification, distillation, and inference-time routing
+(@sec-eliciting-reasoning through @sec-inference-time-scaling).
 
-Finally the loop closes. The assistant does not answer the bug report from
-memory alone. It reads files, runs the test suite, sees the failure, edits,
-and re-runs, one observation-and-action step at a time. That control
-structure is @sec-agent-architectures, the runtime that drives it is
-@sec-the-harness, and the retrieval that pulls the right files into the
-context window is @sec-rag-retrieval. Deciding what to keep in that finite
-window, and what to summarize or drop, is @sec-context-engineering.
+## Deployment turns weights into a service
 
-The slice, drawn as one pass through the stack, is @fig-whole-stack-pipeline.
+A trained checkpoint is a set of weights. A service must load those weights,
+accept concurrent requests, schedule accelerator work, and return tokens within
+a latency budget. Processing the input prompt, called *prefill*, often demands
+substantial arithmetic. Generating later tokens, called *decode*, repeatedly
+reads model weights and is often limited by memory bandwidth.
+
+During generation, attention needs keys and values computed for earlier tokens.
+The @gls-kv-cache stores this state so the model does not recompute the entire
+prefix at every step, but the cache grows with the number of tokens and active
+requests. @sec-serving-problem introduces this cost; @sec-memory-scheduling
+explains batching and paging the cache. Speculative decoding proposes several
+tokens cheaply and verifies them with the target model (@sec-faster-decoding).
+Quantization stores selected weights or cache values at lower precision, reducing
+memory and bandwidth at some risk to accuracy (@sec-quantization-kernels).
+
+## Runtime: the request enters the system
+
+Only now does the user's bug report enter the system. An agent runtime sends the
+request to the model service, interprets the response as text or a tool call,
+executes permitted actions, and returns observations to the model. A typical
+trace reads a file, runs a test, inspects the failure, edits the code, and runs
+the test again. The model proposes actions; the runtime enforces permissions and
+executes them; the repository and test runner provide evidence about the result.
+
+@sec-agent-architectures develops this control loop, and @sec-the-harness covers
+the runtime around it. Some systems use retrieval-augmented generation
+(@sec-rag-retrieval) to select relevant material from an index. A code agent may
+instead use file search and repository tools directly. In both cases,
+@sec-context-engineering addresses the same finite-context problem: which
+instructions, files, tool results, and summaries should accompany the next model
+call.
+
+@fig-whole-stack-pipeline keeps the lifecycle and runtime paths separate. The
+deployed weights connect them: training produces the artifact that serving
+loads, while the request itself moves only through the runtime path.
 
 ```{dot}
 //| label: fig-whole-stack-pipeline
-//| fig-cap: "One request traced through the stack, from a web-scraped corpus to an agent loop that observes and acts. Each box names the layer and the chapter that owns it."
+//| fig-cap: "Two connected paths. The model lifecycle produces deployed weights. At runtime, an agent sends requests to a model service and exchanges actions and observations with tools and the repository."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
+  rankdir=TB;
+  size="6,5";
+  ratio=compress;
+  nodesep=0.35; ranksep=0.45;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
   edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  D [label="raw data\nsec-data-curation"];
-  T [label="tokens\nsec-tokenization"];
-  P [label="pre-training\nsec-scaling-laws"];
-  M [label="mid-training\nsec-mid-training"];
-  A [label="adaptation\nsec-sft-peft, sec-rlhf"];
-  S [label="serving\nsec-serving-problem"];
-  G [label="agent loop\nsec-agent-architectures"];
-  D -> T;
-  T -> P;
-  P -> M;
-  M -> A;
-  A -> S;
-  S -> G;
-  G -> S [label="observe, act, repeat"];
+  LIFE [shape=plain, style="", label="MODEL LIFECYCLE", fontsize=10];
+  subgraph build {
+    D [label="curated data"];
+    T [label="tokens"];
+    P [label="pre-training"];
+    M [label="mid-training"];
+    A [label="post-training"];
+    W [label="deployed weights"];
+    { rank=same; D; T; }
+    { rank=same; P; M; }
+    { rank=same; A; W; }
+    D -> T -> P -> M -> A -> W;
+  }
+  RUN [shape=plain, style="", label="REQUEST RUNTIME", fontsize=10];
+  subgraph run {
+    U [label="user request"];
+    G [label="agent runtime"];
+    S [label="model service"];
+    E [label="tools + repository"];
+    { rank=same; S; E; }
+    U -> G;
+    G -> S [label="model call"];
+    S -> G [label="text or tool request"];
+    G -> E [label="permitted action"];
+    E -> G [label="observation"];
+  }
+  LIFE -> D [style=invis];
+  W -> RUN [style=invis];
+  RUN -> U [style=invis];
+  W -> S [style=dashed, label="loaded by"];
 }
 ```
 
-## What the journey hides: three nested loops
+## Three processes at different timescales
 
-The stations above are arranged in space, one after another, but the stack
-also runs in time, and the timing hides a structure worth naming once because
-it recurs in every part of the book. The stack is built from three nested
-loops, each a control structure that consumes compute to reduce a different
-kind of error.
+Three repeated processes recur throughout the book, but only two are nested.
+Training happens upstream and produces the weights. A model call then decodes
+one token at a time from those fixed weights. An agent task may contain several
+model calls, interleaved with tool actions and observations.
 
-The **training loop** runs over a corpus, adjusting weights by gradient
-descent to lower a loss. Paid once, it runs for weeks and leaves an artifact
-behind. Over a prompt runs the **inference loop**, generating one token at a
-time from frozen weights, and this one is paid on every request, forever,
-which is why a fraction of a cent per token decides the economics of a
-product. Outermost is the **agentic loop**, turning over an environment,
-alternating model calls with tool calls until a task is done; it wraps many
-inference loops inside one unit of useful work, and it is where a model stops
-being a text predictor and starts being infrastructure.
+The **training loop** processes batches, computes a loss, and updates parameters
+with gradients. Its cost is amortized over a released model version. The
+**decoding loop** runs inside each model call: every generated token becomes
+part of the input to the next step, while the weights remain unchanged. Its cost
+depends on input and output length. The **agent loop** runs at the task level,
+where model calls alternate with actions in an environment. Its total cost and
+failure probability accumulate across the trajectory.
 
-The containment is the point, and @fig-whole-stack-loops draws it: the
-artifact that training freezes once sits at the center, each inference loop
-reads it and pays per request, and the agentic loop folds many such inference
-loops into a single unit of useful work. Reading the payment cadence off the
-figure, once, then per request, then per task, is what makes the constraint
-arrow below legible.
+@fig-whole-stack-loops shows these relationships. The agent loop contains model
+calls, and each call contains token-by-token decoding. Training sits to the left
+as their dependency rather than inside them. This gives three useful accounting
+units: per model version, per token and model call, and per task.
 
 ```{dot}
 //| label: fig-whole-stack-loops
-//| fig-cap: "The three nested loops. The training loop runs once and freezes weights. Each inference loop reads those frozen weights and is paid per request. The agentic loop wraps many inference loops per task. Cost is paid at the cadence each loop runs."
+//| fig-cap: "Three repeated processes at different timescales. Training updates parameters before release. A model call decodes tokens from fixed weights. An agent task may contain several model calls and tool interactions."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
+  rankdir=TB;
+  size="6,6";
+  ratio=compress;
+  nodesep=0.35; ranksep=0.45;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
   edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
   subgraph cluster_TR {
-    label="training loop, paid once"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    corpus [label="corpus"];
-    grad [label="gradient step"];
-    corpus -> grad;
-    grad -> corpus [label="weeks"];
+    label="training, before release"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    batch [label="training batch"];
+    loss [label="prediction + loss"];
+    grad [label="gradient update"];
+    params [label="updated parameters"];
+    { rank=same; batch; loss; }
+    { rank=same; grad; params; }
+    batch -> loss;
+    loss -> grad;
+    grad -> params;
+    params -> loss;
   }
-  W [label="frozen weights"];
+  W [label="released weights"];
   subgraph cluster_AG {
-    label="agentic loop, paid per task"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+    label="agent loop, accumulated per task"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
     subgraph cluster_INF {
-      label="inference loop, paid per request"; labelloc="b"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
+      label="token decoding"; labelloc="b"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
       prompt [label="prompt"];
       tok [label="next token"];
       prompt -> tok;
@@ -198,135 +265,122 @@ digraph {
     tok -> tool;
     tool -> prompt;
   }
-  grad -> W [label="freeze weights"];
-  W -> prompt [style=dashed, label="read, never changed"];
+  params -> W [label="release"];
+  W -> prompt [style=dashed, label="loaded, not updated"];
 }
 ```
 
 <figure id="fig-whole-stack-nested-loops">
 <div class="viz" data-viz="nested-loops"></div>
-<figcaption>The same three loops, now turning at the rates the text names. The inference ring spins once per token, the agentic ring once per tool call, and the training ring sweeps once and then freezes into the artifact the other two read: training is paid once, inference and the agentic loop recur. Illustrative.</figcaption>
+<figcaption>A stylized view of the three cadences. Decoding advances per token, an agent advances through model and tool steps, and training runs before a model version is released. The concentric layout shows relative cadence, not literal containment: training is upstream of the other two.</figcaption>
 </figure>
 
-These loops are not independent, and the most useful insight in this book is
-where one reaches up to dictate another's design.
+The processes are separated in time, but their costs are coupled. Expected
+runtime demand can therefore change a training-time decision.
 
 ::: {.callout-tip}
 ## Constraint arrow
-The clearest example appears at the very first layer. Pre-training economics
-seem to say: for a fixed training budget, pick the model size that minimizes
-loss [@hoffmann2022chinchilla]. But a model that will serve billions of
-tokens over its lifetime is better off smaller and over-trained, because the
-inference loop is paid forever while the training loop is paid once. The
-serving cost in @sec-serving-problem reaches up the stack and sets a decision
-that looks like pure pre-training, the subject of @sec-scaling-laws.
-DeepSeek-V3's mixture-of-experts design is the same arrow drawn in hardware:
-activate 37B of 671B parameters per token so the inference loop stays cheap,
-and pay for it in training and serving complexity instead
-[@deepseek2024deepseekv3]. Reading the stack in order is what makes these
-arrows visible.
+Training-compute scaling asks which parameter and token allocation minimizes
+loss for a fixed training budget [@hoffmann2022chinchilla]. Deployment adds a
+second term: the expected cost of serving the model. When demand is high enough,
+it can be economical to spend more on training a smaller model that costs less
+per generated token. This is a conditional result, not a rule that smaller
+models are always better [@sardana2024beyond]. The serving workload in
+@sec-serving-problem has reached back into the training decision studied in
+@sec-scaling-laws.
+
+Sparse models express a related pressure through architecture. DeepSeek-V3
+activates 37 billion of 671 billion parameters per token, reducing expert
+arithmetic while paying for a larger resident parameter pool, routing,
+communication, and load balancing [@deepseek2024deepseekv3]. Inference-aware
+model sizing and mixture-of-experts routing are different techniques, but both
+show why downstream cost belongs in upstream design.
 :::
 
-Try this to make the constraint arrow concrete: charge each design its
-training FLOPs (the count of arithmetic operations) once plus its inference
-FLOPs per served token. Both bills scale with activated parameters, so the
-sparse design is cheaper in both loops at every serving volume; the roughly
-$3.3\times10^{24}$ training FLOPs charged to DeepSeek-V3 here are consistent
-with the 2.788 million H800 GPU-hours station two quoted. What the MoE pays
-is not FLOPs but memory, routing, and communication: all 671B parameters
-stay resident so that each token can activate its 37B, the complexity the
-callout above names.
+The lifecycle comparison can be written without pretending that two released
+models form a controlled experiment. For a design $j$, let
+
+$$
+C_j(V) = T_j + V I_j,
+$$
+
+where $C_j(V)$ is total lifecycle cost at serving volume $V$, $T_j$ is the
+one-time training cost for a model version, and $I_j$ is the incremental serving
+cost per unit of volume. Suppose design B costs more to train than design A,
+$T_B>T_A$, but less to serve, $I_B<I_A$. B becomes cheaper only above the
+break-even volume
+
+$$
+V^* = \frac{T_B-T_A}{I_A-I_B}.
+$$
+
+This small model omits hardware utilization, prompt processing, memory capacity,
+and engineering labor. Its purpose is narrower: it shows exactly when an
+expected runtime bill can justify a larger up-front training bill.
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
-# Lifetime FLOPs for two designs that reach comparable capability.
-# Both loops scale with activated parameters: training ~ 6*N_act*D (paid
-# once); inference ~ 2*N_act per served token. Total parameters N set the
-# memory bill, not the FLOPs bill: every expert must stay resident.
+
+# Two hypothetical designs that reach the same target quality.
+# Costs are normalized compute units; serving volume is billions of tokens.
 designs = {
-    "Llama 3 405B dense":  dict(N=405e9, N_act=405e9, D=15.6e12),
-    "DeepSeek-V3 MoE 37B": dict(N=671e9, N_act=37e9,  D=14.8e12),
+    "A: cheaper training": dict(train=100, serve=0.80),
+    "B: cheaper serving":  dict(train=140, serve=0.35),
 }
-served = np.logspace(11, 16, 200)
+served = np.logspace(-1, 3, 200)
 for name, d in designs.items():
-    train = 6*d["N_act"]*d["D"]
-    plt.plot(served, train + 2*d["N_act"]*served, label=name)
-    print(f"{name}: train ~{train:.1e} FLOPs, "
-          f"serve ~{2*d['N_act']:.1e} FLOPs/token")
-plt.xscale("log"); plt.yscale("log")
-plt.xlabel("tokens served over lifetime"); plt.ylabel("total FLOPs")
+    plt.plot(served, d["train"] + served*d["serve"], label=name)
+
+a, b = designs.values()
+break_even = (b["train"] - a["train"]) / (a["serve"] - b["serve"])
+plt.axvline(break_even, color="grey", linestyle="--")
+print(f"break-even volume: {break_even:.1f} billion tokens")
+plt.xscale("log")
+plt.xlabel("lifetime serving volume, billions of tokens")
+plt.ylabel("normalized lifecycle compute cost")
 plt.legend(); plt.tight_layout(); plt.show()
 ```
 ::::
 
-## Judging any station: capability, efficiency, trust
+## Evaluating the system: capability, efficiency, trust
 
-The three loops describe how the stack runs. A second motif describes how to
-judge any decision inside it. Every technique in this book buys some mix of
-three things, and usually trades one against another.
+The three processes describe how the system runs. A second motif provides three
+separate questions for judging a design. They are not coordinates in a fixed
+budget, and an improvement in one does not necessarily reduce another.
 
-**Capability** is whether the system can do the task at all: can the model
-find the bug, follow the multi-step plan, reason through the fix.
-**Efficiency** asks what that capability costs in compute, memory, latency, and
-dollars. **Trust** is whether you can deploy the result and rely on it:
-whether it is correct, safe, honest about uncertainty, and measurable.
-DeepSeek-V3 and Llama 3 are both bids to push capability up while holding
-cost down, and a mixture-of-experts model is a pure efficiency play,
-more capability per activated parameter [@deepseek2024deepseekv3]. Trust is
-the layer the hype cycle forgets and the operator cannot. Knowing whether the
-agent actually fixed the bug, rather than producing a plausible patch that
-breaks a different test, is measurement: @sec-benchmarks for what a static
-score can and cannot tell you, @sec-statistical-reliability for whether the
-observed gap is real, @sec-factuality-grounding for whether fluent output is
-supported, @sec-evaluating-agents for grading a multi-step trajectory, and
-@sec-oversight-control for keeping a capable system inside its bounds. The
-economics that tie capability and efficiency to a price a user will pay are
-@sec-economics.
+| Dimension | Question | Evidence for the bug-fixing task |
+|---|---|---|
+| Capability | Which tasks can the system complete, and how reliably? | It locates the defect, produces a correct patch, and explains the change. |
+| Efficiency | What compute, memory, latency, energy, and money does that result require? | End-to-end time, model calls, generated tokens, accelerator use, and tool cost. |
+| Trust | What evidence shows that required properties hold and failures can be detected or contained? | A reproducing test, regression tests, review, restricted tool permissions, provenance, and a rollback path. |
 
-@fig-whole-stack-lens places the lens over the two running models. Both bid
-for capability, but a mixture-of-experts model spends fewer activated FLOPs
-to reach it, pulling toward the efficiency vertex, while trust sits at the
-bottom for both until measurement has graded the patch each one produced.
+A passing test supplies evidence for one behavior under one set of conditions.
+It does not by itself make the patch trustworthy: the test may be incomplete,
+another path may regress, or the agent may have exceeded its authority. Trust
+therefore applies to the whole system, including the model, harness, tools,
+context, and operating controls.
 
-```{dot}
-//| label: fig-whole-stack-lens
-//| fig-cap: "The capability, efficiency, trust lens as a trade-off space, with the two running models placed on it. A dense model and a sparse model can reach the same capability. The sparse one does it for fewer activated FLOPs, leaning toward efficiency. Neither earns trust until something measures its output."
-graph lens {
-  layout=neato;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, fixedsize=true, width=2.5, height=0.8, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  cap [label="capability\nfind the bug, plan, reason", pos="0,2.2!"];
-  eff [label="efficiency\ncompute, memory, latency, cost", pos="-3.4,-1.3!"];
-  tru [label="trust\ncorrect, safe, measurable", pos="3.4,-1.3!"];
-  cap -- eff [style=dashed];
-  eff -- tru [style=dashed];
-  tru -- cap [style=dashed];
-  llama [label="Llama 3\ndense", pos="1.05,0.35!", shape=ellipse, width=1.4, height=0.9];
-  ds [label="DeepSeek-V3\nMoE", pos="-1.05,0.35!", shape=ellipse, width=1.6, height=0.9, color="#3b82f6", fontcolor="#3b82f6"];
-  ds -- eff [headlabel="fewer activated FLOPs", labelfontsize=9, labelangle=58, labeldistance=7, color="#3b82f6", labelfontcolor="#3b82f6"];
-}
-```
-
-Across the book, chapter endings return to the same judgment: what did this
-technique do to capability, efficiency, and trust? Hold that lens up to the
-running task and the trade-off is visible. A dense model and a sparse model can
-reach the same capability, the sparse one does it for fewer activated FLOPs, and
-neither is trustworthy until something has measured the patch it produced.
+The later evaluation chapters develop this evidence in stages: @sec-benchmarks
+for what a static score measures, @sec-statistical-reliability for uncertainty in
+observed differences, @sec-factuality-grounding for support behind generated
+claims, @sec-evaluating-agents for multi-step trajectories, and
+@sec-oversight-control for constraining capable systems. @sec-economics connects
+capability and resource use to a price that a deployment can sustain.
 
 ## How to read from here
 
-The next chapter, @sec-field-map, lays out the whole territory this slice cut
-through, naming the parts and how they connect, so the forward references above
-resolve into a map. After that the book follows the slice in order: data and
-architecture, then training, adaptation, and reasoning, then serving, then
-agents, then the evaluation, governance, and infrastructure that hold it all up.
-A reader can follow that order straight through, or jump to the chapter that
-owns whichever layer is on fire today and use the cross-references to climb back
-out. Either way, this first end-to-end pass keeps the layer in front of you from
-looking like the whole story.
+The next chapter, @sec-field-map, places these mechanisms in the full structure
+of the book. From there, readers can follow the lifecycle in order or enter at a
+current engineering problem and use the cross-references to recover its
+dependencies.
+
+Two distinctions should remain after this first pass. Model development and
+request execution are connected timelines, not one journey. Capability,
+efficiency, and trust must be evaluated for the complete deployed system, not
+inferred from model architecture alone. The rest of the book develops the
+mechanisms behind those claims.
 
 ## Further reading
 

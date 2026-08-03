@@ -479,7 +479,7 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("zh/orientation/02-field-map.qmd")).toContain(">基座模型的形成</tspan>");
   expect(src("en/orientation/index.qmd")).toContain("base-model formation (training the raw model), adaptation");
   expect(src("zh/orientation/index.qmd")).toContain("经过基座模型形成（训练出原始模型）与适配");
-  expect(src("en/orientation/01-whole-stack.qmd")).toContain("Station two: base-model formation");
+  expect(src("en/orientation/01-whole-stack.qmd")).toContain("Part I calls this full sequence *base-model formation*");
   expect(src("zh/orientation/01-whole-stack.qmd")).toContain("环节二：基座模型形成");
   expect(src("en/foundations/summary.qmd")).toContain("Base-model formation is infrastructure, not background");
   expect(src("zh/foundations/summary.qmd")).toContain("基座模型形成不是背景知识");
