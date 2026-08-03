@@ -1,7 +1,7 @@
 import { test, expect } from "bun:test";
 import { createElement } from "react";
 import { renderToString } from "react-dom/server";
-import Reader from "./Reader.tsx";
+import Reader, { navInitialScrollTop } from "./Reader.tsx";
 import type { ChapterData } from "./types.ts";
 
 const chapter: ChapterData = {
@@ -48,6 +48,17 @@ test("sidebar shows external about links above preface", () => {
   expect(author).toBeGreaterThan(-1);
   expect(latere).toBeGreaterThan(author);
   expect(preface).toBeGreaterThan(latere);
+});
+
+test("nav stays at the top when the active part starts above the fold", () => {
+  // The preface sits ~80px down, just under the About links: scrolling it to
+  // the top of an 800px nav would hide those links for no gain.
+  expect(navInitialScrollTop(80, 800)).toBe(0);
+  // A part that opens halfway down is already half-cut; pull it up.
+  expect(navInitialScrollTop(400, 800)).toBe(400);
+  expect(navInitialScrollTop(3200, 800)).toBe(3200);
+  // A short nav (the mobile drawer) still scrolls to a part below its middle.
+  expect(navInitialScrollTop(80, 120)).toBe(80);
 });
 
 test("sidebar external about links are localized on zh pages", () => {

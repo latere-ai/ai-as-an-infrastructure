@@ -586,7 +586,15 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
   );
 }
 
-function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 264 }: { t: Strings; chapter: ChapterData; embedded?: boolean; onNavigate?: () => void; onOpenSearch: () => void; width?: number }) {
+// Where the chapter nav starts scrolled on load. The early parts sit right
+// under the About links, so pulling them to the top of the list would push
+// those links out of view and buy the reader nothing: stay at the top unless
+// the active part starts at or below the middle of the nav.
+export function navInitialScrollTop(offsetTop: number, viewport: number): number {
+  return offsetTop >= viewport / 2 ? offsetTop : 0;
+}
+
+function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 264 }:{ t: Strings; chapter: ChapterData; embedded?: boolean; onNavigate?: () => void; onOpenSearch: () => void; width?: number }) {
   // Parts collapse; the part holding the active chapter starts open.
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const isOpen = (part: { id: string; chapters: { active?: boolean }[] }) =>
@@ -598,7 +606,7 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
   const activeRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const sc = scrollRef.current, el = activeRef.current;
-    if (sc && el) sc.scrollTop = el.offsetTop;
+    if (sc && el) sc.scrollTop = navInitialScrollTop(el.offsetTop, sc.clientHeight);
   }, []);
   return (
     <aside className={embedded ? undefined : "glass-regular"} style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, borderRadius: embedded ? undefined : 22, background: embedded ? "transparent" : undefined, display: "flex", flexDirection: "column", paddingTop: 16, alignSelf: "stretch", minHeight: 0, overflow: "hidden" }}>
