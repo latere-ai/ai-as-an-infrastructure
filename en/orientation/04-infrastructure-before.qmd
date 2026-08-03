@@ -1,16 +1,72 @@
 # The Infrastructure Before This One {#sec-infrastructure-before}
 
-The generative stack this book takes apart is not the first AI infrastructure. For fifteen years before a language model wrote its first paragraph, machine learning already ran the world's feeds, search results, and ad auctions at planetary scale, and it did so with its own hardware fleets, its own serving tiers, and its own hard-won operational discipline. Put that incumbent next to the book's subject and three questions follow. What did the generative stack inherit? What could it not reuse, and why? And where are the two stacks now converging? The rest of this book sits against the AI that was already infrastructure; several "new" problems in later parts are old problems wearing new names.
+Before generative models became a product category, machine learning already
+made high-volume decisions in search, advertising, recommendations, fraud
+detection, forecasting, and many other services. These systems built mature
+ways to retrieve candidates, manage features, deploy models, monitor drift, and
+run controlled experiments.
 
-## The largest AI system nobody calls AI
+This chapter calls that body of work **large-scale predictive ML**. It is the
+closest operational predecessor to the generative stack, not a history of all
+earlier AI. The comparison answers three questions: which practices transferred,
+which ones had to change, and which systems remain outside this book's scope.
 
-Start with the incumbent's size, because it reframes what "AI infrastructure" meant until very recently. In 2020, before the language-model buildout, Facebook reported that recommendation models consumed up to 79% of the AI inference cycles in its production datacenters [@gupta2020recommendation], and a companion study put their share of training cycles above 50% [@acun2021training]. The largest AI fleets on earth were not running chatbots or image generators. They were deciding, billions of times a day, which item a person would see next.
+## One request through the older stack
 
-The system doing that deciding has a canonical shape, fixed in the industry's vocabulary by YouTube's 2016 description of its recommender [@covington2016youtube]. The corpus is too large to score every item for every request, so the work splits into two stages. A cheap first stage, candidate generation, narrows millions of items to a few hundred plausible ones. An expensive second stage, ranking, scores those few hundred carefully and orders the final screen. Both stages lean on the same primitive: the embedding, a learned vector that represents a user or an item so that geometric closeness stands in for behavioral affinity. Score by dot product, retrieve by nearest neighbor, and the two-stage funnel turns an impossible scoring problem into two affordable ones.
+The scale was already substantial. In one Facebook production datacenter
+studied before the generative-model buildout, recommendation models accounted
+for more than 79% of AI inference cycles [@gupta2020recommendation]. A separate
+study reported that recommendation consumed more than half of the company's AI
+training cycles [@acun2021training]. These figures describe Facebook's measured
+workloads, not every datacenter, but they show that production AI was already
+dominated by systems choosing what to display next.
+
+A large recommender cannot carefully score every item for every request. The
+usual solution is a funnel:
+
+1. **Candidate generation** quickly reduces a large catalog to a manageable set.
+2. **Ranking** applies a richer model to that set and orders the results.
+3. **Logging and experimentation** record what was shown and what happened next.
+
+YouTube's 2016 system is a well-documented example: a candidate model reduced
+millions of videos to hundreds, then a ranking model selected a few dozen for
+display [@covington2016youtube]. The exact architecture varies by product, but
+the reason for separating retrieval from ranking is stable. The expensive model
+only runs on a small candidate set.
+
+Embedding retrieval gives the first stage a simple formula:
+
+$$
+a_i=e_u^{\mathsf T}e_i,
+\qquad
+C_k(u)=\operatorname{TopK}_{i\in\mathcal I}(a_i).
+$$
+
+The ranker then computes
+
+$$
+\hat{i}_1,\ldots,\hat{i}_m
+=\operatorname{Sort}_{i\in C_k(u)} r_\psi(u,i,z_i).
+$$
+
+Here $u$ is the current user or request, $i$ is an item in catalog
+$\mathcal I$, and $e_u,e_i\in\mathbb{R}^d$ are $d$-dimensional learned vectors
+called embeddings. Their dot product $a_i$ is the retrieval score. $C_k(u)$ is
+the set of $k$ retrieved candidates. The second-stage model $r_\psi$, with
+parameters $\psi$, uses request data and additional item features $z_i$ to
+order $m\leq k$ results.
+
+Computing every $a_i$ is still too expensive for a very large catalog.
+Approximate nearest-neighbor (ANN) search avoids exhaustive scoring by trading
+some retrieval recall for lower latency and memory traffic. Systems such as
+FAISS support similarity search at billion-vector scale [@johnson2017faiss],
+while HNSW organizes vectors
+as a navigable proximity graph and is widely implemented in search systems
+[@malkov2020efficient].
 
 ```{dot}
 //| label: fig-infrastructure-before-funnels
-//| fig-cap: "The recommender funnel of 2016 and the retrieval-augmented generation funnel of 2024. The shape survived intact: a cheap embedding stage narrows a huge corpus, an expensive stage works over the survivors. What changed is the last stage, from scoring items to generating text."
+//| fig-cap: "Recommendation and retrieval-augmented generation share a narrowing pattern. The resemblance stops at the final operation and the feedback signal: one ranks items, while the other constructs context for generated output."
 digraph funnels {
   bgcolor="transparent";
   rankdir=TB;
@@ -19,98 +75,223 @@ digraph funnels {
   edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
   subgraph cluster_rec {
-    label="recommender funnel (2016)";
+    label="recommendation";
     style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    R1 [label="corpus\n~10⁹ items"];
-    R2 [label="candidate generation\ntwo-tower embeddings + ANN"];
-    R3 [label="ranking model\nscores ~10² candidates"];
-    R4 [label="one screen of results"];
+    R1 [label="large item catalog"];
+    R2 [label="candidate retrieval\nembedding or term index"];
+    R3 [label="ranking\nricher features and model"];
+    R4 [label="ordered items\nand logged interactions"];
     R1 -> R2 -> R3 -> R4;
   }
   subgraph cluster_rag {
-    label="RAG funnel (2024)";
+    label="retrieval-augmented generation";
     style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    G1 [label="corpus\ndocument chunks"];
-    G2 [label="retrieval\nembeddings + ANN index"];
-    G3 [label="rerank + generate\nthe model works over top-k"];
-    G4 [label="one answer"];
+    G1 [label="document chunks"];
+    G2 [label="retrieval\nembedding or term index"];
+    G3 [label="reranking and\ncontext construction"];
+    G4 [label="generated answer\nand evaluation signals"];
     G1 -> G2 -> G3 -> G4;
   }
+
+  // Stack the workflows so the comparison stays legible on narrow screens.
+  R4 -> G1 [style=invis, minlen=1];
 }
 ```
 
-The funnel was only half the incumbent's maturity. The other half was operational. Google's 2013 report on its ad click-through predictor reads today like a systems paper that happens to contain a model: online learning over billions of sparse features, yes, but also calibration, feature lifecycle management, memory accounting, and dashboards for watching the model drift [@mcmahan2013adclick]. The discipline now sold as MLOps was worked out in these trenches a decade before the term reached the generative stack.
+The figure shows a shared systems pattern, not an identical learning problem.
+A recommender ranker predicts or optimizes item outcomes. A
+retrieval-augmented generator uses retrieved evidence as input to an open-ended
+generation process. The retrieval machinery can transfer even though the final
+model, objective, and evaluation do not.
 
-One episode from the incumbent's history earns retelling because the whole book keeps meeting its lesson. In 2006 Netflix offered a million dollars to any team that could improve its rating predictor's accuracy by ten percent, and the three-year contest that followed pulled much of the field into recommendation research. The winning entry was an ensemble of hundreds of blended models. Netflix never deployed it. The company's engineers later wrote that the measured accuracy gain "did not seem to justify the engineering effort needed to bring them into a production environment," and that the business had meanwhile moved from predicting ratings to ranking what a member would actually watch; only two component algorithms from an earlier milestone ever shipped [@amatriain2012netflix]. An offline metric had been optimized brilliantly, and the product did not want it. That gap between the number a benchmark rewards and the behavior a deployment needs returns in this book as a central theme of @sec-benchmarks and everything after it.
+## What transferred
 
-## The workhorse that deep learning had to beat
+Three parts of the older stack became foundations for generative systems.
 
-A second correction to the mental picture: the incumbent was never uniformly neural. A large share of production machine learning, then and now, runs on gradient-boosted decision trees, an ensemble method that builds hundreds of shallow decision trees in sequence, each one trained to correct the residual errors of the trees before it. The method's flagship implementation, XGBoost, is revealing about what actually wins in practice: its paper spends most of its pages on systems concerns, cache-aware layout, sparsity handling, out-of-core computation, and notes in passing that 17 of the 29 published Kaggle winning solutions in 2015 used it [@chen2016xgboost]. Its ranking-specialized ancestor, LambdaMART, carried web search relevance for a decade [@burges2010lambdamart].
+| Area | Mature predictive-ML practice | Adaptation in generative systems |
+|---|---|---|
+| **Retrieval** | Embeddings, term indexes, approximate search, hybrid retrieval, and reranking | Retrieve document chunks or tool results, then assemble context for a generator |
+| **Operations** | Reproducible data pipelines, versioned model artifacts, monitored inputs and outputs, staged rollouts, and rollback | Version prompts, retrieval settings, tool schemas, and model combinations as one deployable system |
+| **Measurement** | Online controlled experiments, guardrail metrics, segment analysis, and long-horizon outcomes | Combine task evaluations and safety checks with product experiments; do not treat immediate preference feedback as the complete objective |
 
-Trees were not a placeholder waiting for deep learning to arrive. When Airbnb replaced its hand-written search scoring function with a boosted-tree model, the company described the gain as one of the largest single improvements in bookings in its history; the subsequent migration from trees to neural networks failed twice before it succeeded, and succeeded only after the team stopped trying to out-engineer the trees feature by feature [@haldar2019airbnb]. The pattern has a measured explanation. A careful 2022 benchmark found that on typical tabular data, the rows-and-columns business records that most production models consume, tree ensembles still beat deep networks, and traced the advantage to inductive bias: trees are indifferent to uninformative features and fit the abrupt, axis-aligned patterns that tabular targets actually have [@grinsztajn2022tabular]. The frontier is moving even here, and in a familiar direction: TabPFN, a transformer pretrained on millions of synthetic tabular tasks, now beats tuned tree ensembles on small datasets by reading the whole training table as context [@hollmann2025tabpfn]. But that result holds below roughly ten thousand rows. The high-volume ranking, fraud, and credit tables of the operating economy remain, as of this writing, tree territory.
+The operational inheritance is especially direct. Google's account of hidden
+technical debt showed that production failures often come from data
+dependencies, feedback loops, configuration, and surrounding code rather than
+from the model alone [@sculley2015debt]. Uber's Michelangelo platform later
+standardized the full workflow: shared feature definitions, matching
+transformations for training and serving, versioned artifacts, deployment, and
+monitoring [@hermann2017michelangelo]. TensorFlow Serving supplied versioned
+model loading, request batching, controlled rollout, and rollback
+[@olston2017tfserving]. The
+objects changed in generative applications, but the need for lineage and safe
+rollout did not.
 
-The point of this section is scope. "AI as infrastructure" did not begin with the transformer, and it does not end at the transformer's edges. A working layer of the economy runs on models this book will not take apart. What the book does take apart sits beside that layer, borrows from it, and is slowly merging with it.
+Measurement transferred with an important warning about time. Hohnhold et al.
+showed that users' future tendency to engage with ads depended on the relevance
+and landing-page quality of ads they had previously seen. Their long-term model
+led Google to increase the auction's emphasis on quality and cut mobile-search
+ad load by 50%, with neutral or positive long-run business impact
+[@hohnhold2015longterm]. In 2025, OpenAI rolled back a GPT-4o update that had
+become overly agreeable and wrote that it had focused too much on short-term
+feedback [@openai2025sycophancy]. Clicks and thumbs-up signals are not the same
+mechanism. The shared lesson is narrower: immediate feedback can be a poor proxy
+for the outcome a product needs over time.
 
-## What the new stack inherited
+## Offline improvement is not product improvement
 
-Three inheritances run from the incumbent into the parts ahead, and naming them now will make later chapters feel less like invention from nothing.
+The Netflix Prize remains a compact example of why production systems need more
+than an offline score. Netflix launched the competition in 2006 and offered
+one million dollars for a 10% improvement in rating-prediction accuracy. Two
+algorithms from the 2007 Progress Prize's 107-model ensemble were incorporated
+into the service. The additional methods in the later Grand Prize solution were not:
+Netflix reported that their accuracy gain did not justify the engineering work,
+while the product had also shifted from DVD rating prediction toward helping
+streaming viewers choose what to watch [@amatriain2012netflix].
 
-The first is retrieval. The candidate-generation stage of the funnel matured into a precise recipe: train two embedding towers, one for queries and one for items, so that dot products rank well; correct for the biases of training on your own logged traffic [@yi2019sampling]; index the item embeddings in an approximate nearest-neighbor structure, a data structure that trades exact search for sublinear lookup, using libraries and graph indexes built for billion-item catalogs [@johnson2017faiss; @malkov2018efficient]. Facebook's 2020 account of embedding-based retrieval in its search engine reads, in hindsight, like a checklist of what retrieval-augmented generation teams would rediscover four years later: hybrid dense-plus-keyword retrieval, hard-negative mining, the tension between index recall and ranker quality [@huang2020ebr]. HNSW, the graph index inside most of today's vector databases, was published eight years before anyone said "vector database." When @sec-rag-retrieval and @sec-embeddings develop this machinery for language models, they are extending a production lineage, not starting one.
+The episode separates three deployment gates:
 
-The runnable below compresses the whole retrieval inheritance into a dozen lines: factorize a matrix of user-item interactions into two towers of embeddings, then serve a user with one matrix-vector product and an argsort. That serving step costing almost nothing is the entire reason billion-item catalogs, and now million-chunk document stores, can be searched interactively.
+1. **Offline quality:** does a model improve the chosen test metric?
+2. **Systems feasibility:** can it meet cost, latency, reliability, and
+   maintenance requirements?
+3. **Product value:** does the metric still represent the decision the product
+   must make?
 
-:::: {.runnable}
-```python
-import numpy as np
-rng = np.random.default_rng(0)
-n_users, n_items, d = 200, 1000, 16
-U0, V0 = rng.normal(size=(n_users, d)), rng.normal(size=(n_items, d))
-liked = (U0 @ V0.T + rng.normal(scale=2.0, size=(n_users, n_items))) > 2.0   # synthetic clicks
-U, V = rng.normal(scale=0.1, size=(n_users, d)), rng.normal(scale=0.1, size=(n_items, d))
-for _ in range(300):                          # two towers, logistic loss, plain SGD
-    err = liked - 1 / (1 + np.exp(-(U @ V.T)))
-    U, V = U + 0.5 * err @ V / n_items, V + 0.5 * err.T @ U / n_users
-u = 7
-scores = U[u] @ V.T                           # retrieval: one matrix-vector product
-top10 = np.argsort(scores)[::-1][:10]         # ...plus an argsort
-print("hit rate in this user's top-10:", liked[u, top10].mean())
-print("hit rate of random items:      ", liked[u].mean().round(3))
-```
-::::
+Later chapters apply the same distinction to benchmarks, model serving, and
+operational evaluation. A better offline number is evidence, not a deployment
+decision.
 
-The second inheritance is the operational shell. The incumbent learned early that a model is the small box in the system diagram, surrounded by data pipelines, configuration, and feedback loops whose failure modes are worse than the model's [@sculley2015debt]. Out of that lesson came the feature store, a service that computes each input feature once and serves the identical value to training and to production, because the two silently diverging, training/serving skew, was among the most common ways a model that evaluated well behaved badly [@hermann2017michelangelo]. It also produced the serving tier itself: versioned models loaded behind an atomic pointer swap, request batching, canaried rollouts [@olston2017tfserving]. Readers who reach @sec-deployment-lifecycle and @sec-context-engineering will meet both patterns transposed: the prompt and context pipeline is the new feature pipeline, and it drifts between evaluation and production in exactly the way feature stores were built to prevent.
+## Why serving changed
 
-The third inheritance is measurement, and here the incumbent remains ahead. Two decades of high-volume A/B testing produced a discipline of overall evaluation criteria, guardrail metrics, and rigorous variance accounting that is still the reference standard for knowing whether a change helped [@kohavi2020trustworthy]. Its sharpest lesson concerns time horizons. Google showed in 2015 that optimizing short-term click-through quietly teaches users to ignore ads, so that the metric being maximized was borrowing against the future; the fix was to measure long-term user learning and deliberately trade short-term revenue away [@hohnhold2015longterm]. Ten years later, a chat assistant tuned on thumbs-up feedback became so agreeable it had to be rolled back, and the vendor's post-mortem said it had "focused too much on short-term feedback" [@openai2025sycophancy]. Preference-trained models drift toward flattery for reasons @sec-rlhf will make precise [@sharma2023sycophancy], but the shape of the failure, a cheap proxy metric optimized into user harm, was documented by the incumbent a decade earlier. The new stack is relearning it with a larger model in the loop.
+The older operational discipline transferred, but its serving architecture was
+not a drop-in fit. The useful comparison is between representative workloads,
+not between all recommenders and all language models.
 
-## What did not transfer
+| Dimension | Embedding-heavy recommender | Autoregressive language model |
+|---|---|---|
+| **Main kernels** | Gather and pool selected embedding rows, then run dense interaction or ranking layers | Prefill processes prompt tokens in parallel; decode repeatedly applies dense weights and attention one token at a time |
+| **Memory pressure** | Large embedding-table capacity, irregular accesses, sharding, and bandwidth; dense layers may still be compute-bound | Weight bandwidth often limits low-batch decode; long contexts add growing KV-cache capacity and traffic |
+| **Request state** | Scoring replicas often fetch user and session features from shared stores, so state is external to the model server | Each active generation retains attention state for its preceding tokens, usually on the accelerator |
+| **Output and latency** | A fixed-size score or ranked list, often under a tight request deadline | A variable-length sequence, measured by time to first token and the cadence of later tokens |
+| **Scheduling consequence** | Independent requests can be routed freely and batched conventionally | The scheduler must manage request affinity or state transfer, dynamic cache memory, and different sequence lengths |
 
-Given all that inheritance, a reader might expect the generative stack to have reused the incumbent's serving tier outright. It could not, and the reason is a lesson in how workload shape dictates infrastructure.
+The first column describes models such as DLRM, which combine sparse categorical
+embeddings with dense interaction networks [@naumov2019dlrm]. Which component
+dominates depends on the model, batch, and hardware. The second column also
+contains two regimes: prefill usually has higher arithmetic intensity, while
+decode at low or moderate batch sizes often moves model weights faster than it
+can reuse them [@pope2022scaling].
 
-A production recommender model is, computationally, an inversion of a transformer. Meta's deep learning recommendation model is dominated by embedding tables that can reach terabytes, from which each request randomly fetches a few hundred rows; the dense arithmetic stitched on top is small [@naumov2019dlrm]. The binding resources are memory capacity and random-access lookup rate, not arithmetic. A language model at inference is the opposite: nearly all cost is dense matrix arithmetic, and each generated token requires streaming the model's weights and the conversation's @gls-kv-cache through memory again [@pope2022scaling]. One workload is a sparse lookup machine with a little math attached; the other is a dense math machine with a bandwidth problem.
+The per-sequence attention state makes the serving difference concrete. Its
+approximate size is
 
-Statefulness split the two tiers just as cleanly. A recommender request is stateless: user state lives in the feature store, so any replica behind the load balancer can serve any request, and the incumbent's whole serving pattern leans on that freedom. An in-flight generation is stateful, because the KV cache accumulates on the accelerator token by token, and it is why LLM serving had to invent request-level memory management, paging, and continuous batching rather than borrow the stateless tier [@kwon2023pagedattention]. Latency budgets inverted too: the recommender spends a fixed scoring cost per request and invests its budget in funnel width, while generation is open-ended, priced per output token, and split into the time-to-first-token and per-token cadence that @sec-serving-problem dissects.
+$$
+M_{\mathrm{KV}}\approx 2L H_{\mathrm{KV}}d_h S b.
+$$
+
+Here $M_{\mathrm{KV}}$ is the @gls-kv-cache size in bytes, the factor $2$ counts
+keys and values, $L$ is the number of transformer layers, $H_{\mathrm{KV}}$ is
+the number of key/value heads, $d_h$ is each head's width, $S$ is the number of
+cached tokens, and $b$ is the number of bytes per stored element. The cache
+grows with every generated token. Grouped-query and multi-query attention reduce
+$H_{\mathrm{KV}}$, but they do not remove the per-request state.
+
+This growth forced new memory and scheduling mechanisms. PagedAttention maps
+non-contiguous cache blocks in a way analogous to virtual memory, reducing
+fragmentation and enabling sharing [@kwon2023pagedattention]. Iteration-level
+scheduling can then add and remove requests between decode steps. The older
+stack still contributes RPC, load balancing, batching, observability, staged
+deployment, and rollback; LLM serving adds a different state-management problem.
 
 ::: {.callout-tip}
 ## Constraint arrow
-The silicon a fleet is built from encodes the workload it was bought for. Recommendation-era inference fleets were provisioned for memory capacity and lookup throughput over sparse embedding tables [@gupta2020recommendation]; autoregressive decode instead exhausts memory bandwidth while leaving lookup machinery idle [@pope2022scaling]. That mismatch, one layer down, is why the generative buildout could not run on the datacenters the previous AI era had already paid for, and why @sec-accelerators-networking will describe accelerators whose defining spec is HBM bandwidth. The hardware balance decides which serving tier is even buildable on top of it.
+
+Hardware reflects the workload for which it was purchased. A fleet balanced for
+large sparse tables and irregular embedding lookups can run dense models, but it
+will not necessarily run autoregressive decode economically at large scale
+[@gupta2020recommendation; @pope2022scaling]. Generative serving increased the
+need for accelerator memory bandwidth, HBM capacity, and tightly coupled
+interconnects. Those lower-layer balances determine which batching and memory
+policies are viable in the serving layer that @sec-accelerators-networking and
+@sec-serving-problem examine later.
 :::
 
-## The convergence
+## What remains outside this book's scope
 
-The two stacks are now flowing into each other from both directions, which is the strongest evidence that they were always one field with two workload shapes.
+Production ML is not a sequence in which every tree model is eventually
+replaced by a neural network. Gradient-boosted decision trees remain strong for
+many tabular problems, and XGBoost's success came partly from systems work on
+sparse data, cache use, and out-of-core execution [@chen2016xgboost]. A 2022
+benchmark found tree ensembles ahead of tested deep networks on 45 curated
+medium-size tabular datasets [@grinsztajn2022tabular].
 
-Generative technique is entering recommendation. Google's TIGER reframed retrieval itself as generation: quantize each item's content embedding into a short code called a semantic ID, then train a sequence model to emit the next item's code directly, so the approximate-nearest-neighbor index disappears into the model's weights [@rajput2023tiger]. Meta pushed the recipe to production scale, reporting trillion-parameter generative recommenders that beat its classical stack by double digits in online experiments and, notably, that improve as a power law of training compute, the same scaling behavior @sec-scaling-laws builds this book on [@zhai2024actions]. The incumbent, having lent the generative stack its funnel, is now borrowing back the generative stack's training recipe.
+The boundary is moving, but the evidence is scoped. TabPFN, a transformer
+pretrained on synthetic tabular tasks, outperformed tuned tree baselines in the
+authors' evaluations of datasets with at most 10,000 samples and 500 features
+[@hollmann2025tabpfn]. The paper also says that behavior beyond those limits
+needs further study and reports slower per-example inference than CatBoost in a
+10,000-row example. Model family is therefore a workload choice, not a progress
+ladder. This book follows the lifecycle of generative models; tabular prediction,
+fraud models, forecasting, and classical learning-to-rank remain adjacent
+production systems rather than hidden chapters of that lifecycle.
 
-Traffic flows the other way as well, and it carries warnings. Recommender research documented years ago that a system trained on traffic generated under its own previous policy drifts toward homogeneity, a feedback loop the field learned to detect and dampen [@chaney2018confounding]; the generative analog, models training on a web increasingly written by models, is an open problem that @sec-learning-limits confronts with less accumulated scar tissue. And the argument that engagement-optimized recommenders were the first misaligned objective deployed at planetary scale [@stray2021aligning] hangs over every preference-optimization chapter in Part III: the incumbent ran the experiment of pointing a powerful optimizer at a cheap proxy for human satisfaction first, at civilizational sample size.
+## Where the stacks are beginning to combine
+
+Recommendation is also adopting generative methods. TIGER assigns each item a
+short semantic identifier and trains a transformer to decode the identifier of
+the next item [@rajput2023tiger]. In the evaluated sequential-recommendation
+pipeline, decoding replaces approximate-nearest-neighbor lookup. A learned
+codebook, identifier-to-item mapping, and beam search remain outside the model,
+and the published experiments do not establish web-scale production replacement.
+
+HSTU provides stronger production evidence but supports a narrower conclusion
+than “the funnel is gone.” Its authors report a 1.5-trillion-parameter generative
+recommender deployed on several surfaces of a large platform, a 12.4% improvement
+on one disclosed online metric, and an empirical power-law relation between
+quality and training compute across three orders of magnitude
+[@zhai2024actions]. The same paper retains multiple retrieval generators and
+separate ranking experiments over candidate sets. Generative models are replacing
+or augmenting components of the older stack; the evidence does not yet show that
+one architecture removes every stage.
+
+Closed-loop data is another point of contact. In simulations, Chaney et al.
+showed that training on interactions produced under earlier recommendations can
+increase behavioral homogeneity without increasing utility
+[@chaney2018confounding]. The mechanism is specific: the deployed policy changes
+which human interactions become observable training data. That is different
+from inserting model-generated samples into a training corpus, although both
+cases require engineers to ask who produced the next dataset and under which
+policy.
 
 ::: {.callout-important}
 ## What's contested
-Whether generative recommendation retires the funnel is a live fight. Meta's production numbers argue that one sequence model can replace the retrieve-then-rank cascade and inherit LLM-style scaling [@zhai2024actions]. The skeptical position holds that the funnel exists for a reason no architecture removes: scoring everything with an expensive model is unaffordable at feed-refresh volumes, so a cheap narrowing stage will always be reinvented, inside the model if not around it. A parallel dispute shadows the alignment rhyme: one camp reads engagement optimization as the founding cautionary tale that preference-tuning must study [@stray2021aligning], another holds that chat feedback differs enough from engagement metrics that the analogy misleads more than it teaches. The production evidence, either way, is a few years old at most.
+
+It remains uncertain how much of a production retrieve-then-rank funnel
+generative recommendation can replace. A useful answer needs matched evidence
+on recommendation quality, tail latency, hardware cost, catalog freshness,
+policy enforcement, deletions, observability, and reliability. TIGER supplies a
+research result on small public domains; HSTU supplies company-reported online
+results for particular platform surfaces. Neither establishes a universal
+architecture. The evidence currently supports hybrid coexistence, with the
+boundary likely to differ by catalog size, update rate, and product constraints.
 :::
 
-## The boundary this chapter draws
+## The boundary for the rest of the book
 
-This chapter fixes the book's scope claim. What follows is the lifecycle of a generative capability: compute into base model, base model into adapted behavior, behavior into a served, evaluated, governed system. The incumbent infrastructure of ranking, recommendation, and tabular prediction is not that lifecycle, and this book does not retell its playbooks. It appears from here on the way it appeared in this chapter: as the source of an inherited pattern, as the operator of the fleet next door, and as the field that already paid for a lesson the generative stack is about to buy again. Where a later chapter meets one of those moments, retrieval funnels in @sec-rag-retrieval, deployment gates in @sec-deployment-lifecycle, proxy-metric drift in @sec-operational-evaluation, it will point back rather than pretend a fresh start. Judged by the book's recurring lens, the incumbent's standing is uneven: mature in efficiency, far ahead in measured trust, and now importing capability. The generative stack is the mirror image, and the rest of this book is about what it costs to close that gap.
+The comparison can now be stated without treating every resemblance as an
+inheritance.
+
+| Status | What belongs there |
+|---|---|
+| **Inherited** | Embedding and term retrieval, artifact versioning, monitoring, staged rollout, rollback, controlled experiments, and long-horizon metrics |
+| **Adapted** | Feature pipelines became broader context pipelines; retrieval feeds a generator rather than only a ranker; evaluation must cover open-ended behavior |
+| **Workload-specific** | Accelerator-resident KV state, token-by-token scheduling, variable output length, and generative safety evaluation |
+| **Outside scope** | The broader predictive-ML lifecycle for tabular models, fraud, forecasting, advertising, and classical search or recommendation |
+
+The rest of the book follows a generative capability from compute and data,
+through training and adaptation, into serving, evaluation, governance, and
+operation. Earlier predictive systems will reappear when they provide a method
+or a warning, but they are neighboring infrastructure, not an earlier chapter of
+the same model lifecycle.
 
 ## Further reading
 

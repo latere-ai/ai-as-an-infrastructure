@@ -364,6 +364,33 @@ test("borrowed-ideas chapter distinguishes evidence from analogy", () => {
   expect(chapter).not.toContain("training minimizes description length");
 });
 
+test("infrastructure-before separates inherited practice from workload differences", () => {
+  const chapter = src("en/orientation/04-infrastructure-before.qmd");
+
+  for (const heading of [
+    "## One request through the older stack",
+    "## What transferred",
+    "## Offline improvement is not product improvement",
+    "## Why serving changed",
+    "## What remains outside this book's scope",
+    "## Where the stacks are beginning to combine",
+    "## The boundary for the rest of the book",
+  ]) {
+    expect(chapter).toContain(heading);
+  }
+
+  for (const stage of ["Candidate generation", "Ranking", "Logging and experimentation"]) {
+    expect(chapter).toContain(stage);
+  }
+
+  expect(chapter).toContain("M_{\\mathrm{KV}}\\approx 2L H_{\\mathrm{KV}}d_h S b");
+  expect(chapter).toContain("fig-infrastructure-before-funnels");
+  expect(chapter).not.toContain("np.argsort");
+  expect(chapter).not.toContain("computationally, an inversion of a transformer");
+  expect(chapter).not.toContain("at civilizational sample size");
+  expect(chapter).not.toContain("far ahead in measured trust");
+});
+
 test("generative adaptation and reasoning first uses define the method locally", () => {
   const required = [
     ["en/generative/01-diffusion-flow-matching.qmd", "@gls-diffusion, the train-by-adding-noise and generate-by-denoising recipe"],
