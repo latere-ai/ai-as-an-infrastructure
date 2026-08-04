@@ -608,13 +608,30 @@
     var COLS = 8, ROWS = 4, B = COLS * ROWS;
     var PAL = ['#5b8def', '#ff7a66', '#3dbd8a', '#b07ae0'];
     var reqs = [5, 3, 6, 4].map(function (t, i) { return { target: t, len: 1, col: PAL[i] }; });
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var zh = lang === 'zh';
+    var L = zh ? {
+      paged: '模式：分页', contiguous: '模式：连续预留', useful: '有效块', allocated: '已分配块',
+      efficiency: '分配效率', free: '空闲块', requests: '各请求使用的块数：',
+      diagram: '四个请求共享一个由 32 个 KV 缓存块组成的内存池',
+      pagedNote: '分页模式按请求增长逐块分配，因此尚未分配的块仍可供新请求使用。',
+      contiguousNote: '连续预留模式预先为每个请求保留八个块；虚线块已经保留但尚未使用。'
+    } : {
+      paged: 'mode: paged', contiguous: 'mode: contiguous', useful: 'useful blocks', allocated: 'allocated blocks',
+      efficiency: 'allocation efficiency', free: 'free blocks', requests: 'blocks used by requests:',
+      diagram: 'Four requests sharing a pool of 32 KV-cache blocks',
+      pagedNote: 'Paged mode allocates one block as each request grows, leaving unallocated blocks available to new requests.',
+      contiguousNote: 'Contiguous reservation books eight blocks per request up front; dashed blocks are allocated but unused.'
+    };
+    var reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+    if (reduceMotion) reqs.forEach(function (r) { r.len = r.target; });
     var mode = 'paged', timer = null;
     var bar = el('div', 'viz-pa-bar');
     var btn = el('button', 'viz-pa-toggle'); btn.type = 'button';
-    var read = el('span', 'viz-pa-read');
+    var read = el('span', 'viz-pa-read'); read.setAttribute('aria-live', 'polite');
     bar.appendChild(btn); bar.appendChild(read);
-    var grid = el('div', 'viz-pa-grid'); grid.style.gridTemplateColumns = 'repeat(' + COLS + ', 1fr)';
-    var cells = []; for (var i = 0; i < B; i++) { var c = el('div', 'viz-pa-cell'); grid.appendChild(c); cells.push(c); }
+    var grid = el('div', 'viz-pa-grid'); grid.style.gridTemplateColumns = 'repeat(' + COLS + ', 1fr)'; grid.setAttribute('role', 'img');
+    var cells = []; for (var i = 0; i < B; i++) { var c = el('div', 'viz-pa-cell'); c.setAttribute('aria-hidden', 'true'); grid.appendChild(c); cells.push(c); }
     var note = el('div', 'viz-pa-note');
     host.appendChild(bar); host.appendChild(grid); host.appendChild(note);
     function layout() {
@@ -624,9 +641,8 @@
         var f = 0;
         reqs.forEach(function (r) { for (var j = 0; j < r.len && f < B; j++) { cells[f].style.background = r.col; f++; used++; } });
         reserved = used;
-        btn.textContent = 'mode: paged';
-        read.textContent = 'utilization ' + Math.round(used / B * 100) + '%   (' + (B - used) + ' blocks free for new requests)';
-        note.textContent = 'Paging hands out one block at a time, so the pool packs tight.';
+        btn.textContent = L.paged;
+        note.textContent = L.pagedNote;
       } else {
         reqs.forEach(function (r, i) {
           var base = i * COLS; // one row reserved per request (its max length)
@@ -636,16 +652,22 @@
             reserved++;
           }
         });
-        btn.textContent = 'mode: contiguous';
-        read.textContent = 'reserved ' + Math.round(reserved / B * 100) + '%, used ' + Math.round(used / B * 100) + '%';
-        note.textContent = 'Contiguous reservation books each request’s max length up front; the dashed blocks are reserved but unused.';
+        btn.textContent = L.contiguous;
+        note.textContent = L.contiguousNote;
       }
+      var efficiency = reserved ? Math.round(used / reserved * 100) : 100;
+      read.textContent = used + ' ' + L.useful + ' · ' + reserved + ' ' + L.allocated + ' · ' + L.efficiency + ' ' + efficiency + '% · ' + (B - reserved) + ' ' + L.free;
+      grid.setAttribute('aria-label', L.diagram + '. ' + read.textContent + '. ' + L.requests + ' ' + reqs.map(function (r) { return r.len; }).join(', '));
+      btn.setAttribute('aria-pressed', mode === 'contiguous' ? 'true' : 'false');
     }
-    function step() { var all = true; reqs.forEach(function (r) { if (r.len < r.target) { r.len++; all = false; } }); if (all) reqs.forEach(function (r) { r.len = 1; }); layout(); }
+    function pause() { if (timer) { clearInterval(timer); timer = null; } }
+    function step() { if (!host.isConnected) { pause(); return; } var all = true; reqs.forEach(function (r) { if (r.len < r.target) { r.len++; all = false; } }); if (all) reqs.forEach(function (r) { r.len = 1; }); layout(); }
     btn.addEventListener('click', function () { mode = mode === 'paged' ? 'contiguous' : 'paged'; layout(); });
-    function restart() { if (timer) clearInterval(timer); timer = setInterval(step, 850); }
-    host.addEventListener('mouseenter', function () { if (timer) { clearInterval(timer); timer = null; } });
+    function restart() { pause(); if (reduceMotion) return; timer = setInterval(step, 850); }
+    host.addEventListener('mouseenter', pause);
     host.addEventListener('mouseleave', restart);
+    host.addEventListener('focusin', pause);
+    host.addEventListener('focusout', restart);
     layout(); restart();
   };
 
