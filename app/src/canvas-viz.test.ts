@@ -37,6 +37,21 @@ test("the viz runtime registers the paged-attention component", () => {
   expect(rt).toMatch(/R\['paged-attention'\]\s*=\s*function/);
 });
 
+test("the KV-cache calculator exposes localized labels and an accessible summary", () => {
+  const start = rt.indexOf("R['kv-cache']");
+  const end = rt.indexOf("R['embeddings-3d']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("document.documentElement.lang === 'zh'");
+  expect(component).toContain("cached tokens per request");
+  expect(component).toContain("logical KV memory (GB)");
+  expect(component).toContain("每个请求的缓存词元数");
+  expect(component).toContain("逻辑 KV 内存（GB）");
+  expect(component).toContain("cv.c.setAttribute('role', 'img')");
+  expect(component).toContain("cv.c.setAttribute('aria-label', L.desc + ': ' + summary)");
+  expect(component).toContain("var read = el('span', 'viz-pa-read')");
+});
+
 test("ch17 memory-scheduling uses paged-attention in both languages", () => {
   expect(src("en/inference/02-memory-scheduling.qmd")).toContain('data-viz="paged-attention"');
   expect(src("zh/inference/02-memory-scheduling.qmd")).toContain('data-viz="paged-attention"');

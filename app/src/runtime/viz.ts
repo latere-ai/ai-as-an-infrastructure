@@ -108,8 +108,16 @@
 
   // KV cache memory vs context length, with sliders.
   R['kv-cache'] = function (host) {
+    var lang = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang === 'zh' ? 'zh' : 'en';
+    var L = lang === 'zh'
+      ? { layers: '层数', heads: 'KV 头数', batch: '批大小', x: '每个请求的缓存词元数', y: '逻辑 KV 内存（GB）', peak: '峰值', at: '对应', tokens: '词元', desc: 'KV 缓存内存随缓存长度变化' }
+      : { layers: 'layers', heads: 'KV heads', batch: 'batch', x: 'cached tokens per request', y: 'logical KV memory (GB)', peak: 'peak', at: 'at', tokens: 'tokens', desc: 'KV-cache memory by cached length' };
     var layers = 32, kvheads = 8, dhead = 128, bytes = 2, batch = 1;
     var cv = canvas(host, 260);
+    cv.c.setAttribute('role', 'img');
+    var bar = el('div', 'viz-pa-bar');
+    var read = el('span', 'viz-pa-read');
+    bar.appendChild(read); host.appendChild(bar);
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, p = 46 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
@@ -124,12 +132,17 @@
       }
       ctx.stroke();
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left';
-      ctx.fillText('peak ' + maxGB.toFixed(1) + ' GB at ' + (maxN / 1024) + 'K tokens', p + 8 * cv.dpr, p + 4 * cv.dpr);
-      ctx.textAlign = 'center'; ctx.fillText('context length', W / 2, H - p + 24 * cv.dpr);
+      var summary = L.peak + ' ' + maxGB.toFixed(1) + ' GB ' + L.at + ' ' + (maxN / 1024) + 'K ' + L.tokens;
+      read.textContent = summary;
+      cv.c.setAttribute('aria-label', L.desc + ': ' + summary);
+      ctx.fillText(summary, p + 8 * cv.dpr, p + 4 * cv.dpr);
+      ctx.textAlign = 'center'; ctx.fillText(L.x, W / 2, H - p + 24 * cv.dpr);
+      ctx.save(); ctx.translate(15 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2);
+      ctx.fillText(L.y, 0, 0); ctx.restore();
     }
-    [['layers', 4, 96, 1, 32, function (v) { layers = v; }],
-     ['kv heads', 1, 64, 1, 8, function (v) { kvheads = v; }],
-     ['batch', 1, 64, 1, 1, function (v) { batch = v; }]].forEach(function (a) {
+    [[L.layers, 4, 96, 1, 32, function (v) { layers = v; }],
+     [L.heads, 1, 64, 1, 8, function (v) { kvheads = v; }],
+     [L.batch, 1, 64, 1, 1, function (v) { batch = v; }]].forEach(function (a) {
       host.appendChild(slider(a[0], a[1], a[2], a[3], a[4], function (v) { a[5](v); draw(); }).wrap);
     });
     draw();
