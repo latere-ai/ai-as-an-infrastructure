@@ -1,62 +1,248 @@
 # Computer Use: the GUI as an Action Space {#sec-computer-use}
 
-The harness of @sec-the-harness dispatches tools, and a tool, so far, has meant a machine interface: an API, a shell, a database. Most of the world's software offers no such interface. It offers a screen, built for human eyes and hands, and the long tail of enterprise systems, desktop applications, and vendor portals will never ship anything else. Computer use is the decision to treat that screen as the action space: the model receives screenshots, and acts by clicking coordinates and typing keys, operating software the way its users do. The design fork the field has carried for a decade, why locating a button is the bottleneck rather than deciding to click it, what it costs to give every session a live operating system, why the screen is the harshest prompt-injection surface in the book, and whether this whole interface is a permanent layer or a transitional pad for a web that grows machine interfaces, all answer why an agent that reasons impressively still misses a Submit button, and what a tool call costs next to a GUI action.
+Computer use lets an agent reach software that lacks a suitable machine interface for the work at hand. It can operate a vendor portal, a desktop application, or a canvas whose useful controls are available only through the interface built for people. That reach is valuable, but indirect. A screen is an observation; pointer and keyboard events are actions. Neither a visible button nor a logged-in browser tells the harness whether the user authorized the effect behind the button.
 
-## The interface that is always there
+The practical rule is therefore narrow: prefer the typed tool when an API, command, or semantic UI operation expresses the intended effect and its authorization. Use computer vision and coordinates where structure is absent, incomplete, or unreliable. Computer use is a universal fallback for rendered software, not a universal replacement for machine interfaces. A capable system can switch representations within one task, but every channel must feed the same run and effect ledger described in @sec-the-harness.
 
-The case for pixels was stated plainly at the technique's public debut: rather than building a tool per task, teach the model "general computer skills," so it can use "a wide range of standard tools and software programs designed for people" [@anthropic2024computeruse]. The alternative reading of that sentence is economic. Every API integration is built and maintained by someone; the screen is the one interface whose integration cost is already paid, by the application's own developers, for its human users.
+This chapter develops that fallback as a partially observed control loop. It separates seeing, grounding, acting, and verifying; defines the contract between a model and an executor; shows why retries can duplicate real effects; and explains how to evaluate the whole system without confusing a grounding score with successful work.
 
-The idea has an industrial ancestor whose scars are instructive. Robotic process automation built a real industry on scripted GUI operation: bots that locate elements by selectors and replay recorded action sequences against software that was never going to get an API. Its standing weakness is brittleness, a selector matches until a UI update breaks it, and industry lore prices bot maintenance as a substantial share of what the automation saves. A model-driven computer-use agent is RPA's problem statement with the perception layer replaced: instead of a hand-written selector, a vision-language model that finds the button the way a person does, and so, in principle, keeps finding it after the redesign. Whether the learned layer is reliable enough to cash that promise is this chapter's empirical question.
+## From scripted interfaces to learned control
 
-## Pixels or the tree
+Screen-driven automation predates current multimodal models. World of Bits exposed web pages through both pixels and the DOM, with mouse and keyboard actions, in 2017 [@shi2017worldofbits]. Traditional browser automation and robotic process automation use selectors, accessibility properties, or recorded coordinates. Learned computer-use systems add a policy that can interpret unfamiliar layouts and propose actions from visual or structured observations. Anthropic's 2024 public beta brought that pattern to a frontier-model product: screenshots entered the model, while a developer-supplied tool executed the requested mouse and keyboard actions [@anthropic2024computeruse].
 
-Two representations of a screen compete for the observation and action space, and the fork is as old as the field: the 2017 environment that started the research line already exposed both [@shi2017worldofbits].
+Learned grounding does not make interface drift disappear. A visual policy may survive a changed DOM path and fail after a theme, scale, icon, or layout change. A semantic locator may survive a cosmetic redesign and fail when a custom widget omits its accessible name. These methods fail under different changes. The useful question is not whether pixels or selectors are inherently robust, but which observation and action channel exposes enough stable identity for this operation.
 
-The pixel path gives the model screenshots and asks it to emit coordinates. It is universal, a canvas app, a legacy terminal emulator, and a video frame all render the same way, and it matches how the model's vision encoder saw the world in pretraining. Its failure mode is the mis-grounded click: the model knows *what* to act on and misses *where*. The structured path reads the machine's own description of the interface, the DOM in a browser or the operating system's accessibility tree, and lets the model act on named elements with no pixel arithmetic at all. Its failure modes are the tree's: custom widgets and canvas-rendered interfaces are missing from it, it can lag the rendered state, and a full dump of a busy screen runs to thousands of tokens against one image. In between sits the workaround that carried the field's early agents: set-of-marks prompting overlays numbered tags on detected elements so the model outputs a tag rather than a coordinate [@yang2023som]. The empirical answer, measured since the first real-OS benchmark, is that hybrids win: screenshot plus tree outperforms either representation alone [@xie2024osworld]. The screen says how things look; the tree says what they are; the agent needs both.
+## A partially observed control loop
 
-## Grounding is the bottleneck
+Let $s_t$ be the hidden application state at step $t$. It includes more than the visible page: active account, selected records, open dialogs, unsaved edits, remote service state, focus, clipboard, downloads, and windows outside the current viewport. The executor returns a partial observation
 
-Grounding is the step from "the thing I want to act on" to screen coordinates, and it is worth separating from planning, because the two fail independently and the field's surprise was which one dominates. Models plan competently on screens they cannot ground: the benchmark built from professional software, CAD tools, scientific applications, high-resolution screens with tiny targets, measured the best model of its moment at 18.9% grounding accuracy, while a training-free method, iteratively zooming into candidate regions before predicting, nearly tripled that [@li2025screenspotpro]. Perception, not reasoning, was the binding constraint, and that explains an otherwise odd product detail: mid-2026 computer-use APIs ship zoom actions, because professional interfaces at native resolution fall below what a downsampled screenshot can resolve.
+$$
+o_t = O(s_t, v_t),
+$$
 
-Why a per-step perception error is fatal, rather than merely annoying, is one line of arithmetic: a task of $n$ actions with per-step success $p$ completes at roughly $p^n$. The runnable prices it. At 30 steps, the difference between 95% and 99% per step is the difference between a demo and a product, and real agents make it worse by taking two to four times more steps than a skilled human's trajectory needs [@abhyankar2025osworldhuman]. Long-horizon GUI work compounds exactly the way @sec-reliability's task-level reliability analysis says it must; grounding is just the term in the product that this chapter's hardware and perception limits set.
+where $O$ is the observation process and $v_t$ is capture metadata such as the window, viewport, resolution, scale, cursor, timestamp, and selected modalities. The observation may contain a screenshot, a DOM or accessibility-tree subset, detected elements, the current URL, and focus metadata. It is evidence about $s_t$, not the state itself.
 
-:::: {.runnable}
-```python
-# end-to-end success ~= per-step success ^ steps (independence approximation)
-steps = [5, 10, 30, 60, 100]
-accs  = [0.90, 0.95, 0.99, 0.999]
-print("steps " + "".join(f"   p={p:<5}" for p in accs))
-for n in steps:
-    print(f"{n:5d} " + "".join(f"  {p**n:6.1%} " for p in accs))
-import math
-p = 0.99
-print(f"horizon at 50% success for p={p}: {math.log(0.5)/math.log(p):.0f} steps")
-print("agents also take 2.7-4.3x more steps than the human-optimal path,")
-print("which multiplies the exponent, not the base")
+Given the history $h_t=(o_0,a_0,r_0,\ldots,o_t)$, user instruction $u$, and remaining budget $b_t$, a policy proposes an action according to
+
+$$
+\pi(a_t \mid h_t, u, b_t).
+$$
+
+Here $\pi$ is the policy, and the expression denotes its distribution over the next action $a_t$ under that history, instruction, and budget. The executor validates and dispatches the selected action. The environment then changes according to
+
+$$
+s_{t+1} \sim T(s_t, a_t, \xi_t),
+$$
+
+where $T$ is the transition process and $\xi_t$ collects effects the agent does not control: network delay, animation, a popup, another actor, or a remote failure. A task succeeds only when an independent verifier establishes the required postcondition $G(s_T)$ before a step, time, or cost horizon. Every symbol in these equations names a component that an implementation must record or bound; none assumes that the model sees the hidden application state.
+
+This formalism matters because a partial observation can be plausible and wrong. A screenshot can omit a dialog behind the current window. A tree can be stale. A click can succeed remotely just before the browser crashes. The model's statement that the task is done is another proposal, not proof.
+
+One interaction step should therefore be explicit:
+
+1. Capture an observation with an identity, timestamp, coordinate frame, window, focus, and selected modalities.
+2. Let the model propose one action or a small, bounded batch.
+3. Resolve the semantic intent, target origin, account, resource, payload, and expected effect.
+4. Check authorization, approval, freshness, focus, coordinate bounds, and actionability outside the model.
+5. Dispatch with an action ID and deadline.
+6. Wait for an observable condition, not an arbitrary sleep, then recapture after each state-changing action.
+7. Return executor evidence and verify the intended postcondition. Distinguish `executed`, `rejected`, `timed_out`, and `outcome_unknown`.
+
+The boundary can be represented by three deliberately boring records:
+
+```text
+UIObservation {
+  frame_id,
+  captured_at,
+  window_id,
+  viewport,
+  focus,
+  screenshot_ref,
+  semantic_elements,
+  visible_dialogs
+}
+
+UIAction {
+  action_id,
+  frame_id,
+  window_id,
+  viewport,
+  kind,
+  target,
+  payload_ref,
+  precondition,
+  postcondition,
+  risk_class,
+  approval_id,
+  timeout
+}
+
+UIResult {
+  action_id,
+  status,
+  dispatched_at,
+  completed_at,
+  new_frame_id,
+  observed_effect,
+  remote_receipt,
+  error
+}
 ```
-::::
+
+The executor rejects a stale frame, an invalid or out-of-bounds point, a focus mismatch, an expired approval, or a target whose identity has changed. If an image was downscaled before inference, coordinate remapping must use the recorded transform in both directions; current vendor guidance explicitly warns that coordinates refer to the original screenshot resolution [@openai2026computeruse]. Before a consequential click, recapture and revalidate the active window, origin, target, and exact payload. Batching stops at every side-effect boundary.
+
+## Pixels, structure, marks, and tools
+
+A GUI system has more than two representations. Each reveals a different part of the state and supplies a different kind of target identity.
+
+**Screenshot pixels.** They preserve visual layout, custom drawing, icons, spatial relationships, and canvas content. They struggle with small or occluded targets, resizing errors, the absence of stable element identity, and invisible or offscreen state.
+
+**DOM or accessibility tree.** These expose names, roles, values, hierarchy, and sometimes node-addressed actions. They can omit custom widgets, include hidden or offscreen attacker text, return stale nodes or noisy dumps, and leave visual position ambiguous.
+
+**Detected elements or set of marks.** These create a compact bridge from regions to stable labels for one frame [@yang2023som]. They inherit detector omissions, duplicate labels, overlays that obscure content, and movement that invalidates the labels.
+
+**API or typed tool.** This channel supplies explicit arguments, validation, return values, and often idempotency or audit support. Its limits are coverage, integration work, schema drift, and operations the interface does not expose.
+
+Coverage and identity are separate concerns. Pixels have broad visual coverage but weak identity. A tree can name an element while failing to show that it is covered by a modal. A typed operation can identify the resource precisely but omit a visual judgment the task requires. Structured observations are also untrusted content: a stale accessibility tree or attacker-controlled label is not safer merely because it is machine-readable.
+
+Use the strongest channel that faithfully expresses the operation. Read a chart visually if its information exists only in the rendering. Use a semantic element action when its role and identity are current. Call an API for a payment or deletion when that API provides precise resources, authorization, idempotency, and receipts. A hybrid policy should be tested against pixel-only and structure-only alternatives under the same model, tasks, and harness; OSWorld's original ablations did not establish one representation as universally best [@xie2024osworld].
+
+## Grounding, execution, and verification
+
+"Click the Save button" hides at least five separate problems:
+
+1. **Intent and planning:** decide that saving is the next useful operation.
+2. **Target identification:** distinguish the document's Save action from similar controls.
+3. **Grounding:** map that target to a point, node, or semantic handle in the current observation.
+4. **Execution:** deliver the event to the intended window and control.
+5. **Outcome verification:** establish that the correct document was saved, not merely that the button changed appearance.
+
+ScreenSpot-Pro isolates the third problem. It evaluates point-in-target grounding in high-resolution professional applications across operating systems. Its strongest previously tested model reached 18.9%, while cascaded visual search reached 48.1% [@li2025screenspotpro]. That result demonstrates substantial grounding difficulty in this setting. It does not prove that grounding dominates planning, operational knowledge, recovery, or verification in end-to-end work.
+
+Small targets expose two independent engineering failures. Downsampling can erase useful detail; resizing without a consistent transform can shift every coordinate. Zooming, cropping, and higher-resolution tiles can help the first problem, while explicit coordinate frames solve the second. Current computer-use schemas include zoom actions for this reason, but zoom changes the observation and invalidates coordinates from the earlier frame [@anthropic2026computerusedocs].
 
 ::: {.callout-tip}
 ## Constraint arrow
-The vision encoder's resolution budget reaches up and shapes the whole agent. A professional display is millions of pixels; a screenshot enters the model downsampled to what the encoder affords, so a 12-pixel toolbar icon simply does not survive the trip. That single constraint, set by encoder economics two layers down, is why grounding benchmarks collapse on professional software, why zoom became an action in the action space, and why the field split between end-to-end pixel models and pipelines that bolt a cheap, specialized grounding model under a frontier planner. The interface did not get harder; the sensor got cheaper than the screen.
+The lower layers shape apparent agent intelligence. Capture resolution determines what the model can see. Viewport and crop policy determine what is omitted. Transport and model latency make observations stale. The sandbox determines which windows, files, clipboard contents, and network destinations exist. A grounding failure can therefore originate in the sensor or executor rather than in the policy. Record those layers before attributing an error to reasoning.
 :::
 
-## Two years up the benchmark
+## Reliability is reaching a verified state
 
-The capability's trajectory is unusually legible because one benchmark anchored it. OSWorld put agents in front of real operating systems, 369 tasks across actual applications with execution-based checking, and opened with a gap that defined the problem: humans above 72%, the best agent at 12.24% [@xie2024osworld]. The climb since reads as a compressed history of the field's methods. The first frontier-model beta, in late 2024, reached the low twenties while its own release notes called it cumbersome and error-prone [@anthropic2024computeruse]. A purpose-trained model with a hosted browser roughly doubled that within months [@openai2025operator]. The open end-to-end line, trained on large GUI corpora and then on reinforcement learning through hundreds of live virtual machines, doubled its own numbers year over year [@qin2025uitars]. By late 2025 frontier models passed 60%; by mid-2026, after the benchmark itself was repaired once and its harness revised again, reported scores had gone past the human baseline the benchmark opened with: a May 2026 release page put a frontier model at 84%, in the same note that revised the previous model's score to 82.3% under the changed harness [@anthropic2026opus48]. Two readings of that curve coexist. One is genuine, steep capability growth, the same verifier-driven training the reasoning chapters describe, applied to trajectories of clicks. The other is a measurement caution this book's @sec-benchmarks installed: the ruler was revised twice mid-climb, and a score above the human baseline on 369 checkable tasks is not the claim that an agent replaces a human at a desk.
+For a fixed path of $N$ required steps, let $E_t$ mean that step $t$ achieved its postcondition. Define the conditional step probability
 
-## What a session costs
+$$
+q_t = \Pr(E_t \mid E_{<t},h_t),
+$$
 
-A tool call in @sec-the-harness is a stateless request measured in milliseconds. A computer-use step is a different object: capture a screenshot, upload it as a thousand-plus image tokens with the accumulated history, run a frontier forward pass to plan and ground, execute the action, wait for the interface to settle, and do it again, seconds per step, tens of steps per task. Under the agent there must be a live, isolated operating system for the session's whole duration; the reference deployment is a container running a virtual display server with a desktop and browser inside, and a market of sandbox providers now sells exactly this, priced per VM-second like the cloud-desktop products of an earlier era. Composing the verified pieces, image tokens per step, seconds of inference, VM time, step counts inflated two to four times over the optimal path [@abhyankar2025osworldhuman], puts a GUI task's cost two to three orders of magnitude above the equivalent API calls, as an engineering estimate rather than a measured constant. That gap organizes the market: browser-only agents, driving a real browser through its debugging protocol where the DOM is available and instances pack densely, became the cheap middle tier, with full-desktop control reserved as the expensive general case. The operational details of sandboxes and their providers belong to @sec-agents-practice; what belongs here is the design consequence, that computer use is bought by the trajectory, and every improvement in grounding pays for itself twice, once in success rate and once in steps not retried.
+where $E_{<t}$ denotes all required step outcomes before $t$. The chain rule then gives
 
-## The screen is an injection surface
+$$
+\Pr(\text{path succeeds}) = \prod_{t=1}^{N}q_t.
+$$
 
-Prompt injection elsewhere in this book arrives through a retrieved document or a tool result. Here it arrives through everything, because the screen is the observation: page text, images, popups, hidden form fields, whatever an attacker can cause to be rendered. The vendor documentation says it without decoration: instructions found in content, on webpages or in images, can override the operator's instructions or cause mistakes [@anthropic2024computeruse]. The demonstrations are not hypothetical. Security researchers watched an agentic browser buy from a counterfeit storefront with stored payment details and follow instructions disguised as a CAPTCHA [@hackernews2025promptfix]; the deployed mitigations, injection classifiers watching the screenshots, mandatory confirmation before consequential actions, human-typed credentials the model never sees, domain restrictions, are the runtime-safety machinery of @sec-runtime-safety specialized to a channel that cannot be pre-filtered, and the payment protocols of @sec-agent-economy assume this layer leaks. A published red-team of one browser agent made the state of the art concrete: safeguards cut attack success from roughly a quarter of attempts to a tenth, and browser-specific attacks to zero, numbers that justify deployment gates rather than confidence [@anthropic2025chrome].
+The familiar $p^N$ is only the homogeneous independent special case in which every conditional probability equals $p$ and any failure is unrecoverable. GUI errors are correlated: one wrong window can poison several later actions; a slow page can cause repeated stale clicks; a recovery action changes both the horizon and future probabilities. For an interactive policy, the useful quantity is the probability of reaching a verified goal state before its horizon, including recovery behavior.
+
+OSWorld-Human makes efficiency visible alongside completion. In its evaluated systems, model calls dominated latency, later steps could take much longer than early ones, and the best agents used 2.7--4.3 times as many steps as the human-authored reference trajectories required [@abhyankar2025osworldhuman]. These are measurements of particular agents and tasks, not a universal multiplier. They do show why task success alone hides operational quality.
+
+Retries require effect semantics. A read, zoom, or fresh screenshot is usually safe to retry. A send, purchase, delete, permission change, or form submission may not be. If a timeout occurs after the remote effect but before the next observation, blind replay can duplicate it. A mutation is safe to retry only when it is idempotent or authoritative current state proves that the effect did not occur. Otherwise inspect and reconcile using a receipt, application history, or remote state. If the outcome remains ambiguous, enter `needs_reconciliation` rather than clicking again.
+
+Approvals follow the same rule. An approval for an irreversible action is bound to the exact payload, target, origin, account, price or data disclosure, and current state. It is single-use and expires. A changed screen or payload requires a new approval; approval of a broad goal is not approval of every click used to pursue it. Stopping or restoring the local environment cannot undo an effect already committed to a remote service.
+
+## The environment is part of the system
+
+Not every task needs a full desktop. A browser-only environment is enough for a web workflow; a full desktop is required when the task crosses native applications, system dialogs, or local files. Whichever boundary is chosen, the environment owns state that the model does not: browser profiles and cookies, downloads, clipboard, files, notifications, multiple windows, popups, extensions, locale, scale, and authentication challenges.
+
+Keep three kinds of state distinct:
+
+- **Application state** is the local and remote state changed by the user's task.
+- **Session state** is the browser or desktop profile, credentials, files, clipboard, network identity, and environment configuration.
+- **Model context** is the lossy history supplied to the policy.
+
+Restoring model context does not restore application state. Restoring a VM snapshot does not reverse remote application state. Reusing session state can leak one run's data or authority into another.
+
+Run computer use in a fresh, isolated browser context or desktop environment with the minimum necessary account and network access [@openai2026computeruse; @anthropic2026computerusedocs]. Never attach the agent to a host browser profile containing personal history, extensions, saved cards, or a password manager. Disable shared host mounts and clipboard bridges unless the task specifically needs them. Keep browser-control, remote-debugging, and display endpoints private, authenticated, and scoped to one session. Downloads go to quarantine and are not opened or executed automatically; uploads and sharing pass through the same data-loss and approval checks as any other transmission.
+
+Isolation also has layers. A fresh browser profile separates session data. A browser sandbox and site isolation constrain hostile renderers. A hardened container or microVM protects the host. Network and account policy constrain remote effects. None substitutes for the others, and an ordinary container is not a separate operating-system kernel [@nist2017applicationcontainers; @chromiumsiteisolation].
+
+## The interface is an injection and privacy surface
+
+Pixels, OCR, page text, DOM nodes, accessibility labels, email, PDFs, downloads, and tool results are untrusted data, not authority. They may describe what the agent should do, but only direct user instructions and external policy can authorize a new target, data flow, or side effect [@openai2026computeruse]. An authenticated browser carries ambient authority through its cookies. If page content can make the agent read one origin and type its data into another, the agent becomes a confused deputy across boundaries that normal browser code could not cross.
+
+Authorization must therefore happen outside the model for every proposed effect. Resolve the authenticated user and tenant, current origin and account, target resource, semantic action, exact arguments, data being disclosed, remaining budget, and required approval. An allowed domain does not make its content trusted: it can host user text, third-party frames, redirects, malicious ads, or compromised pages. Navigation policy must recheck the scheme, host, port, resolved destination, redirects, and access to local, private, and metadata networks.
+
+A prompt-injection detector can reduce exposure, but a classifier is not authorization. If it misses an attack, the policy layer must still prevent unauthorized sending, publishing, purchasing, deletion, installation, permission changes, acceptance of legal terms, and disclosure of sensitive data. WASP evaluates this end to end and finds that realistic, low-effort injections can divert capable web agents [@evtimov2025wasp]. Treat attack success, partial attack progress, and privileged effects as separate outcomes; failure to finish an attack may be security by incompetence, not a durable control.
+
+Privacy starts before model inference. A screenshot or structured tree can contain names, account identifiers, notifications, input values, browsing history, one-time codes, and data outside the intended task. Capture the smallest relevant window or viewport, mask sensitive regions before upload where possible, and avoid raw screenshot logging by default. Store necessary artifacts encrypted, per session, with narrow access and short retention. Pause both model actions and capture during trusted user takeover.
+
+Typing sensitive data counts as transmission [@openai2026computeruse]. Human typing alone does not guarantee secrecy: the next screenshot, DOM value, autofill popup, or account page can reveal it. Prefer a scoped credential or action broker. If a person must enter a password or one-time code, transfer control through a trusted surface outside the agent, suspend capture and model actions, clear transient UI, and resume with reduced authority. The model should not receive reusable credentials.
+
+Place approval at the point of risk, immediately before the commit action. Show the person the exact site and account, recipient or target, payload, disclosed data, amount, and irreversible effect. Bind approval to an immutable action ID or payload hash, revalidate the fresh screen and origin after approval, and require another approval if anything changed. Text on the screen can never approve itself.
+
+## What a trajectory costs
+
+Computer use consumes a trajectory, not one model call. A useful accounting identity is
+
+$$
+C = \sum_{t=1}^{N} C_t,
+$$
+
+where the cost of step $t$ is
+
+$$
+\begin{aligned}
+C_t ={}& C_{\text{model},t}+C_{\text{image},t} \\
+       &+C_{\text{env},t}+C_{\text{tool},t}.
+\end{aligned}
+$$
+
+with critical-path latency
+
+$$
+L = \sum_{t=1}^{N} L_{\text{critical},t}.
+$$
+
+Here $N$ is the number of attempted steps, including recovery; $C_{\text{model},t}$ is inference cost; $C_{\text{image},t}$ is image processing or image-token cost; $C_{\text{env},t}$ is browser, container, or VM-seconds; and $C_{\text{tool},t}$ covers capture, dispatch, storage, and verification. $L_{\text{critical},t}$ is the non-overlapped wall time on step $t$ across capture, transport, inference, dispatch, settling, and verification. Each term should be measured, not inferred from a universal GUI-to-API multiplier.
+
+Batching can reduce model calls, but it spends freshness: the later actions are chosen without seeing intermediate state. Parallel actions are safe only when their resources and effects are independent. Report task success together with action count, model calls, tokens, wall time, tail latency, VM-seconds, retries, and human intervention. Report both all-attempt cost and cost conditioned on success; the latter alone hides expensive failures.
+
+## Evaluate the system you actually run
+
+A grounding benchmark asks whether a model identifies the right target in a supplied image. An end-to-end task benchmark asks whether the model, harness, executor, environment, and verifier reach the required state. ScreenSpot-Pro measures the first. OSWorld measures the second on desktop applications: its original 369 tasks reported 72.36% for humans and 12.24% for the best tested agent [@xie2024osworld]. AndroidWorld adds 116 parameterized tasks across 20 mobile applications, with programmatic setup, success checks, and teardown; its original results also showed that task variations can materially change performance [@rawles2025androidworld].
+
+These numbers are not points on one timeless curve. Benchmark tasks, environment images, application versions, observation and action interfaces, maximum steps, prompts, retries, and verifiers change. Original OSWorld and OSWorld-Verified results are not directly comparable, nor does a later agent score on a revised benchmark cross the original human baseline. OSWorld 2.0 deliberately changes the problem again: its 108 workflows are much longer and expose failures involving constraints, changing information, hidden state, asking the user, and verification [@yuan2026osworld2]. The benchmark version and harness are part of every score.
+
+Use a state-based verifier that reads authoritative application or service state. A final screenshot and the model's self-report are weak evidence. For each run, record the task and initial state, benchmark commit, environment image, application versions, resolution, scale, locale, account, network conditions, observation sources, action interface, model snapshot, prompt, harness and verifier versions, limits, retries, and exclusions. Report completion with a bootstrap confidence interval and stratify by application, task horizon, and risk where sample size permits.
+
+A release evaluation should cover four families of evidence:
+
+- **Capability:** task completion, grounding accuracy, invalid-action rate, stale or out-of-bounds actions, unnecessary steps, and model calls.
+- **Efficiency:** wall time, tail latency, tokens, cost, VM-seconds, retries, and human intervention.
+- **Recovery:** success after delayed rendering, moved or occluded targets, popups, focus theft, stale accessibility tree, network retries, authentication challenges, crashes, and an ambiguous duplicate action.
+- **Safety:** side-effect precision, approval-bypass rate, prompt-injection attack success, sensitive-data exposure, post-cancel action count, unauthorized-origin attempts, and effects committed after timeout.
+
+Test those faults deliberately. Vary resolution, scale, theme, locale, and window size. Insert animation, delayed loading, overlays, duplicate controls, focus changes, and stale structure. Crash after a click but before the result observation. Inject an instruction into visible content and into a structured label. A system that passes only the clean path has not demonstrated reliable computer use.
+
+## A deployment checklist
+
+Before exposing a GUI action surface, verify that:
+
+- the typed or semantic alternative was considered first;
+- every observation has a frame, window, viewport, scale, focus, and timestamp;
+- coordinates and semantic handles are checked against fresh state;
+- every mutation declares a precondition, postcondition, risk class, and retry policy;
+- approvals bind to the exact target, payload, account, and current state;
+- ambiguous outcomes enter reconciliation instead of blind replay;
+- the browser or desktop is isolated from host profiles, credentials, files, and control endpoints;
+- capture, logs, clipboard, downloads, uploads, and retention have explicit privacy rules;
+- an independent verifier checks current state; and
+- evaluation reports the complete model--harness--environment configuration.
 
 ::: {.callout-important}
 ## What's contested
-Whether computer use is a permanent layer or a transitional one is the field's live argument, and both positions hold strong cards. The transitional camp points at the protocol wave: @gls-mcp turned tool integration into a commodity, its server ecosystem grew explosively through 2025 and 2026, and agent-facing UI standards are being drafted, so wherever agent traffic concentrates, a structured interface will be built and the per-task economics, orders of magnitude apart, will do the rest. The permanence camp answers with the RPA industry's twenty-year existence proof: the long tail of software that justified scripted GUI bots, mainframe front-ends, legacy desktop tools, vendors with no incentive to open an API, is precisely the software that will never ship a protocol endpoint, and seat-priced SaaS has reasons to prefer screens over APIs indefinitely. The labs themselves refuse to pick a side, and the refusal is revealing: the same companies ship the protocol and the pixels, structure where it exists, screen as the universal fallback. The question is not which wins but where the boundary settles, and the boundary is worth watching because each side's costs fall at different rates.
+Computer use may remain a long-lived compatibility layer, or its use may shrink as more products expose agent-facing tools. Neither outcome needs a universal claim. Structured operations are attractive when they provide stable identity, precise authorization, lower latency, and auditable results. Visual control remains useful for legacy software, custom rendering, cross-application workflows, and tasks whose content is inherently visual. The boundary is empirical and operation-specific: route each effect through the safest interface that can express it, then measure the fallback under realistic drift and faults.
 :::
+
+One agent already faces partial observation, stale state, and ambiguous effects. Adding agents does not remove those conditions. If several policies share a browser or desktop, they can race on focus, invalidate one another's frames, and duplicate side effects unless ownership and coordination are explicit. @sec-multi-agent-systems takes up that coordination problem next.
 
 ## Further reading
 
