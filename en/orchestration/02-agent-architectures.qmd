@@ -1,411 +1,389 @@
 # Agent Architectures {#sec-agent-architectures}
 
-An agent is a language model placed inside a loop that lets it act, observe
-the result, and act again. The loop has a standard four-part decomposition:
-planning, memory, tool use, and the action loop that ties them together. Its
-control flow interleaves reasoning with action because the next decision must
-see what the last action revealed. Tool use is the part that turns a text
-generator into something that changes the world.
+A fixed workflow is enough when every step and branch can be specified before
+execution. An agent becomes useful when the next operation depends on information
+that is not yet available: a test result, a search result, a user decision, or a
+changed environment. Its architecture is the closed decision loop that turns
+those observations into the next bounded action.
 
-![Schematic of the autonomy-versus-blast-radius trade-off across agent architectures. More planning and delegation expands what the system can do, but also expands what can go wrong. Idealized placement, not measured data.](/figures/agent-architectures-1.svg){#fig-agent-architectures-1}
+That loop needs more than a model and a list of tools. It needs a controller, an
+assembled context, an action interface, an environment, a state transition, and
+a termination rule. Tool calling is one action interface; executable code,
+graphical-interface operations, messages, and environment-native commands are
+others. Planning and memory are choices within the loop, not a universal list of
+boxes from which every agent must be built.
 
-## A plan that meets the world
+Two influential 2023 systems established parts of this design space. ReAct
+interleaved explicit verbal reasoning with task-specific actions so that later
+decisions could use new observations [@yao2023react]. Toolformer generated,
+executed, and filtered candidate calls to five fixed APIs, then fine-tuned a model
+on the retained calls [@schick2023toolformer]. They showed that models can learn
+and use action interfaces, but neither paper defines the only valid agent
+architecture.
 
-Imagine the obvious way to build an agent. Ask the model to read the task,
-think it through, and write the full plan: step one, run the tests; step two,
-open the failing file; step three, fix the off-by-one on line forty; step
-four, rerun. Then execute the plan, one step at a time, top to bottom.
+## One turn is a state transition
 
-This design is clean, legible, and wrong. The plan was written before any
-step ran, which means it was written before the agent knew anything the steps
-would reveal. Step one runs the tests and the failure is not the one the model
-assumed. The bug is not on line forty, and it is not an off-by-one. Every
-later step in the plan now refers to a world that does not exist. The agent is
-holding a script for a play whose first scene already went differently. It can
-follow the script into nonsense, or it can throw the script away. Either way,
-planning the whole task up front bought nothing, because the first observation
-invalidated it.
+At turn $t$, the runtime constructs a model input, the controller proposes a
+decision, and the runtime updates durable state:
 
-The structure of an agent is therefore a loop, not a plan. The shape of that
-loop explains why thinking and doing must be interleaved, and why the agent
-decomposes into planning, memory, tool use, and action.
+$$
+\begin{aligned}
+x_t &= \mathcal{C}(g,u,s_t,A_t,b_t), \\
+y_t &\sim \pi_\theta(\cdot\mid x_t), \\
+d_t &= \mathcal{D}(y_t), \\
+s_{t+1} &= \mathcal{U}(s_t,d_t,o_{t+1}).
+\end{aligned}
+$$
 
-## Closing the gap
+Here, $t$ is the turn index; $g$ is the task goal; $u$ contains user
+instructions and constraints; $s_t$ is the durable session state before the
+turn; $A_t$ is the set of action specifications exposed on that turn; $b_t$ is
+the remaining token, action, time, and cost budget record; and $\mathcal{C}$ is
+the context assembler. Its output
+$x_t$ is the bounded input sent to the controller. The controller
+$\pi_\theta$, with parameters $\theta$, samples output $y_t$; decoder
+$\mathcal{D}$ parses that output into decision $d_t$. The updater
+$\mathcal{U}$ combines the old state, the decision, and observation $o_{t+1}$
+to produce the next state $s_{t+1}$. Every symbol in the equations refers to a
+runtime object that can be logged and tested.
 
-Step back to why a loop is needed at all. A base model maps a prompt to a
-continuation. That is enough to answer a question whose answer is already
-latent in the weights, and useless for a task whose answer depends on the
-state of the world: the current contents of a file, the result of a query,
-whether a test passes after an edit. The model cannot read that state, and it
-cannot change it. It emits text and stops.
+The parsed decision must have an explicit type. A useful minimum is
 
-The essential problem of an agent is to close that gap. The model needs a way
-to take an action in the world, see what the action produced, and feed that
-observation back into its next decision. It also needs to do this over many
-steps, because real tasks are not one action long: fixing a bug is read,
-hypothesize, edit, test, and very likely repeat.
+$$
+d_t \in
+\{\operatorname{act}(a_t),\operatorname{ask}(q_t),
+  \operatorname{final}(r_t),\operatorname{stop}(e_t)\}.
+$$
 
-Three constraints shape every answer to this problem, and they are worth
-naming before any architecture is drawn. The context window is bounded, so a
-long task cannot keep every observation in view at once. Each step also costs
-a model call, which gives the loop both a latency and a price. Third, the
-model is probabilistic: any single action can be wrong, so the architecture
-has to tolerate and recover from mistakes rather than assume them away. The
-plan-then-execute design failed precisely because it ignored that last point
-and assumed its first guess would survive contact with the world.
+Here, $a_t$ is a requested action or an explicit action batch; $q_t$ is a
+question for the user,
+$r_t$ is a proposed final response, and $e_t$ is a structured stop reason. An
+action can produce a tool result, an execution error, or a policy denial as
+$o_{t+1}$. A user reply can also become an observation. A final response leaves
+the loop only after its completion condition passes. A stop reason records
+success, terminal failure, cancellation, budget exhaustion, or another declared
+termination condition.
 
-Try changing the per-step reliability and the task length below to see why a
-single up-front plan is so fragile: a plan with no recovery succeeds only if
-every step lands, so its success probability is the per-step reliability
-raised to the number of steps.
-
-:::: {.runnable}
-```python
-import numpy as np
-n = np.arange(1, 21)               # task length: 1 to 20 steps
-for p in [0.99, 0.95, 0.90, 0.80]: # per-step reliability
-    survive = p ** n               # P(all n steps land, no recovery)
-    import matplotlib.pyplot as plt
-    plt.plot(n, survive, marker="o", ms=3, label=f"p={p}")
-plt.xlabel("steps in the plan (n)")
-plt.ylabel("P(plan succeeds with no recovery)")
-plt.ylim(0, 1); plt.legend(); plt.title("Why plan-then-execute is fragile")
-plt.show()
-for p in [0.95, 0.80]:
-    print(f"p={p}: 10-step plan succeeds {p**10:.1%} of the time")
-```
-::::
-
-## The loop, and why it interleaves
-
-The design that works does not separate reasoning from acting. It interleaves
-them. The model produces a short reasoning trace, then an action, observes the
-result, then reasons again with that observation in hand. This is the
-**reason-and-act** pattern, named ReAct by Yao et al. [@yao2023react], and the
-synergy is the point: the reasoning lets the model decide and adjust its plan
-as it goes, and the actions let it pull in facts that the reasoning alone
-would have to hallucinate. The plan is never written all at once. It is
-revised at every turn against what the last action returned, which is exactly
-the failure mode of the previous section turned into a virtue.
+The state $s_t$ and the model context $x_t$ are not the same object. The state
+may contain a full event log, approval records, handles to external resources,
+and data that should never enter a prompt. The context is a selected and
+formatted view of that state. Keeping the two separate makes redaction,
+summarization, replay, and model changes possible without rewriting the session
+record.
 
 ```{=html}
 <figure id="fig-agent-architectures-stepper">
 <div class="viz" data-viz="stepper">
-<div data-chip="Reason" data-title="1 · A first hypothesis">The model reasons it through and guesses the bug is an off-by-one on line 40.</div>
-<div data-chip="Act" data-title="2 · Choose an action">Rather than commit to the guess, it calls a tool: run the tests.</div>
-<div data-chip="Observe" data-title="3 · See the result">The tests fail, but not the way it assumed: the bug is neither on line 40 nor an off-by-one.</div>
-<div data-chip="Context" data-title="4 · Fold it back">That observation is appended to the growing context, so the next reasoning step sees the real failure, not the guess.</div>
-<div data-chip="Reason" data-title="5 · Reason again, and loop">With the fact in hand it revises the hypothesis and chooses the next action. The turn repeats until the test passes.</div>
+<div data-chip="Assemble" data-title="1 · Build the turn input">The runtime selects the task, current working state, relevant observations, allowed actions, and remaining budget.</div>
+<div data-chip="Decide" data-title="2 · Propose one typed decision">The controller requests a test run. A visible reasoning trace is optional; the requested action and its arguments are not.</div>
+<div data-chip="Guard" data-title="3 · Validate before execution">The reference monitor checks the action schema, permissions, approval policy, and budget before any side effect occurs.</div>
+<div data-chip="Execute" data-title="4 · Act and observe">The dispatcher runs the approved test command with a timeout and records its output, status, provenance, and request identifier.</div>
+<div data-chip="Update" data-title="5 · Reduce the result into state">The failure becomes a durable event and updates the working state used to assemble the next turn.</div>
+<div data-chip="Stop" data-title="6 · Check the outcome">The loop continues because the completion check still fails. It exits only after success, terminal failure, cancellation, or budget exhaustion.</div>
 </div>
-<figcaption>Step through one reason-act-observe turn and watch it loop: the observation, not the up-front guess, drives the next reasoning step.</figcaption>
+<figcaption>One controlled turn. The model proposes a typed decision; the runtime guards, executes, records, and decides whether another turn is allowed.</figcaption>
 </figure>
 ```
 
 ```{dot}
 //| label: fig-agent-architectures-react-loop
-//| fig-cap: "The reason-and-act loop. Each turn the model reasons, chooses an action, and folds the observation back in before reasoning again, after Yao et al. (2023)."
-digraph {
-    bgcolor="transparent";
-    rankdir=LR;
-    nodesep=0.4; ranksep=0.5;
-    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-    edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-    M [label="Model: reason"];
-    A [label="Choose action"];
-    T [label="Execute tool"];
-    O [label="Observation"];
-    F [label="Final answer"];
-    M -> A;
-    A -> T;
-    T -> O;
-    O -> M;
-    M -> F [style=dashed, label="done"];
-}
-```
-
-The loop in @fig-agent-architectures-react-loop is the heart of the
-architecture, and its specific shape is what separates an agent from a single
-model call. Everything else here is either a part the loop
-animates or a consequence of running it in production.
-
-The runtime contract that implements the loop is small to state. Create a
-session bound to an agent definition. Send the context to the model, dispatch
-the tool calls it returns, append the results, and repeat until the model
-signals done or the loop is interrupted. That sequence is the reason-and-act
-pattern in operational form. The mechanism that makes this contract survive
-production, durability across crashes, scheduling, interruption, is the
-harness, and it is the subject of @sec-the-harness. The split is architecture
-here, engineering there.
-
-## Anatomy of the loop
-
-The loop has four moving parts. The dominant framing decomposes an agent into
-these four around a model that acts as the controller. The decomposition is
-Lilian Weng's [@weng2023agent], and it has become the common vocabulary:
-**planning**, **memory**, **tool use**, and the **action** loop that ties
-them together.
-
-- **Planning** turns a goal into a sequence of steps. At its simplest this is
-  the model deciding, one step at a time, what to do next. At its most
-  structured it is explicit task decomposition into subgoals, with
-  self-reflection on past steps to correct course.
-- **Memory** is what survives across steps. Short-term memory is the context
-  window itself, the running transcript of what has happened. Long-term
-  memory is an external store the agent reads from and writes to, because the
-  window is too small to hold a long task. Memory as a system is the subject
-  of @sec-memory-systems; here it is one of the four parts the loop relies on.
-- **Tool use** is how the agent reaches outside its weights: a function it can
-  call to fetch a page, run code, query a database, or edit a file. A tool
-  call is the agent's only way to read or change external state.
-- **Action** is the loop that drives the other three: send the current
-  context to the model, let it choose a tool call, execute the call, append
-  the result, and repeat.
-
-It helps to see the parts laid out by where they live. Planning is reasoning
-the model does inside its own forward pass, and short-term memory, the context
-window, is inside that same view. Tool use is the single edge that crosses to
-the world outside the weights, with long-term memory as a store on the far
-side of it.
-
-```{dot}
-//| label: fig-agent-architectures-four-parts
-//| fig-cap: "The four-part decomposition by where each part lives. Planning and short-term memory sit inside the model boundary; tool use is the only edge crossing to external state and long-term memory. After Weng (2023)."
-digraph {
-    bgcolor="transparent";
-    rankdir=LR;
-    node [shape=box, fontname="Helvetica", style=rounded, color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-    edge [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-    subgraph cluster_model {
-        label="Inside the model";
-        fontcolor="#6b7280";
-        style=dashed;
-        color="#6b7280";
-        ctrl [label="Controller\n(reasoning model)"];
-        plan [label="Planning"];
-        stm [label="Short-term memory\n(context window)"];
-    }
-
-    subgraph cluster_world {
-        label="External state";
-        fontcolor="#6b7280";
-        style=dashed;
-        color="#6b7280";
-        ltm [label="Long-term memory\n(external store)"];
-        world [label="Files, queries,\ncode, the web"];
-    }
-
-    ctrl -> plan [label="decides steps"];
-    ctrl -> stm [label="reads/writes", dir=both];
-    ctrl -> tooluse [label="invokes"];
-    tooluse [label="Tool use", style="rounded,filled", fillcolor="#f1ece1", color="#3b82f6", fontcolor="#3b82f6"];
-    tooluse -> world [label="acts/observes", dir=both];
-    tooluse -> ltm [label="recall/persist", dir=both];
-}
-```
-
-Of the four, tool use is the one that earns the name agent. Planning and
-memory shape how the model thinks; tool use is the only part that lets it
-reach past the weights and touch the world, the single edge in
-@fig-agent-architectures-four-parts that crosses the boundary. Without it the
-loop spins on text alone.
-
-## How the pieces matured
-
-The decomposition did not arrive fully formed. The order in which the parts
-became real explains why the synthesis took the shape it did.
-
-The first capability to mature was tool use as a learned skill. Toolformer
-[@schick2023toolformer] showed that a model could teach itself, in a
-self-supervised way, when to call an API and how to splice the result back
-into its generation, which established that tool use is something a model can
-be trained to do rather than a feature bolted on at inference time.
-
-In parallel, the reasoning side matured. Chain-of-thought prompting showed
-that letting a model write intermediate steps before an answer improved
-performance on multi-step problems, a thread @sec-eliciting-reasoning follows
-in depth. ReAct's contribution was to fuse that reasoning with action in one
-interleaved trace [@yao2023react], which directly attacked chain-of-thought's
-weakness: a pure reasoning chain has no way to check itself against the world,
-so it propagates its own errors and hallucinations, while interleaving a
-Wikipedia lookup between reasoning steps lets the model ground each step in a
-fact it just retrieved. The four-part decomposition was the synthesis that
-named the pieces [@weng2023agent], with planning and memory as first-class
-components alongside tool use rather than implicit features of a prompt.
-
-What has changed most recently is where the reasoning lives. Early agents
-carried their reasoning in the prompt: the harness instructed the model to
-think step by step and to interleave thoughts with actions. Reasoning models
-trained to deliberate internally, covered in @sec-training-to-reason, move
-some of that work below the loop. The agent architecture is the same shape, a
-model in a reason-and-act loop, but the planning component is increasingly
-something the model does in its own trained reasoning rather than something
-the harness has to scaffold with prompting.
-
-## Living tensions
-
-The architecture's choices are balances, and each has a cost worth naming.
-
-- **Explicit planning versus letting the model reason as it goes.** Up-front
-  task decomposition gives a legible plan a person can inspect, and it can
-  keep a long task on track. It also commits to a structure before any
-  observation exists, so a plan that meets a surprising result is a plan that
-  has to be torn up. This is the opening failure in
-  miniature. Step-at-a-time reasoning adapts to every observation but has no
-  global view and can wander. Most production agents lean toward the
-  reason-and-act middle: a light plan, revised every step against what the
-  last action returned.
-
-- **Tool count versus model attention.** Every tool the agent can call is a
-  schema in the model's context and a candidate it must consider. A handful
-  of well-chosen tools is easy for the model to select among. A large catalog
-  costs context on every turn and degrades selection accuracy, because the
-  model's attention is finite and irrelevant tools actively hurt. This is the
-  pressure that forces a tool-selection strategy, discussed below and in
-  @sec-the-harness.
-
-- **Short-term versus long-term memory.** Keeping everything in the context
-  window is simple and lossless until the window fills, at which point the
-  task stalls. Externalizing memory lets the task run indefinitely but makes
-  the agent's recall only as good as what it chose to write down and can
-  retrieve. The boundary, what stays in the window and what moves to a store,
-  is a design decision introduced here and expanded in @sec-memory-systems.
-
-- **A tool call per turn versus code as action.** The loop below dispatches
-  one structured call per iteration, which keeps every action legible,
-  gateable, and interruptible. CodeAct established the alternative: the model
-  emits executable code that composes many tool invocations, loops, and
-  filters inside a sandbox, collapsing several loop iterations into one action
-  and raising success rates by up to 20% across 17
-  models [@wang2024codeact]. The trade is the loop's shape itself: fewer,
-  bigger actions spend fewer tokens on round trips but are harder to inspect
-  and to gate per operation, a tension @sec-context-engineering meets again
-  when code execution wraps MCP tools.
-
-::: {.callout-important}
-## What's contested
-How much planning should be explicit is unsettled. One camp builds agents
-that decompose a task into a written plan of subgoals and reflect on it
-between steps, on the argument that a legible plan is more reliable and more
-auditable. The other camp argues that a capable reasoning model plans better
-implicitly, inside its own trained reasoning, than any prompt-level scaffold
-the harness can impose, and that explicit planning machinery adds brittleness
-for a benefit the model now provides on its own. The same debate runs through
-tool discovery: whether the harness should curate the tools the model sees
-each turn, or hand the model a way to discover tools and trust it to choose.
-Neither is settled, and the right answer moves as the underlying model's
-reasoning improves.
-:::
-
-## What the loop dispatches
-
-The loop itself is short to write and unforgiving in its details. In
-pseudocode it is a `while` over model calls:
-
-```text
-loop:
-    response = model(context)
-    if response has no tool call:
-        return response            # the model is done
-    result = execute(response.tool_call)
-    context = context + response + result
-```
-
-Everything hard is hidden in `execute` and in the management of `context`.
-
-The tools a loop dispatches are not uniform, and a loop that treats them all
-alike mishandles most of them. Tools divide by statefulness into three kinds.
-**Stateless** tools hold no state on the agent's side: a web fetch, a sandbox
-command given a sandbox ID, a plain REST call. They are the easy case and
-scale trivially. **Stateful-connection** tools, the Model Context Protocol
-(MCP) in its 2025 revisions being the canonical one [@mcp2026roadmap], carry
-negotiated capabilities
-and cursor state in a connection the loop must hold across calls.
-**Stateful-resource** tools keep their state in an external system, a database
-session or a long-running job, that the loop must correlate to across turns.
-The architectural point is that these three answer the question "what happens
-on restart?" differently: nothing, reconnect, or rediscover. The engineering
-of holding those connections alive through reconnects and token refreshes is
-the harness's job and lives in @sec-the-harness; the architecture's job is to
-know the three classes exist and not collapse them into one. The classes are
-more durable than any protocol's place in them: the 2026 MCP spec work removes
-the protocol-level session, moving the canonical stateful-connection example
-toward the stateless class while the taxonomy itself
-survives [@mcp2026rc].
-@fig-agent-architectures-tool-classes lines the three up against the
-discriminating question.
-
-```{dot}
-//| label: fig-agent-architectures-tool-classes
-//| fig-cap: "The three tool classes divided by where their state lives and what each must do on restart: nothing, reconnect, or rediscover."
+//| fig-cap: "A closed agent loop. State is assembled into context; the controller proposes a typed decision; the runtime handles questions, guarded actions, final responses, and stop conditions explicitly."
 digraph {
     bgcolor="transparent";
     rankdir=TB;
-    node [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-    edge [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+    size="3.2,8.0";
+    nodesep=0.25; ranksep=0.32;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.0];
+    edge [fontsize=8, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-    q [label="Where does the tool's state live?", shape=diamond, style=filled, fillcolor="#f1ece1"];
+    S [label="Durable state"];
+    C [label="Assemble bounded context"];
+    P [label="Controller proposes decision"];
+    D [label="Decision type?", shape=diamond, style=filled];
+    G [label="Validate + authorize action"];
+    E [label="Execute + normalize observation"];
+    Q [label="Wait for user input"];
+    V [label="Verify completion"];
+    U [label="Update state"];
+    X [label="Exit with recorded outcome", shape=doubleoctagon];
 
-    stateless [label="Stateless\nweb fetch, REST call,\nsandbox cmd by ID", shape=box, style=rounded];
-    conn [label="Stateful-connection\nMCP session: capabilities\nand cursor in a live link", shape=box, style=rounded];
-    res [label="Stateful-resource\nDB session, long-running job\nin an external system", shape=box, style=rounded];
-
-    r1 [label="On restart: nothing", shape=note];
-    r2 [label="On restart: reconnect", shape=note];
-    r3 [label="On restart: rediscover", shape=note];
-
-    q -> stateless [label="nowhere"];
-    q -> conn [label="in the connection"];
-    q -> res [label="in an external system"];
-
-    stateless -> r1;
-    conn -> r2;
-    res -> r3;
+    S -> C -> P -> D;
+    D -> G [label="action"];
+    G -> E [label="allowed"];
+    G -> U [label="denied / invalid"];
+    E -> U;
+    D -> Q [label="ask"];
+    Q -> U [label="reply"];
+    D -> V [label="final"];
+    V -> X [label="complete"];
+    V -> U [label="not complete"];
+    D -> X [label="stop"];
+    U -> S;
 }
 ```
 
-One action space sits at the taxonomy's edge: computer use, where the tool is
-the whole graphical interface, actions are clicks and keystrokes, and
-observations are screenshots (Anthropic shipped it in October 2024, OpenAI's
-Operator followed in January 2025 [@anthropic2024computeruse]). It stresses
-the loop hardest, long horizons and noisy pixel observations with no schema to
-validate a call against, which is why hybrid systems such as CoAct-1 route
-between GUI actions and generated code [@song2025coact]; @sec-evaluating-agents
-grades these agents by final environment state.
+ReAct is one way to instantiate the controller in
+@fig-agent-architectures-react-loop. It places visible verbal reasoning between
+actions [@yao2023react]. The general loop does not require such a trace. A model
+may reason internally, an external planner may supply a plan, or a deterministic
+workflow may choose some transitions. What must remain observable is the
+decision record: selected branch, action arguments, observation provenance,
+approval result, budgets consumed, and completion evidence.
 
-The other recurring implementation question is which tools the model sees in a
-given turn. A static flat list, every tool in every prompt, is the simplest
-design and runs out at roughly thirty to fifty tools, because context cost and
-selection accuracy both degrade as the catalog grows. Past that point the
-options are to retrieve a relevant subset per turn, to show a pruned set per
-phase, or to let the model discover tools on demand. The selection mechanism
-is harness machinery; the reason it is forced is a model property, which is
-the constraint the next box names.
+## Architecture is a set of contracts
 
-Drag the slider to see the constraint the next box describes: as the number
-of tools in context grows, function-calling accuracy falls off, which is why
-a flat catalog stops working past a few dozen tools.
+The familiar labels *planning*, *memory*, and *tool use* are useful topics, but
+they mix policy, state, and interface concerns. A production architecture is
+clearer when each runtime role has a contract:
 
-```{=html}
-<figure id="fig-agent-architectures-curve">
-<div class="viz" data-viz="curve" data-family="exp-decay" data-xlabel="tools available in context" data-ylabel="tool-selection accuracy" data-plabel="selection sensitivity" data-pmin="0.1" data-pmax="1.0" data-p="0.3"></div>
-<figcaption>Tool-selection accuracy degrades as the catalog grows, the measured effect behind tool-RAG, retrieving only the relevant tools per turn, and phased mounting.</figcaption>
-</figure>
+| Role | Contract | Failure if omitted |
+|---|---|---|
+| **Controller** | Propose one typed decision from the assembled context. | Free-form output is mistaken for an executable command. |
+| **Context assembler** | Select, order, label, and bound the model input. | Durable state is confused with whatever happens to fit in one prompt. |
+| **State store and updater** | Preserve events and derive the next working state. | A retry loses history or applies an observation twice. |
+| **Action catalog** | Define available operations, argument schemas, side effects, and result schemas. | The controller cannot distinguish legal operations from plausible text. |
+| **Reference monitor** | Validate, authorize, request approval, and enforce budgets. | Model output bypasses the product's authority boundary. |
+| **Dispatcher and environment** | Execute allowed actions and return normalized observations with status and provenance. | Timeouts and partial failures are mistaken for task results. |
+| **Completion checker** | Test the requested end state independently of the controller's claim. | A confident final response ends an unfinished task. |
+| **Termination policy** | Stop on success, failure, cancellation, or exhausted resources. | The loop wanders, retries forever, or spends without a bound. |
+
+This decomposition also separates architecture from harness implementation.
+The architecture says that state must survive and actions need a guard. The
+harness in @sec-the-harness supplies queues, leases, retries, checkpoints, and
+crash recovery that make those contracts durable.
+
+## Choose the control pattern from the task
+
+Agent architecture is plural because the controller need not use the same
+control pattern for every task.
+
+| Pattern | Use it when | Required feedback | Main failure mode |
+|---|---|---|---|
+| **Fixed workflow** | Steps and branches are known before execution. | Status at declared checkpoints. | An unencoded case has nowhere to go. |
+| **Reactive next action** | The latest observation determines the next small step. | Observation after nearly every action. | The controller wanders or loses the global objective. |
+| **Receding-horizon plan** | Several future steps help coordination, but the world can change. | Replan after each action or checkpoint. | Replanning cost dominates, or a stale prefix is executed. |
+| **Plan then execute** | Dependencies are predictable and observations rarely change the plan. | Validation at step boundaries. | An early assumption invalidates later steps. |
+| **Hierarchical planner and executor** | High-level decomposition and low-level action selection need different contexts or models. | Subgoal completion and escalation. | Planner and executor disagree about state or success. |
+| **Evaluator and refiner** | A candidate can be checked more cheaply than it can be produced correctly once. | Actionable verifier feedback. | The evaluator rewards superficial changes or refinement never stops. |
+| **Branching search** | Alternatives are cheap to generate and can be compared reliably. | A scorer and an explicit search budget. | Cost grows faster than useful diversity. |
+
+A workflow is usually preferable when it can express the task. It is cheaper,
+easier to test, and easier to authorize. A model-controlled loop earns its extra
+cost when it must choose among actions using observations that were unavailable
+at design time.
+
+## Planning is a cadence, not a binary choice
+
+An immutable plan can become stale, but that does not make planning useless.
+The design question is when a plan is made, how far it reaches, and what causes
+revision. ReAct demonstrated stepwise adaptation with explicit reasoning and
+actions [@yao2023react]. Reason for Future, Act for Now instead plans a future
+trajectory, executes the first action, incorporates feedback, and plans again
+[@liu2024rafa]. Plan-and-Act separates a trained high-level planner from an
+executor and reports results on long-horizon web tasks [@erdogan2025planact].
+These are different planning cadences, not successive versions of one correct
+architecture.
+
+A written plan is state, not authority. Each step still passes through current
+preconditions, permissions, and budgets. Useful replan triggers include a failed
+precondition, an unexpected observation, a changed user constraint, a denied
+action, a timeout, a failed completion check, or a remaining-budget threshold.
+Plans should also record which observations support them; otherwise a summary
+can preserve the step while dropping the assumption that justified it.
+
+A visible reasoning trace is not required for adaptive control. It can be useful
+in research systems such as ReAct, but operational inspection should rely on
+stable artifacts: the plan version, decision type, action arguments, verifier
+output, and state transition. Reflexion is a specific alternative that turns
+task feedback into textual reflection stored for later trials
+[@shinn2023reflexion]. It demonstrates one way to update contextual state without
+updating model weights; it does not make self-critique a general correctness
+guarantee.
+
+## Choose an action representation
+
+An action interface determines what the controller can express and what the
+runtime can validate. Three common representations make different trades:
+
+| Representation | Strength | Boundary the runtime must enforce |
+|---|---|---|
+| **Structured function call** | Explicit operation name and typed arguments support schema validation, per-call approval, and stable logs. | Validate semantics after syntax, authorize the operation and target, and normalize every result and error. |
+| **Executable code** | Loops, variables, filtering, and several operations can be composed inside one action. | Run in a sandbox, mediate every external capability, bound CPU, memory, network, and time, and retain the code plus effects. |
+| **Environment-native action** | Text commands, robot controls, clicks, keystrokes, or messages match the environment directly. | Constrain the legal action set, identify the target state, and verify effects from fresh observations. |
+
+Toolformer concerns how a model learned when and how to call a small fixed set
+of APIs [@schick2023toolformer]. CodeAct concerns a different action
+representation: executable Python. Across 17 models on API-Bank and
+M³ToolEval, its authors report up to 20 absolute percentage points
+higher success than their compared text and JSON formats
+[@wang2024codeact]. That result is scoped to those models, interfaces, and
+benchmarks. It does not show that code is always safer or cheaper.
+
+Interface design itself can change agent performance. SWE-agent introduced an
+agent-computer interface for repository navigation, editing, and testing, then
+evaluated it on software-engineering tasks [@yang2024sweagent]. The broader
+lesson is not that every agent needs that interface. It is that action names,
+argument shapes, observation formats, and feedback latency are part of the
+architecture, not neutral plumbing.
+
+Regardless of representation, the model proposes and a reference monitor
+decides whether execution is allowed. A side-effecting request needs a stable
+idempotency key so a transport retry does not repeat a purchase, message, or
+write. Long-running work needs a durable handle rather than a live connection
+as its identity. Parallel actions are safe only when their dependencies and
+effects do not conflict.
+
+## Make every branch explicit
+
+The minimal loop is not “call a model until it emits no tool.” No call may mean
+a final answer, a clarification request, a refusal, malformed output, or a model
+failure. A safer architectural skeleton is:
+
+```text
+state = initialize(task, user_constraints, permissions, budgets)
+
+loop:
+    stop = check_termination(state)
+    if stop exists:
+        return recorded_outcome(stop, state)
+
+    context = assemble_context(state)
+    raw = controller(context)
+    decision = decode_typed_decision(raw)
+
+    if decision is invalid:
+        state = record_parse_error(state, raw)
+        continue  # bounded by the parse-retry budget
+
+    if decision is ask_user:
+        suspend until reply or cancellation
+        state = record_user_reply(state, reply)
+        continue
+
+    if decision is final_response:
+        evidence = verify_completion(state, decision)
+        if evidence passes:
+            return recorded_outcome(success, state, evidence)
+        state = record_failed_completion(state, evidence)
+        continue
+
+    if decision is requested_action:
+        verdict = validate_authorize_and_budget(decision, state)
+        if verdict denies:
+            state = record_observation(state, verdict)
+            continue
+        request_id = idempotency_key(session_id, turn_id, decision)
+        result = execute_with_timeout(decision, request_id)
+        state = record_observation(state, normalize(result))
 ```
 
-::: {.callout-tip}
-## Constraint arrow
-The model's tool-selection accuracy degrading as the tool count rises is a
-lower-layer property that dictates an upper-layer architecture. The Berkeley
-Function Calling Leaderboard [@yan2025bfcl] and ACEBench [@chen2025acebench]
-both measure function-calling accuracy falling as the number of available
-tools grows, with robustness suffering specifically when irrelevant tools are
-present. That measured degradation is why an agent cannot simply register
-every tool it might ever need and send the whole catalog each turn. The
-model's finite attention forces tool-RAG, phased mounting, or model-driven
-discovery up at the architecture layer. A capability limit at the model sets a
-structural choice at the agent.
+This skeleton can ask the user, request an action, return a final response, or
+stop. Parser errors, authorization denials, timeouts, and tool failures become
+typed observations rather than exceptions that silently erase a turn. The
+termination check covers success, failure, cancellation, and budget exhaustion.
+The harness may implement retries and resumption differently, but it must
+preserve these outcomes.
+
+## Separate autonomy from authority
+
+Autonomy describes who chooses the next operation. Authority describes which
+operations the system may perform. They are independent axes. A controller can
+autonomously search a read-only corpus with little authority, while a fixed
+workflow can have broad authority to deploy software or transfer funds.
+
+This distinction changes architecture reviews. Adding a planner, longer horizon,
+or dynamic tool discovery may increase autonomy without changing permissions.
+Mounting a write-capable credential, widening a filesystem scope, or removing an
+approval gate increases authority even if the control loop stays fixed. Blast
+radius follows authority, reachability, and reversibility, not an informal label
+such as “agentic.” Security and authorization controls are developed in
+@sec-security-authorization; the architecture must expose the decision points at
+which those controls apply.
+
+## Lower-layer constraint: context is a shared budget
+
+The context window must hold instructions, task data, working state, action
+schemas, and room for output. Its token accounting is
+
+$$
+B_{\mathrm{ctx}}
+= B_{\mathrm{fixed}} + B_{\mathrm{task}} + B_{\mathrm{state},t}
++ B_{\mathrm{tools},t} + B_{\mathrm{out},t}
+\le W,
+\qquad
+B_{\mathrm{tools},t}=\sum_{a\in A_t}s(a).
+$$
+
+Here, $B_{\mathrm{ctx}}$ is the total tokens reserved for turn $t$;
+$B_{\mathrm{fixed}}$ covers system and policy instructions;
+$B_{\mathrm{task}}$ covers the user goal and fixed task data;
+$B_{\mathrm{state},t}$ covers selected session state;
+$B_{\mathrm{tools},t}$ covers the mounted action schemas;
+$B_{\mathrm{out},t}$ reserves controller output; and $W$ is the model's
+supported context limit. The set $A_t$ contains actions exposed on turn $t$,
+and $s(a)$ is the serialized token length of action specification $a$. The
+equality is accounting, not a claim that all allocations have equal value.
+
+Mounting another action therefore has a certain token cost. Its effect on action
+selection is empirical, not a universal exponential curve or a fixed tool-count
+threshold. It depends on the model, task, schema similarity, descriptions, and
+prompt. BFCL evaluates serial and parallel calls, abstention, and stateful
+multi-turn behavior [@patil2025bfcl]. ACEBench adds ambiguous and incomplete
+instructions plus multi-turn agent scenarios [@chen2025acebench]. These
+benchmarks expose several failure modes, but they do not establish one catalog
+size at which every model fails.
+
+Choose among a flat catalog, phase-based mounting, retrieval, or explicit
+discovery by measuring the actual workload. Measure selection quality with the
+needed action present, add irrelevant tools and similar schemas, test abstention
+when no action applies, and report retrieval recall when schemas are selected
+dynamically. Tool retrieval can save context while also hiding the only action
+that would solve the task.
+
+::: {.callout-important}
+## What's contested
+
+There is no general winner between explicit and implicit planning. Explicit plans
+can improve long-horizon coordination and support review, while reactive control
+can adapt with less planning overhead. Plan-and-Act provides scoped evidence for
+a separate planner and executor [@erdogan2025planact]; ReAct and receding-horizon
+systems provide scoped evidence for tighter feedback [@yao2023react;
+@liu2024rafa]. The task distribution, model, verifier, and cost budget determine
+which result transfers.
+
+Action exposure is also unsettled. A flat catalog is simple and auditable;
+retrieval or discovery saves context but introduces a recall failure. Structured
+function calls are easy to gate individually; executable code composes operations
+but moves more responsibility into the sandbox and reference monitor. These are
+choices to compare under the same operating envelope, not stages of a universal
+agent maturity ladder.
 :::
+
+## Verify the architecture as a system
+
+An architecture comparison must keep the same model checkpoint, same task
+distribution, same tool implementations, same permissions, and same budgets.
+Otherwise a stronger model, broader credential, or larger token allowance can be
+mistaken for a better loop.
+
+| Layer | Measurements |
+|---|---|
+| **Task outcome** | Completion rate with confidence intervals; completion by task family and horizon; independent end-state verification; user corrections. |
+| **Control quality** | Invalid-action rate; unnecessary-action rate; replan frequency; recovery rate after denied, failed, or misleading actions; premature-final rate. |
+| **Safety and authority** | Approval frequency; permission-denial rate; unintended side effects; duplicate side effects; operations outside the requested scope. |
+| **State quality** | Replay success; missing or duplicated events; context truncation; observation provenance; dynamic-action retrieval recall. |
+| **Cost and service** | Model calls, input and output tokens, action count, tool and model latency, wall-clock time, and cost per completed task. |
+
+Inspect failures by transition, not only by final score. Determine whether the
+needed fact never entered context, the controller chose the wrong decision type,
+the action schema was ambiguous, authorization rejected a valid operation, the
+environment returned a misleading observation, the state updater dropped it, or
+the completion checker accepted too early. Each cause belongs to a different
+contract and requires a different fix.
+
+The architecture now has a precise state boundary, but it has not yet decided
+what should survive for one turn, one session, or many sessions. That is the
+subject of @sec-memory-systems.
 
 ## Further reading
 

@@ -736,7 +736,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/orchestration/02-agent-architectures.qmd",
-      ["planning, memory, tool use", "interleaves reasoning with action", "last action revealed", "turns a text", "generator into something that changes the world"],
+      ["closed decision loop", "assembled context", "Tool calling is one action interface", "Planning and memory are choices", "termination rule"],
     ],
     [
       "zh/orchestration/02-agent-architectures.qmd",
