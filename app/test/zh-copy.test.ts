@@ -864,7 +864,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/01-mechanistic-interpretability.qmd",
-      ["trained transformer is a few hundred billion numbers", "single neuron rarely means one thing", "sparse dictionaries", "pulling features apart", "whether that tool is the right one is still open"],
+      ["how a fixed model produced a specified behavior", "description, prediction, intervention, and mediation", "Treat features and superposition as hypotheses", "An SAE fit is a measurement model", "Make the study reproducible"],
     ],
     [
       "zh/safety/01-mechanistic-interpretability.qmd",

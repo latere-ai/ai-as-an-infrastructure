@@ -1,398 +1,369 @@
 # Mechanistic Interpretability {#sec-interpretability}
 
-A trained transformer is a few hundred billion numbers that produce
-behavior no one wrote down. @gls-mechanistic-interpretability is the attempt to
-read those numbers as computation: to find the features a model represents
-and the circuits that connect them, the way one might reverse engineer a
-binary into source. That attempt immediately runs into three facts: a
-single neuron rarely means one thing, sparse dictionaries became the field's
-main tool for pulling features apart, and whether that tool is the right one
-is still open.
+@gls-mechanistic-interpretability tries to explain how a fixed model produced
+a specified behavior by constructing human-readable hypotheses about its
+internal computation and testing those hypotheses against the model. A useful
+claim therefore names the model revision, input population, behavior or
+output, and internal site under study. It is not a transcript of hidden
+thoughts, and it is not by itself a safety guarantee.
 
-## Why a neuron rarely means one thing
+This scope matters because an internal pattern can support several different
+claims. It may merely correlate with a behavior, predict that behavior on new
+inputs, change the behavior when edited, or participate in the model's ordinary
+computation. These are increasingly demanding claims. This chapter develops a
+workflow for keeping them separate: propose candidate features, test them with
+held-out data and interventions, assemble them into circuit hypotheses, and
+report what the explanation leaves out. The result can inform the oversight
+methods in @sec-oversight-control, but it cannot replace behavioral evidence or
+an explicit safety case.
 
-Start at the obvious place: open a transformer and look at a single neuron. The natural
-unit of a neural network is the neuron, and the natural hope is that each
-neuron means something: this one fires on Python code, that one on the color
-red. Early vision work found a few neurons like that. Language models do not
-cooperate. Probe a neuron in a transformer and it fires on a grab bag of
-unrelated things, a curve detector and a car wheel and a line of French at
-once. This is @gls-polysemanticity, and it is the wall that stops naive
-interpretation. If the unit you can read does not carry a single meaning,
-reading it tells you nothing.
+## Begin with the explanatory claim
 
-The wall is not that the model has no concepts. It is that the model has
-far more concepts than it has neurons, and it stores them anyway. A
-residual stream, the shared vector channel every layer reads from and writes
-back to, has width $d$ and only $d$ orthogonal directions, yet the
-model seems to track tens of thousands of distinct features. Something has
-to give. The features cannot each get a private direction, so they share.
-The work is to undo that sharing: recovering the
-concepts the model uses from the activations (the internal vectors it forms
-as it processes a token) that smear them together, then
-showing how those concepts feed each other to produce an output. The payoff
-is the input to @sec-oversight-control: oversight that can only watch
-behavior is blind to a model that behaves until it does not, whereas
-oversight that can read features has a chance of catching a plan before it
-executes.
+Mechanistic interpretability studies should distinguish four levels of
+evidence: **description, prediction, intervention, and mediation**.
 
-That obstacle sets the sequence. Two ideas come first, explaining why the
-wall exists and how to climb it. Circuits follow, turning recovered features
-into explanations of behavior. From there the decade-long arms race carries
-the method from hand-traced vision filters to causal graphs of a production
-model, before the field arrives at the open trial of whether its main tool is
-the right one. Last comes a frank reckoning of what the tool still leaves
-behind.
+1. **Description** assigns a human-readable pattern to an internal unit or
+   direction. Examples that activate a latent can suggest a label, but a
+   coherent label is not a causal explanation.
+2. **Prediction** asks whether that label forecasts activations or behavior on
+   held-out inputs. This tests generalization beyond the examples used to name
+   the pattern.
+3. **Intervention** changes an internal variable and measures the output. It
+   can establish necessity or sufficiency under the stated intervention, not
+   an unrestricted claim about the model.
+4. **Mediation** asks whether the proposed variables and connections reproduce
+   the relevant intervention effects of the model's natural computation. This
+   is the strongest evidence that a proposed circuit captures how the behavior
+   is normally produced [@geiger2025causal].
 
-## Two ideas that climb the wall
+@fig-interpretability-evidence shows the progression. A study's headline must
+make only the strongest claim supported by the weakest link in its evidence.
 
-The escape from polysemanticity rests on two ideas, a hypothesis about how
-models store features and a method for recovering them.
+```{dot}
+//| label: fig-interpretability-evidence
+//| fig-cap: "An evidence ladder for a scoped mechanistic claim. Each level requires a new validation, so a readable label alone cannot establish a mechanism."
+digraph evidence {
+  rankdir=TB;
+  bgcolor="transparent";
+  graph [nodesep=0.16, ranksep=0.22, pad=0.04];
+  node [shape=box, style="rounded,filled", width=2.35, height=0.42, fixedsize=true, fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#374151", fillcolor="#f1ece1", penwidth=1.0];
+  edge [color="#6b7280", arrowsize=0.58, penwidth=1.0];
+
+  scope [label="Scope the behavior\nand internal site"];
+  describe [label="Describe\na candidate pattern"];
+  predict [label="Predict\non held-out inputs"];
+  intervene [label="Intervene\non an internal variable"];
+  mediate [label="Test mediation of\nnatural computation"];
+  claim [label="State the bounded claim\nand known failures", color="#3b82f6", fontcolor="#2563eb"];
+
+  scope -> describe -> predict -> intervene -> mediate -> claim;
+}
+```
+
+The ladder also prevents a common category error. An intervention performed
+far outside the model's normal activation range may show that an internal
+direction can steer an output. It does not show that the model ordinarily uses
+that direction with the same magnitude or meaning. The intervention protocol,
+its range, and the comparison being tested belong in the claim itself.
+
+## Treat features and superposition as hypotheses
+
+The architecture in @sec-transformer-architecture exposes tensors such as
+neurons, attention-head outputs, and residual-stream vectors. These are
+implementation units, not guaranteed units of meaning. A neuron may respond to
+several recognizable patterns, while a useful pattern may be distributed
+across many neurons. A polysemantic neuron can still carry predictive or causal
+information; its mixed selectivity only limits simple one-neuron-one-concept
+accounts.
+
+In this chapter, a **feature** is an analyst-proposed variable that helps
+explain some model behavior. It might be a neuron, a direction in activation
+space, a sparse-autoencoder latent, or a more complex function. Its status is
+earned by evidence, not by its name or by the method that produced it.
 
 The hypothesis is @gls-superposition: a model represents more features than it
-has dimensions by assigning each feature a direction in activation space and
-letting those directions overlap. This works because features are sparse:
-on any given token, only a handful of the thousands of possible features are
-active, so the model can tolerate interference between directions that are
-rarely on at the same time. Elhage et al. built the cleanest demonstration
-in "Toy Models of Superposition" [@elhage2022superposition]: a tiny
-autoencoder (a network trained to compress its input and reconstruct it)
-forced to pack $n$ sparse features into fewer than $n$
-dimensions does exactly this, arranging the feature directions into regular
-geometric structures and trading reconstruction error against interference
-as a function of sparsity. Polysemanticity, in this picture, is not a
-defect. It is the visible shadow of a model using superposition to fit more
-features than it has neurons.
+has dimensions by allowing non-orthogonal feature directions to share an
+activation space. A simple sparse linear model writes an activation as
+
+$$
+x = \sum_{i=1}^m a_i v_i + \varepsilon .
+$$
+
+Here $x \in \mathbb{R}^d$ is the activation vector at a declared internal site,
+$v_i \in \mathbb{R}^d$ is candidate feature direction $i$, $a_i$ is its
+feature coefficient, and $\varepsilon$ is the unexplained residual. The
+sparsity assumption is that only a small number $k = \lVert a \rVert_0$ of the
+$m$ coefficients are nonzero for a typical example, even when $m>d$. Because
+more than $d$ mutually orthogonal directions cannot fit in $\mathbb{R}^d$,
+some directions must then overlap.
+
+Toy models demonstrate that this packing is possible and predict geometric
+changes as feature sparsity and importance vary [@elhage2022superposition].
+They do not prove that every transformer activation has a unique linear,
+sparse decomposition, or that every human-recognizable concept is a direction.
+Superposition is therefore a productive model of the evidence, not a license
+to assume that a learned dictionary has recovered the model's native ontology.
 
 <figure id="fig-mechanistic-interpretability-superposition">
 <div class="viz" data-viz="superposition"></div>
-<figcaption>An idealized two-dimensional version of that geometry. Drag sparsity up and the plane packs in more feature directions, which arrange into a regular polygon and pay for it in interference, the mean overlap between directions. Illustrative, not from a trained model.</figcaption>
+<figcaption>An idealized view of feature directions sharing a low-dimensional space. The interactive geometry illustrates the superposition hypothesis; it is not evidence from a trained language model.</figcaption>
 </figure>
 
-If features live along directions rather than on neurons, the right unit of
-analysis is a direction, and the right tool is one that finds the directions.
-That tool is dictionary learning, implemented as a @gls-sae
-[@cunningham2023sparse]. An SAE takes a model activation
-$x \in \mathbb{R}^{d}$ and learns an overcomplete dictionary of $m \gg d$
-feature directions, encoding $x$ as a sparse vector of feature activations
-and decoding it back:
+## Learn candidate features with a sparse autoencoder
+
+A sparse autoencoder (SAE) learns an overcomplete dictionary from activations
+collected at one declared model site. Let $x \in \mathbb{R}^d$ be an activation,
+let the dictionary contain $m$ latents, and choose a target sparsity $k$. One
+TopK formulation is
 
 $$
-f = \sigma(W_{\text{enc}} x + b_{\text{enc}}), \qquad
-\hat{x} = W_{\text{dec}} f + b_{\text{dec}}
+\begin{aligned}
+z &= W_{\mathrm{enc}}(x-b_{\mathrm{dec}})+b_{\mathrm{enc}}, \\
+f &= \operatorname{TopK}_k(z), \\
+\hat{x} &= W_{\mathrm{dec}}f+b_{\mathrm{dec}} .
+\end{aligned}
 $$
 
-trained to minimize reconstruction error plus a sparsity penalty so that
-only a few of the $m$ features fire on any input. The columns of
-$W_{\text{dec}}$ are the recovered feature directions. Because $m$ exceeds
-$d$, the dictionary is overcomplete: it has room to give each underlying
-feature its own slot even though the model had to pack them into $d$
-crowded dimensions. The features the SAE recovers are far more often
-monosemantic than the raw neurons, which is the whole point.
+The encoder matrix is
+$W_{\mathrm{enc}} \in \mathbb{R}^{m \times d}$, the decoder matrix is
+$W_{\mathrm{dec}} \in \mathbb{R}^{d \times m}$,
+$b_{\mathrm{enc}} \in \mathbb{R}^m$ is the encoder bias, and
+$b_{\mathrm{dec}} \in \mathbb{R}^d$ is the decoder bias and centering term.
+The vector $f \in \mathbb{R}^m$ has at most k nonzero entries. Depending on
+the implementation, TopK may select the largest positive pre-activations or
+the largest values after a nonlinearity; the study must state which rule it
+uses.
 
-@fig-interpretability-superposition shows the two-sided number tension that
-makes this work. The model compresses many sparse true features into the $d$
-shared directions of the residual stream, accepting interference between
-directions that rarely fire together. The SAE runs the compression backward,
-expanding that $d$-vector into $m \gg d$ slots so each feature can land in its
-own direction again.
+The basic TopK objective minimizes mean squared reconstruction error,
 
-```{dot}
-//| label: fig-interpretability-superposition
-//| fig-cap: "Superposition packs many sparse features into a narrow residual stream, and an overcomplete SAE expands them back into monosemantic slots. After Elhage et al. (2022) and Bricken et al. (2023)."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+$$
+\begin{aligned}
+\mathcal{L}_{\mathrm{TopK}}
+  &= \mathbb{E}_{x \sim \mathcal{D}}
+     \left[\lVert x-\hat{x}\rVert_2^2\right], \\
+\lVert W_{\mathrm{dec}}[:,i]\rVert_2 &= 1.
+\end{aligned}
+$$
 
-  subgraph cluster_world {
-    label="True features\n(many, sparse)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    f1 [label="curve"];
-    f2 [label="French"];
-    f3 [label="DNA"];
-    f4 [label="car wheel"];
-  }
-  subgraph cluster_stream {
-    label="Residual stream:\nd directions, shared"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    s [label="overlapping directions\ntolerable interference\npolysemantic neurons"];
-  }
-  subgraph cluster_dict {
-    label="SAE dictionary:\nm >> d slots"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    d1 [label="curve"];
-    d2 [label="French"];
-    d3 [label="DNA"];
-    d4 [label="car wheel"];
-  }
-  f1 -> s [label="superposition\ncompress"];
-  s -> d1 [label="sparse autoencoder\nexpand"];
-}
+The constraint gives unit-norm decoder columns. Without it, multiplying a
+decoder column by a constant and dividing the corresponding latent activation
+by the same constant leaves the reconstruction unchanged. This scale
+degeneracy makes latent magnitudes and sparsity penalties difficult to compare.
+Older L1 SAEs instead add $\lambda\lVert f\rVert_1$ to the reconstruction loss.
+TopK directly controls the number of active latents and avoids L1 shrinkage;
+the broader training recipe, not the TopK operation alone, determines dead
+latent rates and optimization quality [@gao2024scaling].
+
+An SAE fit is a measurement model, not a discovery certificate. Its decoder
+columns are candidate feature directions, and several independent checks are
+needed:
+
+- **Reconstruction fidelity:** report normalized reconstruction error or
+  explained variance on held-out activations.
+- **Downstream fidelity:** replace the original activation with $\hat{x}$ and
+  measure the change in task loss or behavior.
+- **Activation sparsity:** report the distribution of active latents, not only
+  the configured value of $k$.
+- **Latent use:** count dead latents and unusually frequent latents.
+- **Stability across seeds:** align dictionaries trained from different seeds
+  and report which patterns recur.
+- **Semantic validity:** evaluate automatic or human labels against held-out
+  feature labels and adversarial counterexamples.
+- **Causal utility:** compare latent interventions with neuron, random-direction,
+  PCA, and supervised probing baselines.
+
+No single metric certifies a dictionary. Low reconstruction error can coexist
+with unreadable latents, crisp labels can coexist with poor coverage, and a
+strong intervention can be off the model's ordinary activation distribution.
+Early SAE studies produced useful candidate features
+[@cunningham2023sparse; @bricken2023monosemanticity]. A later study extended
+the method to Claude 3 Sonnet [@templeton2024scaling], but dictionary width
+does not guarantee atomic, complete, or canonical recovery.
+
+![Schematic of the trade-off between reconstruction error and sparsity. More active latents generally allow better reconstruction, while a larger dictionary can shift the frontier. The curves are conceptual, not measured data.](/figures/mechanistic-interpretability-1.svg){#fig-interpretability-tradeoff}
+
+## Test causal relevance with interventions
+
+Activation patching localizes information by comparing clean and corrupted
+runs. Begin with an input for which the model produces the target behavior and
+a controlled corruption that changes it. Run both inputs, patch one internal
+component from the clean run into the corrupted run, and measure how much of a
+declared output metric is restored.
+
+For base input $x_b$, source input $x_s$, component $j$, model $F$, and scalar
+score $s$, define
+
+$$
+\begin{aligned}
+\Delta_j(x_b,x_s) &= \\
+&s\!\left(F_{\operatorname{do}(h_j \leftarrow h_j(x_s))}(x_b)\right) \\
+&-s\!\left(F(x_b)\right).
+\end{aligned}
+$$
+
+Here $h_j(x_s)$ is the source activation and
+$F_{\operatorname{do}(h_j \leftarrow h_j(x_s))}$ is the intervened model. A
+large $\Delta_j$ shows causal relevance to that contrast. It does not identify
+a unique mechanism: correlated components, nonlinear interactions, or a poor
+corruption can produce similar restoration scores.
+
+Consequently, every patching result must report the corruption procedure,
+output metric, patch location and granularity, source and base examples, and
+normalization of the effect. Results can change materially across these choices
+[@zhang2024patching]. Necessity tests, sufficiency tests, path patching, and
+ablations answer different questions. Agreement among them is stronger than a
+single heat map.
+
+Feature steering uses the same discipline. Increasing the Golden Gate Bridge
+latent in Claude 3 Sonnet changed the model's outputs toward that topic
+[@templeton2024scaling]. This is evidence that the direction can affect the
+behavior under the intervention. It does not by itself show that the direction
+is unique, canonical, or the complete natural mediator of bridge-related
+behavior.
+
+## Recompose features into circuit hypotheses
+
+A **circuit** is a causal subgraph relative to a behavior and input
+distribution. Its nodes may be attention heads, MLPs, neurons, or learned
+features; its edges propose how information flows between them. The circuit is
+an explanatory abstraction, so its quality depends on both predictive coverage
+and interventional faithfulness.
+
+Work on transformer circuits supplied useful algebra for residual-stream
+writes, attention QK selection, and OV transformations [@elhage2021framework].
+Induction heads provide a concrete example: a preceding-token head and an
+induction head can compose to continue repeated token patterns. Training
+dynamics, ablation evidence, and cross-model observations provide evidence for
+an induction mechanism [@olsson2022induction]. They are not proof that
+induction heads explain all in-context learning, especially in larger models
+and tasks that require more than token-sequence continuation.
+
+Recent circuit-tracing work scales the search by fitting a replacement model
+whose MLP computations are approximated with sparse cross-layer transcoders,
+then constructing prompt-specific attribution graphs [@ameisen2025circuit;
+@lindsey2025biology]. The method uses fixed attention patterns for the traced
+forward pass and includes an error-correction term to improve fidelity. Each
+graph is therefore a local hypothesis about one computation in the replacement
+model. It is not a complete trace of the original model, and a large edge weight
+is not automatically an independently verified causal effect.
+
+Attribution graphs become more persuasive when investigators perturb proposed
+nodes and paths, compare the replacement and original models, and test the
+mechanism on related prompts. Open tooling makes these checks easier to
+reproduce on selected open-weight models [@anthropic2025opencircuit]. Competing
+replacement architectures should also be tested: on the evaluated models and
+automated metrics, transcoders improved the reconstruction-interpretability
+trade-off over comparable MLP-output SAEs [@paulo2025transcoders].
+
+## Measure what the method leaves out
+
+Interpretability errors are not one-dimensional. A responsible report keeps
+the following failure modes visible.
+
+- **Reconstruction error** is activation signal omitted by the SAE or
+  replacement model. It is not automatically behaviorally important, but it
+  cannot be called harmless without downstream and interventional tests.
+- **Feature splitting** assigns one broad pattern to several narrower latents.
+  This can reflect useful granularity or an unstable decomposition rather than
+  an error by itself.
+- **Feature absorption** occurs when a broader latent fails to activate because
+  a more specific latent captures the example. This creates a recall hole for
+  feature detection [@chanin2024absorption].
+- **Non-identifiability** means the dictionary is not unique. Different seeds,
+  widths, or objectives can learn different decompositions of the same
+  activations, so one SAE should not be treated as the canonical unit system
+  [@leask2025canonical].
+- **Weak baselines** can make a new representation look useful. A supervised
+  neuron probe, PCA direction, random dictionary, and task-specific probing
+  baseline test whether the SAE adds value. The current negative evidence from
+  sparse probing is scoped to that use case, not to every use of SAEs
+  [@kantamneni2025useful].
+- **Distribution shift** can invalidate both labels and interventions. A latent
+  named from top-activating examples may behave differently on another input
+  population, and aggressive steering may move off the model's ordinary
+  activation distribution.
+- **Label error** arises because automatic feature labels summarize selected
+  examples. They can miss exceptions, import the labeler's concepts, or turn a
+  graded pattern into a categorical name.
+- **Coverage limits** make every attribution graph a local explanation. A
+  prompt-level account should not silently become a global claim about a model,
+  a task, or a training process.
+
+These limits do not make the methods useless. They determine which claims the
+evidence can support. A study that reports reconstruction, downstream fidelity,
+baselines, stability, and interventions is much more informative than a gallery
+of intuitively appealing feature labels.
+
+## Make the study reproducible
+
+The unit of work should be an `InterpretabilityStudy`, not an isolated feature
+screenshot. A minimal retained record is:
+
+```yaml
+study_id: stable identifier
+model_and_tokenizer_hashes: immutable revisions
+behavior_and_output_metric: operational definition
+input_population_and_splits: train, validation, and held-out sets
+activation_sites: tensors, layers, positions, and preprocessing
+method_and_code_revision: implementation and configuration
+dictionary_width_and_sparsity: m, k or lambda, and selection rule
+training_data_and_seeds: activation corpus and random seeds
+baselines_and_validity_metrics: reconstruction, fidelity, stability, labels
+intervention_protocol: corruption, patch, ablation, and steering ranges
+retained_artifacts: dictionaries, activations, graphs, and evaluation outputs
+claim_scope_and_known_failures: supported level and explicit exclusions
 ```
 
-## From nouns to verbs: circuits
+The record should preserve enough information to rerun feature extraction,
+reproduce aggregate metrics, and inspect both supporting and failing examples.
+For a safety-relevant study, independent reviewers should be able to change the
+input sample, seed, baseline, intervention magnitude, and output metric without
+reconstructing the pipeline from prose.
 
-Features alone are nouns. To explain behavior you need verbs, the
-connections that carry one feature's activation into another. That is the
-circuit. A circuit is a subgraph of the model's computation, a small set of
-features and the weights between them that together implement a recognizable
-algorithm. The earliest worked example outside vision was the induction
-head, a two-attention-head circuit that implements the rule "if the token
-$A$ was followed by $B$ earlier in the context, and I just saw $A$ again,
-predict $B$." Olsson et al. traced this circuit and tied its formation to a
-phase change in training that coincides with the onset of in-context
-learning [@olsson2022induction]. The agenda of the field is to do for
-arbitrary behavior what induction heads did for copying: name the features,
-name the wires, check the explanation by intervening.
-
-Two things make that agenda hard, and they pull in opposite directions.
-Naming features needs a unit that means one thing, which superposition
-denies the neuron and dictionary learning tries to restore. Naming wires
-needs a model of how those units compose, which is the circuit. The history
-of the field is the story of these two needs forcing each other forward.
-
-## An arms race against the wall
-
-The lineage runs from hand-traced circuits to learned features to causal
-graphs, each step forced by the limit of the last.
-
-It began in vision. Olah et al., in the Distill thread "Zoom In: An
-Introduction to Circuits," argued that features are real and circuits
-connecting them are real, and showed both by hand in convolutional networks
-[@olah2020zoomin]. Carrying this to transformers needed an algebra for the
-architecture. Elhage et al. supplied it in "A Mathematical Framework for
-Transformer Circuits" [@elhage2021framework]: the residual stream as a
-shared communication channel that every layer reads from and writes to,
-attention heads as operations that move information between positions, and
-the composition rules that let heads form multi-step circuits. Induction
-heads were the first big result that framework explained.
-
-Then the wall: hand-tracing does not scale, and superposition means the
-neurons you would trace are polysemantic anyway. "Toy Models of
-Superposition" named the obstacle [@elhage2022superposition]. The escape was
-to stop reading neurons and start learning features. Cunningham et al.,
-"Sparse Autoencoders Find Highly Interpretable Features in Language Models"
-[@cunningham2023sparse], and Anthropic's "Towards Monosemanticity"
-[@bricken2023monosemanticity] landed the same idea at the same time: train an
-SAE on a model's activations and the recovered dictionary is far more
-interpretable than the neuron basis. Bricken et al. worked on a one-layer
-transformer with a 512-neuron MLP (a multi-layer perceptron, the per-token
-feed-forward network) and showed that dictionary features picked
-out crisp concepts, such as Arabic script or DNA sequences, that no single
-neuron cleanly held.
-
-The open question was whether this survived scale. "Scaling Monosemanticity"
-carried SAEs up to Claude 3 Sonnet, a production model, training
-dictionaries on its middle-layer residual stream and recovering abstract,
-multilingual, multimodal features [@templeton2024scaling], including the
-Golden Gate Bridge feature that, when clamped on, produced the "Golden Gate
-Claude" that steered every conversation toward the bridge. The intervention
-mattered more than the demo: it showed the features were causal, not just
-correlated. In parallel, the engineering of SAEs tightened. Gao et al.,
-"Scaling and Evaluating Sparse Autoencoders" [@gao2024scaling], replaced the
-soft L1 penalty with a top-$k$ activation that fixes the number of live
-features directly, which removed a tuning headache, cut the population of
-dead latents, and produced clean scaling laws relating dictionary size and
-sparsity to reconstruction. @fig-interpretability-tradeoff sketches that
-relationship: more active latents per token buy lower reconstruction error,
-a larger dictionary shifts the whole frontier down, and the two ends of the
-sparsity axis carry the failure modes below.
-
-![Schematic of the sparse autoencoder trade-off between reconstruction error and sparsity. More active latents per token lower the error, and a larger dictionary shifts the frontier down. The synthetic curves illustrate the relationship only and are not measured data, after Gao et al. (2024).](/figures/mechanistic-interpretability-1.svg){#fig-interpretability-tradeoff}
-
-Sweep the top-$k$ sparsity below and watch the reconstruction error fall, then flatten once $k$ reaches the true number of active features, leaving a nonzero residue that no extra latent removes.
-
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
-
-rng = np.random.default_rng(0)
-d, m, n_true = 32, 96, 6        # residual width d, dictionary slots m, true active features
-D = rng.standard_normal((m, d))
-D /= np.linalg.norm(D, axis=1, keepdims=True)
-
-codes = np.zeros((300, m))      # each token uses only n_true of the m features
-for c in codes:
-    idx = rng.choice(m, n_true, replace=False)
-    c[idx] = rng.standard_normal(n_true)
-X = codes @ D + 0.15 * rng.standard_normal((300, d))   # activations are only nearly sparse
-base = np.mean(X ** 2)
-
-ks, frac = list(range(0, 13)), []
-for k in ks:
-    f = codes.copy()
-    if k == 0:
-        f[:] = 0
-    else:
-        thr = np.sort(np.abs(f), axis=1)[:, -k][:, None]
-        f = np.where(np.abs(f) >= thr, f, 0.0)         # keep only the k largest latents
-    frac.append(np.mean((X - f @ D) ** 2) / base)
-
-plt.plot(ks, frac, "o-")
-plt.axvline(n_true, ls="--", color="gray", label=f"true sparsity = {n_true}")
-plt.xlabel("k active latents per token")
-plt.ylabel("fraction of variance unexplained")
-plt.legend(); plt.title("Top-k reconstruction: drops, then plateaus on a residue")
-plt.show()
-print("unexplained at k=0,3,6,12:", [round(frac[i], 3) for i in (0, 3, 6, 12)])
-```
-::::
-
-The latest step puts the nouns and verbs back together. Anthropic's 2025
-work, "Circuit Tracing" [@ameisen2025circuit] and "On the Biology of a Large
-Language Model" [@lindsey2025biology], builds attribution graphs: it
-replaces a model's MLPs with cross-layer transcoders, sparse interpretable
-features that read from one layer and write to all later ones, then traces
-the linear causal pathways through those features for a single prompt. The
-result is a graph whose nodes are features and whose edges are causal
-influences, a local circuit diagram for one input. Studied on Claude 3.5
-Haiku, these graphs surfaced multi-step reasoning, planning ahead in rhymes,
-and shared machinery across languages [@lindsey2025biology]. In May 2025 the
-tooling was open-sourced, and community replications hosted on Neuronpedia
-traced graphs through open-weight models such as Gemma-2-2b and Llama-3.2-1b,
-moving the method from a lab demonstration toward a shared instrument
-[@anthropic2025opencircuit].
-
-@fig-interpretability-lineage traces this progression, where each step is
-forced by the limit of the one before it.
-
-```{dot}
-//| label: fig-interpretability-lineage
-//| fig-cap: "Lineage of mechanistic interpretability, from hand-traced circuits through learned features to causal attribution graphs. Each arrow marks the limit that forced the next step."
-digraph lineage {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
-
-  zoomin [label="Zoom In 2020\nhand-traced vision circuits"];
-  framework [label="Transformer Circuits 2021\nresidual stream algebra"];
-  induction [label="Induction Heads 2022\nfirst LM circuit"];
-  toymodels [label="Toy Models 2022\nsuperposition named"];
-  sae [label="Monosemanticity 2023\nSAE recovers features"];
-  scaling [label="Scaling Monosemanticity 2024\nSAE on Claude 3 Sonnet"];
-  topk [label="top-k SAE 2024\nfixed sparsity"];
-  attrib [label="Attribution Graphs 2025\ntranscoders, causal graph", color="#3b82f6", fontcolor="#3b82f6"];
-
-  zoomin -> framework -> induction;
-  induction -> toymodels [label="hand-tracing\ndoes not scale"];
-  toymodels -> sae [label="read directions,\nnot neurons"];
-  sae -> scaling [label="survives scale?"];
-  scaling -> topk [label="tune sparsity"];
-  topk -> attrib [label="recompose\nnouns and verbs"];
-  sae -> attrib [style=dashed];
-}
-```
-
-How the loop runs in practice is mechanical and worth seeing in outline.
-Collect a large sample of activations at one site in the model, the residual
-stream after a chosen layer or an MLP's hidden activations. Train the
-dictionary on them. With a top-$k$ encoder the forward pass is small:
-
-```python
-# x: model activation, shape (batch, d)
-pre = x @ W_enc + b_enc            # (batch, m), m >> d
-f   = topk(pre, k)                  # keep k largest, zero the rest
-x_hat = f @ W_dec + b_dec           # reconstruct
-loss = mse(x_hat, x)                # no separate L1 term: k fixes sparsity
-```
-
-The fixed $k$ removes the sparsity coefficient that the L1 formulation
-forces you to tune, and is the practical reason top-$k$ SAEs displaced the
-older soft penalty [@gao2024scaling]. After training, each dictionary column
-is a candidate feature. You interpret it by gathering the inputs that
-activate it most, reading the pattern, and, crucially, testing the reading by
-clamping the feature on or off and watching the output move. A feature you
-cannot steer with is a feature you have not understood. Attribution graphs
-extend the same discipline to a whole computation: swap the MLPs for trained
-transcoders, run one prompt, and read off the causal graph among active
-features, then verify edges by perturbing nodes and confirming the
-downstream effect [@ameisen2025circuit].
-
-## The trial of the sparse autoencoder
-
-The arms race has carried the field to a production model and a causal
-graph, but it has not settled the central methodological question. The whole
-escape from the wall rests on one bet: that dictionary learning is how you
-read superposition. That bet is now on trial.
+An `InterpretabilityStudy` is evidence for a larger decision process. It cannot
+authorize a safety decision on its own. Release or deployment decisions still
+need behavioral evaluations, threat models, monitoring, access controls, and a
+documented account of uncertainty.
 
 ::: {.callout-important}
 ## What's contested
-Whether the sparse autoencoder is the right interpretability primitive, or
-an artifact-prone detour, is actively debated. The case against has several
-named results. Kantamneni et al., "Are Sparse Autoencoders Useful? A Case
-Study in Sparse Probing" [@kantamneni2025useful], find that on downstream
-probing tasks SAE features rarely beat simple baselines once those baselines
-are made strong, which questions the practical payoff. Chanin et al. document
-feature absorption, where a general feature like "starts with L" goes silent
-on a specific token like "lion" because a more specific feature swallowed it,
-so the dictionary's apparent cleanliness is partly an artifact of the
-objective [@chanin2024absorption]. Others argue the L1 sparsity penalty pushes
-SAEs to learn frequent combinations rather than the atomic features that
-actually mediate computation, and that transcoders outperform SAEs on
-interpretability (arXiv:2501.18823). The defenders, centered on Anthropic's
-interpretability team and the authors of the scaling and attribution work,
-counter that SAEs are improvable engineering, not a dead end, that causal
-interventions like Golden Gate Claude show the features are real, and that
-attribution graphs already produce mechanistic accounts that bare probing
-cannot. The disagreement is not whether superposition is real. It is whether
-dictionary learning is how we should be reading it. A third position declines
-to read it at all: OpenAI's weight-sparse transformers train models whose
-weights are mostly zero, so circuits are interpretable by construction rather
-than recovered post hoc, at the current price of toy scale and a capability
-hit [@gao2025weightsparse].
+
+The central dispute is not whether SAEs sometimes yield readable and causally
+useful directions. It is what those directions mean and when the cost is worth
+paying. Sparse probing has not consistently beaten strong simple baselines on
+the tested datasets [@kantamneni2025useful]. Feature absorption creates silent
+recall failures [@chanin2024absorption], while cross-seed comparisons challenge
+the idea that an SAE finds canonical units [@leask2025canonical]. Results that
+favor transcoders show that the replacement architecture also matters
+[@paulo2025transcoders].
+
+The constructive response is empirical: compare methods on held-out prediction,
+reconstruction and downstream fidelity, interventional utility, stability, and
+human audit cost. Weight-sparse transformers offer a different route by making
+many circuits easier to inspect by construction, but current evidence is from
+small, simple tasks and scaling beyond tens of millions of nonzero parameters
+remains difficult [@gao2025weightsparse]. No present method justifies treating
+the model as fully understood.
 :::
 
 ::: {.callout-tip}
-## Constraint arrow
-Superposition is a fact about the architecture in
-@sec-transformer-architecture, and it dictates the shape of every tool in
-this work. Because the residual stream packs more features than it has
-dimensions, no method that reads neurons directly can work, and the field is
-forced into overcomplete dictionary learning. A property of how the model
-stores information sets the entire method stack of how we read it.
+## Lower-layer constraint
+
+The tensors defined in @sec-transformer-architecture constrain what can be
+measured and intervened on, but they do not determine the correct explanatory
+units. Residual-stream directions, attention-head outputs, SAE latents, and
+transcoder features are alternative abstractions over the same computation.
+Their value depends on the behavior, input distribution, and evidence level in
+the claim. Architectural access makes mechanistic tests possible; validation
+decides which abstraction deserves trust.
 :::
 
-## What the dictionary leaves behind
-
-Every gain here is bought with a matching cost, and naming the
-costs is the right way to read the trial above.
-
-- **Monosemanticity versus completeness.** Sparsity buys clean, single
-  meaning features, but a dictionary recovers only the features it was sized
-  and trained to find. Push sparsity too hard and features split or get
-  absorbed into each other; push too soft and they go polysemantic again.
-  The SAE reconstructs the activation imperfectly, and the gap, the
-  reconstruction error, is exactly the part of the model's computation the
-  dictionary failed to explain.
-- **Faithfulness versus interpretability.** A transcoder or SAE that
-  replaces part of the model is interpretable only to the degree it stays
-  faithful to what the original computed. Attribution graphs make this
-  trade explicit: they freeze attention and approximate MLPs, so the graph
-  is a readable story about a model that is not quite the one you deployed.
-- **Local versus global.** An attribution graph explains one prompt. A
-  feature dictionary describes one model at one training checkpoint. Neither
-  yet gives a global, reusable account of what the model does on inputs you
-  have not traced, which is what oversight ultimately wants.
-- **Effort versus coverage.** Reading a circuit is slow human work.
-  Auto-interpretation, using a model to label features, scales the labor but
-  imports the labeler's errors, and the field has no settled metric for when
-  a feature has been correctly understood.
-
-The failure modes are specific, and each one is a way the dictionary lies
-about how clean it is. Dead latents are dictionary features that never fire
-and learn nothing, wasting capacity. Dead and over-firing latents together
-push you toward top-$k$ and careful initialization [@gao2024scaling].
-Feature splitting hands you several narrow features where the model had one,
-and absorption hides a general feature inside a specific one, so the
-dictionary looks cleaner than the model is [@chanin2024absorption]. And the
-reconstruction error is not noise to be ignored: it is the unexplained
-residue, the part of the computation your dictionary did not capture, and a
-method that reports high interpretability while leaving large error has
-explained less than it claims. The wall, in the end, is never fully climbed.
-What remains is a measured account of how far up we are, and a clear-eyed
-reading of the distance left.
+Mechanistic interpretability can give oversight a better question than “did the
+model produce a bad output?” It can ask whether a tested internal mechanism is
+present, active, and causally relevant on a defined input population. That
+additional evidence is valuable when its scope and failure modes travel with
+it. The next layer, @sec-oversight-control, must combine such evidence with
+controls that remain useful when the explanation is incomplete or wrong.
 
 ## Further reading
 
