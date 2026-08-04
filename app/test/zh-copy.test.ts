@@ -744,7 +744,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/orchestration/03-memory-systems.qmd",
-      ["durable record of a session", "Session logs must record intent", "branching a conversation is cheap", "shared vector store is a data-breach risk"],
+      ["execution history", "mutable workspace", "long-term memory", "external systems", "cannot make an external side effect happen exactly once"],
     ],
     [
       "zh/orchestration/03-memory-systems.qmd",
