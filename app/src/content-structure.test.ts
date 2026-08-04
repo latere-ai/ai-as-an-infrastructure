@@ -331,7 +331,7 @@ test("abbreviations and decoding methods are defined at first use", () => {
   const required = [
     ["en/infrastructure/01-accelerators-networking.qmd", "the @gls-hbm sitting beside the accelerator die"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "紧贴加速器裸片的@gls-hbm供给单块芯片"],
-    ["en/inference/03-faster-decoding.qmd", "@gls-speculative-decoding is the exact version of that pattern"],
+    ["en/inference/03-faster-decoding.qmd", "@gls-speculative-decoding is proposal-and-verification with a correction rule"],
     ["zh/inference/03-faster-decoding.qmd", "@gls-speculative-decoding就是这个模式的精确版本"],
     ["en/generative/03-speech-and-voice.qmd", "@gls-tts, the task of synthesizing speech from text"],
     ["zh/generative/03-speech-and-voice.qmd", "@gls-tts，也就是把文字合成为语音的任务"],

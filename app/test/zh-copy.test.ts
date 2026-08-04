@@ -976,7 +976,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/inference/03-faster-decoding.qmd",
-      ["one target pass verifies several guesses", "Speculative decoding", "Medusa, Hydra, the EAGLE line", "memory-bound regime"],
+      ["Verification can be parallel even when generation is sequential", "Modified rejection sampling preserves the target distribution", "Proposal source, candidate topology, and acceptance policy are separate choices", "Speedup is a wall-clock measurement"],
     ],
     [
       "zh/inference/03-faster-decoding.qmd",

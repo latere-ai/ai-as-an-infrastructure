@@ -1,428 +1,354 @@
 # Faster Decoding {#sec-faster-decoding}
 
-A frontier model running at batch size one spends most of its time waiting.
-To produce a single token it streams every weight from high-bandwidth memory
-into the accelerator's compute units, multiplies once, and discards them. The
-matrix multiplications are skinny, a vector against each weight matrix, so the
-chip finishes the math long before the next slab of weights arrives, then sits
-idle waiting on memory. @sec-serving-problem and @sec-memory-scheduling
-establish this wall from the serving side: decode is memory-bound, its
-arithmetic intensity far below what the hardware can sustain. Faster decoding
-uses that idle arithmetic to break the one-token-per-pass rule: a cheap process
-guesses several future tokens, and one target pass verifies several guesses at
-once. Decoding a token means sampling it from the probability distribution the
-model places over its vocabulary, so the target distribution is just those
-next-token probabilities the expensive model produces. @gls-speculative-decoding
-is the exact version of that pattern: a draft model proposes tokens, the target
-model verifies them in parallel, and the target distribution stays unchanged. Medusa, Hydra, the EAGLE line, lookahead decoding, and
-multi-token prediction differ mainly in where the guess comes from. The
-speedup is not a property of the method alone. It holds in the small-batch
-memory-bound regime where spare FLOPs are real, and can disappear once serving
-becomes compute-bound.
+The previous two chapters separated request timing from memory allocation. They
+also established a rule for execution: reserve the state required by a token
+plan before launching it. Faster decoding changes that plan. Instead of asking
+the target model for exactly one new token, a proposer supplies several
+candidates and the target scores them together. A successful cycle can return
+more than one token, but it also consumes proposal time, verification work, and
+temporary KV state.
 
-## The Common Move
+This trade is attractive when target decoding is underutilizing the
+accelerator, as low-batch dense decoding often does when weight traffic is the
+main cost. It is not a universal property of decoding. Long contexts add KV
+traffic; model parallelism adds communication; and larger batches may make
+verification compute-bound. The proposal must therefore be judged as part of
+the measured serving regime.
 
-Autoregressive generation has a sequential bottleneck that looks fundamental:
-decoding $K$ tokens takes $K$ forward passes, each waiting on the one before
-it. The bottleneck bites hardest exactly where latency is felt most. Reasoning
-models from @sec-inference-time-scaling emit long chains of intermediate
-tokens before an answer, so wall-clock latency is dominated by the sheer count
-of sequential decode steps.
+Two 2023 papers established exact versions of this idea: speculative
+decoding by Leviathan, Kalman, and Matias [@leviathan2023fast], and speculative
+sampling by Chen and colleagues [@chen2023accelerating]. Later work changed
+where candidates come from and how they are arranged. Medusa and Hydra add
+draft heads [@cai2024medusa; @ankner2024hydra], the EAGLE family learns a
+feature or token drafter [@li2024eagle; @li2024eagle2; @li2025eagle3],
+lookahead decoding builds candidates through iteration [@fu2024lookahead], and
+multi-token prediction trains future-token modules with the model
+[@gloeckle2024multi]. These are design choices, not stages in a required
+lineage.
 
-The single idea behind everything in this chapter is to trade extra parallel
-compute for fewer sequential steps. A cheap process guesses several future
-tokens, the expensive model checks all of them in one forward pass, and every
-guess that survives the check is a token produced without its own sequential
-step. Because a forward pass over $\gamma$ candidate tokens costs almost the
-same as a pass over one, the spare compute is nearly free.
+## Verification can be parallel even when generation is sequential
 
-Two quantities govern the payoff. The acceptance rate $\alpha$ is the fraction
-of draft tokens the target keeps; the draft cost is how much cheaper the
-guesser is than the target. The expected number of tokens produced per target
-pass rises with $\alpha$, so the whole game is to make the draft both cheap and
-well aligned with the target, and to verify many candidates at once. Two
-questions organize the rest of the chapter: where the guess comes from, and
-how the check stays correct.
+Autoregressive generation still has a sequential dependency: token $i+1$
+depends on token $i$. A proposed suffix makes those dependencies available as
+inputs. Under a causal mask, one target pass can then score every position in
+that suffix in parallel. The target remains authoritative; the proposal only
+creates candidate work.
 
-@fig-faster-decoding-1 makes the payoff concrete. With acceptance rate
-$\alpha$ and a draft of $\gamma$ tokens checked in one pass, the expected tokens
-emitted per target pass is the geometric sum
-$(1 - \alpha^{\gamma+1}) / (1 - \alpha)$, rising from one when nothing is
-accepted toward $\gamma + 1$ when everything is. A longer draft helps only when
-$\alpha$ is high, because an early rejection wastes the whole tail.
+Here $\gamma$ is the length of a linear proposal. Define $A_k$ as the event that
+draft position $k$ is accepted after every earlier position was accepted, and
+let
 
-![Schematic of the speculative-decoding payoff: expected tokens emitted per target pass as a function of acceptance rate, for several draft lengths. A longer draft helps only when the acceptance rate is high. After Leviathan et al. (2023).](/figures/faster-decoding-1.svg){#fig-faster-decoding-1}
+$$
+s_k=\Pr(A_1\cap\cdots\cap A_k),\qquad s_0=1.
+$$
 
-Try simulating the accept/reject loop directly and watch the Monte Carlo
-average converge to the closed-form geometric sum.
+If a cycle emits the accepted prefix plus one corrected or bonus token, and no
+stop condition truncates that output, its token yield $Y$ satisfies
+
+$$
+\mathbb E[Y]=1+\sum_{k=1}^{\gamma}s_k.
+$$
+
+This expectation means that an aggregate accepted-token rate does not determine
+prefix survival. Early positions may be easier than later ones, and acceptance
+events may be correlated. Only under the additional assumption of a constant
+conditional acceptance probability $\alpha$ at every position does
+$s_k=\alpha^k$, giving
+
+$$
+\mathbb E[Y]
+=\sum_{k=0}^{\gamma}\alpha^k
+=\frac{1-\alpha^{\gamma+1}}{1-\alpha},
+\qquad \alpha\ne1,
+$$
+
+with $\mathbb E[Y]=\gamma+1$ when $\alpha=1$. This is expected tokens per
+verification cycle, not a latency speedup. It says nothing yet about the time
+or memory spent on that cycle.
+
+Here the runnable compares heterogeneous conditional probabilities with an IID
+estimate formed from their arithmetic mean. The two results differ even in this
+small deterministic example.
 
 :::: {.runnable}
 ```python
-import numpy as np
-rng = np.random.default_rng(0)
-alpha, gamma, trials = 0.7, 4, 50000
+conditional = [0.85, 0.75, 0.60, 0.40]
 
-def simulate():
-    emitted = np.ones(trials)            # the corrected/bonus token
-    alive = np.ones(trials, dtype=bool)  # runs not yet rejected
-    for _ in range(gamma):
-        accept = (rng.random(trials) < alpha) & alive
-        emitted += accept                # count each accepted draft token
-        alive &= accept                  # stop at first rejection
-    return emitted.mean()
+survival = []
+alive = 1.0
+for probability in conditional:
+    alive *= probability
+    survival.append(alive)
 
-closed_form = (1 - alpha**(gamma + 1)) / (1 - alpha)
-print(f"simulated mean tokens/pass: {simulate():.4f}")
-print(f"closed-form  tokens/pass:   {closed_form:.4f}")
+expected = 1.0 + sum(survival)
+alpha = sum(conditional) / len(conditional)
+iid_estimate = sum(alpha**k for k in range(len(conditional) + 1))
+
+print("survival by position:", ", ".join(f"{value:.4f}" for value in survival))
+print(f"expected tokens/cycle: {expected:.4f}")
+print(f"iid estimate at alpha={alpha:.2f}: {iid_estimate:.4f}")
 ```
 ::::
 
-## Keeping the check exact
+## Modified rejection sampling preserves the target distribution
 
-The decisive design choice is how the verification preserves correctness, and
-the answer that made the method safe to deploy is that it can be made exact.
-@gls-speculative-decoding, introduced independently by Leviathan et al.
-[@leviathan2023fast] and Chen et al. [@chen2023accelerating], guarantees this.
-A small draft model proposes a continuation of $\gamma$ tokens. The target
-model scores all $\gamma$ positions in one parallel pass, yielding its own
-distribution $p$ at each position alongside the draft's distribution $q$. A
-modified rejection sampling rule then accepts or rejects each draft token left
-to right: token $x$ proposed from $q$ is accepted with probability
-$\min(1, p(x)/q(x))$, and on the first rejection a corrected token is resampled
-from the residual distribution $\max(0, p - q)$, renormalized. That residual
-keeps only the probability mass the target wanted that the draft under-supplied,
-which is exactly what repairs the distribution at the rejected position. The theorem
-behind the rule is that the accepted stream is distributed exactly as if it had
-been sampled from $p$ token by token [@leviathan2023fast]. The speedup is real
-and the output distribution is untouched. The method is not an approximation of
-the model, it is the same model sampled in a different order.
+@gls-speculative-decoding is proposal-and-verification with a correction rule
+that leaves the target model's output distribution unchanged. Consider one
+position after applying the intended decoding policy, including temperature,
+logit constraints, and any top-$k$ or top-$p$ truncation. Here $p$ denotes the
+target distribution, $q$ the proposal distribution, and $\mathcal V$ their
+common token space. A candidate $X\sim q$ is accepted with probability
+
+$$
+a(v)=\min\!\left(1,\frac{p(v)}{q(v)}\right).
+$$
+
+The denominator is defined for a sampled candidate because such a token has
+$q(v)>0$. On rejection, sample from the residual distribution
+
+$$
+Z=\sum_{u\in\mathcal V}[p(u)-q(u)]_+,
+\qquad
+r(v)=\frac{[p(v)-q(v)]_+}{Z},
+$$
+
+where $[z]_+=\max(0,z)$. The rejection probability is $Z$. For any token $v$,
+the probability mass contributed by acceptance and correction is
+
+$$
+q(v)a(v)+Zr(v)=\min(p(v),q(v))+[p(v)-q(v)]_+=p(v).
+$$
+
+If $Z=0$, the rejection probability is zero and the residual is never sampled.
+This one-position identity is applied left to right: stop at the first
+rejection, emit a corrected token, and discard the remaining proposal. If all
+$\gamma$ candidates are accepted, sample one bonus token from the target
+distribution at the next position. The target pass must therefore provide
+distributions for all candidate positions and for that bonus position
+[@leviathan2023fast; @chen2023accelerating].
 
 <figure id="fig-faster-decoding-stepper">
-<div class="viz" data-viz="stepper">
-<div data-chip="DRAFT" data-title="1 · Draft proposes">The cheap draft model guesses a run of γ tokens, sampling each from its own distribution q.</div>
-<div data-chip="SCORE" data-title="2 · Target scores">One target forward pass scores all γ positions at once, giving the true distribution p alongside q at each.</div>
-<div data-chip="WALK" data-title="3 · Walk left→right">Move through the draft accepting token x while p(x)/q(x) ≥ r, a uniform draw in [0,1).</div>
-<div data-chip="REJECT" data-title="4 · First reject">At the first token that fails the test, stop: everything before it is the longest valid prefix.</div>
-<div data-chip="FIX" data-title="5 · Resample">Replace the rejected token by drawing from the corrected residual max(0, p − q), renormalized.</div>
-<div data-chip="BONUS" data-title="6 · Bonus token">When the whole draft is accepted, the target's own pass already gives one extra free token.</div>
+<div class="viz" data-viz="stepper" data-lang="en">
+<div data-chip="PROPOSE" data-title="1 · Propose a suffix">Sample candidate tokens from q while retaining the proposal probability at each position.</div>
+<div data-chip="SCORE" data-title="2 · Score in parallel">Run the target once with the proposed suffix, producing p for every candidate and the possible bonus position.</div>
+<div data-chip="WALK" data-title="3 · Check left to right">At each position, accept the candidate with probability min(1, p(v)/q(v)).</div>
+<div data-chip="CORRECT" data-title="4 · Correct the first rejection">On the first rejection, sample one token from the normalized positive part of p − q and stop checking.</div>
+<div data-chip="BONUS" data-title="5 · Handle full acceptance">If the whole suffix survives, sample one extra token from the target's bonus-position distribution.</div>
+<div data-chip="COMMIT" data-title="6 · Commit verified state">Keep target KV only for the accepted candidate prefix; reclaim rejected candidate state before the next cycle.</div>
 </div>
-<figcaption>Step through the modified rejection rule: every accepted prefix, plus the resampled or bonus token, is distributed exactly as if it had been sampled from the target p.</figcaption>
+<figcaption>The exact linear speculative-sampling cycle. Proposal, target scoring, stochastic correction, and state commit are separate operations.</figcaption>
 </figure>
 
-```{dot}
-//| label: fig-faster-decoding-spec-loop
-//| fig-cap: "The speculative decoding loop: a cheap draft proposes a run of tokens, one target pass scores them all, and a modified rejection rule keeps the longest valid prefix while preserving the target's distribution. After Leviathan et al. (2023) and Chen et al. (2023)."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  A [label="context"];
-  D [label="draft: propose gamma tokens"];
-  V [label="target: score all positions in one pass"];
-  R [label="accept under p over q?", shape=diamond];
-  O [label="emit accepted tokens"];
-  C [label="resample from residual p minus q"];
-  A -> D;
-  D -> V;
-  V -> R;
-  R -> O [label="accept run"];
-  R -> C [label="first reject"];
-  C -> O;
-  O -> A;
-}
+"Exact" here means equal output distributions, not identical sampled token
+sequences for the same seed. Floating-point kernels, batching, and random-number
+consumption can change a particular realization. Exactness also requires the
+same sampling transformation and stopping policy on the distributions being
+compared: temperature, truncation, constraints, and token mapping cannot be
+silently different. EOS, stop sequences, and maximum length may shorten a
+cycle and suppress the bonus token.
+
+Greedy verification is a separate deterministic contract. It can accept the
+longest run that matches the target's greedy tokens and then take the target's
+first mismatch. Relaxed rules, such as a typical-acceptance mode, deliberately
+trade distribution equality for another quality or speed criterion. A system
+must label these contracts separately.
+
+## Proposal source, candidate topology, and acceptance policy are separate choices
+
+Implementations make three independent choices: who proposes candidates, how
+candidates are arranged, and which rule authorizes output. A proposal mechanism
+does not by itself make sampling exact.
+
+| Proposal source | Added artifact or state | Natural candidate shape | Important condition |
+|---|---|---|---|
+| Separate autoregressive model [@leviathan2023fast; @chen2023accelerating] | Draft weights, draft KV, and draft scheduling | Linear suffix | Target and draft need compatible token spaces and sampling probabilities. |
+| Attached draft heads [@cai2024medusa; @ankner2024hydra] | Learned heads; Hydra conditions later heads on earlier candidates | Linear or tree | The training and acceptance recipe determines whether the result is exact, greedy, or relaxed. |
+| Feature or token drafter [@li2024eagle; @li2024eagle2; @li2025eagle3] | A learned module beside the target | Linear or dynamic tree | Target verification still determines which proposed tokens may be committed. |
+| Prompt lookup [@saxena2023prompt] | An index or search over repeated prompt and output spans | One or more retrieved suffixes | It helps only when the workload contains useful repetition; verification supplies the correctness contract. |
+| Lookahead decoding [@fu2024lookahead] | A Jacobi window, n-gram pool, and custom masks | Multiple n-gram continuations | It removes a learned drafter, not proposal compute or temporary state. |
+| Multi-token prediction module [@gloeckle2024multi; @deepseek2024deepseekv3] | Future-token heads trained with the base model | Linear or branched proposals | The training objective supplies candidates; it is not an acceptance theorem. |
+
+This table is not a ranking. A deployer may already have a compatible small
+model, while another model may ship with useful heads. Proposal quality can
+also change with domain, context length, sampling settings, and quantization.
+The cheapest proposal is the one that reduces measured target-cycle cost for
+the actual workload.
+
+### Linear chains and candidate trees spend work differently
+
+Here a linear suffix contains $\gamma$ candidate positions. If an early token is
+rejected, its later positions cannot be emitted in that cycle. A candidate tree
+hedges by carrying several continuations. A tree attention mask packs branches
+into one target operation while ensuring that each node attends only to its own
+ancestry.
+
+```{mermaid}
+%%| label: fig-faster-decoding-tree
+%%| fig-cap: "A candidate tree carries alternatives where a linear suffix carries one node per depth. Every scored node consumes verification work and temporary state; the verification policy, not the mask, decides which path can be committed."
+flowchart TD
+  C[context] --> A1[A1] --> A2[A2]
+  C --> B1[B1] --> B2[B2]
+  B1 --> B3[B3]
 ```
 
-@fig-faster-decoding-spec-loop draws this loop. The line of accept/reject
-decisions it shows is the simplest case, a single linear continuation. The
-self-draft methods below replace that line with a tree.
+The mask makes joint scoring possible; it does not make a verifier exact.
+Greedy tree search, distribution-preserving tree sampling, and relaxed tree
+acceptance are different algorithms. Tree width can improve the chance of
+finding a useful path, but verification time and temporary KV grow with the
+number of scored nodes. Rejected branches are real work, not free alternatives.
 
-## The search for the guess
+## Speedup is a wall-clock measurement
 
-The lineage of these methods tracks where the guess comes from, moving from a
-separate model toward parts of the target itself, and finally into how the
-target is trained.
+Here $t_1$ denotes the measured time for one baseline target decode step,
+$t_{\mathrm{propose}}(\gamma)$ the proposal time,
+$t_{\mathrm{verify}}(\gamma,m)$ the target time for a proposal containing
+$m$ scored candidate nodes, and $t_{\mathrm{reconcile}}$ the acceptance,
+synchronization, and state-management time. For a chain, $m=\gamma$. A useful
+first-order latency ratio is
 
-### A second, smaller model
+$$
+S_{\mathrm{latency}}
+\approx
+\frac{\mathbb E[Y]t_1}
+{t_{\mathrm{propose}}(\gamma)
+ +t_{\mathrm{verify}}(\gamma,m)
+ +t_{\mathrm{reconcile}}}.
+$$
 
-The first answer was a second, smaller model. Leviathan et al. and Chen et al.
-both used an off-the-shelf draft model from the same family as the target, for
-example a small Chinchilla drafting for a 70B Chinchilla [@chen2023accelerating].
-This needs no change to the target and is provably lossless, but it requires
-training, hosting, and aligning a second model, and a poorly matched draft has
-a low acceptance rate.
+The denominator represents $t_{\mathrm{cycle}}$. In words, speculation improves
+average token time only when
 
-### Heads on the target itself
+$$
+\frac{t_{\mathrm{cycle}}}{\mathbb E[Y]}<t_1.
+$$
 
-Medusa [@cai2024medusa] removed the separate model. Instead of a draft network
-it bolts several lightweight decoding heads onto the target's last hidden
-state, each head predicting one further future token in parallel. The
-candidates the heads produce form a tree, and a tree-structured attention mask
-lets the target verify many branches of that tree in a single pass rather than
-a single linear continuation. Medusa's heads predict each future token
-independently of the others, which caps how coherent a multi-token guess can
-be. It also offers a typical-acceptance scheme that relaxes exact sampling for
-more speed, so Medusa in that mode is deliberately not distribution-preserving,
-a different bargain from speculative decoding's exactness [@cai2024medusa].
+Verification time grows with candidate positions, tree nodes, context length,
+KV traffic, batch composition, kernels, and communication. In a low-batch,
+weight-bandwidth-bound regime, that growth may be small enough that fewer
+target synchronizations win. At higher utilization, rejected candidate work
+can compete with other requests. Compute-bound operation can reduce the
+advantage, but it does not prove that every proposal must lose; proposal
+placement, overlap, kernels, and synchronization still matter.
 
-Hydra [@ankner2024hydra] fixed the independence limitation. Its draft heads are
-sequentially dependent: the head predicting the third token sees what the
-second head proposed, so the multi-token guess is internally coherent and the
-acceptance rate rises. The EAGLE line pushed further on what the draft should
-predict. EAGLE [@li2024eagle] observed that autoregression is more regular at
-the feature level, the second-to-top-layer hidden state, than at the token
-level, so it drafts by predicting the next feature and then mapping it to a
-token, resolving the uncertainty by feeding in the token already sampled one
-step ahead. Its successor, EAGLE-2 [@li2024eagle2], turned the verification tree
-dynamic: because a draft token's acceptance depends on context and not only on
-its position, it expands the draft tree where the draft is confident and prunes
-it where it is not. By EAGLE-3 [@li2025eagle3], feature prediction was gone,
-replaced by direct token prediction over a fusion of low, middle, and high
-layers, trained with a procedure the authors call training-time test, which lets
-the drafter keep improving as its training data grows.
+Paper results demonstrate feasibility in their evaluated settings, not portable
+multipliers. Leviathan and colleagues reported twofold to threefold improvement
+on their T5 experiments [@leviathan2023fast], while EAGLE reported 2.7 to 3.5
+times lower latency on its evaluated LLaMA2-Chat configurations
+[@li2024eagle]. Those numbers used different models, hardware, software,
+sampling settings, and baselines. Reproduce the configuration before comparing
+them.
 
-### The Draft-Free Route
+## The scheduler must plan speculative work
 
-A parallel branch removed the draft entirely. Lookahead decoding
-[@fu2024lookahead] reframes autoregressive generation as solving a nonlinear
-system by Jacobi iteration, a fixed-point sweep that updates a whole window of
-future positions at once and collects the n-grams the iteration produces along
-the way. A
-verification branch then checks those n-grams against the target in the same
-step. There is no draft model and no extra trained heads; the parallelism comes
-from the fixed-point structure of the problem, and the method is exact.
+Chapter 32's reserve, execute, and commit protocol applies directly. Before a
+cycle begins, the scheduler should reserve candidate positions and workspace.
+A linear proposal needs room for its candidate suffix; a
+tree needs room for all scored nodes. Admission must use that planned maximum,
+not the expected accepted length.
 
-The guess can also be retrieved rather than computed. Prompt-lookup decoding
-matches the last few tokens of the generation against the prompt and proposes
-the n-gram that followed there, a drafter with no model at all
-[@saxena2023prompt]. It ships as a standard speculative method in vLLM and
-TensorRT-LLM and is strongest where output copies input: retrieval-augmented
-answers, editing, and code.
+After verification, commit target KV only for the accepted draft prefix and
+release every rejected tail or branch. Draft and target caches are separate
+namespaces: their tensors come from different models or modules and are not
+interchangeable. The corrected or bonus token becomes input to the next target
+cycle, where its own target KV is materialized. The scheduler must roll
+reservations back on cancellation or failure before the same blocks are
+offered elsewhere.
 
-### Training the guess in
+Different requests accept different prefix lengths, so the next batch is
+ragged. The scheduler must preserve each request's positions, masks, stop state,
+and cache ownership while repacking work. Under memory pressure or rising
+concurrency, it may shorten $\gamma$, narrow a tree, select a cheaper proposal,
+or fall back to ordinary one-token decoding. No universal batch cutoff chooses
+among those policies.
 
-The last move folds the guess into training. Multi-token prediction
-[@gloeckle2024multi] trains the base model with several output heads on a shared
-trunk so that each position predicts the next $n$ tokens at once. The authors
-found this improves sample efficiency as an auxiliary objective, and crucially
-the extra heads double as a built-in drafter at inference time. DeepSeek-V3
-[@deepseek2024deepseekv3] carries this into a frontier system: its MTP module
-is trained alongside the main model and then reused for speculative decoding,
-reported to accept its second predicted token 85% to 90% of the time and to
-raise generation throughput by roughly 1.8 times.
+## Choose from workload evidence
 
-```{dot}
-//| label: fig-faster-decoding-lineage
-//| fig-cap: "Where the guess comes from: the lineage moves from a separate draft model, into parts of the target itself, and finally into how the target is trained, with a draft-free branch off to the side."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  S [label="separate draft model\nLeviathan, Chen"];
-  H [label="self-draft heads\nMedusa, Hydra"];
-  E [label="feature and token drafting\nEAGLE 1/2/3"];
-  J [label="draft-free Jacobi iteration\nlookahead"];
-  M [label="train the draft in\nmulti-token prediction, DeepSeek-V3"];
-  S -> H;
-  H -> E;
-  S -> J;
-  H -> M;
-  E -> M;
-}
-```
+A deployment decision starts with a contract and ends with a load test.
 
-@fig-faster-decoding-lineage traces that search.
+1. **Fix the output contract.** Decide whether the service promises exact
+   sampling, greedy sequence equality, or a documented relaxed rule. Confirm
+   the target, tokenizer, vocabulary mapping, model revision, adapters,
+   sampling transforms, constraints, and stopping behavior. Here the named
+   transforms include top-$k$ and top-$p$.
+2. **Profile proposal budgets.** Sweep chain length or tree-node budget across
+   representative context lengths, output types, batch shapes, and sampling
+   settings. Include low-acceptance workloads rather than tuning only on the
+   easiest prompts.
+3. **Measure the whole cycle.** Record the accepted-prefix length distribution,
+   proposed, verified, accepted, corrected, and bonus tokens; target cycles per
+   output token; proposal, verification, and reconciliation time; and temporary
+   KV and workspace high-water marks.
+4. **Evaluate as a service.** Compare at matched admitted load and report TTFT,
+   TPOT, inter-token latency, end-to-end latency, output throughput, goodput,
+   rejection rate, cost, and energy. Inspect both medians and tails.
+5. **Keep a fallback.** Disable speculation when its predicted cost exceeds
+   baseline decoding, when capacity cannot be reserved, or when compatibility
+   checks fail. Record when and why fallback occurs.
 
-## When the Speedup Holds
+No single acceptance rate or paper speedup answers whether the deployment wins.
+For example, two systems can accept the same fraction of candidates but place
+rejections at different positions, producing different $\mathbb E[Y]$. They
+can also have the same yield but very different target verification times.
 
-Every method here buys fewer sequential steps with more parallel compute and
-more memory traffic for verification. The boundaries are where that trade stops
-paying, and the sharpest of them is set by the serving regime rather than the
-method.
+### Correctness and failure tests
 
-@fig-faster-decoding-regime shows why the same method can help or hurt. At
-small batch the accelerator's compute units sit idle waiting on weights, so the
-FLOPs speculation spends to verify candidates were going to waste anyway, and
-they are free. At large batch the weights are amortized across many sequences
-and the compute units are already saturated, so verifying tokens that then get
-rejected competes with real work for FLOPs and can lower total throughput. The
-premise of the whole chapter, that decode is memory-bound, holds only in the
-small-batch regime.
+Test the sampler and the memory protocol independently, then together.
 
-```{dot}
-//| label: fig-faster-decoding-regime
-//| fig-cap: "Why a speedup is a property of the serving regime. At small batch the compute units idle on memory, so speculation's extra FLOPs are free. At large batch the units are saturated, so verifying rejected tokens competes for FLOPs and can cost throughput."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_L {
-    label="small batch: memory-bound";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    L1 [label="compute units idle, waiting on weights"];
-    L2 [label="spare FLOPs available"];
-    L3 [label="verify candidates for free"];
-    L4 [label="fewer sequential steps, speculation wins"];
-    L1 -> L2;
-    L2 -> L3;
-    L3 -> L4;
-  }
-  subgraph cluster_R {
-    label="large batch: compute-bound";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    R1 [label="weights amortized across many sequences"];
-    R2 [label="compute units saturated"];
-    R3 [label="rejected tokens still consume FLOPs"];
-    R4 [label="verification competes with real work, can lose"];
-    R1 -> R2;
-    R2 -> R3;
-    R3 -> R4;
-  }
-}
-```
-
-Three further trades sit underneath this one, and they are worth naming
-because they explain why the lineage moved the way it did.
-
-- **Acceptance versus draft cost.** A larger or better-trained drafter raises
-  the acceptance rate but costs more per proposal. The optimal draft is the
-  cheapest one whose acceptance is high enough that the saved target passes
-  outweigh the draft's own cost. This is why self-draft heads and feature-level
-  drafting won out: they are nearly free yet aligned with the target.
-  @fig-faster-decoding-2 shows the optimum this implies: as the draft grows
-  longer the cost-adjusted speedup rises, peaks, then falls, because past some
-  length the extra verification work outweighs the tokens it wins back, and a
-  cheaper drafter pushes that peak to longer drafts.
-- **Tree width versus waste.** Verifying a wider tree of candidates accepts
-  more tokens per pass but burns compute on branches that will be rejected.
-  Dynamic trees, as in EAGLE-2, exist to spend that width only where the draft
-  is confident.
-
-![Schematic of the acceptance-versus-draft-cost trade-off: cost-adjusted speedup against draft length, at a fixed acceptance rate, for several draft-to-target cost ratios. Each curve peaks at an optimal draft length, and a cheaper drafter moves the peak rightward. After Leviathan et al. (2023) and Chen et al. (2023).](/figures/faster-decoding-2.svg){#fig-faster-decoding-2}
-- **Lossless versus lossy.** Speculative decoding, lookahead, and the EAGLE
-  line preserve the target's output distribution exactly. Medusa's
-  typical-acceptance mode trades that exactness for speed. Multi-token
-  prediction changes training, not the sampling guarantee. Whether a lossy
-  shortcut is acceptable is an application decision, not a property the serving
-  system gets for free.
+- On a tiny vocabulary, compare empirical output frequencies with the target
+  distribution for $p=q$, partial overlap, and disjoint support. Here partial
+  overlap means that only part of the proposal's probability mass matches the
+  target. Force first rejection, later rejection, and full acceptance.
+- Compare greedy output token for token with baseline decoding. Exercise EOS,
+  stop sequences, and maximum length, including full acceptance at a boundary.
+- Repeat under temperature, top-$k$, top-$p$, grammar constraints, and logit
+  processors. Reject a tokenizer, adapter, or constraint mismatch before work
+  begins.
+- Batch requests with mixed accepted-prefix lengths. Verify positions, masks,
+  output order, and per-request random state after repacking.
+- Cross a cache-block boundary, reject a wide tree, cancel during verification,
+  and inject a target failure. Reconcile every reservation, committed block,
+  reference count, and released branch.
+- Compare numerical distributions within a stated tolerance across batch and
+  kernel configurations. Do not require bitwise-identical stochastic samples.
+- Drive acceptance low and memory pressure high. Confirm bounded queueing and
+  a clean return to baseline decoding.
 
 ::: {.callout-important}
 ## What's contested
-The speedups quoted across this literature, the 2 to 3 times of the original
-speculative decoding, the 3 to 4 times of EAGLE-2 [@li2024eagle2], the larger
-figures of EAGLE-3 [@li2025eagle3], are measured at small batch sizes where
-serving is latency-bound and the accelerator's compute genuinely sits idle.
-They are not comparable across papers, because each uses different baselines,
-hardware, and tasks, and they do not transfer to every deployment. As batch
-size grows, a server becomes compute-bound rather than memory-bound: the spare
-FLOPs that speculation spends are no longer free, and verifying tokens that then
-get rejected can lower total throughput. Whether speculative decoding pays in
-high-throughput production serving now has an operational answer: for models
-that ship trained-in drafters it is a production default, SGLang reports up to
-60% higher output throughput serving DeepSeek-V3 with MTP enabled
-[@sglang2025mtp], and engines scale the draft length down with batch size, to
-zero at high concurrency, so the regime boundary has become a scheduler policy
-rather than an open question. Still live is where that cutoff should sit, and
-the choice among separate-draft, self-draft, and draft-free designs, which
-trade hosting cost, training cost, and acceptance differently with no settled
-winner. Treat any single speedup number as a property of a serving regime, not
-of the method.
+
+There is no universal best proposal source, tree shape, draft length, or batch
+cutoff. Exact stochastic sampling, exact greedy sequences, and quality-tolerant
+acceptance are also different product contracts. Cross-paper speedups are not
+comparable without the target and draft models, hardware, parallelism, batch,
+context, sampling policy, baseline, and load. The open operational question is
+not whether speculative methods can work, but where their full cycle wins for a
+particular service.
 :::
 
 ::: {.callout-tip}
 ## Constraint arrow
-This whole chapter is a lower layer reaching up to dictate an algorithm. The
-memory-bandwidth wall of @sec-serving-problem and @sec-memory-scheduling, where
-single-stream decode reloads every weight per token and leaves the compute
-units idle, is what makes "spend parallel compute to save sequential steps"
-worthwhile in the first place. If decode were compute-bound there would be no
-idle FLOPs to spend and none of these methods would help. The shape of the
-decode algorithm is set by the bandwidth-to-compute ratio of the chip below it.
+
+Faster decoding raises the useful tokens returned by some target cycles, while
+also widening the scheduler's temporary token plan. It composes with continuous
+batching, paged KV allocation, prefix reuse, and disaggregated serving only if
+their reservation and ownership rules include speculative state. A change in
+batching or memory policy changes the latency inequality, so reprofile the
+combination rather than multiplying isolated speedup factors.
 :::
 
-## Inside the verification step
+## Payoff and boundary
 
-The verification step is the part worth seeing concretely, because it is where
-correctness lives. Given draft tokens $x_1, \dots, x_\gamma$ from $q$ and the
-target's distributions $p_1, \dots, p_{\gamma}$ from one parallel pass, the
-accept loop is short:
+Proposal-and-verification does not remove autoregression. It supplies candidate
+dependencies so the target can verify several positions in parallel, then
+commits only output authorized by an explicit acceptance contract. Its payoff
+is fewer expensive target cycles per output token; its price is proposal work,
+wider verification, temporary memory, and more complex reconciliation.
 
-```python
-for i in range(gamma):
-    r = uniform(0, 1)
-    if r < min(1, p[i][x[i]] / q[i][x[i]]):
-        emit(x[i])              # accepted, no extra target step
-    else:
-        emit(sample(normalize(relu(p[i] - q[i]))))  # corrected token
-        break                   # stop at first rejection
-# if all gamma accepted, sample one bonus token from p[gamma]
-```
-
-The two details that make it exact are the residual $\max(0, p - q)$ resampling
-on rejection and the bonus token after a full-accept run; together they are what
-the distribution-preservation theorem requires. For the self-draft and
-tree-based methods, the same accept logic runs over a tree rather than a line: a
-tree attention mask lets the single target pass score every branch, and the
-longest accepted path through the tree is emitted. @fig-faster-decoding-tree
-shows why this beats a linear draft. A linear draft commits to one continuation,
-so a single early rejection wastes everything after it. A tree hedges across
-several continuations at each position, and the tree attention mask scores all
-of them in the one target pass for almost the cost of one. The target then emits
-the longest path whose every token was accepted.
-
-```{dot}
-//| label: fig-faster-decoding-tree
-//| fig-cap: "Tree-structured drafting and verification. From the context, draft heads propose several candidate tokens per position rather than one. A tree attention mask scores every branch in a single target pass, and the longest fully accepted path (bold) is emitted. After Cai et al. (2024) and Li et al. (2024)."
-digraph {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style=rounded, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
-  ctx [label="context"];
-
-  a1 [label="The"];
-  a2 [label="A"];
-
-  b1 [label="cat"];
-  b2 [label="dog"];
-  b3 [label="cat"];
-
-  c1 [label="sat"];
-  c2 [label="ran"];
-  c3 [label="barked"];
-
-  ctx -> a2;
-  a1 -> b2;
-  a2 -> b3;
-  b1 -> c2;
-  b2 -> c3;
-
-  // longest accepted path, emitted (bold accent)
-  ctx -> a1 [penwidth=2.5, color="#3b82f6"];
-  a1 -> b1 [penwidth=2.5, color="#3b82f6"];
-  b1 -> c1 [penwidth=2.5, color="#3b82f6"];
-  ctx [color="#3b82f6"];
-  a1 [color="#3b82f6"];
-  b1 [color="#3b82f6"];
-  c1 [color="#3b82f6"];
-}
-```
-
-Operationally, serving stacks expose this as a drafter choice. A separate draft
-model is a second checkpoint to load and schedule. With EAGLE-style and
-Medusa-style drafters, the artifact shrinks to a small head module trained
-against a frozen target and loaded beside it. Multi-token-prediction drafting,
-as in DeepSeek-V3, needs no separate artifact at all because the heads were
-trained into the model. The practical
-failure mode is a drafter whose acceptance rate is too low for the workload, at
-which point speculation adds latency instead of removing it, which is why
-acceptance rate is the metric to watch in production rather than the headline
-speedup from a paper.
+The next chapter changes a complementary quantity. Quantization reduces the
+bytes used to represent model state, while fused kernels reduce data movement
+and launch overhead inside a cycle. Those changes can alter both baseline time
+and proposal acceptance, so faster decoding, quantization, and kernels should
+be measured together rather than treated as independent multipliers.
 
 ## Further reading
 
