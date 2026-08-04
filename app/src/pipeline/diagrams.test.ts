@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { withNodeMargin } from "./diagrams.ts";
+import { renderDot, withNodeMargin } from "./diagrams.ts";
 
 // Graphviz's default node margin crowds multi-line labels against rounded/filled
 // box borders. withNodeMargin injects a roomier default right after the graph's
@@ -22,4 +22,18 @@ test("handles named, strict, and undirected graph headers", () => {
 
 test("leaves non-graph input untouched", () => {
   expect(withNodeMargin("not a graph")).toBe("not a graph");
+});
+
+test("Graphviz SVGs expose the figure caption as an accessible name", () => {
+  const graphviz = {
+    dot: () => '<?xml version="1.0"?><svg width="10pt" height="10pt"><g></g></svg>',
+  } as any;
+  const code = [
+    "//| label: fig-path",
+    '//| fig-cap: "Artifact & kernel compatibility."',
+    "digraph { A -> B }",
+  ].join("\n");
+  const html = renderDot(graphviz, code, new Map(), "chapter.html", "../");
+
+  expect(html).toContain('<svg role="img" aria-label="Artifact &amp; kernel compatibility."');
 });

@@ -53,6 +53,15 @@ function figureWrap(inner: string, label: string | undefined, cap: string | unde
 // node defaults keep this margin unless they set their own; `fixedsize` nodes
 // ignore it. One central knob instead of repeating margin in every diagram.
 const NODE_MARGIN = '\n  node [margin="0.2,0.12"];';
+
+function escapeAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 export function withNodeMargin(body: string): string {
   const open = body.match(/^\s*(?:strict\s+)?(?:di)?graph\b[^{]*\{/);
   if (!open) return body;
@@ -66,6 +75,8 @@ export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap,
     svg = gv.dot(withNodeMargin(body), "svg");
     const i = svg.indexOf("<svg"); // drop the <?xml?> + DOCTYPE preamble for inline HTML
     if (i > 0) svg = svg.slice(i);
+    const accessibleName = escapeAttribute(cap || label || "Diagram");
+    svg = svg.replace("<svg", `<svg role="img" aria-label="${accessibleName}"`);
   } catch (e) { svg = `<pre class="rdr-diagram-error">graphviz error: ${String(e)}</pre>`; }
   return figureWrap(`<div class="rdr-diagram">${svg}</div>`, label, cap, xref, currentHref, prefix);
 }
