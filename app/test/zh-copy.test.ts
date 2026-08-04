@@ -848,7 +848,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/06-evaluating-agents.qmd",
-      ["agent score is a property of model-plus-harness", "graded on its outcome rather than its path", "built to disagree with the agent", "independent, checkable signal beats a self-report"],
+      ["An agent does not merely produce an answer", "Evaluate the versioned system, verify the resulting state", "Score state and constraints separately", "One attempt is not reliability"],
     ],
     [
       "zh/evaluation/06-evaluating-agents.qmd",
