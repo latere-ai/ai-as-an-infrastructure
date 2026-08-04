@@ -7,7 +7,8 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadBook, type Lang } from "./book.ts";
+import type { Lang } from "../types.ts";
+import { loadBook } from "./book.ts";
 import { buildCrossref } from "./crossref.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
