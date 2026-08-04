@@ -1,223 +1,409 @@
 # Memory and Scheduling {#sec-memory-scheduling}
 
-A serving engine spends most of its accelerator memory on one growing object,
-the key-value cache, and most of its scheduling effort deciding which requests
-share a forward pass. The mechanisms in this chapter form a dependency chain.
-Continuous batching removes static-batch waste but makes allocation churn visible.
-PagedAttention removes fragmented cache waste and makes prefix
-sharing cheap. With sharing now cheap, radix-tree prefix caching reuses shared
-prompts, but prefill and decode still interfere. That last interference is what
-phase splitting removes, and the price is a network transfer. Memory layout and scheduling policy are therefore the same serving
-problem, seen from two sides.
+@sec-serving-problem established the scheduler's central safety rule: reserve
+the state required by a token plan before executing it. This chapter follows
+that rule down to physical KV-cache blocks. The allocator must account for
+growing sequences, shared prefixes, cancellations, and memory pressure. The
+scheduler must choose work that fits those blocks without losing sight of
+latency, fairness, or progress.
 
-## Two facts that make one problem
+Several systems established the main techniques. Orca introduced
+iteration-level scheduling in 2022 [@yu2022orca]. vLLM's PagedAttention applied
+block-based allocation to KV state in 2023 [@kwon2023pagedattention]. SGLang
+organized reusable prefixes with RadixAttention in 2024
+[@zheng2024sglang]. Sarathi-Serve bounded prefill work within a colocated
+scheduler, while DistServe separated prefill and decode pools
+[@agrawal2024sarathi; @zhong2024distserve]. Mooncake later extended the
+placement problem into a storage-backed, cluster-wide KV hierarchy
+[@qin2024mooncake]. These mechanisms compose. They are not stages in a required
+historical sequence.
 
-@sec-serving-problem named the two phases of generation and their opposite shapes. Prefill reads the whole prompt in one compute-bound pass and produces the first token. Decode then emits one token per forward pass, each step reading the entire key-value cache for one new query, so decode is memory-bandwidth-bound and runs at batch size one per request unless the engine batches across requests. The memory cost and the scheduling cost of those two phases are not separate concerns. They are two faces of one resource problem, and treating them together is what this chapter is for.
+## From retained tokens to physical blocks
 
-The memory fact is that the key-value cache is large, per-request, and grows by one slot per layer per generated token. For a request of length $T$, the cache holds $2 \cdot T \cdot L \cdot n_{\text{kv}} \cdot d_{\text{head}}$ values, the factor of two for keys and values. On a model with billions of parameters the weights are fixed, but the cache for a few dozen concurrent long-context requests can exceed the weights, and it appears and disappears as requests arrive and finish. A naive engine reserves the maximum possible length for every request up front, which wastes most of the reservation for requests that finish early and caps the batch size far below what the hardware could hold.
+Let the logical KV payload per retained token be
 
-The scheduling fact is that requests do not share a length. In a batch of generations, one request may stop at twenty tokens and another run to two thousand. If the engine schedules a batch and waits for every member to finish before admitting the next, the short requests sit idle inside a padded batch while the longest one decodes, and newly arrived requests wait behind the whole batch. Throughput collapses to the pace of the slowest member, and latency for a new arrival is the tail of the batch in front of it.
+$$
+\kappa
+=
+2L\,n_{\mathrm{kv}}\,d_{\mathrm{head}}\,b_{\mathrm{kv}}.
+$$
 
-So the problem has two halves that this chapter treats together: pack the key-value cache so memory is not wasted, and schedule the forward passes so no request waits on another's length. The four sections that follow each take one mechanism, and each mechanism earns its place by fixing what the previous one exposed.
+Here $L$ is the number of transformer layers, $n_{\mathrm{kv}}$ is the number
+of key-value heads per layer, $d_{\mathrm{head}}$ is one head's dimension,
+$b_{\mathrm{kv}}$ is the bytes per cached element, and the factor two accounts
+for keys and values. The quantity $\kappa$ is logical bytes per token before
+sharding, alignment, metadata, or allocator overhead.
 
-## Iteration, not request
+Here one allocation block holds the state for $B$ token positions. For a
+request $i$ retaining $T_i$ prompt and generated tokens, $q_i$ denotes its
+logical block count, $M_i^{\mathrm{alloc}}$ its allocated KV capacity in bytes,
+and $w_i$ the unused token capacity in its final block. Then
 
-The first move is to schedule at the granularity of an iteration rather than a request. An iteration is one forward pass that advances every active request by a single token. After each iteration the scheduler is free to remove requests that just emitted their stop token and admit waiting requests into the next iteration's batch. This is **@gls-continuous-batching**, also called iteration-level scheduling, introduced by Orca [@yu2022orca]. The batch is no longer a fixed cohort that lives and dies together; it is a sliding window over the active set, refilled every step. A request that finishes at token twenty leaves immediately and its slot is reused, instead of padding out the batch until the longest member finishes. @fig-memory-scheduling-continuous shows the loop: every iteration retires whatever just emitted its stop token and admits waiting requests, so the batch composition changes each step.
+$$
+\begin{gathered}
+q_i=\left\lceil\frac{T_i}{B}\right\rceil,\\
+M_i^{\mathrm{alloc}}=q_i B\kappa,\\
+w_i=q_iB-T_i,
+\qquad 0\le w_i<B.
+\end{gathered}
+$$
 
-```{dot}
-//| label: fig-memory-scheduling-continuous
-//| fig-cap: "The continuous-batching loop. The scheduler forms a batch, runs one forward pass that advances every active request by one token, retires those that emitted a stop token, and admits waiting requests before the next iteration, so the batch is a sliding window refilled every step. After Yu et al., 2022."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  waiting [label="Waiting queue"];
-  form [label="Form batch from active set"];
-  fwd [label="One forward pass, advance each request by one token"];
-  sample [label="Sample one token per request"];
-  done [label="Emitted stop token?", shape=diamond];
-  retire [label="Retire request, free its blocks"];
-  waiting -> form [label="admit"];
-  form -> fwd -> sample -> done;
-  done -> retire [label="yes"];
-  done -> form [label="no, keep in active set"];
-  retire -> form [style=dashed, label="slot reused"];
-}
-```
+The bound shows exactly what fixed blocks guarantee: tail waste is less than
+one block per unshared sequence. Paging does not eliminate block tables,
+alignment, reference counts, reserved capacity, or unused memory elsewhere in
+the process.
 
-Before Orca, serving systems batched at request granularity: form a batch, run it to completion, return the results. This is request-level scheduling, and it inherits the static-batch pathology of any padded-cohort design. Orca's contribution was to schedule at iteration granularity and to make the batch a living set, refilled every step, which is the single change that lets a serving engine keep accelerators busy under heterogeneous request lengths [@yu2022orca]. Orca also introduced selective batching, batching the parts of the computation that can be batched across requests of different lengths while running attention per request.
+Three kinds of waste should not be conflated:
 
-Continuous batching solves the scheduling fact and immediately exposes the memory fact in a sharper form. If admission happens every iteration, the engine must allocate and free key-value cache space every iteration, for requests whose final length it does not know. Reserving a contiguous maximum-length buffer per request, the obvious scheme, fragments memory: a finished request leaves a hole too small for the next, and reserved-but-unused tail space is dead weight. Measurements in the vLLM paper put the waste from this fragmentation and over-reservation at the majority of cache memory in prior systems [@kwon2023pagedattention]. The next move exists to reclaim it.
+| Waste | Cause | What fixed blocks change |
+|---|---|---|
+| Over-reservation | A request receives capacity for a declared maximum it never reaches | Allocate blocks as the sequence grows |
+| External fragmentation | Variable contiguous extents leave holes that cannot satisfy a larger request | Any free fixed block can satisfy the next block request |
+| Tail waste | The last block is only partly occupied | Bound the waste to fewer than $B$ token positions |
 
-## The cache as virtual memory
-
-The second move removes that waste by borrowing virtual memory from operating systems. The insight is that the key-value cache is exactly the kind of object virtual memory was invented for: a per-process allocation that grows unpredictably and must share a fixed physical pool without fragmentation. **@gls-pagedattention** [@kwon2023pagedattention] stores the key-value cache in fixed-size blocks, each holding the keys and values for a fixed number of tokens, and lets a request's logical sequence of blocks map to physically non-contiguous blocks through a block table. The attention kernel is rewritten to gather keys and values through that table instead of assuming contiguity. Now allocation is per block, not per request: a request grows by appending a block when its current block fills, memory is shared at block granularity across all requests, and the only internal waste is the partial final block. The analogy is precise. The block is a page, the block table is a page table, and the engine is a memory manager that hands out and reclaims pages as sequences grow and finish. @fig-memory-scheduling-paging shows the indirection: a request's logical sequence of token blocks maps through a block table to physically scattered blocks in a shared pool.
-
-```{dot}
-//| label: fig-memory-scheduling-paging
-//| fig-cap: "PagedAttention indirection. A request's logical token blocks map through a block table to non-contiguous physical blocks in a shared pool, so allocation is per block and the only waste is the partial final block. After Kwon et al., 2023."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_logical {
-    label="Logical KV (per request)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    t0 [label="tokens 0-15"];
-    t1 [label="tokens 16-31"];
-    t2 [label="tokens 32-47"];
-    t0 -> t1 -> t2;
-  }
-  subgraph cluster_table {
-    label="Block table"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    e0 [label="slot 0"];
-    e1 [label="slot 1"];
-    e2 [label="slot 2"];
-  }
-  subgraph cluster_phys {
-    label="Physical blocks (shared pool)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    b2 [label="block 2"];
-    b7 [label="block 7"];
-    b9 [label="block 9"];
-  }
-  t0 -> e0 [style=dashed];
-  e0 -> b7 [style=dashed];
-  t1 -> e1 [style=dashed];
-  e1 -> b2 [style=dashed];
-  t2 -> e2 [style=dashed];
-  e2 -> b9 [style=dashed];
-}
-```
-
-<figure id="fig-memory-scheduling-paged-attention">
-<div class="viz" data-viz="paged-attention"></div>
-<figcaption>A pool of KV-cache blocks, the same four requests under each scheme. Toggle to contiguous and every request books a full row, its maximum length, so the dashed blocks sit reserved but unused; toggle to paged and the pool packs to the realized length, leaving blocks free for more requests. Watch the utilization readout as the sequences grow. Illustrative.</figcaption>
-</figure>
-
-vLLM is the serving system built on this idea, and it reported two to four times the throughput of the prior generation at the same latency by lifting the achievable batch size [@kwon2023pagedattention]. The lift comes from where the waste goes. @fig-memory-scheduling-1 contrasts the two schemes: reserving a maximum-length buffer per request leaves utilization at the ratio of average to maximum length, so a workload of mostly short requests strands most of the pool, while paging holds only the realized length plus a partial final block and keeps utilization near one regardless of length spread, which is what lifts the achievable batch size. The rest of vLLM, the block manager, the swapping of blocks to host memory under pressure, the copy-on-write sharing, all follows from treating the cache as paged virtual memory. The result reset the throughput baseline for open serving. It also opened a door: once the cache is paged and blocks can be shared, identical content across requests need not be stored or computed twice.
-
-![Schematic of why paging lifts the achievable batch size, after Kwon et al. (2023). Reserving a maximum-length buffer per request leaves utilization at the mean-to-maximum length ratio, so most of the pool sits dead when requests finish early, while paged allocation wastes only the partial final block and holds utilization near one across the whole length spread, which is what lifts the achievable batch size. Idealized synthetic data, not measured.](/figures/memory-scheduling-1.svg){#fig-memory-scheduling-1}
-
-## Sharing prefixes
-
-Paging makes sharing cheap, and that is the third move. Two requests that begin with the same prompt, a shared system prompt or a few-shot preamble, compute identical keys and values for that prefix. Under paging, they can point their block tables at the same physical blocks for the shared prefix and diverge only where their tokens diverge, with copy-on-write when one writes into a shared block. The open question is how to find shareable prefixes automatically across a stream of requests with arbitrary overlap. **RadixAttention** [@zheng2024sglang], the @gls-prefix-caching mechanism of the SGLang runtime, answers it by storing all cached prefixes in a radix tree keyed by token sequence, with least-recently-used eviction. A new request walks the tree to find the longest cached prefix of its prompt, reuses those blocks, and computes only the uncached suffix. The radix tree turns prefix reuse from a special case, handled by hand for a known shared prompt, into a default the runtime applies to all traffic. Prefix caching turns the repeated structure of real workloads, shared system prompts, multi-turn chat history, branching agent calls, into reused computation rather than recomputed computation. The same reuse is now a billed product surface: API providers sell it as prompt caching, with cached input tokens priced at roughly a tenth of the standard input rate and some providers charging for cache writes [@anthropic2025caching], so putting the stable prefix first in a prompt became a caller's cost lever as well as a server's scheduling win. @fig-memory-scheduling-radix shows two requests sharing a system-prompt prefix: they point at the same cached blocks up to the branch point and compute only their divergent suffixes.
-
-```{dot}
-//| label: fig-memory-scheduling-radix
-//| fig-cap: "Prefix sharing in a radix tree. Two requests with the same system prompt share its cached blocks up to the branch point and compute only the suffix where their tokens diverge. The shared node is reference-counted and copied on first write past it. After Zheng et al., 2024."
-digraph radix {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
-  root [label="root", shape=circle, width=0.3];
-  shared [label="shared system prompt\n(cached blocks, refcount 2)", style=filled, fillcolor="#f1ece1"];
-  sufA [label="request A suffix\n(computed)"];
-  sufB [label="request B suffix\n(computed)"];
-  root -> shared;
-  shared -> sufA [label="branch"];
-  shared -> sufB [label="branch"];
-}
-```
-
-Paging and prefix sharing both assume prefill and decode share a device and a batch, and that assumption is the next thing to break. Running both in one batch means a long prefill stalls the decodes waiting behind it, because the two phases want different parallelism and different batch shapes. One way out keeps the single device and schedules around the interference. Sarathi-Serve [@agrawal2024sarathi] addresses it within a single device by splitting prefill into chunks and coalescing each chunk with ongoing decodes, so a long prefill never stalls decode. The fourth move takes the opposite route.
-
-## Splitting the phases
-
-The fourth move separates the two phases onto different hardware. Prefill is compute-bound and bursty; decode is memory-bandwidth-bound and steady. **Prefill/decode disaggregation** runs prefill on one pool of machines and decode on another, transferring the key-value cache between them over the network. Each pool is provisioned and parallelized for its own phase, and neither interferes with the other's latency. DistServe [@zhong2024distserve] optimizes the placement for @gls-goodput, the rate of requests that meet both a time-to-first-token target for prefill and a time-per-output-token target for decode. Mooncake [@qin2024mooncake] centers the whole architecture on the key-value cache, pooling CPU @gls-dram and SSD across the cluster into a disaggregated cache that prefill writes and decode reads. @fig-memory-scheduling-disagg sketches the split: the prompt enters a prefill pool, the resulting key-value cache crosses the network, and the decode pool reads it to emit tokens, each pool sized and parallelized for its own phase.
-
-```{dot}
-//| label: fig-memory-scheduling-disagg
-//| fig-cap: "Prefill/decode disaggregation. A compute-bound prefill pool produces the first token and the key-value cache, which transfers over the network to a memory-bandwidth-bound decode pool that streams the remaining tokens. Each pool is provisioned and parallelized for its own phase. After Zhong et al., 2024 and Qin et al., 2024."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  prompt [label="Prompt"];
-  prompt -> pp;
-  subgraph cluster_prefillpool {
-    label="Prefill pool (compute-bound)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    pp [label="Read full prompt, one pass"];
-    ft [label="First token"];
-    kv [label="Build KV cache"];
-    pp -> ft;
-    pp -> kv;
-  }
-  kv -> dp [label="KV cache transfer over network"];
-  subgraph cluster_decodepool {
-    label="Decode pool (bandwidth-bound)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    dp [label="Read KV cache"];
-    step [label="Emit one token per pass"];
-    dp -> step;
-    step -> dp [label="append to KV"];
-  }
-  out [label="Output stream"];
-  step -> out;
-}
-```
-
-This is the most recent move, and it inverts the assumption the first three shared. The within-device line, exemplified by chunked-prefill scheduling [@agrawal2024sarathi], keeps one resource pool and schedules carefully; the disaggregated line [@zhong2024distserve; @qin2024mooncake] accepts a network transfer of the key-value cache to remove interference entirely. At scale the two lines composed rather than one displacing the other: fleets disaggregate across pools while each pool's scheduler still chunks and interleaves, and disaggregation is the core design of the production orchestration layers, NVIDIA Dynamo and the CNCF llm-d project among them [@nvidia2025dynamo; @llmd2025].
-
-Once the cache can cross the network, its placement stops being a single device's problem. Production systems now treat KV blocks as a tiered storage hierarchy of their own: hot blocks in accelerator memory, warm blocks spilled to host DRAM and SSD, and shared stores such as LMCache and Mooncake's disaggregated store keeping them addressable across instances, so a prefix computed on one replica can be reused on another [@lmcache2025; @qin2024mooncake]. Routing follows the cache: a KV-aware scheduler such as Dynamo's sends a request to the replica that already holds its prefix rather than to the least loaded one [@nvidia2025dynamo]. The cache this chapter began by scheduling within one device ends as a placed, routed resource at fleet scale.
-
-::: {.callout-important}
-## What's contested
-What remains contested about disaggregating prefill and decode is the crossover point, not the mechanism. Disaggregation removes phase interference and lets each pool scale and parallelize independently, and at large scale with long prompts the reported goodput gains are substantial [@zhong2024distserve]. But it pays a network transfer of the key-value cache on every request, needs enough cross-machine bandwidth to hide that transfer, and complicates routing and fault handling. The colocated camp, exemplified by chunked-prefill scheduling [@agrawal2024sarathi], argues that careful within-device scheduling captures most of the benefit at a fraction of the operational cost and with no transfer. The right answer still depends on prompt length, the time-to-first-token and time-per-output-token targets, and the interconnect: at frontier fleets with long prompts disaggregation has become the norm, while small deployments and short prompts still favor colocation, and the open question is where a scheduler should switch between the modes per workload.
-:::
-
-::: {.callout-tip}
-## Constraint arrow
-The attention design upstream sets how hard this chapter's job is. The size of the key-value cache, the term that paging exists to manage, is fixed by the number of key-value heads chosen in @sec-transformer-architecture. Multi-query and grouped-query attention shrink that term by sharing key-value heads across query heads, and the latent attention of @sec-moe-ssm-hybrids compresses it further. A smaller per-token cache means more sequences fit in the same memory, which raises the achievable batch size, which is the lever continuous batching pulls for throughput. An attention variant chosen for cache size is, in effect, a scheduling decision made one layer down.
-:::
-
-## What each move costs
-
-The cascade buys four benefits, and each comes with a named cost.
-
-- **Block size in paging.** A small block wastes little in the partial final block and shares at fine granularity, but multiplies block-table entries and per-kernel gather overhead. A large block cuts that overhead but wastes more tail memory and shares more coarsely. @fig-memory-scheduling-2 plots the two costs against block size: internal fragmentation rises with the block while indirection overhead falls, and their sum is a U-curve with an interior optimum. The block size is a tuning knob, not a constant, and the right value depends on typical sequence length and how much prefix sharing the workload has.
-
-![Schematic of the block-size trade-off in paged attention, after Kwon et al. (2023). Internal fragmentation, the partial final block, grows with block size, while indirection overhead, the block-table entries and the gather through them, falls as roughly one over the block size. Their sum is a U-curve with an interior optimum, which is why the block size is a tuning knob. Idealized synthetic data, not measured.](/figures/memory-scheduling-2.svg){#fig-memory-scheduling-2}
-
-  Try changing `T`, the typical sequence length, and watch the optimal block size move with it, matching the square-root formula.
+The runnable below performs exact discrete accounting. Four requests retain
+`[37, 81, 130, 211]` tokens and each declares a maximum of 256. It reports
+allocated token slots and tail waste for several block sizes. It does not turn
+block-table entries into a synthetic runtime cost; kernel measurements are
+needed for that side of the trade-off.
 
 :::: {.runnable}
 ```python
-import numpy as np
-import matplotlib.pyplot as plt
-T = 512            # typical sequence length, in tokens
-w_frag = 1.0       # cost per wasted token in the partial final block
-w_indir = 4.0      # cost of one block-table entry and its gather
-b = np.arange(1, 257)
-frag = w_frag * (b / 2)          # waste grows with block size
-indir = w_indir * (T / b)        # indirection falls as 1/block
-total = frag + indir
-b_star = b[np.argmin(total)]
-b_formula = np.sqrt(2 * w_indir * T / w_frag)
-print("argmin block size:", b_star, "  sqrt formula:", round(b_formula, 1))
-plt.plot(b, frag, "--", label="fragmentation (b/2)")
-plt.plot(b, indir, "--", label="indirection (T/b)")
-plt.plot(b, total, label="total")
-plt.axvline(b_star, color="k", lw=0.8)
-plt.xlabel("block size (tokens)"); plt.ylabel("cost"); plt.legend(); plt.show()
+from math import ceil
+
+lengths = [37, 81, 130, 211]
+declared_max = 256
+
+print("block  entries  allocated  tail-waste")
+for block_tokens in [1, 8, 16, 32, 64]:
+    entries = sum(ceil(length / block_tokens) for length in lengths)
+    allocated = entries * block_tokens
+    waste = allocated - sum(lengths)
+    print(f"{block_tokens:>5}  {entries:>7}  {allocated:>9}  {waste:>10}")
+
+contiguous = len(lengths) * declared_max
+print("contiguous max-reservation slots:", contiguous)
 ```
 ::::
 
-- **Prefix-cache retention versus memory.** Keeping more prefixes in the radix tree raises the hit rate for workloads with shared structure, but the cache competes with live requests for the same physical blocks. Under memory pressure the engine must evict cached prefixes to admit new work, so the prefix cache is a bet that reuse will pay before the blocks are reclaimed. Workloads with little overlap pay the bookkeeping and get little back.
-- **Disaggregation versus colocation.** Disaggregation removes interference and lets each phase scale alone, at the cost of a key-value cache transfer per request and the bandwidth to hide it. Colocation with chunked prefill keeps one pool and one transfer-free path, at the cost of scheduling complexity and some residual interference. The crossover is set by prompt length and latency targets.
-- **Throughput versus latency in batching.** A larger continuous batch raises throughput but lengthens each iteration, which raises time-per-output-token for every request in it. Admission is therefore a latency knob: the engine can cap batch size or reserve headroom to protect tail latency, trading some throughput for it.
+Larger blocks reduce table entries but can increase tail waste. Neither count
+is a complete performance model. A deployment chooses $B$ using its sequence
+distribution, cache layout, kernel implementation, and measured latency.
 
-## The engine as a loop and a memory manager
+## Block tables remove the contiguity requirement
 
-All four moves reduce, in code, to a loop and a memory manager. The loop is iteration-level: each step, the scheduler picks the set of requests to run, the model runs one forward pass over them, the sampler produces one token each, finished requests are retired, and waiting requests are admitted into the next step. In vLLM this is the engine-core step (`EngineCore.step`, `vllm/v1/engine/core.py`), which calls the scheduler (`vllm/v1/core/sched/scheduler.py`) to form the batch and the model runner to execute it. The scheduler tracks queues for running, waiting, and swapped requests, and moves requests between them as cache blocks are allocated and reclaimed.
+@gls-pagedattention stores a request's logical KV sequence in fixed-size
+blocks that need not be adjacent in physical memory
+[@kwon2023pagedattention]. Let $\mathcal P$ be the set of physical block
+identifiers. The block table for request $i$ is a mapping
 
-The memory manager owns the block pool. It maintains a free list of physical blocks and a per-request block table mapping logical positions to physical blocks. Allocation appends a block when the current one fills; freeing returns a request's blocks to the pool on completion. Under pressure the manager can preempt a request, either recomputing its cache later or swapping its blocks to host memory and back, which is the serving analogue of paging to disk. The attention kernel reads through the block table, so the physical layout stays invisible to the rest of the model. For prefix sharing, the block table of a new request is initialized to point at the cached blocks of its longest matching prefix, with a reference count so a shared block is freed only when its last user finishes, and copied on first write past the shared point.
+$$
+\pi_i:
+\{0,\ldots,q_i-1\}\longrightarrow\mathcal P.
+$$
 
-Two operational realities are worth naming. First, the partial final block is the only internal fragmentation paging leaves, so average waste falls as sequences lengthen relative to block size, which is why long-context workloads benefit most from paging. Second, prefix-cache hit rate is workload-shaped: a chat service with a fixed system prompt or an agent loop that re-sends a long tool preamble can see most of its prefill served from cache, while a stream of unrelated single-turn prompts sees almost none. Instrumenting the hit rate, the achievable batch size, and the preemption rate is how an operator reads whether the memory manager is winning.
+Here logical block index $j$ maps to physical block $\pi_i(j)$. For example, a
+three-block request can have the following table even when blocks 2, 7, and 9
+are scattered in the pool:
+
+| Logical block $j$ | 0 | 1 | 2 |
+|---:|---:|---:|---:|
+| Physical block $\pi_i(j)$ | 7 | 2 | 9 |
+
+The attention kernel reads through this indirection. The design is inspired by
+virtual memory, but it is not a hardware page table: the serving runtime and
+attention kernel manage the mapping explicitly, and there need not be demand
+faults, a translation lookaside buffer, or operating-system replacement.
+
+<figure id="fig-memory-scheduling-paged-attention">
+<div class="viz" data-viz="paged-attention" data-lang="en"></div>
+<figcaption>Four synthetic requests share a 32-block pool. In contiguous mode,
+each request reserves eight blocks; in paged mode, it receives blocks as it
+grows. Each colored cell is one allocated block, so partial occupancy within a
+block is intentionally omitted. Dashed cells are reserved but unused.</figcaption>
+</figure>
+
+In the models, workloads, and FasterTransformer and Orca baselines evaluated
+in the vLLM paper, the complete vLLM system delivered two to four times the
+throughput at a similar latency level [@kwon2023pagedattention]. That result
+includes the block manager, scheduler, kernels, and sharing behavior. It is not
+a hardware-independent multiplier for block allocation alone.
+
+## Allocation is part of the token plan
+
+@gls-continuous-batching lets the active set change between iterations, but an
+iteration does not have to advance every resident request. A plan may include
+decode steps, prefill chunks, or no work for a particular request because of
+priority, capacity, or fairness policy. If the plan schedules $s_i\ge0$ new
+positions for request $i$, the additional blocks it needs are
+
+$$
+\Delta q_i
+=
+\left\lceil\frac{T_i+s_i}{B}\right\rceil
+-
+\left\lceil\frac{T_i}{B}\right\rceil.
+$$
+
+Here $T_i$ is the request's current retained length, $s_i$ is the number of new
+positions in this plan, and $\Delta q_i$ is the required increase in its block
+table. If $q_{\mathrm{free}}$ blocks are available after permitted cache
+eviction, memory feasibility requires
+
+$$
+\sum_{i\in\mathcal S}\Delta q_i
+\le q_{\mathrm{free}},
+$$
+
+where $\mathcal S$ is the set of requests selected by the plan. This condition
+is separate from a scheduler's token or compute budget. A plan can fit in
+memory and still be too slow for the current latency contract.
+
+The allocator needs a reserve, execute, and commit protocol. It reserves all
+new blocks atomically before launching model work. Successful execution commits
+the mappings and token state. Cancellation or failure rolls uncommitted
+reservations back. One useful conservation check is
+
+$$
+q_{\mathrm{free}}
++q_{\mathrm{reserved}}
++q_{\mathrm{committed}}
+=q_{\mathrm{capacity}}.
+$$
+
+The four terms are free blocks, blocks reserved for a planned iteration,
+committed blocks referenced by live or cached state, and total pool capacity.
+No referenced block may be reassigned, and every state transition must preserve
+the equality.
+
+```{mermaid}
+%%| label: fig-memory-block-lifecycle
+%%| fig-cap: "A block moves from the free pool through reservation and commit. Failure rolls back a reservation; completion, cancellation, eviction, or preemption decrements references before a zero-reference block returns to the pool."
+flowchart TD
+    A[Build a token plan] --> B[Compute additional blocks]
+    B --> C{Enough reclaimable capacity?}
+    C -->|no| D[Apply the configured pressure policy]
+    D --> M[Defer or terminate this plan]
+    C -->|yes| E[Atomically reserve blocks]
+    E --> F[Execute model work]
+    F --> G{Execution succeeds?}
+    G -->|no| H[Roll back reservations]
+    G -->|yes| I[Commit mappings and KV state]
+    I --> J{Request or cache entry released?}
+    J -->|no| N[Keep referenced blocks committed]
+    J -->|yes| K[Decrement block references]
+    K --> L[Return zero-reference blocks to free pool]
+```
+
+## Sharing a prefix changes block ownership
+
+Two requests may share a physical prefix block when their corresponding KV
+state is identical. Equal visible text is not enough. A cache identity normally
+includes at least the token IDs, model weights or revision, active adapters,
+position treatment, attention and cache format, and any multimodal state that
+affects the prefix. Tenant and isolation policy may forbid sharing even when the
+mathematics matches.
+
+Here $\mathcal B_i\subseteq\mathcal P$ denotes the physical blocks referenced
+by request $i$, and $\mathcal R$ denotes the resident-request set. The live
+physical-block count is
+
+$$
+q_{\mathrm{live}}
+=
+\left|\bigcup_{i\in\mathcal R}\mathcal B_i\right|,
+\qquad
+q_{\mathrm{live}}\le q_{\mathrm{capacity}},
+$$
+
+Here the union counts a shared block once. For each physical block $p$, a
+reference count $r_p$ records all live and retained-cache owners. A block is
+reclaimable only after its relevant references are removed and $r_p=0$.
+
+@gls-prefix-caching adds an index from compatible token prefixes to those
+blocks. SGLang's RadixAttention stores prefixes in a radix tree, matches the
+longest reusable prefix, tracks references to live nodes, and evicts reusable
+leaf state under memory pressure [@zheng2024sglang]. Full shared blocks remain
+immutable. Divergent suffixes receive different blocks; an implementation that
+shares a writable partial block needs copy-on-write or an equivalent rule.
+
+Prefix caching creates four operational questions:
+
+1. **Identity:** Which model, adapter, position, cache-format, modality, and
+   tenant fields form the cache namespace?
+2. **Ownership:** Which live requests and retained index entries reference each
+   block?
+3. **Value:** How many prefill tokens and how much time would a hit save?
+4. **Eviction:** Which unpinned prefix should leave when live work needs space?
+
+A request-level hit rate can hide most of the value. Report matched prefix
+tokens or bytes as well, because a hit on eight tokens and a hit on eight
+thousand tokens do not save the same work.
+
+## Memory pressure needs an explicit policy
+
+Dynamic allocation admits more work than maximum-length reservation, but it
+does not guarantee that every admitted sequence can grow to its declared
+limit. Here memory pressure means that the free pool cannot satisfy
+$\sum_i\Delta q_i$; the system must choose among distinct actions:
+
+| Action | State affected | Cost when work resumes |
+|---|---|---|
+| Evict reusable prefix state | Cached blocks with no live owner | Recompute the prefix on a future miss |
+| Defer admission | Waiting request | Queueing delay; no lost model work |
+| Preempt and recompute | Live request | Discarded KV state and later model computation |
+| Offload and reload | Live or cached blocks | Transfer, storage queueing, and synchronization |
+| Reject or fail explicitly | Waiting or active request, according to contract | Lost request; must be visible in service metrics |
+
+These actions are not interchangeable. Evicting an unpinned cache entry does
+not alter a live request. Preempting live work does. Offloading preserves state
+but adds a data path that can become slower than recomputation. Priority can
+protect interactive traffic while starving an older batch request, so victim
+selection needs age or fairness constraints as well as a memory score.
+
+A retry after a pressure-policy action is a policy boundary, not permission to
+spin forever. If capacity cannot be recovered, the scheduler must defer, reject,
+or surface a failure. An invisible retry loop converts a known allocation
+failure into unbounded queueing.
+
+## Chunked prefill shares an iteration budget
+
+A long prefill can occupy an iteration long enough to widen inter-token gaps for
+active decodes. Sarathi-Serve splits a prefill into chunks and coalesces those
+chunks with decode work [@agrawal2024sarathi]. Here $\mathcal D$ denotes the
+selected decode requests, $d_i$ their scheduled decode positions, $\mathcal P_f$
+the selected prefill requests, $c_j$ their chunk sizes, and $K$ a profiled
+iteration token budget. A simplified constraint is
+
+$$
+\sum_{i\in\mathcal D}d_i
++
+\sum_{j\in\mathcal P_f}c_j
+\le K.
+$$
+
+Without multi-token decoding, $d_i$ is usually one. Token count is only a proxy
+for execution time: context length, kernels, phase mix, parallel layout, and
+hardware change the work per token.
+
+Chunking bounds how much prefill work enters one plan; it does not remove all
+prefill-decode interference. Small chunks can add launches, repeated scheduling,
+and less efficient kernels. Decode-first policies can protect token cadence but
+starve new prefills and worsen time to first token. The scheduler therefore
+needs per-class queue age and latency measurements, not only a target batch
+size.
+
+## Move KV state only when the data path earns its cost
+
+Prefill/decode disaggregation gives each phase its own device pool. It removes
+colocated kernel contention and uncouples some resource and parallelism choices,
+but decode cannot use a request until the required KV state reaches its pool.
+Here $\tau_{\mathrm{fixed}}$ denotes setup and synchronization latency, $S$ the
+transferred KV payload in bytes, and $\beta$ the path's achieved bandwidth. The
+isolated transfer time obeys
+
+$$
+\tau_{\mathrm{transfer}}
+\ge
+\tau_{\mathrm{fixed}}+\frac{S}{\beta}.
+$$
+
+The model uses achieved rather than advertised link bandwidth. End-to-end delay
+also includes source and destination queues, contention, retries, and
+backpressure. Transfer can overlap other work, but the consumer still needs a
+clear readiness and ownership protocol.
+
+DistServe optimizes separate prefill and decode resources under chosen TTFT and
+TPOT attainment targets [@zhong2024distserve]. Mooncake extends the same state
+movement problem across GPU memory, CPU @gls-dram, SSD, and network links
+[@qin2024mooncake]. These systems demonstrate particular designs and measured
+workloads. They do not establish disaggregation or tiering as the universal
+choice.
+
+Cache-aware routing also needs both locality and load. Here $Q_j$ denotes the
+predicted queue delay on worker $j$, $P_i$ the prompt length, $H_{ij}$ the
+compatible cached-prefix length, $C_{\mathrm{prefill}}(u;j)$ the predicted time
+to compute $u$ uncached tokens there, and $X_{ij}$ the transfer and routing
+overhead. One illustrative completion-time estimate is
+
+$$
+\widehat C_{ij}
+=
+Q_j
++C_{\mathrm{prefill}}(P_i-H_{ij};j)
++X_{ij}.
+$$
+
+Choosing the lowest estimate is only a starting point. Capacity, fairness,
+fault domains, prediction error, and tenant isolation can override it.
+
+::: {.callout-important}
+## What's contested
+
+No allocation or placement policy dominates every workload. Small blocks bound
+tail waste more tightly but create more table entries. Prefix retention helps
+only when compatible reuse arrives before eviction. Recompute can beat offload
+when the storage path is slow; offload can win when compute is scarce.
+Colocation avoids KV transfer, while disaggregation can isolate phase queues and
+size pools independently. Prompt and output distributions, offered load, SLOs,
+parallelism, topology, and failure policy determine the crossover.
+:::
+
+## Verify the allocator and scheduler together
+
+Correctness tests should exercise more than successful completion:
+
+1. Cancel a request between reservation and commit; every reserved block must
+   return to the pool.
+2. Share a prefix across requests, finish them in different orders, and prove
+   that the block is reclaimed only after its final reference disappears.
+3. Inject execution and transfer failures; committed mappings must remain valid
+   and uncommitted mappings must roll back.
+4. Exhaust the pool; the configured eviction, preemption, deferral, rejection,
+   and fairness rules must occur explicitly rather than through a retry loop.
+5. Change model revision, adapter, position, modality, or tenant namespace; an
+   incompatible prefix must miss the cache.
+
+Under load, report four groups of measurements:
+
+- **Pool state:** free, reserved, committed, and uniquely referenced blocks;
+  tail waste; allocation failures; and high-water marks.
+- **Reuse and reclamation:** matched prefix tokens, hit and eviction rates,
+  reuse distance, recomputed tokens, offloaded bytes, and reload latency.
+- **Scheduling:** queue age by request class, prefill chunk sizes, decode batch
+  composition, preemptions, rejections, and fairness outcomes.
+- **Service result:** TTFT, inter-token gaps, TPOT, goodput, acceptance, KV
+  transfer bytes and latency, accelerator time, and cost.
+
+@sec-serving-problem gives the matched-load evaluation protocol. The additional
+requirement here is conservation: reconcile every scheduled token and every
+physical block from admission through release.
+
+::: {.callout-tip}
+## Constraint arrow
+
+@sec-transformer-architecture determines logical KV bytes per token through
+layer count, KV-head count, head dimension, and cache precision. This chapter
+decides how that state is allocated, shared, reclaimed, and moved.
+@sec-faster-decoding changes how many accepted tokens a model pass can produce,
+which changes the token plan and future block demand. @sec-quantization-kernels
+can reduce cache bytes or change attainable kernel performance. A memory policy
+must be remeasured when any of those lower-level facts change.
+:::
+
+## Payoff and boundary
+
+Block allocation gives the scheduler a precise feasibility test. Reference
+counts make prefix sharing safe. Pressure policies state which work may be
+discarded, moved, delayed, or refused. Chunk budgets control colocated phase
+interference, and transfer models expose the price of separating state from
+compute.
+
+These mechanisms are independently useful and often combined. The allocator's
+job is to preserve memory and ownership invariants. The scheduler's job is to
+choose among safe plans using the workload's latency, fairness, acceptance, and
+cost contract. Confusing those responsibilities produces systems that are fast
+only until the first cancellation, cache miss, burst, or exhausted block pool.
 
 ## Further reading
 

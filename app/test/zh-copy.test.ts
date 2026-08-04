@@ -968,7 +968,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/inference/02-memory-scheduling.qmd",
-      ["Continuous batching removes static-batch waste", "PagedAttention removes fragmented cache", "radix-tree prefix caching", "phase splitting removes"],
+      ["From retained tokens to physical blocks", "Allocation is part of the token plan", "Sharing a prefix changes block ownership", "Memory pressure needs an explicit policy", "Move KV state only when the data path earns its cost"],
     ],
     [
       "zh/inference/02-memory-scheduling.qmd",
