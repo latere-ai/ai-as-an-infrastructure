@@ -984,7 +984,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/inference/04-quantization-kernels.qmd",
-      ["makes weights or activations smaller", "attention intermediates off high-bandwidth memory", "GPTQ, AWQ, and SmoothQuant", "FlashAttention"],
+      ["numeric contract", "A capacity saving is not automatically a latency saving", "artifact, kernel, and runtime", "exact attention up to floating-point rounding"],
     ],
     [
       "zh/inference/04-quantization-kernels.qmd",
