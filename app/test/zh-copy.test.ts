@@ -704,7 +704,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/06-reasoning-data-distillation.qmd",
-      ["reasoning example", "Bootstrapping", "Small Data", "Distilling Long Thought"],
+      ["What a reasoning record must preserve", "accepted distribution", "Bootstrapping traces", "Small curated sets are a conditional result", "What distillation actually optimizes", "Smaller models and shorter outputs are different goals"],
     ],
     [
       "zh/reasoning/06-reasoning-data-distillation.qmd",

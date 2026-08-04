@@ -1,156 +1,400 @@
 # Reasoning Data and Distillation {#sec-reasoning-data-distillation}
 
-Reasoning models are trained not only on questions and answers, but on traces:
-worked solutions, failed attempts, self-corrections, rejected samples, verifier
-labels, and long chains later compressed into short ones. That data layer has
-its own engineering questions: what a reasoning dataset contains, how correct
-traces are harvested, why small curated sets sometimes work, and how a large
-reasoner can hand its behavior to a smaller one through distillation, training a
-small student model on a stronger model's outputs.
+A final answer records whether a model reached a destination. Reasoning data
+records more of the route: the prompt, a visible trace, the answer, the checks
+applied to both, and the conditions under which the trace was generated. Those
+extra fields make it possible to train on successful demonstrations, learn a
+verifier from labeled failures, form preference pairs, or audit why a data
+pipeline accepted a sample.
 
-![Reasoning data pipeline. A base model samples many traces, a checker filters
-or labels them, accepted traces train a student or policy, and long reasoning
-can later be distilled into shorter behavior.](/figures/reasoning-data-distillation-1.svg){#fig-reasoning-data-distillation-1}
+These uses should not be collapsed into one operation. Sampling creates a pool
+of candidates. Selection changes the distribution of that pool. Supervised
+fine-tuning imitates selected text. Distillation transfers a teacher's output
+distribution or selected outputs to a student. None of those steps, by itself,
+establishes that a written rationale faithfully reports the computation inside
+either model. This chapter follows the data through each step and states what
+the resulting model has actually been trained to reproduce.
 
-## A Reasoning Example Is More Than an Answer
-
-A standard supervised example is $(x, y)$: prompt and target. A reasoning example
-is closer to $(x, z_{1:T}, y, m)$, where $z_{1:T}$ is the trace and $m$ is
-metadata: verifier result, difficulty, source, language, tool calls, trace
-length, or process labels. That extra structure changes the training question.
-The model is not only learning which answer is correct. It is learning a style
-of search and when to stop.
-
-The simplest loss is still next-token prediction:
-
-$$
-\mathcal{L}_{\text{trace}}(\theta)
-  = -\sum_{t=1}^{T} \log p_\theta(z_t \mid x, z_{<t})
-    - \log p_\theta(y \mid x, z_{1:T}).
-$$
-
-Here the first term teaches the trace tokens, and the second teaches the final
-answer conditioned on that trace.
-The data choice decides what this loss teaches. Human-written traces teach a
-legible style; machine traces teach the teacher's. Filter the set through a
-checker, and the model sees only the paths that passed it. Long traces teach
-deliberation, though they teach verbosity too unless something later compresses
-them. This is why reasoning data is a systems object, not just a file of
-solutions.
-
-## Bootstrapping and Rejection Sampling
-
-STaR was the early form of self-improving reasoning data. Start with a few
-rationale examples, ask the model to generate rationales for many questions,
-keep rationales that lead to correct answers, and fine-tune on them. For wrong
-answers, condition on the correct answer and try to generate a rationale that
-would have reached it, then repeat [@zelikman2022star]. The loop is simple:
-
-```python
-def star_round(model, prompts, examples, checker):
-    accepted = []
-    for x in prompts:
-        trace, answer = model.sample_with_rationale(x, examples)
-        if checker(x, answer):
-            accepted.append((x, trace, answer))
-        else:
-            trace = model.sample_rationale_given_answer(x, reference_answer(x))
-            if checker_trace_or_answer(x, trace):
-                accepted.append((x, trace, reference_answer(x)))
-    return fine_tune(model, accepted)
+```{mermaid}
+%%| label: fig-reasoning-data-distillation-1
+%%| fig-cap: "Two related but distinct pipelines. Trace construction turns sampled responses and checks into a versioned corpus. Distillation then uses an explicit teacher target to train a student; output-length compression is an additional objective, not an automatic consequence of using a smaller student."
+flowchart TD
+    A[Prompt registry and split groups] --> B[Teacher samples candidate traces]
+    B --> C[Answer, process, and policy checks]
+    C --> D[Accepted demonstrations]
+    C --> E[Rejected traces and audit labels]
+    D --> F[Deduplicate, balance, and version]
+    F --> G[Demonstration corpus]
+    E --> M[Version failure labels and audits]
+    M --> N[Verifier, preference, or error-model training]
+    G --> H[Chosen student objective]
+    I[Teacher logits or selected sequences] --> H
+    H --> J[Model-size transfer]
+    H --> K[Output-length compression]
+    J --> L[Held-out quality and cost evaluation]
+    K --> L
+    N --> L
 ```
 
-Rejection sampling fine-tuning, or RFT, generalizes the filtering idea. Generate
-many candidate traces, keep the ones whose final answer passes the checker,
-discard the rest, and train on the accepted set. Yuan et al. found that RFT improves mathematical
-reasoning, especially when the augmented samples contain diverse correct paths
-[@yuan2023scaling]. This is the data-side counterpart of self-consistency:
-sampling raises coverage, the verifier selects, and the selected traces become
-training data rather than immediate answers.
+## What a reasoning record must preserve
 
-The failure is selection bias. A verifier that only checks final answers can
-keep traces with flawed reasoning but correct outputs, or traces that exploit a
-shortcut. A filtered dataset is therefore not automatically cleaner than a human
-one. It is only ever clean with respect to the checker.
+For training item $i$, $x_i$ denotes the prompt, $z_{i,1:T_i}$ the visible
+reasoning trace, and $y_{i,1:U_i}$ the final-answer tokens. A trace-trained
+language model usually masks the prompt and predicts the trace and answer. One
+explicit per-example loss is
 
-## Small Data, Large Latent Skill
+$$
+\mathcal L_i(\theta)
+=
+-\frac{1}{Z_i}
+\left[
+\alpha_z\sum_{t=1}^{T_i}
+\log p_\theta(z_{i,t}\mid x_i,z_{i,<t})
++
+\alpha_y\sum_{u=1}^{U_i}
+\log p_\theta(y_{i,u}\mid x_i,z_i,y_{i,<u})
+\right].
+$$
 
-s1 and LIMO made the data question sharper. s1 reports strong reasoning by
-fine-tuning on only 1,000 carefully curated examples, then using budget forcing
-at test time (controlling how long the model thinks before it answers)
-[@muennighoff2025s1]. LIMO reports strong mathematical reasoning
-from 817 curated examples and argues that, when the base model already encodes
-the relevant domain knowledge, a small set of high-quality reasoning templates
-can elicit the capability [@ye2025limo]. The implication is not that data no
-longer matters, only that the marginal value of a reasoning trace depends on
-what the base model already knows.
+Here $\theta$ denotes the student parameters; $T_i$ and $U_i$ are the trace
+and answer lengths; $\alpha_z$ and $\alpha_y$ weight those two regions; and
+$Z_i$ is the normalization. Setting $Z_i=1$ gives a long completion more total
+weight because it contributes more token losses. Setting
+$Z_i=T_i+U_i$ gives every example the same total weight, so each token in a
+long completion contributes less. Neither choice is neutral. If prompt $i$ has
+$K_i$ accepted traces, storing every trace as an ordinary row also weights that
+prompt roughly in proportion to $K_i$. Sampling a prompt first and one of its
+traces second, or weighting each trace by $1/K_i$, preserves equal prompt
+weight instead.
 
-This reframes dataset scale. A million low-quality traces may teach format and
-verbosity. A thousand hard, diverse, correct traces may teach how to activate a
-latent capability. The useful unit is not the count of examples alone, but the
-coverage of reasoning moves: decomposition, algebraic transformation, proof
-planning, code simulation, checking, and stopping. Scale and curation turn out
-not to be opposites, though: OpenThoughts ran controlled data-recipe ablations
-up to the 1.2M-trace OpenThoughts3 set and found that scaling a curated
-pipeline beats tiny hand-picked sets on open base models, its OpenThinker3-7B
-reaching 53% on AIME 2025 [@guha2025openthoughts]. That narrows s1 and LIMO
-to a claim about strong base models, not about data scale in general.
+The text fields are only part of the record. A useful corpus keeps enough
+metadata to reproduce admission decisions and detect leakage:
 
-## Distilling Long Thought Into Shorter Behavior
+```yaml
+prompt: {text, source_dataset, source_item_id, split_group}
+completion: {trace, final_answer, language, token_count, tool_calls}
+checks: {answer_result, process_result, policy_result, checker_versions}
+generation: {teacher, checkpoint, prompt_template, temperature, seed}
+provenance: {license, parent_hashes, generated_at}
+disposition: {accepted_for_sft, preference_role, audit_only, rejection_reason}
+```
 
-DeepSeek-R1 made distillation a central part of the reasoning story. The R1
-paper reports that dense smaller models distilled from R1 reasoning traces
-outperform small models trained with RL directly in that recipe
-[@guo2025deepseek]. Kimi k1.5 reports long2short methods that use long-CoT
-techniques to improve short-CoT models, giving a production-facing answer to a
-simple problem: long reasoning is useful, but long answers are expensive
-[@kimi2025k15].
+Each field has a job. `split_group` keeps paraphrases and shared source
+problems in one partition. Checker versions make later re-grading possible.
+Generation settings explain why two nominally identical runs produced
+different coverage. The disposition prevents a failed trace from silently
+entering positive supervised data. Metadata that is collected but never used
+for filtering, sampling, weighting, conditioning, or audit is not part of the
+training design; it is only storage overhead.
 
-Distillation changes the location of the cost. The teacher spends training and
-test-time compute to find long traces. The student pays a supervised loss to
-imitate the useful behavior. If it works, production gets part of the reasoning
-benefit without paying the full token budget on every request. The trade-off is
-information loss. A short student may learn the result of a deliberation without
-the ability to reproduce the deliberation under distribution shift.
+## From samples to an accepted distribution
 
-Weak supervision extends the same idea. Yuan et al. study whether weaker
-reasoners can supply supervision that improves stronger students, reporting that
-weak supervision can recover most of the gains of more expensive RL in their
-setting [@yuan2025weak]. The result is important because it breaks the assumption
-that every reasoning dataset must come from a frontier teacher or human expert.
-The open question is calibration: when does a weak teacher provide useful
-templates, and when does it teach brittle habits?
+Let $s=(z,y)$ denote a complete trace and answer sampled from a teacher or
+proposal distribution $q_\phi(s\mid x)$. Let
+$a(x,s)\in\{0,1\}$ be the admission rule. Rejection sampling does not recover
+an abstract distribution of correct reasoning. It produces the proposal
+distribution conditioned on that rule:
+
+$$
+q_A(s\mid x)
+=
+\frac{q_\phi(s\mid x)a(x,s)}
+{\mathbb E_{s'\sim q_\phi(\cdot\mid x)}[a(x,s')]}.
+$$
+
+The denominator is the teacher's acceptance probability for prompt $x$ and
+normalizes the retained samples. The teacher and the admission rule therefore
+co-author the dataset. If the teacher never proposes a valid path, filtering
+cannot create one. If the checker accepts a spurious path, supervised training
+will imitate it.
+
+Sampling more candidates changes which prompts enter the corpus. If one sample
+passes with probability $p_x$ and the pipeline draws $K$ independent samples,
+where $p_x$ is the per-sample acceptance probability for prompt $x$, then the
+probability that the prompt contributes at least one demonstration is
+
+$$
+P(\text{at least one accepted trace}\mid x)=1-(1-p_x)^K.
+$$
+
+Here, easy prompts with large $p_x$ enter readily; prompts with tiny $p_x$ may
+disappear. Keeping every passing sample adds another bias because easy prompts
+produce more accepted rows. A defensible pipeline records both empty groups
+and accepted groups, then decides deliberately whether to balance prompts,
+difficulty bands, domains, or trace families.
+
+Answer, process, and data-utility checks answer different questions:
+
+- **Outcome admission** asks whether the extracted final answer passes a rule.
+  It does not validate the route to that answer.
+- **Process admission** asks whether steps satisfy human labels, a process
+  reward model, a proof checker, or another stated criterion. A learned process
+  scorer remains an imperfect proxy, as @sec-verifiers-process-supervision
+  explains.
+- **Data-utility admission** asks whether the sample adds something useful:
+  a distinct solution structure, an underrepresented difficulty, a permitted
+  license, or a trace length appropriate for the target system.
+
+Rejected traces are useful only when an objective consumes them. They may
+become negative examples for a verifier, losers in preference pairs, targets
+for an error classifier, or audit records. Positive-only SFT learns nothing
+from a rejected row merely because the row was retained in storage.
+
+## Bootstrapping traces without confusing answer checks with proof
+
+STaR, the Self-Taught Reasoner, established an influential iterative recipe in
+2022 [@zelikman2022star]. It starts with a pretrained checkpoint, a small set of
+rationale demonstrations, and questions with known answers. The reported loop
+can be written as pseudocode:
+
+```text
+M_0 := pretrained checkpoint
+M_n := M_0
+
+for round n = 0, 1, ...:
+    ordinary := generate rationale + answer with M_n
+    keep ordinary samples whose generated answer matches the known answer
+
+    for each failed question:
+        rationalized := generate again while revealing the known answer as a hint
+        keep it only if the generated answer now matches
+        remove the answer hint from the training input
+
+    M_(n+1) := fine-tune a fresh copy of M_0 on all retained samples
+```
+
+The reset to $M_0$ matters: the original algorithm did not simply continue
+fine-tuning the previous round. The rationalization branch also needs careful
+interpretation. A trace generated while the answer is visible is a post-hoc
+explanation conditioned on that answer, not evidence that the model derived
+the answer independently. STaR filtered on answer correctness, not on a proof
+of every rationale step. The paper explicitly notes that tasks with high
+chance-level accuracy can admit poor rationales.
+
+Rejection sampling fine-tuning (RFT) applies the same sample-filter-train
+pattern without requiring STaR's exact reset and rationalization procedure.
+In the mathematical-reasoning study that named RFT, an SFT model sampled 100
+solutions per GSM8K problem at temperature 0.7, rejected wrong answers and
+incorrect calculations using Python, extracted ordered equation lists, and
+selected diverse paths by edit distance [@yuan2023scaling]. In that reported
+setup, combining rejection samples from multiple models raised LLaMA-7B from
+35.9% to 49.3% on GSM8K.
+The result supports both sampling and structural diversity within that recipe.
+It does not show that every accepted trace is a valid derivation.
+
+STaR and RFT are offline data construction. Self-consistency instead samples
+several answers at inference time and aggregates them. Online RL samples from
+a changing policy and applies gradient updates using rewards. All three may
+sample multiple completions, but they spend the samples at different stages and
+optimize different objectives.
+
+## Small curated sets are a conditional result
+
+Two 2025 studies showed that reasoning SFT can be data-efficient on an already
+capable base model. s1 selected 1,000 questions and Gemini-generated traces for
+difficulty, diversity, and formatting quality, then fine-tuned
+Qwen2.5-32B-Instruct [@muennighoff2025s1]. Its final paper reports that the
+authors' grader judged only 53.6% of the s1K generations correct. The system's
+headline results also combine the dataset with budget forcing, a decoding-time
+intervention discussed in @sec-inference-time-scaling. s1 therefore
+demonstrates a compact, effective recipe; it is not evidence that 1,000 fully
+correct traces suffice in general.
+
+LIMO used 800 selected mathematical examples with Qwen2.5-32B-Instruct. Those
+800 rows were the end of a much larger production pipeline that began with
+tens of millions of problems and used repeated teacher sampling, heuristics,
+and manual review. The final COLM paper reports 63.3% on AIME 2024 and 95.6%
+on MATH-500 and proposes that strong pretrained domain knowledge lowers the
+number of demonstrations needed to elicit a useful response pattern
+[@ye2025limo]. That hypothesis is conditional on the base checkpoint, teacher,
+prompt distribution, evaluation protocol, and domain. Changing any of them
+changes the meaning of "800 examples."
+
+Scale is a separate axis. OpenThoughts ran more than 1,000 controlled pipeline
+experiments and built a 1.2-million-example corpus using QwQ-32B as the teacher.
+Its ICLR 2026 report compares data recipes while holding the
+Qwen2.5-7B-Instruct student family fixed and reports 53.3% on AIME 2025 for
+OpenThinker3-7B [@guha2025openthoughts]. This is evidence that a curated
+pipeline can continue to benefit from scale in that matched setup. It is not a
+controlled refutation of s1 or LIMO because the teachers, students, data, and
+evaluations differ.
+
+The useful question is therefore not "small or large?" It is how performance
+changes along independently reported axes: unique prompt families, accepted
+traces per prompt, teacher and checkpoint, difficulty distribution, verifier
+quality, duplicate rate, trace length, and total training tokens.
+
+## What distillation actually optimizes
+
+Knowledge distillation originally trained a student to match the softened class
+distribution of a larger teacher [@hinton2015distilling]. For language
+generation, there are two common targets.
+
+With **soft token distillation**, the student matches the teacher's next-token
+distribution at each history $h_t=(x,s_{<t})$, where $x$ is the prompt and
+$s_{<t}$ is the generated prefix before token $t$:
+
+$$
+\mathcal L_{\mathrm{soft}}
+=
+\tau^2\sum_t
+D_{\mathrm{KL}}
+\left(q_T^\tau(\cdot\mid h_t)\,\middle\|\,
+p_S^\tau(\cdot\mid h_t)\right).
+$$
+
+Here $q_T^\tau$ and $p_S^\tau$ are teacher and student token distributions
+softened by temperature $\tau>0$, and $D_{\mathrm{KL}}$ is Kullback-Leibler
+divergence. This target requires comparable vocabularies and access to teacher
+logits, which a closed API usually does not provide.
+
+With **hard sequence distillation**, the teacher generates a completion
+$\tilde s$, where the symbol denotes one sampled sequence, and the student
+learns it with ordinary sequence loss:
+
+$$
+\mathcal L_{\mathrm{hard}}
+=
+-\mathbb E_{x,\,\tilde s\sim q_T(\cdot\mid x)}
+\sum_t \log p_S(\tilde s_t\mid x,\tilde s_{<t}).
+$$
+
+Teacher samples give a Monte Carlo view of the teacher distribution; greedy or
+beam outputs emphasize selected modes. If a checker filters the samples first,
+the student imitates the accepted distribution $q_A$, not the unfiltered
+teacher. Sequence-level distillation predates reasoning models
+[@kim2016sequence], while rationale-based methods later showed that intermediate
+text can serve as an additional training target rather than merely a label
+[@hsieh2023distilling].
+
+The target can include only the answer, the visible trace plus answer, or
+separate answer and rationale tasks. These choices teach different output
+contracts. A trace-trained student is trained to reproduce teacher-like visible
+text; that is not proof that it recovered the teacher's internal algorithm.
+
+## Smaller models and shorter outputs are different goals
+
+Model-size compression changes parameter count. Output-length compression
+changes generated tokens. Either may be pursued without the other.
+
+DeepSeek-R1 is evidence for model-size distillation. Its released Qwen and
+Llama students were fine-tuned on 800,000 samples curated with DeepSeek-R1.
+For the paper's direct comparison, a distilled Qwen-32B model outperformed one
+Qwen-32B run trained with more than 10,000 RL steps on the reported reasoning
+benchmarks [@guo2025deepseek]. That is a recipe-specific comparison, not a
+general theorem that SFT beats RL. The students are smaller than the teacher,
+but they may still emit long traces. The result does not establish short-output
+behavior.
+
+Kimi k1.5 studied output-length compression directly [@kimi2025k15]. Its
+long2short experiments separated four mechanisms:
+
+1. average the weights of long- and short-chain models;
+2. sample eight responses and use the shortest correct one for SFT;
+3. train with preference pairs that favor the shortest correct response over
+   longer correct or incorrect responses; and
+4. run a second RL phase with a length penalty and a shorter rollout limit.
+
+The proprietary, self-reported system also used large SFT stages before these
+experiments. Within its published comparison, the long2short RL variant gave
+the best token-efficiency trade-off. This is not ordinary teacher SFT. It is
+constrained optimization over both correctness and length.
+
+A production evaluation should therefore report at least three quantities
+together: task quality under a fixed sampling protocol, generated tokens or
+latency, and model-serving cost. A smaller model that preserves accuracy by
+producing far more tokens may save memory but not latency. A short model that
+works only on familiar templates may fail when the prompt requires recovery
+from an early error.
+
+## Weak supervision changes who can be a teacher
+
+A teacher need not be larger than its student. The EACL 2026 weak-to-strong
+study trained 7B-to-32B Qwen students on traces from weaker 0.5B-to-14B
+reasoners [@yuan2025weak]. Those weak teachers had themselves received RL, so
+the method relocates that cost to smaller teachers rather than eliminating it.
+In one Qwen2.5-Math pairing, supervision from a 1.5B
+reasoner recovered 94.34% of the direct-RL gain for a 7B student on MATH. That
+number is a normalized reasoning-gap result for a particular teacher, student,
+benchmark, and training recipe, not a universal fraction of RL capability.
+
+The study compared all traces, final-answer-correct traces, and
+final-answer-incorrect traces. Correct-only filtering usually helped most, but
+even imperfect traces sometimes improved the student. The authors found that a
+teacher's structured trace behavior mattered more than parameter count alone.
+This makes weak supervision a useful design option, while also reinforcing the
+need to log teacher identity, filtering policy, and benchmark-specific
+conditions.
+
+## Building a defensible reasoning corpus
+
+A production data loop needs stronger boundaries than a benchmark script:
+
+1. **Register prompt families before generation.** Group originals,
+   paraphrases, translated variants, and shared source documents so they cannot
+   cross train, validation, and test splits.
+2. **Freeze the generation contract.** Version the teacher checkpoint, system
+   prompt, sampling parameters, tools, token budget, and random seed.
+3. **Store every decision, not only winners.** Keep raw candidates, checker
+   outputs, extraction failures, rejection reasons, and later human audits.
+4. **Separate admission dimensions.** Record answer validity, process quality,
+   policy compliance, provenance, and data utility independently before
+   combining them into a final disposition.
+5. **Deduplicate before splitting and again after generation.** Compare source
+   items, normalized answers, trace shingles, code structure, and provenance
+   hashes. A text-only exact match is not enough.
+6. **Weight deliberately.** Report examples, unique prompts, accepted traces per
+   prompt, predicted tokens, and domain mix. These quantities imply different
+   training distributions.
+7. **Evaluate the student, not the corpus story.** Use held-out and adversarial
+   prompt families, matched inference budgets, trace audits, calibration, and
+   general-capability regressions. Compare against answer-only SFT and a
+   compute-matched non-distilled baseline.
+
+The data card should also report licenses and deletion lineage. A generated
+trace can carry obligations from its source prompt, teacher terms, embedded
+code, or quoted text. Provenance that cannot be traced backward cannot be
+reliably removed later.
 
 ::: {.callout-important}
-## What's Contested
-The live dispute is whether small curated reasoning sets reveal latent skill or
-merely overfit a narrow evaluation slice. s1 and LIMO argue that hundreds or
-thousands of carefully chosen traces can unlock substantial reasoning when the
-base model already contains the relevant knowledge [@muennighoff2025s1;
-@ye2025limo]. Distillation results point in the same direction from a different
-angle: a strong teacher can donate useful traces to smaller models
-[@guo2025deepseek]. The counterweight is that every filter imports its checker's
-bias, every teacher its own style, and every short student may lose the
-ability to recover when the easy template fails. The question is not whether
-reasoning data works. It is which coverage, provenance, and verifier metadata
-make the data reusable outside the benchmark that selected it.
+## What's contested
+
+Small curated datasets clearly produce large benchmark gains in some strong
+base models. What remains unsettled is why. The gain may reflect reusable
+reasoning patterns, adaptation to a benchmark family, imitation of a teacher's
+surface conventions, or some combination. Million-example pipelines show that
+scale can still help under matched recipes, but they do not resolve that causal
+question. Distillation results are equally conditional: a student can exceed
+its teacher on a benchmark because its pretrained knowledge, capacity, and
+training objective differ, yet still inherit the teacher's blind spots or fail
+under a new distribution. Claims about "transferring reasoning" should name
+the teacher, student, filter, token budget, and evaluation that make the claim
+observable.
 :::
 
 ::: {.callout-tip}
 ## Constraint Arrow
-Reasoning data ties Part IV back to @sec-data-curation and
-@sec-synthetic-data. A reasoning corpus has the usual data problems, duplicates,
-contamination, provenance, and filtering, plus trace-specific ones: verifier
-leakage, spurious rationales, trace length bias, and teacher style transfer. It
-also ties forward to @sec-eval-practice, because production
-failures become the best source of new hard prompts only if the system records
-enough trace and checker metadata to learn from them.
+
+Reasoning data inherits the ordinary constraints of @sec-data-curation and
+@sec-synthetic-data: provenance, contamination, duplicates, licensing, and
+distribution coverage. It adds trace-specific constraints: answer-conditioned
+rationalization, process-label quality, prompt reweighting through acceptance,
+teacher-style transfer, and length-dependent training weight. Those fields tie
+forward to @sec-eval-practice. Production failures become valuable training
+prompts only when the system records enough context to reproduce the failure
+and keeps the resulting family out of the evaluation set.
 :::
 
-Reasoning data is therefore a capital asset. It is expensive to create, hard to
-audit, and easy to overfit to a checker. The final chapter of this part asks how
-much of that work should be paid during training, and how much should remain as
-test-time compute paid per prompt.
+## Payoff and boundary
+
+Reasoning traces can turn expensive sampling into reusable training data and
+can transfer useful output behavior across models. The asset is not the text
+alone. It is the versioned relation among prompt, teacher, trace, checks,
+selection rule, student objective, and held-out result. Remove those relations
+and a million traces become difficult to audit. Preserve them and the corpus
+can support SFT, verifier training, preference learning, distillation, and
+future data rounds without pretending that every accepted explanation is a
+proof.
 
 ## Further reading
 
