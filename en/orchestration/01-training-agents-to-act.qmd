@@ -1,228 +1,421 @@
 # Training Agents to Act {#sec-training-agents}
 
-The reasoning models of @sec-training-to-reason are trained to produce a single
-answer: one prompt, one chain, one check. An agent does more. It takes many
-turns, calls tools, and reads what comes back before it is done. Agentic RL
-extends the verifiable-reward recipe from rewarding an answer to rewarding a
-whole trajectory, and that change pulls systems problems into the training loop.
-A rollout is now the agent's full interaction with an environment, not merely a
-longer completion; masking the environment's tokens out of the loss is what
-makes the sequence trainable; the hard part, credit assignment over a long
-trajectory, does not get any easier; the environment itself becomes a training
-asset; and inside that training run now sits a serving engine.
+Training a model to answer and training it to act differ at the boundary where
+the model meets an environment. An answer may be scored after one completion.
+An agent chooses an action, receives an observation, and chooses again. The
+training example therefore includes not only model tokens but also tool results,
+environment state, termination rules, and the version of the policy that
+generated the run.
 
-![Schematic of the horizon problem in training agents. Imitation is strongest near demonstrated behavior, while environment reinforcement becomes more valuable as tasks stretch over more steps. Idealized curves, not measured data.](/figures/training-agents-to-act-1.svg){#fig-training-agents-to-act-1}
+There was no single invention called “agent training.” WebGPT demonstrated in
+2021 that a language model could learn to browse through behavior cloning and
+human-feedback-based selection; its strongest reported system used rejection
+sampling rather than online policy optimization [@nakano2021webgpt]. Later work
+such as Search-R1 optimized multi-turn search behavior with an outcome reward
+[@jin2025searchr1]. These are different training regimes. Demonstrations remain
+useful for teaching valid actions and providing a cold start; rejection sampling
+can select good complete runs; offline objectives can reuse recorded runs; and
+online reinforcement learning (RL) can collect new runs from the changing
+policy. This chapter focuses on the additional contracts required when the unit
+of learning is an interaction trajectory. The planning and runtime architecture
+used after training belong to @sec-agent-architectures and @sec-the-harness.
 
-## Rewarding a trajectory, not an answer
+## One trajectory has two time scales
 
-The machinery carries over, GRPO or PPO over sampled rollouts against a
-verifiable reward (@sec-training-to-reason), but a rollout is now an agent's full
-interaction with an environment rather than one completion. The shift is formal,
-not just longer. Ordinary language-model RL is a degenerate single-step decision
-problem, prompt in, one response out, reward, done; agentic RL is a temporally
-extended partially-observable process over *turns*, where the agent emits an
-action, the environment returns an observation, and this repeats
-[@zhang2025agenticrlsurvey]. This is where the training loop reaches into the
-agentic loop of @sec-the-harness: the harness that runs an agent at inference
-becomes, pointed at a checkable environment, the thing that generates training
-trajectories.
+A language model always generates tokens sequentially. Agent training adds a
+second time scale: after one or more model-generated tokens form an action, an
+external system advances and returns an observation. Calling ordinary
+language-model RL “single-step” hides the token decisions that are already
+there. The useful distinction is **one environment exchange** versus **repeated
+action--observation exchanges**.
 
-A rollout is then a single token sequence that *interleaves* two sources, the
-model's own action tokens (its reasoning, the tool or search call) and the
-environment's observation tokens (retrieved passages, tool output, browser state).
-The decisive mechanical move is **loss masking**: the policy gradient (a training
-method that nudges the model's own sampled-token probabilities up when an outcome
-scored well, down when it scored badly) is computed only over the tokens the model
-generated, with the observation tokens masked out, so the model is never trained
-to imitate text it did not author. Search-R1 states
-this precisely, masking retrieved tokens out of the loss, and reports that without
-it the gradient flows into copying retrieved text and training destabilizes
-[@jin2025searchr1]. Everything downstream assumes this mask is in place.
+A partially observed interaction can be written as
 
-The early exemplars are domain-shaped. WebGPT pointed here as far back as 2021,
-fine-tuning a model to browse and gather references, though its best system used
-behavior cloning and rejection sampling rather than full RL [@nakano2021webgpt].
-Search-R1 trains a model to interleave reasoning with live search queries across a
-multi-turn trajectory, rewarded only by whether the final answer matches
-[@jin2025searchr1]. Moving from search to tool use in general, ToolRL applies GRPO and
-reports that a coarse answer-matching reward is not enough [@qian2025toolrl]. SWE-RL scales the
-idea to software engineering, rewarding a patch by its similarity to the
-developer's real fix mined from open-source history [@wei2025swerl], and ARTIST
-interleaves tool calls into the reasoning chain under an outcome reward
-[@singh2025artist]. In each the reward is verifiable, computed by a checker rather
-than a learned reward model, which is what lets the loop run without a
-human-in-the-loop.
+$$
+\begin{aligned}
+h_t &= (x, o_0, a_0, o_1, \ldots, a_{t-1}, o_t), \\
+a_t &\sim \pi_\theta(\,\cdot \mid h_t), \\
+s_{t+1} &\sim P_E(\,\cdot \mid s_t, a_t), \\
+o_{t+1} &\sim \Omega_E(\,\cdot \mid s_{t+1}), \\
+\tau &= (x, o_0, a_0, o_1, \ldots, a_{T-1}, o_T), \\
+R(\tau) &= \sum_{t=0}^{T-1} \gamma^t r_t
+          + \gamma^T r_T^{\mathrm{term}}.
+\end{aligned}
+$$
 
-The recipe has since left the lab. OpenAI's Deep Research was trained end to
-end with RL on browsing and Python tool-use tasks, using the same methods
-behind its reasoning models [@openai2025deepresearch], and Moonshot's
-Kimi-Researcher was trained entirely through end-to-end agentic RL, averaging
-23 reasoning steps and over 200 URLs per task [@moonshot2025kimi]. Multi-turn
-tool-use RL under outcome rewards is now a standard stage of frontier flagship
-training rather than an academic exemplar [@zhang2025agenticrlsurvey], which
-is why the systems split at the end of this chapter is a production concern,
-not a research one.
+Here, $x$ is the task; $t$ indexes environment turns; $s_t$ is the hidden
+environment state before action $t$; $o_t$ is the observation exposed to the
+agent; $a_t$ is the action; and $h_t$ is the observation history available to
+the policy. The policy $\pi_\theta$ has parameters $\theta$. The environment
+revision $E$ determines the transition distribution $P_E$ and observation
+distribution $\Omega_E$. The termination condition sets the final turn $T$.
+The step reward is $r_t$, the terminal reward is $r_T^{\mathrm{term}}$, and the
+discount $\gamma\in[0,1]$ controls how strongly later rewards count. The full
+trajectory is $\tau$, and its return is $R(\tau)$. Every symbol in these
+equations corresponds to a policy, environment, or scoring decision that must
+be recorded.
 
-## Credit assignment over a trajectory
+An action need not be plain text. It may be a structured function call, a code
+patch, a browser command, or a multimodal control. Likewise, an observation may
+be structured or multimodal. Serializing both into one token transcript is a
+common implementation, not the definition of a trajectory.
 
-What does not carry over cleanly is credit assignment, working out which of the
-agent's many actions across a long trajectory actually earned the reward, and it
-is the central difficulty. What every method here does is score an attempt
-by its *advantage*, how much better it did than the typical attempt, rather than by
-its raw reward. GRPO drops the value critic (a learned predictor of expected
-reward, the usual baseline an advantage is measured against) and estimates each
-rollout's advantage *group-relatively*, sampling a group of rollouts for one prompt
-and normalizing their returns (each rollout's total reward) against the group's
-mean and spread [@shao2024deepseekmath]. Carried
-to agents, a group of full trajectories is scored by one outcome reward at the end
-and normalized across the group, but that single end-of-trajectory scalar is then
-broadcast to *every* action token in the episode. A good final answer rewards a
-wasted early tool call exactly as much as the decisive one. The signal is sparse
-and delayed, and that is where multi-turn RL gets hard: a value function estimated
-over many turns is high-variance, and the critic-free group methods give up
-per-step resolution entirely.
+## Turn the interaction into a valid training record
 
-Three granularities of fix have emerged. The first shapes the reward over the
-action's *form*: ToolRL decomposes the reward into a format term that checks the
-tool call's structure and a correctness term that scores tool name, parameters,
-and values, a finer signal than answer-matching alone [@qian2025toolrl]. The
-second manufactures step-level credit without a process-reward model. GiGPO keeps
-GRPO's critic-free stability but adds a second level of grouping: alongside the
-episode-level group it builds *step-level* groups by finding environment states
-that recur across different rollouts, an anchor-state grouping, and computes a
-local relative advantage among all the actions taken from the same recurring
-state, so each step gets a normalized credit at no extra rollout cost and reports
-double-digit gains over GRPO on agent benchmarks [@feng2025gigpo]. ARPO takes a
-third route, noticing that token entropy spikes right after a tool call and
-branching its sampling at exactly those high-uncertainty steps to attribute
-tool-use credit [@dong2025arpo].
+Suppose a serialized record contains tokens
+$z=(z_1,\ldots,z_J)$. Here the provenance mask means
 
-The instability this provokes has a name. RAGEN, which optimizes the whole
-state-thinking-action-reward sequence with a method it calls StarPO, identifies an
-*Echo Trap*: the agent overfits to a few locally-rewarded patterns, and the
-collapse announces itself through a drop in reward *variance* across the group as
-an early warning, then an entropy drop and a spike in gradient norm after which it
-is hard to recover [@wang2025ragen]. Its stabilized variant filters for the
-highest-variance prompts and borrows DAPO's asymmetric clipping, but the general
-lesson is that the multi-turn regime, with its compounding errors and larger
-correlated action space, pushes a policy to latch onto one template far harder
-than single-turn reasoning RL does.
+$$
+m_j =
+\begin{cases}
+1, & z_j \text{ is a policy-generated token included in the update},\\
+0, & z_j \text{ comes from the prompt, system, or environment}.
+\end{cases}
+$$
+
+A schematic masked policy objective can be read as
+
+$$
+\mathcal{L}_{\mathrm{policy}}(\theta)
+= -\frac{1}{\sum_{j=1}^{J} m_j}
+  \sum_{j=1}^{J}
+  m_j\,\widehat{A}_j
+  \log \pi_\theta(z_j\mid z_{<j}).
+$$
+
+In these expressions, $j$ indexes serialized tokens; $J$ is the record length;
+$z_{<j}$ is the prefix before token $j$; $m_j$ is the binary provenance mask;
+and $\widehat{A}_j$ is the training weight or advantage assigned to an included
+token. Prompt and system tokens have $m_j=0$, as do environment observations.
+The denominator counts included action tokens and must be nonzero.
+Algorithm-specific objectives may add probability ratios, clipping, a reference
+policy, entropy terms, or value losses. The invariant is simpler: an
+environment observation may condition later actions, but it is not an action
+sampled by the policy. The mask is an ownership rule, not a claim that
+observations are unimportant.
+
+Search-R1 applies this rule to retrieved passages: retrieved tokens remain in
+context but are excluded from the policy loss [@jin2025searchr1]. A production
+record needs the same distinction for system and prompt tokens, tool responses,
+browser state, compiler output, and injected error messages. It must also state
+whether private reasoning tokens are retained or trained on. Without explicit
+roles, a preprocessing change can silently train the model to predict text it
+did not author.
+
+The record should preserve more than tokens:
+
+| Field | Why training needs it |
+|---|---|
+| Task, environment version, reset seed | Reconstructs the initial state and detects train--evaluation leakage. |
+| Policy and tokenizer versions | Identifies the behavior policy and makes likelihood ratios meaningful. |
+| Parsed action plus raw action text | Separates language generation from parser behavior. |
+| Observation provenance and truncation | Shows what the policy actually saw and what was omitted. |
+| Timeout, retry, cancellation, and termination reason | Distinguishes a policy failure from an infrastructure failure. |
+| Step rewards, terminal reward, verifier version | Makes the final return auditable. |
+| Cost, permissions, and safety events | Prevents task success from hiding an unacceptable route. |
+
+Invalid calls require an explicit policy. The environment may reject them and
+return an error observation, end the episode, or assign a penalty. Dropping them
+after collection changes the training distribution. Truncated trajectories also
+need a distinct termination reason; “ran out of budget” is not the same outcome
+as “task completed.”
 
 ```{dot}
 //| label: fig-agent-rl-loop
-//| fig-cap: "The agentic RL loop. The policy generates a group of full multi-turn rollouts through the environment, interleaving its action tokens with the environment's observation tokens; a verifier scores each trajectory; group-relative normalization turns the scores into advantages, broadcast to the action tokens (with observation tokens masked out) for the policy update. Generation through the environment is the wall-clock bottleneck. After Shao et al. (2024) and Jin et al. (2025)."
+//| fig-cap: "One trajectory-training loop. The policy and environment alternate until a termination rule fires. A verifier then scores the recorded trajectory; an advantage estimator supplies training weights; and the policy update applies a provenance mask so only policy-generated action tokens enter the policy loss. Placement and scheduling choices are omitted here."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  pol [label="policy (current weights)"];
-  gen [label="generate group of rollouts\n(vLLM)"];
-  env [label="environment\ntool / search / sandbox\nreturns observations"];
-  ver [label="verifier scores\neach trajectory"];
-  adv [label="group-relative\nadvantages\n(observations masked)"];
-  upd [label="policy update"];
-  pol -> gen;
-  gen -> env;
-  env -> gen;
-  gen -> ver;
-  ver -> adv;
-  adv -> upd;
-  upd -> pol;
+  size="3.2,8.0";
+  rankdir=TB;
+  nodesep=0.2; ranksep=0.3;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=8, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  TASK [label="task + reset state"];
+  POLICY [label="policy emits action"];
+  ENV [label="environment advances"];
+  OBS [label="observation joins history"];
+  TERM [label="termination rule", shape=diamond];
+  VERIFY [label="verifier scores trajectory"];
+  ADV [label="estimate training weights"];
+  UPDATE [label="masked policy update\naction tokens only"];
+
+  TASK -> POLICY -> ENV -> OBS -> TERM;
+  TERM -> POLICY [label="continue"];
+  TERM -> VERIFY [label="stop"];
+  VERIFY -> ADV -> UPDATE -> POLICY [label="new weights"];
 }
 ```
 
+## Choose the data regime before the optimizer
+
+“Agent training” does not imply online RL. The data source determines what the
+optimizer can learn:
+
+| Regime | Training record | What it provides | Main limitation |
+|---|---|---|---|
+| **Behavior cloning** | Demonstrated action--observation trajectories | Valid action syntax, tool conventions, and a reliable cold start. | Covers the demonstrator's state distribution and mistakes; unseen recovery behavior remains unseen. |
+| **Selection or offline learning** | Previously recorded trajectories with scores or preferences | Reuses expensive environment runs and avoids changing the policy during collection. | Cannot explore states absent from the log; behavior-policy provenance still matters. |
+| **Online RL** | New trajectories sampled from the current or recent policy | Lets the policy discover alternatives and receive feedback on its own failures. | Requires live environments, repeated scoring, exploration controls, and protection against verifier exploitation. |
+| **Hybrid curriculum** | Demonstrations first, then selected or online trajectories | Separates learning the interface from optimizing task outcomes. | Stage boundaries, data mixtures, and changing action formats become additional hyperparameters. |
+
+WebGPT is an example of the first and second rows rather than evidence that
+online RL is always required [@nakano2021webgpt]. In practice, a valid tool-call
+grammar is often taught before sparse outcome optimization begins. Otherwise the
+early rollout budget may be spent rediscovering the parser rather than learning
+the task.
+
+## Design the reward as a contract
+
+The environment and the reward are not the same object. The environment changes
+state and produces observations. A verifier or reward wrapper assigns scores to
+actions, states, or complete trajectories. Keeping those interfaces separate
+makes failures diagnosable.
+
+| Contract | Required questions |
+|---|---|
+| **Transition contract** | Given a reset state and action, what state change occurs? Which failures are retried, exposed, or terminal? |
+| **Observation contract** | What state is visible, in what format, with what truncation, redaction, and provenance? |
+| **Verifier contract** | Which artifact is checked? Is the check deterministic, isolated, versioned, and resistant to tampering? |
+| **Reward contract** | How are validity, progress, outcome, cost, and safety combined? Can shaping change which behavior is optimal? |
+
+Agent rewards commonly combine several signals:
+
+- **Syntax and validity:** Did the action parse, name an available tool, and use
+  a valid schema? This provides dense feedback but does not show that the action
+  was useful.
+- **Intermediate progress:** Did a state become closer to the goal? This can
+  improve credit assignment, but a misspecified progress metric can reward a
+  detour or prevent a valid alternative route.
+- **Terminal task outcome:** Did tests pass, was the answer correct, or did the
+  environment reach the goal state? This is closest to the intended result but
+  is often sparse.
+- **Cost and constraints:** How many tokens, tool calls, seconds, dollars,
+  permissions, or safety violations did the run incur? These terms expose
+  trade-offs that a success bit hides.
+
+ToolRL's experiments show why a coarse answer match and a structured tool-use
+reward are not interchangeable [@qian2025toolrl]. SWE-RL uses similarity to a
+developer patch as a reproducible proxy, not proof that every semantically valid
+repair received the same score [@wei2025swerl]. Multiple action sequences can
+solve the same task. Exact action matching may reject a better route, while a
+weak final checker may reward a superficial one.
+
+Reward hacking is therefore an interface failure as much as an optimization
+failure. Keep a **held-out verifier** that is not used for training, add tests
+that probe known loopholes, and inspect the gap between proxy reward and the
+intended task metric. Human-created tests and reference artifacts remain human
+supervision even when scoring is automated.
+
+## Trajectory reward is not action-level credit
+
+Group Relative Policy Optimization (GRPO) removes the learned value critic used
+by PPO and normalizes returns within a group of samples for the same task
+[@shao2024deepseekmath]. For a group of $G$ trajectories, one simple form is
+
+$$
+\bar{R}=\frac{1}{G}\sum_{i=1}^{G}R_i,
+\qquad
+\sigma_R=\sqrt{\frac{1}{G}\sum_{i=1}^{G}(R_i-\bar{R})^2},
+\qquad
+\widehat{A}_i=\frac{R_i-\bar{R}}{\sigma_R+\varepsilon}.
+$$
+
+Here, $i$ indexes a trajectory in the group; $G$ is the group size; $R_i$ is
+trajectory $i$'s return; $\bar{R}$ is the group mean; $\sigma_R$ is the group
+standard deviation; $\varepsilon>0$ prevents division by zero; and
+$\widehat{A}_i$ is the normalized trajectory advantage. If every return is the
+same, this estimator supplies no ranking signal.
+
+With only an undiscounted terminal reward, implementations commonly apply the
+same trajectory-level advantage to every included action token. That update
+reinforces or suppresses the whole sampled route. It does not identify which
+action caused the result. Calling this value “credit assignment” can hide the
+missing causal resolution.
+
+Several remedies target different parts of the problem:
+
+- A **step-level reward** changes the feedback timing. It helps only if the
+  intermediate metric is trustworthy.
+- A learned **value function** estimates expected future return from a state or
+  history, enabling per-step advantages but adding a model that can itself be
+  hard to fit under partial observation.
+- Replaying alternative actions from the same state or checkpoint creates a
+  local **counterfactual** comparison. Exact recurrence may be rare in open or
+  stochastic environments.
+- GiGPO builds step-level groups from repeated anchor states while retaining a
+  critic-free group estimator [@feng2025gigpo]. Its reported gains are scoped to
+  ALFWorld, WebShop, and search-augmented question answering; the mechanism
+  depends on states that can be recognized as equivalent.
+
+Reward design, credit estimation, and exploration are independent choices. A
+more detailed reward does not by itself create better exploration, and branching
+more rollouts does not make a flawed verifier correct. RAGEN's reported “Echo
+Trap” is a useful warning from three stylized environments: falling reward
+variance and rising gradients accompanied collapse in those experiments
+[@wang2025ragen]. It is a diagnostic to test, not a universal law of agent RL.
+
 ::: {.callout-important}
 ## What's contested
-Whether outcome-only rewards suffice for agentic tasks is unsettled. Search-R1 and
-ToolRL report strong results from outcome or lightly-shaped rewards in narrow
-domains, while RAGEN finds that reasoning fails to emerge without reasoning-aware
-credit in stylized ones [@wang2025ragen], and GiGPO's gains come precisely from
-manufacturing step-level credit the outcome reward cannot supply [@feng2025gigpo].
-This is the outcome-versus-process tension of @sec-training-to-reason, now
-stretched over a trajectory instead of a chain. Which way it resolves looks
-domain-dependent and tied to how dense a signal the environment can supply, rather
-than settled by a single best answer.
+
+Outcome-only rewards have produced gains in narrow, checkable settings such as
+multi-turn search, while other experiments benefit from step-aware credit or
+shaped rewards. The evidence does not establish one universal choice. A sparse
+outcome reward is attractive when the verifier is strong and many paths are
+valid; process feedback is attractive when intermediate states are reliable and
+the terminal horizon is too long. The right comparison holds the environment,
+base policy, rollout budget, and evaluation verifier fixed.
 :::
 
-::: {.callout-tip}
-## Constraint Arrow
-Agent training is constrained by the environment before it is constrained by the
-optimizer. A reward can only score states the environment exposes, a policy can
-only learn tools the harness can run, and rollout throughput is capped by the
-same serving machinery used in production. That ties this chapter back to
-@sec-the-harness, @sec-serving-problem, and @sec-evaluating-agents: training an
-agent to act requires an executable world, not just a better loss.
-:::
+## Treat the environment as versioned data infrastructure
 
-## Environments as the training substrate
+An executable environment is reusable training infrastructure. SWE-Gym, for
+example, packages 2,438 real Python repository tasks with runtime environments,
+unit tests, and natural-language tasks. Its ICML 2025 study uses the collection
+for supervised agent training and verifier-guided inference-time scaling, and
+reports up to a 19-percentage-point resolve-rate gain in its evaluated setups
+[@pan2024swegym]. That result demonstrates the value of a reproducible substrate;
+it should not be retold as an online-RL result.
 
-The environment becomes a training asset in its own right, because in
-verifiable-reward RL the environment *is* the reward function. SWE-Gym packages
-roughly twenty-four hundred real repository tasks with executable runtimes and
-unit tests so an agent's trajectory can be sampled and scored in the loop, the
-unit test serving as the verifier, and training on it lifts resolve rates on
-SWE-bench by close to twenty points [@pan2024swegym]; this is the sandbox of
-@sec-agents-practice turned from a place to run an agent into a place to train one.
-The same executable-environment pattern is being mined from existing benchmarks,
-the app-and-API world of AppWorld and the self-hosted websites of WebArena among
-them, repurposed from evaluation harnesses into training grounds.
+A training environment needs an operational contract:
 
-Building one is harder than it looks, and the difficulty is systems-shaped:
-runtimes must be reproducible, sandboxes isolated at scale, and the environment's
-execution latency now sits *inside* the RL loop, where a slow checker starves the
-trainer. The verifier can also be exploited, so an agent can satisfy an
-imperfect test specification rather than solve the task, the reward-hacking risk
-of @sec-training-to-reason moved into the environment. The shift is large enough
-that environments are now
-collected and sold as products, a 2025 market of training grounds for agents
-[@techcrunch2025environments], though the value of any single environment is
-contested, since a model that masters a skill can generate cheap substitute data
-for it [@anderson2025rlenv]. Both of those last sources are journalism and
-opinion, not peer-reviewed, and are flagged as such.
+- **Reset and replay:** A reset must restore a known snapshot. Record the seed,
+  environment version, data version, clock policy, and allowed network state.
+  Measure deterministic replay rather than assuming it.
+- **Isolation:** Separate filesystem, process, network, credential, and tenant
+  scope. A rollout must not read another rollout's artifacts or the held-out
+  answer.
+- **Observation control:** Bound output size, label truncation, preserve source
+  roles, and treat tool output as untrusted input.
+- **Failure semantics:** Set a timeout for each action and trajectory. Distinguish
+  parser rejection, tool failure, retry exhaustion, cancellation, and genuine
+  task failure.
+- **Verifier integrity:** Run scoring outside the agent's writable boundary,
+  version its dependencies, and retain enough evidence to audit a score.
+- **Dataset separation:** Keep training tasks, tuning tasks, and final evaluation
+  tasks separate at the repository, template, and dependency levels, not only by
+  issue identifier.
 
-## The systems split: generation and learning
+These controls affect learning. A flaky test adds reward noise. A slow browser
+extends the rollout tail. A leaked solution turns memorization into apparent
+success. A changed API alters the transition distribution even if the task text
+is unchanged.
 
-An agentic RL loop generates rollouts from the current policy, scores them, and
-updates the weights, and generation is the bottleneck: OpenRLHF measures the
-rollout phase at around eighty percent of RLHF wall-clock [@hu2024openrlhf]. So
-modern toolkits embed an inference engine, almost always vLLM, to produce the
-rollouts (@sec-training-practice). The training box now contains a serving engine,
-and two architectural patterns split its compute. The colocated pattern keeps the
-trainer and the rollout engine on the same GPUs and reshards the model between
-them: HybridFlow, whose open implementation is veRL, reshards the actor between
-its training and generation layouts with what it calls a 3D-HybridEngine, reusing
-the training weights for generation so no memory is duplicated, under a hybrid
-single- and multi-controller programming model [@sheng2024hybridflow]. The
-disaggregated pattern puts the actor, reward, reference, and critic models on
-separate GPU pools and schedules them with Ray: OpenRLHF takes this route,
-embedding vLLM for the rollout phase that dominates wall-clock [@hu2024openrlhf].
-The choice is the familiar one between packing for utilization and disaggregating
-for scheduling flexibility, now made inside a single training run.
+## Lower-layer constraint: rollout time shapes optimization
 
-The deeper knob is how fresh the rollouts must be: whether the training data comes
-from the current policy (*on-policy*) or from slightly older weights (*off-policy*).
-Strict on-policy RL waits for the latest weights before each batch, which leaves the trainer idle while the
-slower generator runs, an idleness made acute by long agent trajectories where the
-batch waits on its slowest rollout. Asynchronous RL lets generation run ahead on
-slightly stale weights and overlaps the two [@noukhovitch2024asyncrlhf], trading a
-controlled amount of off-policy staleness for throughput, the same
-staleness-against-utilization trade the pipeline schedules of @sec-training-at-scale
-make at the gradient level. Pushed to its limit the two sides fully decouple, with
-rollout workers generating continuously while the trainer updates whenever a batch
-arrives; AReaL reports up to a 2.77x speedup this way [@fu2025areal]. The price is
-that the data is off-policy, corrected by the importance-sampling ratio (a
-reweighting factor for reusing data the current policy did not generate) that PPO
-already carries, and how far staleness can be pushed is itself a research question,
-with methods that constrain the variance of those importance weights rather than
-just clipping them training stably on data hundreds of updates old
-[@zheng2025m2po].
+For trajectory $i$, the following terms give a useful wall-clock decomposition:
+
+$$
+T_{\mathrm{rollout},i}
+= T_{\mathrm{reset},i}
++ \sum_{t=0}^{T_i-1}
+  \left(T_{\mathrm{decode},i,t}+T_{\mathrm{env},i,t}\right)
++ T_{\mathrm{verify},i}.
+$$
+
+For a synchronous batch of $B$ trajectories, the corresponding approximate
+critical-path formula is
+
+$$
+T_{\mathrm{iteration}}
+\approx \max_{1\le i\le B} T_{\mathrm{rollout},i}
++ T_{\mathrm{update}} + T_{\mathrm{weight\ sync}}.
+$$
+
+Here, $T_{\mathrm{reset},i}$ is environment setup time; $T_i$ is trajectory
+$i$'s number of turns; $T_{\mathrm{decode},i,t}$ is policy generation time for
+action $t$; $T_{\mathrm{env},i,t}$ is tool or environment time;
+$T_{\mathrm{verify},i}$ is scoring time; $B$ is batch size;
+$T_{\mathrm{update}}$ is learner time; and $T_{\mathrm{weight\ sync}}$ is the
+time to make new weights available to rollout workers. The maximum exposes the
+straggler: one long tool call can hold the whole synchronous batch. Real systems
+may overlap some terms, so measure the stage trace rather than treating this sum
+as a hardware law.
+
+OpenRLHF reports that generation can dominate RLHF wall-clock and uses Ray,
+vLLM, and DeepSpeed to organize its roles [@hu2024openrlhf]. In an agent
+workload, decoding may dominate, or environment and verifier latency may
+dominate. vLLM is one possible inference backend, not part of the definition.
+Admission control, cancellation, prefix reuse, and batching still matter, but
+the unit being scheduled is now a trajectory that can pause between turns.
+
+## Placement and freshness are orthogonal
+
+Two systems decisions are often conflated:
+
+| Axis | Choice | Benefit | Cost to measure |
+|---|---|---|---|
+| **Resource placement** | Colocated rollout and learning roles | Reuses a GPU pool and may reduce persistent model copies. | Resharding, memory pressure, and phase idle time. |
+| **Resource placement** | Separate GPU pools | Sizes rollout and learning independently and can overlap them. | Additional capacity, weight transfer, and cross-pool coordination. |
+| **Update synchronization** | Synchronous collection and update | Each batch can use a known recent policy version. | Barriers and straggler idle time. |
+| **Update synchronization** | Asynchronous collection and update | Overlaps rollout with learning and reduces barriers. | Behavior-policy staleness and off-policy correction. |
+
+These axes are orthogonal. Separate GPU pools can still wait at a synchronous
+barrier, and a colocated cluster can time-slice roles while allowing queued
+rollouts from older weights. HybridFlow's 3D-HybridEngine is one colocated
+design that reshards the actor between generation and training layouts
+[@sheng2024hybridflow]. OpenRLHF demonstrates a Ray-based distributed layout
+[@hu2024openrlhf]. Neither placement alone determines whether the data is
+on-policy.
+
+Asynchronous RLHF separates generation and learning and shows the resulting
+throughput--off-policy trade-off on instruction following and mathematical
+reasoning [@noukhovitch2024asyncrlhf]. AReaL goes further with continuous
+rollout workers and a staleness-aware learner, reporting up to 2.77 times the
+training speed of evaluated synchronous systems on its math and code workloads
+[@fu2025areal]. Those results establish systems possibilities, not a guarantee
+for long-horizon tool agents.
+
+Every asynchronous trajectory should carry its behavior-policy version. Here,
+if trajectory $i$ was generated by behavior policy $\mu_i$ and the learner uses
+$\pi_\theta$, a token-level importance ratio is
+
+$$
+\rho_{i,j}(\theta)
+= \frac{\pi_\theta(z_{i,j}\mid z_{i,<j})}
+        {\mu_i(z_{i,j}\mid z_{i,<j})},
+\qquad m_{i,j}=1.
+$$
+
+Here, $i$ indexes trajectories; $j$ indexes a policy-generated token;
+$z_{i,<j}$ is that token's recorded context; $m_{i,j}=1$ identifies an included
+action token; $\mu_i$ is the recorded behavior policy; $\pi_\theta$ is the
+current learner; and $\rho_{i,j}$ reweights the old sample under the current
+policy. Clipping ratios can limit variance but cannot repair missing support or
+arbitrarily stale trajectories. Products of ratios across many tokens and turns
+can become extreme, so record policy lag, ratio distributions, and clipping
+fractions rather than labeling a run merely “asynchronous.”
 
 <figure id="fig-training-agents-to-act-rl-timeline">
 <div class="viz" data-viz="rl-timeline"></div>
-<figcaption>Two ways to split a GPU between generation and learning. Colocated keeps both on one pool and alternates them, reusing the weights but leaving reshard idle gaps, and it stays on-policy. Disaggregated runs generation and learning on separate pools in parallel, reaching near-full utilization at the cost of a controlled off-policy staleness. Toggle the two. Illustrative.</figcaption>
+<figcaption>Resource placement and update synchronization are independent design axes. The placement view compares a shared GPU pool with separate rollout and learning pools. The schedule view compares a synchronous barrier with asynchronous overlap and measured policy lag. Toggle between the two axes; block widths are schematic, not utilization measurements.</figcaption>
 </figure>
+
+## Verify learning, environments, and systems together
+
+A useful evaluation sheet keeps three layers separate:
+
+| Layer | Minimum measurements |
+|---|---|
+| **Policy behavior** | Task success by horizon and task family; tool-call validity; recovery after a failed action; steps, tokens, and cost per success; safety violation rate; proxy reward beside held-out verifier results. |
+| **Environment quality** | Environment reset failure rate; deterministic replay rate; parser, tool, and verifier failures; observation truncation; leakage probes; per-stage p50, p95, and p99 latency. |
+| **Training system** | Rollout tokens per second, environment steps per second, trajectories per hour, trainer idle fraction, GPU memory, weight transfer time, policy lag, ratio clipping, and discarded-rollout rate. |
+
+Compare systems on matched hardware and a matched workload distribution. A
+throughput improvement obtained by shortening trajectories, dropping slow tasks,
+or changing the verifier is not a systems-only improvement. Report learning
+curves against environment interactions, generated action tokens, accelerator
+time, and wall-clock time; each denominator answers a different question.
+
+Before release, replay held-out tasks with the production parser and tool
+permissions, perturb tool latency and failures, test budget exhaustion, and
+inspect high-reward failures manually. Training has succeeded only if the policy
+improves under an independent evaluation contract without buying the score
+through excess cost or unsafe action.
+
+The result of this pipeline is a policy that has learned from interaction. The
+next chapter asks a different question: which runtime loop should expose that
+policy to planning, memory, tools, and the outside world?
 
 ## Further reading
 

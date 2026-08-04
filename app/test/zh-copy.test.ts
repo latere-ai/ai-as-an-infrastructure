@@ -728,7 +728,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/orchestration/01-training-agents-to-act.qmd",
-      ["rollout is now the agent's full interaction", "masking the environment's tokens out of the loss", "credit assignment over a long trajectory", "environment becomes a training asset", "training run now", "contains a serving engine"],
+      ["unit of learning is an interaction trajectory", "two time scales", "mask is an ownership rule", "Reward design, credit estimation, and exploration are independent choices", "environment as versioned data infrastructure", "Placement and freshness are orthogonal"],
     ],
     [
       "zh/orchestration/01-training-agents-to-act.qmd",
