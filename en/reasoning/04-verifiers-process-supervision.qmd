@@ -1,171 +1,349 @@
 # Verifiers and Process Supervision {#sec-verifiers-process-supervision}
 
-Reasoning systems improve when they can tell good work from bad work. The
-central object is therefore not the chain, the tree, or the reinforcement
-learning algorithm. It is the verifier. A verifier can be a unit test, an answer
-checker, a proof kernel, a learned outcome reward model, a process reward model,
-or a generative judge that writes its own critique. Each version answers a
-different question, and that question determines what training and test-time
-compute can buy.
+Generating several plausible solutions is useful only when the system can recognize
+which one deserves trust. That job belongs to a **verifier**: a component that receives
+a problem and a candidate, then returns evidence used to accept, reject, rank, revise,
+or reward that candidate. Unit tests, answer checkers, learned reward models, human
+review, and proof kernels can all fill this role. They do not provide the same evidence.
 
-![Verifier ladder for reasoning. Cheap heuristic judges cover broad tasks but
-are easy to exploit; unit tests and answer checkers have stronger semantics;
-process reward models give dense signal; formal checkers are narrow but hardest
-to spoof.](/figures/verifiers-process-supervision-1.svg){#fig-verifiers-process-supervision-1}
+A verifier is not an oracle for truth. It implements a particular judgment under a
+particular specification. A unit test establishes that one execution produced an
+expected result. A proof kernel establishes that a formal term proves a stated theorem
+from declared assumptions. A learned judge estimates a label from its training data.
+None of these facts, by itself, establishes that the checked object answers the user's
+actual request.
 
-## Outcome, Process, and the Unit of Credit
+![A verifier is described by three independent choices: whether feedback attaches to
+the final outcome or an intermediate step; whether judgment comes from an explicit
+rule, a learned model, or human review; and whether the result is a decision, score,
+critique, or certificate.](/figures/verifiers-process-supervision-1.svg){#fig-verifiers-process-supervision-1}
 
-Let a model produce a trace $z_{1:T}$ and a final answer $y$ for prompt $x$.
-Outcome supervision defines a reward on the terminal object, where
-$\mathbf{1}[\cdot]$ is the indicator function, 1 when the bracketed condition
-holds and 0 when it does not:
+## Three independent questions
+
+Verifier designs become confusing when unlike properties are placed on one scale. A
+process reward model is not inherently stronger than a unit test, and an outcome model
+is not inherently weaker than a proof checker. These names answer different questions.
+The useful taxonomy is not a ladder. It asks three independent questions:
+
+1. **Where is the signal attached?** Outcome feedback applies to a terminal object;
+   process feedback applies to an intermediate step or prefix.
+2. **How is judgment produced?** It may come from an explicit executable rule, a learned
+   model, or human review. A proof kernel is an executable rule with unusually strong
+   semantics for a formal statement. A unit-test suite is also executable, but covers
+   only the cases and properties that its tests encode.
+3. **What does it return?** The interface may expose a Boolean decision, a scalar score,
+   a natural-language critique, or evidence such as a counterexample, execution trace,
+   or proof certificate.
+
+The axes can be combined. A unit-test suite is usually a terminal, rule-based verifier
+that returns decisions and traces. A process reward model is a learned verifier over
+prefixes that returns scores. A generative critic may inspect a whole answer or one
+step, return a critique, and then rely on a separate extractor to turn that text into a
+decision. “Verifier” names the role in the system, not one model architecture or one
+level of assurance.
+
+This separation also shows why math, code, and formal proof are attractive training
+domains. They often supply executable checks for a useful part of correctness. Open-ended
+advice and synthesis rarely do. The difference lies in the available specification, not
+in a universal ranking of algorithms.
+
+## Outcome and process supervision
+
+Let a generator produce candidate $c=(z_{1:T},y)$ for prompt $x$, where $z_{1:T}$ is a
+trace of $T$ written steps and $y$ is the final answer. Outcome supervision labels the
+terminal object:
 
 $$
-r_{\text{out}}(x, z_{1:T}, y) = \mathbf{1}\left[\operatorname{check}(x, y)=1\right].
+r_{\text{out}}(x,c)=\operatorname{check}(x,y).
 $$
 
-By contrast, process supervision defines rewards over prefixes:
+For an exact-answer task, `check` may return 0 or 1. For a learned outcome reward model,
+it may return a real-valued estimate. “Outcome” specifies where the label lands, not how
+the label was obtained.
+
+Process supervision instead labels an intermediate object such as a step $z_t$ in the
+context of its prefix $z_{1:t-1}$:
 
 $$
-r_{\text{proc}}(x, z_{1:t}) \in \{-1, 0, 1\}, \qquad 1 \le t \le T.
+r_t = V_{\phi}(x,z_{1:t}), \qquad 1 \le t \le T.
 $$
 
-Here $x$ is the prompt, $z_{1:T}$ is the reasoning trace, $y$ is the final
-answer, and the check function is whatever verifier the task supplies.
-The first of these is cheap but sparse. The second buys density at a price.
-Outcome reward only asks whether the answer passed; process reward asks, of each
-step, whether it was a good move. Uesato et al. compared the two on math word problems and found that
-outcome feedback could match final-answer error with less label supervision,
-while process feedback was needed to reduce reasoning-step errors among correct
-answers [@uesato2022solving]. Lightman et al. later trained process reward
-models (PRMs, which score each step of a solution rather than only the final
-answer) on PRM800K and found process supervision stronger than outcome
-supervision on challenging MATH problems [@lightman2023lets].
+Here $r_t$ is the label or score attached to prefix $t$, and $V_\phi$ denotes the
+verifier with parameters $\phi$. That notation hides an important design choice. A step
+label can target at least three different properties:
 
-This is a credit-assignment trade. If all the system sees is a wrong final
-answer, it must infer which step ruined the path. A process label points earlier
-and can prune a branch before it consumes more budget. But the process label is
-itself a judgment, often learned from humans, so it reintroduces proxy error.
-The verifier that made RLVR (reinforcement learning with verifiable rewards,
-training on problems whose answers can be checked automatically) attractive
-because it avoided a learned reward gap can become a learned reward again.
+- **Step correctness:** is this inference locally valid given the preceding state?
+- **Progress:** does the step move toward the requested result rather than merely repeat
+  a valid fact?
+- **Value to go:** how likely is this prefix to lead to a correct completion under a
+  specified continuation policy and budget?
 
-Where the step labels come from turned out to dominate that trade. Lightman et
-al. labeled steps with humans; the cheap substitute, scoring a step by Monte
-Carlo rollouts from it, produces unreliable labels, and the Qwen team's
-post-mortem of building PRMs found that a consensus filter, keeping only steps
-where the Monte Carlo estimate and an LLM judge agree, is what made their
-Qwen2.5-Math-PRM and the ProcessBench evaluation work [@zhang2025prmlessons].
-ThinkPRM merges the generative-verifier idea below with step-level judging: a
-PRM that reasons about each step in its own verification chain of thought, and
-matches discriminative PRMs with roughly 1% of the process labels
-[@khalifa2025thinkprm].
+These are not interchangeable targets. A correct step may make no progress. A flawed
+prefix may still have high value to go if the continuation policy often repairs it. A
+Monte Carlo estimate of successful completions is therefore not automatically a label
+of local step correctness. Training data must state the target, and any use of per-step
+scores must state its aggregation rule. Taking the minimum, the last score, or a product
+over steps creates different preferences over length and error position.
 
-## The Verifier Ladder
+Outcome labels are often cheaper because one label covers the whole candidate, but they
+give poor credit assignment. A failed final answer does not identify the first bad step.
+Process labels expose earlier intervention points for training or search, but every extra
+label is another judgment that can be costly, inconsistent, or wrong.
 
-The ladder is ordered by semantics, not prestige.
+The evidence is task-specific. On GSM8K, Uesato and colleagues found that pure outcome
+supervision reached similar final-answer error with less label supervision, while
+low reasoning error among solutions whose final answers were correct required either
+process-based feedback or a learned reward model that came to emulate it
+[@uesato2022solving]. On a representative subset of the MATH test
+set, Lightman and colleagues reported that their process-supervised reward model selected
+solutions more effectively than their outcome-supervised model in a fixed-generator,
+best-of-$N$ setup. They also released PRM800K, roughly 800,000 human step labels used for
+their best model [@lightman2023lets]. These results establish benefits in those
+experimental settings; they do not establish that every process label is better than
+every terminal check or that step scores must be used as online RL rewards.
 
-- **Heuristic judges** cover open-ended tasks but have weak guarantees. They are
-  useful for triage and rough ranking, yet easy to optimize against.
-- **Outcome reward models** learn to rank finished solutions. Cobbe et al. used
-  trained verifiers to rerank many math completions and showed that verification
-  scaled better with data than direct fine-tuning on GSM8K [@cobbe2021verifiers].
-- **Executable checks** include unit tests, answer equivalence, parsers, and
-  type checks. They are cheap once written, but their coverage is bounded by the
-  specification.
-- **Process reward models** score intermediate steps. They make search and
-  training denser, but the labels are costly and the model can learn labeler
-  artifacts [@lightman2023lets].
-- **Formal proof checkers** provide the strongest terminal semantics, because a
-  small kernel checks the proof. They are narrow and demand formalization.
+Label construction remains a first-order problem. Experiments by Zhang and colleagues
+found that process models trained from Monte Carlo step labels generalized worse than
+models trained from an LLM judge or human annotations. Their consensus filter kept cases
+where the Monte Carlo estimate and LLM judgment agreed, and they argued that best-of-$N$
+answer accuracy alone can hide weak step verification [@zhang2025prmlessons].
+ProcessBench makes the step-level task explicit: among 3,400 human-annotated solutions,
+the verifier must identify the earliest erroneous step or declare the full solution
+correct. Its authors found that existing process reward models often failed to generalize
+from GSM8K and MATH to harder competition problems [@zheng2024processbench].
 
-The ladder also explains why different research areas appear to move at
-different speeds. Math, code, and formal proof offer natural checkers, though
-the 2025 IMO-gold results discussed in @sec-training-to-reason show even that
-boundary being stretched. Open-ended
-advice, synthesis, and policy reasoning do not. The algorithm may be the same,
-but the reward source is not.
+## Selection is a contract
 
-## Generative Verifiers
+At inference time, a verifier often ranks samples. Draw $N$ candidates from generator
+$q_\theta$ and assign each a verifier score:
 
-A scalar verifier compresses judgment into one number. Generative verifiers
-instead use the language model's own next-token machinery to reason about a
-candidate. GenRM trains verifiers with next-token prediction on verification and
-solution generation, enabling the verifier to write a chain of thought and spend
-its own test-time compute through voting [@zhang2024genrm]. This matters because
-some errors are too subtle for a shallow classifier. A verifier that can reason
-may catch them.
+$$
+c_i \sim q_\theta(c\mid x),
+\qquad
+s_i = V_\phi(x,c_i),
+\qquad
+\hat c = \arg\max_{1\le i\le N} s_i.
+$$
 
-The cost is that verification becomes another reasoning problem. The selector in
-@sec-inference-time-scaling is no longer a fixed component; it has its own
-latency, sampling budget, and failure modes. A generative verifier can improve
-best-of-$N$ selection (sample $N$ answers, keep the one the verifier scores
-highest), but it can also agree with plausible wrong work. Its
-advantage depends on whether judging is easier than generating for the task at
-hand.
+Here each $c_i$ is one sampled candidate, $s_i$ is its verifier score, and $\hat c$ is
+the highest-scoring candidate. Let $u(x,c)$ denote the task utility that an ideal
+independent evaluation would assign. The selection regret within the sampled set is
 
+$$
+\operatorname{Regret}(x)
+= \max_{1\le i\le N} u(x,c_i)-u(x,\hat c).
+$$
+
+In words, regret measures the utility of the best sampled candidate minus the utility of
+the candidate the verifier selected. Zero means that the verifier chose a utility-maximal
+candidate from this pool; it does not mean that the pool contained a perfect answer.
+
+The generator controls which candidates are available. The verifier controls which one
+is returned. Best-of-$N$ therefore succeeds only when the sample set contains a good
+candidate and the verifier ranks it correctly. The selector maximizes the verifier, not
+task utility. If $V_\phi$ misses a property that $u$ cares about, increasing $N$ gives
+the selector more chances to find a candidate that exploits that omission.
+
+Cobbe and colleagues demonstrated the productive side of this contract on GSM8K:
+sampling many solutions and selecting with a trained verifier improved accuracy, and the
+verification approach scaled more effectively with training data than their fine-tuning
+baseline [@cobbe2021verifiers]. That is an empirical result for a defined generator,
+verifier, dataset, and sampling procedure. It does not mean that more samples always
+help with a fixed imperfect verifier. In the same study, selected accuracy peaked at
+roughly 400 candidates and then declined. The authors attributed the decline to rare,
+adversarial solutions that fooled the verifier [@cobbe2021verifiers].
+
+The following toy example makes the failure mode concrete. The first three candidates
+are ranked correctly by the proxy. Adding a polished but wrong candidate increases the
+best available true utility no further, yet its proxy score wins. The numbers are
+illustrative, not measured results.
+
+:::: {.runnable}
 ```python
-def best_of_n_with_verifier(prompt, n):
-    candidates = [generator.sample(prompt) for _ in range(n)]
-    judged = []
-    for c in candidates:
-        critique = verifier.generate(format_judgment_prompt(prompt, c))
-        judged.append((extract_score(critique), c, critique))
-    return max(judged, key=lambda x: x[0])
+candidates = [
+    {"name": "direct partial", "true_utility": 0.62, "proxy_score": 0.60},
+    {"name": "careful correct", "true_utility": 0.90, "proxy_score": 0.82},
+    {"name": "concise correct", "true_utility": 0.95, "proxy_score": 0.87},
+    {"name": "polished wrong", "true_utility": 0.20, "proxy_score": 0.98},
+]
+
+for n in range(1, len(candidates) + 1):
+    pool = candidates[:n]
+    selected = max(pool, key=lambda item: item["proxy_score"])
+    oracle = max(pool, key=lambda item: item["true_utility"])
+    regret = oracle["true_utility"] - selected["true_utility"]
+    print(
+        f"N={n}: selected={selected['name']!r}; "
+        f"selection regret={regret:.2f}"
+    )
 ```
+::::
 
-The critique is not only a score. It becomes audit data. If the system later
-fails, operators can inspect whether the candidate was wrong, the verifier was
-wrong, or the extraction from critique to score was wrong. That audit trail is
-one reason to prefer structured verification over an opaque scalar when the
-task is operationally important.
+Here, at $N=3$, the selector returns `concise correct` with zero selection regret. At $N=4$,
+it returns `polished wrong`, and regret rises to 0.75. A real system will not expose
+`true_utility`; that is why an independent evaluation set and hidden checks are needed.
 
-## When the Checker Becomes the Objective
+## Evaluating the verifier
 
-Every verifier is also an attack surface. In training, the policy learns the
-verifier's boundary. In inference, best-of-$N$ selects the sample that maximizes
-the verifier's score. If the checker is incomplete, more optimization pressure
-finds its holes. This is reward hacking in @sec-rlhf, selector over-optimization
-in @sec-inference-time-scaling, and unit-test overfitting in code generation.
-The names differ because the loop differs, but the shape is the same.
+A verifier benchmark should match the role the verifier will play. Accuracy on balanced,
+independent examples is not enough when deployment selects the maximum score from a large
+candidate pool. Start with an evaluation distribution $D$, where candidates come from the
+deployed generator and label their task correctness as $Y\in\{0,1\}$. For a Boolean
+verdict $\hat Y$, two errors matter:
 
-There is no universal fix. The practical answer is layered verification. A code
-answer may need unit tests, hidden tests, static analysis, type checking, and
-human review for specification fit. For a math answer the relevant layers are
-different ones: symbolic equivalence, numeric substitution, and a step-level
-sanity check. An agent trace asks for yet another set, environment feedback,
-permission checks, and outcome evaluation. The right verifier is a bundle, and
-the bundle's weakest layer often sets the ceiling.
+$$
+\operatorname{FAR}=\Pr_D(\hat Y=1\mid Y=0),
+\qquad
+\operatorname{FRR}=\Pr_D(\hat Y=0\mid Y=1).
+$$
+
+Here $\Pr_D$ denotes probability under deployment distribution $D$, $Y$ is the reference
+correctness label, and $\hat Y$ is the verifier's decision.
+
+The **false-accept rate** (FAR) measures incorrect candidates admitted as correct. The
+**false-reject rate** (FRR) measures correct candidates discarded. Their costs are rarely
+equal. A tutoring hint may tolerate a false rejection and regenerate. A permission check
+cannot casually tolerate a false acceptance. Thresholds should follow that asymmetry.
+
+For a scalar score, evaluate ranking and calibration as separate properties. Ranking asks
+whether better candidates tend to score higher. Calibration asks whether a score of, for
+example, 0.8 corresponds to the observed event rate under a stated distribution. Neither
+property implies the other. Report both before and after selection, because choosing the
+maximum score changes the distribution presented to downstream users.
+
+A useful verifier evaluation includes all of the following:
+
+- candidate-level false-accept rate, false-reject rate, ranking quality, and calibration;
+- end-to-end task utility and selection regret at each deployed value of $N$;
+- results stratified by difficulty, length, and domain, including all-correct and
+  error-containing traces for a process verifier;
+- candidates sampled from the deployed generator, temperature, prompt, tools, and search
+  policy, not only a static corpus from an older policy;
+- adversarial and naturally occurring failures collected after deployment;
+- latency, token use, execution cost, and human-review cost under matched total cost.
+
+The distribution clause is essential. Training or search changes the candidates toward
+regions where the verifier assigns high scores. A verifier measured only on ordinary
+samples can look reliable while failing on the optimized tail. Re-run evaluation whenever
+the generator, search budget, checker, prompt, rubric, or score extractor changes.
+
+## Generative verifiers
+
+A discriminative verifier maps a candidate directly to a label or score. A generative
+verifier writes tokens that may explain a judgment before producing a verdict. GenRM,
+published at ICLR 2025, trained verifiers with next-token prediction on both verification
+and solution generation. In the authors' experiments, verification rationales and
+majority voting let the verifier spend additional test-time compute and improved
+best-of-$N$ selection on several algorithmic and mathematical benchmarks
+[@zhang2024genrm].
+
+ThinkPRM applies the same broad idea at step level. It generates a verification chain for
+each step and, in the reported experiments, outperformed the compared discriminative
+process models while using about 8,000 process labels, roughly 1% of PRM800K. Those
+labels filtered 1,000 synthetic verification chains produced by a reasoning model
+[@khalifa2025thinkprm]. This is evidence that generation can be a data-efficient verifier
+interface in those benchmarks, not evidence that a written rationale makes a judgment
+correct or that the method is supervision-free.
+
+The operational advantage is inspectability. A structured generative result can expose
+the verdict, score, first alleged error, supporting evidence, and uncertainty. It gives
+operators a debugging hypothesis, not a faithful explanation by default. Independent
+tests or review are still needed to distinguish whether the critique misunderstood the
+candidate, the score extractor misread the critique, or the selector applied the score
+incorrectly.
+
+The new surface also creates new failure modes. The critique may be persuasive and wrong,
+omit the decisive issue, contradict its final verdict, or vary across samples. Its text
+may contain instructions copied from an untrusted candidate. Treat every critique as
+untrusted model output. Parse it through a strict schema, keep the raw text for audit,
+and never execute instructions found inside it. Evaluation must include the verifier's
+sampling budget and the extraction rule, not just the base model name.
+
+## When the checker becomes the objective
+
+Verification changes once its score controls selection or learning. In ordinary
+evaluation, the checker observes candidates. Under best-of-$N$ or reinforcement learning,
+the generator is optimized against the checker. Any systematic blind spot becomes a
+target.
+
+Reward-model experiments by Gao and colleagues illustrate this proxy problem for both
+reinforcement learning and best-of-$N$: as optimization against a learned proxy
+increased, an independent gold-model score eventually declined in their synthetic setup
+[@gao2022scaling]. The result does not supply a universal degradation curve, but it shows
+why the optimized verifier cannot also be the only release judge. DeepSeek-R1 reports a
+related engineering choice. Its authors avoided neural outcome and process reward models
+for reasoning tasks because they observed reward hacking at large RL scale and judged
+retraining complexity to be high; they used rule-based accuracy and format rewards for
+those tasks instead [@guo2025deepseek].
+
+The response is not to seek one perfect checker. It is to separate responsibilities:
+
+- Use cheap visible checks for rapid feedback, but reserve hidden checks for independent
+  evaluation. Rotate or extend them when failures reveal coverage gaps.
+- Combine checks that cover different properties. Code may need unit tests, property
+  tests, static analysis, resource limits, and review against the original specification.
+- Keep the release evaluator independent from the signal being optimized. Measure the
+  gap between proxy score and held-out task utility as pressure increases.
+- Stop increasing sample count, search depth, or RL steps when held-out utility stalls,
+  the audit gap widens, or the selected score margin becomes unreliable.
+- Abstain or route to a stronger checker or human reviewer when verifiers disagree, the
+  score margin is small, required evidence is missing, or the candidate is outside the
+  validated domain.
+
+Layering helps only when the checks add distinct evidence. Five learned judges trained on
+the same labels may share the same blind spot. Ten public unit tests may all omit the same
+boundary condition. Record what each layer establishes and what remains unchecked.
+
+## A production record
+
+The verifier is part of the deployed system, so its provenance belongs beside the model's.
+For every run, version the generator, verifier, prompt, rubric, and score extractor.
+Also record the candidate count, sampling parameters, tool and data versions, thresholds,
+aggregation rule, and total verification budget.
+
+Log every candidate considered, not only the winner. Store its verifier decision, score,
+structured critique, execution evidence, and selection reason. Sensitive traces still
+need access controls and retention limits, but without candidate-level records an
+operator cannot reconstruct whether generation, verification, extraction, or selection
+failed.
+
+Compare alternatives at matched total cost. A generative verifier that reads eight long
+solutions may consume more tokens than producing additional candidates. A process model
+may save search by pruning early but add a score at every step. Report quality together
+with generation, verification, execution, and review cost.
 
 ::: {.callout-important}
-## What's Contested
-Process supervision is not simply "better supervision." It is denser and often
-more aligned with human reasoning, but it costs more, can be inconsistent across
-labelers, and can reward a human-legible path over a shorter alien but valid
-one. DeepSeek-R1 reports that attempted process reward models and MCTS (Monte
-Carlo tree search) did not justify their overhead in that recipe [@guo2025deepseek]. Lightman et al. report
-the opposite direction on MATH reward-model training [@lightman2023lets]. The
-difference is not a contradiction. It says the value of process supervision is a
-function of task, model, label quality, and whether the dense signal is used for
-training, search, or both.
+## What's contested
+
+Process supervision is not simply better supervision. Uesato and colleagues found an
+advantage for outcome feedback in label efficiency on final-answer error, while process
+feedback, or a learned reward model that emulated it, better reduced reasoning errors
+among correct answers on GSM8K [@uesato2022solving]. Lightman and colleagues found
+process supervision stronger for
+reward-model selection in their MATH setting [@lightman2023lets]. DeepSeek-R1 chose
+rule-based terminal rewards for large-scale reasoning RL because its developers found
+neural reward models vulnerable to exploitation and expensive to maintain
+[@guo2025deepseek].
+
+These findings concern different tasks, labels, models, and uses of the signal. Process
+supervision can improve credit assignment, but it also moves correctness into the step
+rubric and its labeler. The relevant question is which feedback produces better held-out
+task utility for a stated budget and risk, not which category wins in the abstract.
 :::
 
 ::: {.callout-tip}
 ## Constraint Arrow
-The verifier decides which later systems can be trusted to spend more compute.
-If the checker is cheap and reliable, @sec-inference-time-scaling can turn extra
-samples into better selection, and @sec-training-to-reason can use the same
-signal as reward. If the checker is learned, expensive, or easy to exploit, the
-constraint moves sideways into @sec-judging-holistic and
-@sec-operational-evaluation: the system now needs evidence that the judge itself
-deserves to move a release or a training run.
+
+A reliable, inexpensive verifier lets @sec-structured-reasoning-search prune branches,
+lets @sec-inference-time-scaling turn candidate coverage into selection, and lets
+@sec-training-to-reason reuse the judgment as a reward. When verification is learned,
+expensive, or easy to exploit, the constraint moves into @sec-judging-holistic and
+@sec-operational-evaluation. More generator compute then creates more verification and
+audit work rather than automatic improvement.
 :::
 
-The verifier is the hinge between this part's chapters. Search calls on it to
-prune, and program-aided reasoning reaches for external runtimes to strengthen
-it; RLVR turns it into a training reward, while test-time scaling leans on it to
-convert coverage into accuracy. The next chapter moves from the verifier as a
-component to the full training loop that uses it as reward.
+The next chapter follows the signal into training. The same distinction remains in
+force: a reward specifies what the optimizer can see, not everything the user values.
 
 ## Further reading
 

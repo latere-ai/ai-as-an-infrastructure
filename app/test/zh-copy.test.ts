@@ -688,7 +688,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/04-verifiers-process-supervision.qmd",
-      ["Outcome, Process", "Verifier Ladder", "Generative Verifiers", "Checker Becomes the Objective"],
+      ["Three independent questions", "Outcome and process supervision", "Selection is a contract", "Evaluating the verifier", "Generative verifiers", "When the checker becomes the objective"],
     ],
     [
       "zh/reasoning/04-verifiers-process-supervision.qmd",

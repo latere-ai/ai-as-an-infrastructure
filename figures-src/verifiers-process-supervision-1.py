@@ -2,51 +2,81 @@ import matplotlib
 
 matplotlib.use("svg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import FancyBboxPatch
 
 from common import ACCENT, DATA, INK, MUTED, WARN, save_bilingual
 
 
-fig, ax = plt.subplots(figsize=(5.6, 3.2))
-
-points = [
-    ("heuristic judge", 0.88, 0.20, MUTED),
-    ("outcome RM", 0.72, 0.36, DATA),
-    ("unit tests", 0.56, 0.54, DATA),
-    ("answer checker", 0.45, 0.63, ACCENT),
-    ("process RM", 0.33, 0.72, WARN),
-    ("formal checker", 0.16, 0.90, ACCENT),
+AXES = [
+    (
+        "signal location",
+        [("terminal outcome", DATA), ("intermediate process", ACCENT)],
+    ),
+    (
+        "judgment source",
+        [("explicit rule", DATA), ("learned model", WARN), ("human review", MUTED)],
+    ),
+    (
+        "return type",
+        [("decision", DATA), ("score", WARN), ("critique", MUTED), ("certificate", ACCENT)],
+    ),
 ]
 
-ax.plot([p[1] for p in points], [p[2] for p in points], color=MUTED, linewidth=1.2, alpha=0.7)
-offsets = {
-    "heuristic judge": (-0.04, -0.07, "right"),
-    "outcome RM": (-0.035, -0.06, "right"),
-    "unit tests": (0.02, -0.045, "left"),
-    "answer checker": (0.02, 0.03, "left"),
-    "process RM": (0.02, 0.035, "left"),
-    "formal checker": (0.02, -0.04, "left"),
-}
-for label, x, y, color in points:
-    ax.scatter([x], [y], s=62, color=color, zorder=3)
-    dx, dy, ha = offsets[label]
-    ax.text(x + dx, y + dy, label, color=INK, fontsize=8, ha=ha, va="center")
 
-ax.text(0.82, 0.06, "broad coverage", color=INK, fontsize=8, ha="center")
-ax.text(0.18, 0.06, "narrow scope", color=INK, fontsize=8, ha="center")
-ax.text(0.86, 0.46, "spoofable", color=INK, fontsize=8, ha="center")
-ax.text(0.20, 0.96, "proof kernel", color=INK, fontsize=8, ha="left")
+fig, ax = plt.subplots(figsize=(6.2, 3.25))
+ax.set_xlim(0, 1)
+ax.set_ylim(0, 1)
+ax.axis("off")
 
-ax.set_xlabel("coverage", color=INK)
-ax.set_ylabel("integrity / hard to spoof", color=INK)
-ax.set_xlim(1.0, 0.0)
-ax.set_ylim(0.0, 1.0)
-ax.set_xticks([])
-ax.set_yticks([])
-for spine in ("top", "right"):
-    ax.spines[spine].set_visible(False)
-for spine in ("left", "bottom"):
-    ax.spines[spine].set_color(INK)
-ax.tick_params(colors=INK)
+ax.text(
+    0.02,
+    0.94,
+    "three independent verifier choices",
+    color=INK,
+    fontsize=10,
+    fontweight="bold",
+    va="top",
+)
 
-fig.tight_layout()
+row_y = [0.69, 0.42, 0.15]
+box_left = 0.27
+box_right = 0.98
+gap = 0.018
+
+for (label, options), y in zip(AXES, row_y):
+    ax.text(0.02, y + 0.06, label, color=INK, fontsize=8.5, va="center")
+    width = (box_right - box_left - gap * (len(options) - 1)) / len(options)
+    for index, (option, color) in enumerate(options):
+        x = box_left + index * (width + gap)
+        patch = FancyBboxPatch(
+            (x, y),
+            width,
+            0.12,
+            boxstyle="round,pad=0.008,rounding_size=0.018",
+            facecolor=color,
+            edgecolor=color,
+            alpha=0.14,
+            linewidth=1.0,
+        )
+        ax.add_patch(patch)
+        ax.text(
+            x + width / 2,
+            y + 0.06,
+            option,
+            color=INK,
+            fontsize=7.8,
+            ha="center",
+            va="center",
+        )
+
+ax.text(
+    0.27,
+    0.04,
+    "examples combine one choice from each row",
+    color=MUTED,
+    fontsize=7.5,
+    va="center",
+)
+
+fig.tight_layout(pad=0.55)
 save_bilingual(fig, "verifiers-process-supervision-1")
