@@ -712,7 +712,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/07-inference-time-scaling.qmd",
-      ["Repeated sampling buys coverage but not an answer", "sequential", "revision and parallel search", "compute-optimal allocation routes a budget", "selector is imperfect"],
+      ["What is being scaled", "Repeated sampling buys coverage", "Selection determines realized accuracy", "Sequential work needs a feedback source", "Allocate a budget instead of maximizing it", "Account for the work where it is paid"],
     ],
     [
       "zh/reasoning/07-inference-time-scaling.qmd",

@@ -1,435 +1,404 @@
-# The Inference-Time Scaling Paradigm {#sec-inference-time-scaling}
+# Inference-Time Scaling {#sec-inference-time-scaling}
 
-Training in @sec-training-to-reason spends compute once to bake reasoning into
-the weights. Inference-time scaling is the other lever: after the weights are
-frozen, spend more compute per prompt to make a fixed model answer harder
-questions. Repeated sampling buys coverage but not an answer; sequential
-revision and parallel search are different shapes of test-time compute with
-different ideal regimes; compute-optimal allocation routes a budget by prompt
-difficulty; and the whole curve bends back down when the selector is imperfect.
+Once a model's weights are fixed, a system can still spend more work on an
+individual prompt. It can generate additional candidates, extend or revise a
+partial answer, call a tool, search a branching state space, or evaluate several
+alternatives before returning one. These operations are grouped under
+**inference-time scaling**, but they do not spend the same resource or improve
+an answer for the same reason.
 
-## The one knob left after training
+The model is only one component of this process. A controller decides what work
+to request, an evaluator supplies evidence about the results, and a stopping
+rule decides when further work is no longer worth its cost. More computation
+helps only when that system can create useful alternatives and identify or
+construct a better answer from them.
 
-A trained model has one knob left at inference: how much compute to spend per
-prompt. The cheapest answer is one greedy decode. The question is what spending
-more buys: a thousand samples instead of one, or a long deliberate chain instead
-of a short one, and whether that spend is ever a better deal than training a
-larger model in the first place.
+## What is being scaled
 
-The reason the question is live is that the two spends are fungible. A larger
-model costs more to train and more per token forever. Test-time compute costs
-nothing at training and is paid only on the prompts that need it, which is most
-of the value on a long tail of hard prompts and none of it on the easy
-majority. If a small model plus extra inference can match a large model on the
-hard prompts, the serving economics of @sec-serving-problem change, because you
-move cost from a fixed asset you pay for on every request to a variable you
-spend only when a prompt earns it.
+An inference strategy can vary several quantities at once:
 
-## Two shapes of test-time compute
+- **Breadth:** the number and diversity of candidate responses.
+- **Depth:** the length of a trajectory or the number of dependent revision
+  steps.
+- **Evaluation:** tests, proof checks, learned scores, answer aggregation, or
+  judge calls applied to candidates and partial states.
+- **External work:** retrieval, code execution, simulation, or other tools.
+- **Serving resources:** model choice, accelerator time, memory, concurrency,
+  and the latency allowed for the request.
 
-Test-time compute comes in two shapes, and the distinction organizes the whole
-chapter. Parallel scaling draws many independent samples and combines them.
-Sequential scaling spends the compute in one growing chain, where each step
-conditions on the last, revising or extending a single line of thought. Snell
-et al. frame these as revising the proposal distribution sequentially versus
-searching against a verifier in parallel, and the central empirical claim is
-that neither dominates: the better shape depends on the prompt
-[@snell2024scaling].
+Parallel and sequential work describe dependencies, not two exclusive method
+families. Independent samples can run concurrently. A revision must wait for
+the answer it revises. Beam search, lookahead, and tool-using agents mix both:
+they branch at some steps, evaluate the branches, and continue from selected
+states. A complete description therefore names the proposal method, evaluation
+rule, controller, and budget instead of reporting only “reasoning tokens.”
 
-Sequential scaling spends the budget the second way. Instead of $k$ independent
-shots, the model keeps thinking in one trajectory, and the compute buys length
-and revision rather than breadth. The reasoning models of
-@sec-training-to-reason already do this natively: a long chain of thought is
-sequential test-time compute that the RL of that chapter taught the model to
-produce. s1 shows the lever in its barest form with @gls-budget-forcing, a
-decoding-time intervention that controls how long the model thinks by
-suppressing the end-of-thinking token and appending the word "Wait" to push the
-model to continue, or by forcing termination to cap the spend
-[@muennighoff2025s1]. Lengthening the chain this way lets the model catch and
-fix its own errors, and accuracy rises with the forced budget. Sequential and
-parallel are composable: you can draw several long chains and select among them,
-and Snell et al. study exactly this two-dimensional budget [@snell2024scaling].
-@fig-inference-time-scaling-shapes lays out the two shapes and where the
-selector decides whether coverage becomes accuracy.
-
-```{dot}
-//| label: fig-inference-time-scaling-shapes
-//| fig-cap: "The two shapes of test-time compute. Parallel sampling raises coverage, but a selector decides whether that coverage becomes accuracy: a verifier converts it directly, while majority vote or a reward model plateaus past hundreds of samples."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  P [label="Prompt"];
-  PAR [label="Parallel: k independent samples"];
-  SEQ [label="Sequential: one growing chain"];
-  COV [label="Coverage rises with k"];
-  SEL [label="Selector", shape=diamond];
-  ACC [label="Coverage becomes accuracy"];
-  PLAT [label="Plateaus past hundreds of samples"];
-  REV [label="Revise or extend in place"];
-  BUD [label="Budget forcing controls length"];
-
-  P -> PAR;
-  P -> SEQ;
-  PAR -> COV;
-  COV -> SEL;
-  SEL -> ACC [label="verifier"];
-  SEL -> PLAT [label="majority vote or reward model"];
-  SEQ -> REV;
-  REV -> BUD;
-}
+```{mermaid}
+%%| label: fig-inference-time-controller
+%%| fig-cap: "An inference controller allocates generation, evaluation, and tool work under explicit cost and latency limits. Evidence can stop the request, trigger another step, or escalate to a different strategy."
+flowchart TD
+    A[Prompt and task policy] --> B[Inference controller]
+    B --> C[Generate candidates or revisions]
+    B --> D[Call tools or retrieval]
+    C --> E[Candidate set or partial state]
+    D --> E
+    E --> F[Evaluate and aggregate evidence]
+    F --> G{Stop rule}
+    G -->|accept| H[Return answer]
+    G -->|continue| B
+    G -->|escalate| I[Stronger model or human path]
+    J[Cost, latency, and concurrency limits] --> B
 ```
 
-::: {.callout-note}
-## Where this came from
-The split between a single fast forward pass and a longer deliberate chain echoes
-the System 1 and System 2 distinction from cognitive psychology, a picture that
-organizes the design space rather than a mechanism the architecture implements.
-@sec-borrowed-ideas marks where that analogy holds and where it breaks.
-:::
+A production controller is solving a constrained decision problem. One useful
+form is
 
-## Coverage is not accuracy
+$$
+a^*(x)
+=
+\arg\max_{a\in\mathcal A}
+\left(
+\mathbb E[U_x(Y_a)]
+-\lambda\,\mathbb E[C_a]
+-\mu\,\mathbb E[L_a]
+\right).
+$$
 
-The parallel story starts with the simplest possible method. Draw $k$ samples
-and ask what fraction of problems are solved by at least one of them. Brown et
-al. call this coverage, and it is the ceiling on what any selection rule could
-extract from the samples [@brown2024monkeys]. Coverage rises smoothly with $k$
-across four orders of magnitude, well modeled as an exponentiated power law (a
-smooth curve that climbs toward a ceiling with predictable diminishing returns
-as $k$ grows), which is the inference-time analogue of the training scaling laws
-in @sec-scaling-laws [@brown2024monkeys]. The key word is coverage, not accuracy. A
-correct sample exists in the set; that is not the same as knowing which one it
-is.
+Here $x$ is the prompt; $\mathcal A$ is the available set of inference
+strategies; $Y_a$ is the answer returned by strategy $a$; and $U_x$ is the true
+task utility, including any value assigned to abstaining or escalating.
+$C_a$ denotes compute or monetary cost, $L_a$ latency, and the nonnegative
+weights $\lambda$ and $\mu$ express the deployment's cost and latency
+trade-offs. The router cannot observe true utility before answering. It must
+estimate the value of each action from held-out data and signals available at
+runtime.
 
-That gap is the design problem of parallel scaling. To turn coverage into an
-answer you need a selector, and the selector is where the difficulty lives.
-When the task has an automatic verifier, the unit tests and answer checkers and
-proof checkers of @sec-training-to-reason, selection is free: run the verifier
-on each sample and keep one that passes. Coverage converts directly into
-accuracy, which is why repeated sampling pays most in code and formal math. When
-there is no automatic verifier, you fall back to a heuristic selector, majority
-vote over the answers or a learned reward model (a model trained to score how
-good an answer looks) scoring each sample. These work
-to a point and then plateau: Brown et al. report that majority vote and reward
-models stop scaling past a few hundred samples even as coverage keeps climbing,
-because the selector cannot tell the rare right answer from the many confident
-wrong ones [@brown2024monkeys]. The design problem turns on this one gap between a
-correct answer existing and a system finding it. @fig-inference-time-scaling-1
-makes the gap visible: coverage climbs smoothly with $k$, a verifier realizes
-almost all of it, and a heuristic selector tracks coverage early and then
-plateaus far below it.
+This objective also shows why inference compute is not automatically cheaper
+than training or model capacity. Some strategies require a separately trained
+verifier or revision model. The best choice depends on request volume, hardware,
+quality targets, and which prompts can benefit from additional work.
 
-![Schematic of the coverage-is-not-accuracy gap in parallel test-time scaling. Coverage rises smoothly with the sample count $k$ toward a ceiling; a verifier converts it into accuracy almost one-for-one, while a heuristic selector (majority vote or a reward model) plateaus past hundreds of samples. Idealized curves, after Brown et al. (2024).](/figures/inference-time-scaling-1.svg){#fig-inference-time-scaling-1}
+## Repeated sampling buys coverage
 
-## Spending compute on the check
+Parallel sampling is the simplest case. Draw a response $Y$ from the fixed
+proposal distribution $\pi(\cdot\mid x)$ for prompt $x$. Here
+$h_x(Y)\in\{0,1\}$ indicates whether that response satisfies the task's true
+acceptance condition. The one-sample success probability is
 
-If the selector is the bottleneck, the question becomes how much compute to spend
-checking rather than generating. The reason any of this pays is an asymmetry:
-for many tasks, deciding whether a candidate is right is cheaper and more
-reliable than producing it, so a verifier need not match the generator's
-strength to be useful. Generative verifiers push the idea further. Rather than a
-frozen scalar head, @gls-genrm trains the verifier with the same next-token objective
-as the generator, jointly on verification and generation, so the verifier can
-write a chain of thought about a candidate and even spend its own test-time
-compute by voting over several such judgments [@zhang2024genrm]. The selector
-becomes a second reasoner, not a fixed score.
+$$
+p_x
+=
+\Pr_{Y\sim\pi(\cdot\mid x)}[h_x(Y)=1].
+$$
 
-That asymmetry opens two deployments that pull in opposite directions. A cheap
-verifier can gate an expensive generator, rejecting obviously wrong candidates
-before paying for more samples or a longer chain. And a strong verifier can lift
-a weaker generator above what it could select for itself, the inference-time
-face of the weak-to-strong question in @sec-oversight-control. The cheapest
-verifier of all is the model itself. Self-Refine loops generate, critique, and
-revise with a single model and no extra training [@madaan2023selfrefine]. In
-Reflexion, a failure signal becomes a natural-language reflection held in an
-episodic memory and fed into a retry; the method reports large gains on coding
-tasks [@shinn2023reflexion]. Self-RAG goes further inside the model, training it
-to emit reflection tokens that decide when to retrieve and whether its own output
-is supported [@asai2023selfrag].
+Now draw $k$ responses that are conditionally independent and share the same
+success probability. Their **coverage** means the probability that at least one
+of those responses is correct:
 
-The catch is that a self-check is only as good as the signal behind it. Huang et
-al. find that intrinsic self-correction, revising on the model's own judgment
-with no external feedback, fails on reasoning and can lower accuracy, because a
-model confident enough to assert a wrong answer is usually confident enough to
-wave it through on a second look [@huang2024selfcorrect]. The self-correction
-methods that work route a real signal into the loop: a unit test, a retrieval, a
-tool result, a verifier that checks against ground truth. This is the
-inference-time echo of @sec-training-to-reason, where a checkable reward beat a
-learned proxy, and it is what the agent loop of @sec-the-harness spends itself
-on.
+$$
+C_k(x)=1-(1-p_x)^k.
+$$
 
-## From Methods to a Compute Axis
+In these formulas, $p_x$ measures one-sample success for this prompt and
+proposal, while $C_k(x)$ measures whether a correct response exists among the
+$k$ samples. Coverage increases monotonically when $p_x>0$, but with
+diminishing returns. The formula is exact for independent draws from an
+unchanged proposal. Independence can fail when later prompts adapt to earlier
+outputs, calls share state, or a controller couples, deduplicates, or resamples
+candidates. Diversity is a separate issue: independent draws can still repeat
+the same answer because repetition is part of $\pi(\cdot\mid x)$. Sampling
+temperature, prompt variation, model diversity, and search policy all change
+the proposal and therefore its coverage.
 
-The methods are older than the paradigm. @gls-self-consistency, sampling several
-chains and taking a majority vote over final answers, is parallel scaling with
-a majority selector and predates the reasoning-model era [@wang2022selfconsistency].
-Best-of-$n$ against a reward model is parallel scaling with a learned selector.
-A @gls-prm (process reward model), trained in "Let's Verify Step by Step" and used as the
-dense verifier in @sec-training-to-reason, is what makes verifier-guided search
-over partial chains work, scoring steps rather than only final answers so a
-search can prune early [@lightman2023lets]. What changed in 2024 was the
-framing: these stopped being isolated methods and became a compute axis with its own
-scaling laws.
+Brown et al. measured coverage across models and tasks for as many as 10,000
+samples per problem. Aggregate curves were often well fit by an exponentiated
+power law, though the fit was not universal. In their SWE-bench Lite experiment,
+DeepSeek-Coder-V2-Instruct solved 15.9% of issues with one sample and 56% with
+250 samples when candidate patches could be tested [@brown2024monkeys]. That is
+evidence about a particular proposal, benchmark, and verification setup. It
+does not imply that every task has a comparable scaling curve.
 
-Brown et al. established the parallel law: coverage as a smooth, predictable
-function of sample count, and the sharp dependence of its payoff on whether a
-verifier exists [@brown2024monkeys]. Snell et al. asked the allocation question.
-Given a fixed test-time budget, how should you split it, more parallel samples,
-more sequential revision, a deeper verifier search [@snell2024scaling].
+## Selection determines realized accuracy
 
-## Routing the budget by difficulty
+Coverage is not the accuracy of a deployed system. Suppose a selector $S$
+must return one of the sampled candidates $Y_{1:k}$. Its realized accuracy is
 
-Snell et al. showed the answer depends on prompt difficulty. Easy prompts
-benefit from sequential refinement of an already-good first guess; hard prompts
-benefit from broader parallel search. Routing the budget by difficulty, their
-compute-optimal strategy, beat a best-of-$n$ baseline by more than four times in
-efficiency, and on prompts where a small model already had a foothold, a
-FLOPs-matched small model with extra test-time compute outperformed a model
-roughly fourteen times larger [@snell2024scaling]. That is the constraint made
-quantitative: inference compute substituting for parameters.
-@fig-inference-time-scaling-allocation traces how the budget is routed by
-difficulty.
+$$
+A_k(x)
+=
+\Pr\!\left[
+h_x\!\left(Y_{S(Y_{1:k})}\right)=1
+\right].
+$$
 
-```{dot}
-//| label: fig-inference-time-scaling-allocation
-//| fig-cap: "Compute-optimal allocation routes a fixed test-time budget by estimated prompt difficulty. Easy prompts spend it on sequential refinement of a good first guess, hard prompts on broad parallel search, and prompts the small model never solves return zero coverage no matter the spend. Following Snell et al., 2024."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+Here $S(Y_{1:k})$ is the index chosen from the $k$ candidates, and $A_k(x)$ is
+the probability that the selected candidate passes the true task condition.
+For a selector restricted to the sampled set, $A_k(x)\le C_k(x)$. Equality
+requires an exact procedure that returns a correct candidate whenever one is
+present. A controller that revises or synthesizes a new answer is not subject to
+this particular bound because its output can leave the original set.
 
-  B [label="Fixed test-time budget"];
-  D [label="Estimated prompt difficulty", shape=diamond];
-  SEQ [label="Sequential refinement of a good first guess"];
-  PAR [label="Broad parallel search"];
-  ZERO [label="Zero coverage: no spend helps"];
-  WIN [label="Compute-optimal beats best-of-n by over 4x"];
-  SUB [label="Small model plus compute matches a 14x larger model"];
-  UP [label="Only a stronger model or better training helps"];
+Selectors have different evidence and different failure modes:
 
-  B -> D;
-  D -> SEQ [label="easy"];
-  D -> PAR [label="hard"];
-  D -> ZERO [label="beyond reach"];
-  SEQ -> WIN;
-  PAR -> WIN;
-  WIN -> SUB;
-  ZERO -> UP;
-}
-```
+- An **exact checker** validates a fully specified property. A proof kernel can
+  establish that a proof term satisfies its formal rules. A test suite usually
+  checks only sampled behavior, so a passing program can still be wrong outside
+  the tests. Verification also consumes compute.
+- **Answer voting** groups candidates by a normalized final answer and chooses
+  the largest group. Self-consistency introduced this sample-and-marginalize
+  procedure for reasoning paths and evaluated up to 40 paths
+  [@wang2022selfconsistency]. Voting works when probability mass concentrates on
+  the correct answer, not merely because one correct sample exists.
+- A **learned scorer or judge** ranks candidates using a proxy for task utility.
+  It can distinguish answers that do not admit exact checks, but its errors may
+  be correlated with the generator and can be exploited by a large candidate
+  pool.
 
-What Snell et al. framed as advice became serving architecture in August 2025:
-GPT-5 ships as a fast model, a thinking model, and a per-request router that
-picks between them, with reasoning-effort levels exposed in the API, and
-Anthropic and Google sold thinking budgets the caller set per request
-[@openai2025gpt5]. The knob itself then converged on effort rather than tokens:
-by mid-2026 Anthropic had replaced its explicit per-request token budget with an
-adaptive mode where the caller sets an effort level and the model decides how
-much of it to use, so part of the router in the compute-optimal picture now
-lives inside the model.
+In Brown et al.'s GSM8K and MATH selection experiments, majority voting and
+learned reward-model selection failed to track the continued growth in oracle
+coverage [@brown2024monkeys]. More generally, best-of-$n$ selection against an
+imperfect reward model can eventually prefer responses that exploit the
+model's scoring errors. Huang et al. formalize this failure and show why an
+ideal candidate count can exist when the reward model is imperfect
+[@huang2025bestofn]. A larger pool is therefore useful evidence only if the
+selection rule remains reliable over the distribution induced by that larger
+pool.
 
-## Less data, more inference
-
-The s1 and LIMO results sharpened a different edge. s1 reached strong
-competition-math performance by supervised fine-tuning on only about a thousand
-carefully chosen reasoning traces and then scaling at test time with budget
-forcing [@muennighoff2025s1]. LIMO made the less-is-more claim explicit with a
-few hundred examples, arguing that when a base model already encodes the
-knowledge from pre-training, a small set of high-quality demonstrations is
-enough to elicit the reasoning, and the heavy lifting moves to inference
-[@ye2025limo]. Both point the same way: the capacity may already be latent in
-the weights, and test-time compute is how you call it out. This connects to the
-contested question in @sec-training-to-reason about whether RL teaches new
-reasoning or elicits what is already there, seen now from the inference side.
-
-::: {.callout-important}
-## What's contested
-How far test-time compute keeps paying off is bounded by the quality of the
-thing that selects or guides, and that bound is not a footnote. With a perfect
-verifier, more samples never hurt: coverage rises monotonically and selection is
-free, so the curve only bends toward the ceiling. With an imperfect verifier or
-a heuristic selector, the curve can stop improving or turn down. More samples
-give the selector more confident-but-wrong candidates to be fooled by, and an
-optimization-against-the-selector effect appears that is the inference-time twin
-of the reward hacking in @sec-rlhf: best-of-$n$ against a flawed reward model
-can select the sample that exploits the model rather than solves the problem, and
-past some $n$ the expected quality falls. Brown et al. see majority vote and
-reward-model selection plateau past hundreds of samples while coverage keeps
-climbing, which is the same gap from the other side: the answer is in the set
-and the selector cannot find it [@brown2024monkeys]. So the claim is
-conditional. Test-time compute scales cleanly where verification is cheap and
-sound, and the cleaner the verifier, the longer the curve pays. Where it is not,
-the scaling is bounded by selector quality, and more compute is not free
-improvement. @fig-inference-time-scaling-2 shows both regimes: a perfect
-verifier rises monotonically, while an imperfect one peaks and then turns down
-as larger $n$ feeds the selector more confident-but-wrong candidates.
-
-![Schematic of best-of-$n$ against verifiers of differing quality. A perfect verifier rises monotonically toward the coverage ceiling, so more samples never hurt; an imperfect verifier peaks at some optimal $n$ and then declines as the search optimizes against the selector, the inference-time twin of reward hacking. Idealized curves, after Snell et al. (2024) and Brown et al. (2024).](/figures/inference-time-scaling-2.svg){#fig-inference-time-scaling-2}
-
-Raise `selector_bias`, the fraction of wrong samples the flawed selector scores
-above a correct one, and watch the imperfect-selector curve peak earlier and
-then fall, while coverage and the perfect verifier never turn down.
+The following runnable is a constructed failure model, not an empirical fit.
+Each candidate is correct with probability `p`. Each wrong candidate has
+probability `selector_bias` of receiving a misleadingly high mean score, and
+Gaussian noise has standard deviation `noise`. Increasing `k` always raises
+coverage, but it also creates more opportunities for a misleading wrong
+candidate to win.
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
+
 rng = np.random.default_rng(0)
-p, selector_bias, noise, trials, ks = 0.3, 0.05, 0.4, 4000, range(1, 65)
-cov, heuristic = [], []
+p = 0.30
+selector_bias = 0.05
+noise = 0.40
+trials = 4000
+ks = range(1, 65)
+coverage, selected_accuracy = [], []
+
 for k in ks:
-    correct = rng.random((trials, k)) < p                 # which samples are right
-    confident_wrong = (~correct) & (rng.random((trials, k)) < selector_bias)
-    base = np.where(confident_wrong, 1.5, np.where(correct, 1.0, 0.0))
-    score = base + rng.normal(0, noise, (trials, k))      # selector score, noisy
-    cov.append(np.mean(correct.any(axis=1)))              # a right answer exists
-    picked = score.argmax(axis=1)                          # selector keeps top score
-    heuristic.append(np.mean(correct[np.arange(trials), picked]))
-plt.plot(list(ks), cov, label="coverage / perfect verifier")
-plt.plot(list(ks), heuristic, label=f"imperfect selector (bias={selector_bias})")
-plt.xlabel("samples k"); plt.ylabel("accuracy"); plt.legend(); plt.show()
-print("best heuristic k:", list(ks)[int(np.argmax(heuristic))])
+    correct = rng.random((trials, k)) < p
+    misleading = (~correct) & (rng.random((trials, k)) < selector_bias)
+    mean_score = np.where(misleading, 1.5, np.where(correct, 1.0, 0.0))
+    score = mean_score + rng.normal(0, noise, (trials, k))
+    coverage.append(np.mean(correct.any(axis=1)))
+    chosen = score.argmax(axis=1)
+    selected_accuracy.append(np.mean(correct[np.arange(trials), chosen]))
+
+plt.plot(list(ks), coverage, label="coverage")
+plt.plot(list(ks), selected_accuracy, label="imperfect selector")
+plt.xlabel("candidates k")
+plt.ylabel("fraction correct")
+plt.legend()
+plt.show()
+print("best selector k:", list(ks)[int(np.argmax(selected_accuracy))])
 ```
 ::::
-:::
 
-## The balances and their knees
+## Sequential work needs a feedback source
 
-The paradigm is a set of balances, each with a knee.
+Sequential scaling makes later work depend on earlier state. A model may extend
+one trace, critique a draft, revise after a failed test, or expand a search node
+chosen from a frontier. A generic revision loop can be written as
 
-- **Parallel versus sequential.** Parallel sampling is embarrassingly
-  concurrent and latency-friendly, you can decode $k$ samples at once, but it
-  needs a selector and wastes compute on redundant near-duplicates. Sequential
-  revision uses compute more efficiently on prompts where a first guess is close,
-  but it is inherently serial and pays full latency. Snell et al. show the right
-  mix is difficulty-dependent, not a constant [@snell2024scaling].
-- **Coverage versus selection.** More samples always raise coverage, but the
-  realized accuracy is capped by the selector. With a verifier the cap is the
-  coverage ceiling; without one the cap is wherever majority vote or the reward
-  model plateaus. Spending past that point buys nothing.
-- **Test-time compute versus model size.** Extra inference can substitute for
-  parameters on the hard tail, shifting cost from a fixed training-and-serving
-  asset to a per-prompt variable. But the substitution has a regime: it works
-  when the small model already has nonzero coverage, and it fails on prompts the
-  small model never solves no matter how many tries, where only a stronger model
-  or better training helps.
-- **Data efficiency versus compute.** s1 and LIMO trade training data for
-  test-time compute, eliciting latent capability with a tiny SFT set plus
-  inference scaling [@muennighoff2025s1; @ye2025limo]. The bet holds only when
-  the base model already encodes the domain; on genuinely new capability there is
-  nothing latent to elicit.
-- **Latency and cost versus accuracy.** Every method here multiplies the
-  per-prompt compute and, for sequential methods, the latency. The product
-  decision is which prompts deserve the spend, which is exactly what
-  compute-optimal allocation formalizes.
+$$
+Y_0\sim\pi(\cdot\mid x),\qquad
+F_t=\phi(x,Y_t,e_t),\qquad
+Y_{t+1}\sim R(\cdot\mid x,Y_t,F_t).
+$$
 
-::: {.callout-tip}
-## Constraint arrow
-This argument reaches down to @sec-serving-problem and back up to
-@sec-scaling-laws. Test-time scaling only makes sense if the serving layer can
-deliver many samples or long chains cheaply, so the batching, key-value cache,
-and decoding speed of @sec-memory-scheduling and @sec-faster-decoding set the
-real price of a sample, and that price decides where compute-optimal allocation
-stops. And it closes the loop opened in @sec-scaling-laws: the over-training
-argument there said training compute substitutes for serving cost, while this
-chapter's claim is that inference compute substitutes for parameters. Together they say the
-model size is jointly set by training budget, serving cost, and how much
-reasoning you intend to buy at inference, not by any one of them alone.
-:::
+Here $Y_t$ is the answer at revision step $t$; $e_t$ is the evidence available
+at that step; $\phi$ converts the prompt, answer, and evidence into feedback
+$F_t$; and $R$ is the revision distribution. The evidence may be the model's
+own critique, an executable check, a tool result, retrieved material, or human
+feedback. These sources should not be described as equivalent. They differ in
+cost, independence, and how directly they constrain correctness.
 
-## Overthinking as a Production Failure
+The s1 work provides a narrow example of direct length control. Its budget
+forcing procedure could suppress the end-of-thinking token and append “Wait”
+when s1-32B tried to stop, or terminate thinking at a fixed limit. On AIME 2024,
+the final paper reports an increase from 50% without the intervention to 57%
+with it [@muennighoff2025s1]. AIME 2024 contains only 30 questions, so each
+question moves the score by about 3.3 percentage points. This result combines a
+particular model, its 1,000-example SFT set, a competition-math benchmark, and a
+decoding procedure. It does not establish that appending a continuation cue
+improves arbitrary models or that accuracy rises monotonically with trace
+length.
 
-The reasoning budget has a second knee: after a point, more thinking can hurt
-quality or simply burn the serving budget. Ghosal et al. report a non-monotonic
-pattern in reasoning models, where additional thinking first improves accuracy
-and then degrades it, motivating parallel thinking and adaptive stopping rather
-than unbounded chain extension [@ghosal2025thinking]. This matches the product
-experience of reasoning models: a hard prompt may deserve a long trace; a simple
-prompt that triggers the same trace is waste.
+Revision without new evidence is especially fragile. Huang et al. define
+**intrinsic self-correction** as asking a model to correct its answer without
+external feedback. Across their reasoning experiments, the studied models
+struggled to improve and sometimes degraded their answers [@huang2024selfcorrect].
+A unit-test failure or a retrieved fact changes the information available to the
+next step; a second opinion from the same model may only restate the first
+error. Sequential compute is valuable when the loop supplies a useful search
+operation or a feedback channel, not simply because the transcript is longer.
 
-That waste is now an attack surface. OverThink shows that decoy reasoning
-problems injected into retrieved content can make reasoning models spend many
-more reasoning tokens while still returning contextually correct answers, with
-large slowdowns reported across closed and open reasoning models
-[@kumar2025overthink]. Excessive Reasoning Attack crafts inputs that delay
-termination and trigger extra reasoning paths, increasing reasoning length by
-several times while preserving task utility [@si2025excessive]. These attacks
-do not need to make the final answer wrong. They make the system too expensive
-or too slow.
+## Allocate a budget instead of maximizing it
 
-![Schematic of the useful-thinking window. Accuracy rises with the first slice
-of reasoning tokens, then flattens or declines, while cost and latency keep
-climbing. Overthinking attacks push a prompt to the right side of the window.](/figures/inference-time-scaling-3.svg){#fig-inference-time-scaling-3}
+A uniform budget wastes work on easy prompts and may still be insufficient for
+hard ones. Snell et al. studied two mechanisms on MATH using PaLM 2 models
+fine-tuned for the relevant operation: search against a process reward model
+and sequential revision of the proposal distribution. The effective strategy
+depended on both problem difficulty and the base model
+[@snell2024scaling]. Their difficulty bins used 2,048 samples per problem and
+either ground-truth pass@1 or the verifier's average score, while the cost of
+estimating difficulty was excluded. Their compute-optimal allocation was more
+than four times as efficient as a fixed best-of-$n$ baseline in the reported
+setup. In parts of the paper's FLOPs-matched workload analysis, the smaller
+model with test-time compute outperformed a model about fourteen times larger
+only on problem subsets where the smaller model already had a nontrivial
+success rate; the comparison also depended on the assumed ratio between
+inference and pretraining demand.
+
+Those findings are conditional, not a theorem that inference compute replaces
+parameters. The study estimated problem difficulty using large offline sample
+pools and a learned verifier; that oracle-like information is not free at
+deployment. A practical router must infer difficulty from cheaper signals such
+as a first-pass score, candidate disagreement, checker failures, prompt class,
+or historical outcomes. It must also recognize uncertainty in that estimate.
+No observed success within one proposal and budget does not prove that the true
+success probability is zero. A different model, prompt, tool, or decomposition
+may create coverage that repeated sampling from the original proposal did not.
 
 <figure id="fig-ttc-budget">
 <div class="viz" data-viz="ttc-budget" data-lang="en"></div>
-<figcaption>Adaptive test-time compute budget. Move the difficulty slider and
-watch the router spend little on easy prompts, more on the useful-thinking
-window, and then stop when expected accuracy no longer pays for cost and
-latency. Synthetic, not measured.</figcaption>
+<figcaption>Illustrative adaptive budget policy. The difficulty slider changes
+the synthetic quality curve and its cost-aware stopping point. The values are
+not measurements or a universal scaling law.</figcaption>
 </figure>
 
-The operational response is to treat reasoning tokens as metered, routable work.
-Give each task class a default effort, the knob that providers now expose directly
-as reasoning-effort levels and thinking budgets, and estimate difficulty before
-committing the full budget. The knob is a ceiling, not a purchase: under adaptive
-effort controls the model self-regulates and may spend few or no reasoning tokens
-at a high setting on an easy input, so the observed reasoning tokens, not the
-configured level, are the spend to meter. The setting may also not be yours,
-because harnesses ship silent effort defaults of their own, so check what the
-layer above your call is sending. Stop early once the verifier is confident, and cap sequential
-thinking even when the model asks to continue. Suspicious retrieved content
-should run through a cheap filter before it reaches a slow reasoner. And log the
-hidden cost separately from output tokens, so overthinking appears in
-observability rather than only in the cloud invoice. The concise-and-adaptive
-thinking literature collects this as its own design problem: reasoning models
-need to learn when to think less, not only how to think longer [@zhu2025concise].
+Longer computation can also reverse an initially correct answer. A 2026 study
+of R1-32B and s1-32B across AIME 2024/2025, MATH-500, and GPQA Diamond used
+forced budgets from 500 to 16,000 tokens. It found diminishing marginal returns,
+cases where models abandoned previously correct answers, and different useful
+stopping lengths for different difficulty levels [@zhou2026overthinking]. The
+appropriate response is not one universal token cap. It is a validated stopping
+policy with both a hard resource limit and task-specific evidence for
+continuing.
 
-## Building it
+## Account for the work where it is paid
 
-The operational core is small. A parallel scaler is a sampling loop plus a
-selector: draw $k$ completions at a temperature high enough for diversity, then
-either run the verifier and keep a passing one, or take a majority vote, or
-score with a reward model and take the best. The verifier path is the one that
-scales, so the engineering effort goes where @sec-training-to-reason put it,
-into making the checker sound and broad. A sequential scaler is a controlled
-decode: detect when the model tries to stop and decide whether to let it, the
-budget-forcing intervention, suppressing the stop token and injecting a
-continuation cue to extend, or forcing a final answer to cap.
+Generated tokens are convenient to count, but they are not a complete compute
+measure. A useful request-level ledger over $R$ attempts is
 
-```python
-# Parallel scaling: coverage is free, selection is the hard part.
-def best_of_k(prompt, k, select):
-    samples = [model.sample(prompt, temperature=0.8) for _ in range(k)]
-    return select(samples)  # verifier > reward model > majority vote
-```
+$$
+C_{\mathrm{total}}
+=
+\sum_{r=1}^{R}
+\left(
+C_{\mathrm{gen},r}+C_{\mathrm{eval},r}+C_{\mathrm{tools},r}
+\right)
++C_{\mathrm{controller}},
+$$
 
-The failure modes follow from the design. The central one is selecting with an
-imperfect verifier: more samples feed a flawed selector more chances to pick a
-confident wrong answer, the inference-time reward hacking named in the contested
-box, so the curve flattens or dips and the extra compute is wasted. A related
-trap is coverage without a selector, where the right answer is provably in the
-set and the system still returns a wrong one, which looks like a model failure
-but is a selection failure. Then there is sequential over-thinking: budget
-forcing past the useful point can make a model second-guess a correct answer into
-a wrong one, so the forced budget itself has a knee. And the substitution fails
-silently on prompts of zero coverage, where no amount of test-time compute helps
-because no sample is ever correct, and the only fix is upstream in the model.
+where attempt $r$ may be an initial call or retry; its three terms denote
+candidate generation, evaluation, and external tool work; and
+$C_{\mathrm{controller}}$ is routing and orchestration overhead. End-to-end
+latency follows the workflow's critical path rather than the sum of all work:
 
-The selector is where these threads meet.
-Test-time scaling is, first, a capability lever: it turns a frozen model into a
-stronger one on the hard tail without retraining. As an efficiency lever, it
-moves cost off the fixed asset and onto the prompts that earn it, at the serving
-prices set above. And it is a trust hazard, because the entire payoff rides on
-the selector, and one you do not trust converts more compute into more
-confidently wrong answers. The verifier quality that bounded the training loop in
-@sec-training-to-reason bounds the inference loop here too: the same ground
-truth that makes RL safe is what makes test-time scaling pay.
+$$
+L_{\mathrm{e2e}}
+=
+L_{\mathrm{queue}}+L_{\mathrm{prefill}}
++\max_{p\in\mathcal P}\sum_{s\in p}L_s.
+$$
+
+Here $\mathcal P$ is the set of dependency paths through generation,
+evaluation, and tool stages; $s$ is one stage on path $p$; and $L_s$ is that
+stage's latency. Queueing and prompt prefill precede the longest dependent path.
+Parallel samples can overlap in wall-clock time only when spare concurrency
+exists. Under a fixed hardware budget they may increase queueing, reduce
+batching efficiency, or delay other users even while one request finishes
+sooner.
+
+Comparisons should therefore match the resource that matters. Equal output
+tokens do not imply equal floating-point operations when model sizes differ.
+Equal floating-point operations do not imply equal latency when one strategy is
+serial and another uses wide concurrency. Equal latency does not imply equal
+fleet cost. Report generated and evaluated tokens, model and verifier calls,
+tool executions, peak concurrency, accelerator time, and latency percentiles
+alongside task quality.
+
+## Operating an inference policy
+
+A defensible deployment makes the controller observable and testable:
+
+1. **Define utility before routing.** Specify task success, acceptable
+   abstention, escalation outcomes, cost, and latency limits for each request
+   class.
+2. **Measure complete curves.** On held-out prompt families, sweep candidate
+   count, revision depth, model choice, and evaluation effort. Record quality,
+   total work, tail latency, and variance rather than one preferred setting.
+3. **Compare matched strategies.** Give parallel sampling, sequential revision,
+   stronger-model escalation, and tool use the same cost or latency envelope.
+4. **Audit selectors under search.** Measure false accepts, false rejects,
+   calibration, and performance as the candidate pool grows. Include adversarial
+   candidates selected to expose scorer weaknesses.
+5. **Use explicit stop reasons.** Log exact-check success, stable agreement,
+   budget exhaustion, low expected marginal value, timeout, and escalation as
+   distinct outcomes.
+6. **Meter every component.** Store generation, evaluation, tool, retry, and
+   queueing costs per request, together with the controller version and model
+   checkpoints.
+7. **Protect the budget boundary.** Apply hard caps and rate limits even when an
+   adaptive model requests more work. Treat retrieved or user-supplied content
+   as untrusted input to the controller.
+
+The last control is a security requirement as well as a cost control. The
+OverThink study inserted decoy reasoning problems into content used by
+retrieval-augmented systems. Across its evaluated models, it reported slowdowns
+up to 18 times on FreshQA and 46 times on SQuAD while preserving contextually
+correct answers [@kumar2025overthink]. Output-only monitoring would miss that
+failure. Reasoning work, tool calls, and wall-clock occupancy need their own
+alerts and quotas.
+
+::: {.callout-important}
+## What's contested
+
+An improved result after more inference work does not identify a single causal
+mechanism. The system may have searched a fixed distribution more thoroughly,
+changed the proposal through revision, imported new information from a tool, or
+benefited from a selector that corrected an earlier error. Conversely, failure
+to find a correct answer in a finite sample does not establish that the model
+assigns it zero probability. Claims that a model “learned to reason at test
+time” should be replaced by measurements of the proposal, controller,
+evaluator, budget, and returned-answer quality. Whether empirical scaling curves
+continue beyond the measured range remains an experimental question for each
+combination of those components.
+:::
+
+::: {.callout-tip}
+## Constraint arrow
+
+Inference-time scaling turns the reasoning methods in this part into a serving
+workload. @sec-memory-scheduling determines how many parallel candidates fit in
+memory, @sec-faster-decoding sets the price of each generated token, and
+@sec-serving-problem determines whether extra concurrency reduces latency or
+only creates a queue elsewhere. The verifier boundary from
+@sec-verifiers-process-supervision remains equally important: more search
+amplifies whatever acceptance rule the system actually implements.
+:::
+
+## Payoff and boundary
+
+Inference-time compute can turn a frozen model into a stronger system for some
+prompts. Its value comes from a complete policy: create alternatives, gather
+evidence, choose or revise an answer, and stop before the marginal benefit falls
+below the resource cost. Extra candidates without selection buy coverage, not a
+returned answer. Extra revisions without a validated improvement signal add
+work; they do not establish reliable correction. A scaling claim is
+operationally meaningful only when it reports
+quality together with generation, evaluation, tools, latency, and the limits of
+the measured regime.
 
 ## Further reading
 
