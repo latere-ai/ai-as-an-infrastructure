@@ -1,501 +1,445 @@
 # The Harness {#sec-the-harness}
 
-The harness is the runtime around the model: the layer that turns model
-output into tool calls and tool results back into model input, manages the
-context window, routes tools, sandboxes execution, and exposes the verbs that
-let a person pause, redirect, fork, or kill a running loop. A loop that looks
-trivial as a flowchart needs this machinery as soon as it meets production, and
-the shape of that machinery can move an evaluation score as much as a model swap
-does.
+A model can suggest the next action. It cannot, by itself, turn that suggestion
+into bounded, observable work. The harness is the runtime around the model that
+does so. It assembles model input, records progress, dispatches tools, waits for
+approval, enforces limits, and gives a person reliable ways to pause or stop a
+run.
 
-![Schematic of harness choices by runtime cost and isolation strength. Stronger sandboxes cost more, but they bound the damage when generated actions touch real systems. Idealized placement, not measured data.](/figures/the-harness-1.svg){#fig-the-harness-1}
+This distinction is the chapter's foundation: **the model proposes; the harness
+sequences and records; policy and identity systems decide authority; tools and
+external systems own effects**. The harness enforces a decision, but it does not
+grant authority. It coordinates attempts, but it does not make external effects
+exactly once. Those boundaries keep a convenient agent loop from being mistaken
+for a transaction manager or a security principal.
 
-## A loop that refuses to stay simple
+## The runtime contract
 
-The contract is small. Create a session bound to an agent definition. Drive
-its loop: send context to the model, dispatch the tool calls it returns, append
-the results, repeat until done or interrupted. Resume after a crash or a wait.
-Interrupt mid-flight. Fork at a checkpoint. Drawn as a flowchart the loop is a
-box and an arrow back to itself.
+At its smallest, a harness repeats three operations: ask a model, execute an
+accepted tool call, and append the result. A production runtime also has to
+answer questions the loop leaves open:
 
-It stops being trivial the moment it meets production. A tool that holds a
-connection across turns leaves the loop no longer stateless between steps. As
-the context window fills, something has to decide what to forget. A user hits
-cancel while a sandbox command is mid-execution, and now the loop must stop
-work it does not directly control. The sharpest case is two replicas that both
-think they own the same scheduled tick, where the loop has to coordinate with a
-copy of itself it cannot see. The harness is where these frictions are absorbed
-or leaked. It
-owns mechanism, not policy: it does not decide who may call (identity,
-@sec-security-authorization), where the model comes from (model access), or
-which actions require a human (oversight, @sec-oversight-control). It decides
-how those decisions are carried out, and the most consequential mechanism it
-owns is the ability to stop the loop.
+| Concern | Contract the harness must expose |
+|---|---|
+| Identity | Which user, tenant, agent definition, and run produced this step? |
+| State | What was durably accepted, and which work is still outstanding? |
+| Authority | Which policy and approval authorize this exact action now? |
+| Effects | Was an external operation committed, rejected, duplicated, or left with an unknown outcome? |
+| Control | Where do pause, steer, cancel, kill, and fork take effect? |
+| Limits | What time, cost, calls, bytes, mutations, and concurrency remain? |
+| Recovery | What may be replayed, and what must first be reconciled? |
 
-The loop drawn bare is one box and a back-edge. What @fig-harness-loop adds is
-where each of those production frictions bites the loop, which is the whole
-argument in one picture: four unrelated-sounding problems land
-at four distinct points on a structure that looked like it had none.
+A useful formalization is a versioned transition function:
+
+$$
+(S_{t+1}, C_t) = \delta_v(S_t, e_t).
+$$
+
+Here, `e_t` is an accepted event: a user command, model result, tool result,
+approval decision, timer, or recovery observation. `C_t` is the set of commands
+the transition emits. The state `S_t = (r, h, w, m, p, k, b, q)` contains:
+
+- `r`: run identity, status, and agent-definition version;
+- `h`: the durable history head;
+- `w`: the workspace or sandbox reference;
+- `m`: the application-memory view and its version;
+- `p`: the principal, policy snapshot, and approval records;
+- `k`: the admitted tool-catalog version;
+- `b`: remaining and reserved budgets; and
+- `q`: outstanding work, attempts, leases, and unresolved effects.
+
+The reducer is versioned because recovery must interpret old history with the
+same semantics that produced it. It should be deterministic over accepted
+events even when model and tool outputs are not. Four invariants follow:
+
+1. A terminal run emits no new commands.
+2. Every effect command records its actor, scope, approval, stable step ID,
+   attempt number, idempotency key, and input fingerprint.
+3. Budgets never increase except through an explicit, authorized grant.
+4. One completion is accepted for an attempt lineage; late or duplicate results
+   are retained as evidence but cannot silently advance state twice.
+
+This event history is the source for restart and audit. A checkpoint is an
+optimization, not a second truth: it records a verified history position plus
+the versions, pending operation IDs, deadlines, workspace references, and known
+effect outcomes needed to continue.
+
+## Runs are state machines, not recursive functions
+
+The states below are deliberately explicit. A client that receives `paused` or
+`waiting for approval` should not have to infer that condition from missing
+tokens on a stream. Likewise, **needs reconciliation** is a visible state, not a
+generic failure that invites a blind retry.
+
+| State | Meaning |
+|---|---|
+| `created` | Identity, definition, and initial budgets have been recorded. |
+| `ready` | Admission succeeded; no child operation is active. |
+| `running` | The reducer is processing an accepted event. |
+| `waiting_model` | Waiting for model; the UI can display “waiting for model.” |
+| `waiting_tool` | Waiting for tool; the exact call and deadline are visible. |
+| `waiting_approval` | Waiting for approval before dispatching an effect. |
+| `paused` | No new work is scheduled; resumable state remains durable. |
+| `cancelling` | Cancellation was accepted and active children are being stopped. |
+| `completed` / `failed` | Terminal success or terminal known failure. |
+| `needs_reconciliation` | An external outcome is unknown or inconsistent. |
 
 ```{dot}
-//| label: fig-harness-loop
-//| fig-cap: "The agent loop with the four production frictions mapped to where each one bites. The bare loop is the solid cycle; the dashed callouts are the points where reality breaks the abstraction."
+//| label: fig-harness-state-machine
+//| fig-cap: "A harness state machine. Waits and reconciliation are visible states, not gaps in an output stream."
 digraph {
     bgcolor="transparent";
     rankdir=TB;
-    nodesep=0.4; ranksep=0.5;
-    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-    edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+    size="4.6,5.2";
+    nodesep=0.24;
+    ranksep=0.32;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#374151", fillcolor="#f1ece1"];
+    edge [fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280"];
 
-    CTX [label="Send context to model"];
-    CALL [label="Model returns tool calls"];
-    DISP [label="Dispatch tool calls"];
-    APP [label="Append results to context"];
-    END [label="Return to caller"];
+    C [label="created"];
+    R [label="ready"];
+    X [label="running"];
+    M [label="waiting\nfor model"];
+    T [label="waiting\nfor tool"];
+    A [label="waiting\nfor approval"];
+    P [label="paused"];
+    K [label="cancelling"];
+    Q [label="needs\nreconciliation", fillcolor="#f2d6a2"];
+    D [label="completed / failed", fillcolor="#cfe8cf"];
 
-    CTX -> CALL;
-    CALL -> DISP;
-    DISP -> APP;
-    APP -> CTX [label="not done"];
-    APP -> END [label="done"];
-
-    F1 [label="Tool holds a connection across turns: loop is no longer stateless between steps", fillcolor="#f2c2c2"];
-    F2 [label="Context window fills: loop must decide what to forget", fillcolor="#f2c2c2"];
-    F3 [label="User cancels mid-execution: loop must stop work it does not directly control", fillcolor="#f2c2c2"];
-    F4 [label="Two replicas own one scheduled tick: loop must coordinate with a copy it cannot see", fillcolor="#f2c2c2"];
-
-    F1 -> DISP [style=dashed];
-    F2 -> APP [style=dashed];
-    F3 -> DISP [style=dashed];
-    F4 -> CTX [style=dashed];
+    C -> R -> X;
+    X -> M -> X;
+    X -> T -> X;
+    X -> A -> X;
+    X -> P -> X;
+    X -> K -> D;
+    T -> Q;
+    Q -> X [label="resolved"];
+    X -> D;
 }
 ```
 
-The six mechanisms that follow absorb those frictions. Each began as a simple
-version, broke at a specific point under load, and acquired exactly the machinery
-that point demanded. Read in order, the six are the harness: where an instance
-comes from, how a cancel reaches the work, who is allowed to run, what the lock
-actually protects, what survives a full context window, and how the model learns
-a tool exists. Each carries the lineage that produced it, the knee where its
-trade-off bites, and the operational hardening that lets the loop survive a long
-night unattended.
+The transition journal must be committed before a command is delivered. That
+ordering prevents a worker crash from erasing the reason a tool was called.
+It cannot remove the classic uncertainty window: an external system may commit
+a write just before the worker crashes and records its receipt. Recovery must
+therefore understand effects, not merely replay functions.
 
-## Where an instance comes from
+## Pin definitions; adapt protocols explicitly
 
-The first decision is when an agent definition, a prompt plus a tool set plus a
-model binding, becomes a live instance. The obvious starting point is a
-singleton: one runner shared across every session, isolated only by a
-`session_id`, zero allocation per request. The hidden cost is not performance,
-it is rollout granularity. With a singleton, the prompt is a deploy-time
-constant, so a bad prompt regresses 100% of sessions until rollback completes.
-OpenAI's GPT-4o sycophancy episode is the shape of this: the update rolled out
-April 25, 2025, rollback began April 28, and the full revert took roughly a
-day [@openai2025sycophancy]. A runtime registry resolves a prompt version per
-request instead, which lets a regression touch a canary slice while the stable
-version keeps serving everyone else. The blast radius now equals the canary,
-not the fleet. The cost is a resolution hop, a cross-replica consistency story,
-and a new variable in every incident.
+Instance lifetime and definition versioning are independent choices. A shared
+runner can resolve immutable configuration per run; a freshly allocated runner
+can still load an unversioned prompt. Pin each run to an agent-definition
+version containing its instructions, model route, tool schemas, policy
+references, and harness reducer version. Record that version in every
+checkpoint. A rollout policy then routes *new* runs to a canary or stable
+definition and states whether existing runs remain pinned, migrate at a safe
+boundary, or stop.
 
-The knee is when this stops being optional. A singleton is fine at one or two
-agent types and starts hurting past three or four, when a prompt regression in
-one agent forces a rollback that reverts an unrelated fix in another because
-they shared a deploy. That shared-deploy incident is the moment versioning
-stops being a nicety, because the cost of not having it has become a regression
-in code nobody touched.
+Provider protocols are not interchangeable. A compatibility adapter should
+publish a feature matrix for tool calls, structured output, streaming,
+cancellation, usage data, continuation identifiers, and error semantics. When a
+feature cannot be represented, fail explicitly or declare the downgrade. Do
+not silently interpret “request accepted” as feature parity. Pin adapter and
+provider versions alongside the agent definition so an evaluation or incident
+can reproduce the actual path.
 
-The prompt is the volatile leg of the definition; the model binding is the
-rigid one. A harness does not speak to models in the abstract, it speaks one
-provider's wire dialect: Claude Code speaks the Anthropic Messages API, Codex
-speaks the OpenAI Responses API, and open-weights models are served almost
-exclusively behind the OpenAI Chat Completions shape. Pairing a harness with a
-foreign model therefore takes a translation gateway that maps requests through
-a neutral intermediate representation, and because the dialects are not
-isomorphic the mapping can drop fields; a good gateway surfaces the loss
-explicitly, naming the dropped fields in a response header, where a bad one
-degrades silently. Some routes do not exist at all: OpenAI's reasoning models
-(the o-series and the gpt-5.x reasoning tiers) reject function tools combined
-with a reasoning-effort setting on Chat Completions, so a tool-using harness
-can drive them only through the Responses API. Swapping the model in an agent
-definition is a wire-protocol decision, not a string edit.
+## Control verbs have different meanings
 
-## How a cancel reaches the work
+Pause, resume, steer, cancel, kill, and fork are separate capabilities, not
+strength levels of one interrupt:
 
-Cancellation is exactly as effective as its most-blind hop. The harness can see
-an interrupt flag instantly, but the flag has to travel down every layer that
-might be mid-execution: the model call has to honor its context deadline, the
-tool dispatch layer has to propagate cancellation into the tool, the sandbox
-command has to respect SIGTERM, and a stateful protocol call has to respect
-RPC-level cancellation. A model call that ignores its deadline holds the session
-for tens of seconds past cancel. A sandbox command that ignores SIGTERM holds
-it for the full grace period. So "the runtime supports cancellation" is a claim
-about every hop in the cascade, and a single uncooperative layer makes the
-cancel cosmetic. This is why interruption is a primitive and not a feature: the
-pause a human-in-the-loop approval depends on is threaded through every hop, or
-it does not actually stop anything. The decision about what requires approval belongs to oversight;
-the pause that lets the approval happen is the runtime's verb, and frameworks
-that expose it as a first-class interrupt make that pause inspectable rather
-than implicit [@langchain2025interrupts].
-@fig-harness-cancel-cascade traces the cascade and the latency each uncooperative
-hop adds, so the claim that cancel is only as real as its most-blind hop becomes
-a property of the chain rather than an assertion.
+- **Pause** stops scheduling at a documented safe point. Active calls either
+  finish, are cancelled, or remain listed as unresolved.
+- **Resume** continues a paused state under compatible definition and policy
+  versions. If those changed, migration is an explicit transition.
+- **Steer** appends a user command to durable history. The contract says whether
+  it applies before the next model call or after current work finishes.
+- **Cancel** records `cancel_requested`, rejects new work, and fans the request
+  out to active children. Cooperative code must observe it; an RPC cancellation
+  alone does not interrupt arbitrary server code [@grpc2024cancellation].
+- **Kill** forcefully terminates harness-owned execution, such as a process
+  group or sandbox. It is an escalation path, not a rollback mechanism.
+- **Fork** creates a new run namespace from a checkpoint, with isolated mutable
+  state and a new idempotency scope. Already committed external effects remain
+  shared reality.
 
-```{dot}
-//| label: fig-harness-cancel-cascade
-//| fig-cap: "The cancellation cascade. The interrupt flag is instant, but the cancel is only effective once every downstream hop honors it. One uncooperative hop bounds the whole result, so the dangling delays mark where a cancel goes cosmetic."
-digraph {
-    bgcolor="transparent";
-    rankdir=TB;
-    nodesep=0.4; ranksep=0.5;
-    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-    edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+Cancellation has two useful milestones. It is **acknowledged** when the request
+is durable and no new commands will be scheduled. It is **quiescent** when all
+harness-owned children have stopped or been marked unresolved. Remote work can
+continue after the harness stops waiting, and cancellation cannot undo a
+committed external effect. The runtime must reconcile, compensate, or ask an
+operator what to do with an unknown outcome. Temporal makes the same practical
+distinction between graceful cancellation and forceful termination, and notes
+that a remote activity needs cooperative heartbeats to receive cancellation
+[@temporal2026cancellation].
 
-    FLAG [label="Harness sets interrupt flag: instant"];
-    MODEL [label="Model call honors context deadline"];
-    TOOL [label="Tool dispatch propagates cancellation"];
-    SBX [label="Sandbox command respects SIGTERM"];
-    RPC [label="Stateful protocol call respects RPC cancellation"];
+An approval is another interruption, but it carries an integrity requirement.
+Show the approver the exact tool, target, arguments or diff, acting identity,
+expected effect, and cost. Bind the decision to a unique call ID and immutable
+payload hash; make it scoped, expiring, and single-use. Re-run authorization and
+input guardrails immediately before dispatch. If the payload or relevant policy
+changed while paused, require a new decision. Serializable pause-and-resume
+approval flows demonstrate the mechanism, including approvals raised by nested
+agents [@openai2026hitl]. They do not replace execution authorization.
 
-    FLAG -> MODEL;
-    MODEL -> TOOL;
-    TOOL -> SBX;
-    SBX -> RPC;
+## Durable work, duplicate delivery, and external effects
 
-    D1 [label="Cosmetic cancel", fillcolor="#f2c2c2"];
-    D2 [label="Cosmetic cancel", fillcolor="#f2c2c2"];
+A resumable harness persists durable history independently of prompt context.
+Workers consume commands from a queue, claim them with a bounded lease, and
+write results against a stable step ID and attempt number. A lease limits
+concurrent ownership; it does not prove the previous owner stopped. For a
+correctness-critical resource, attach a monotonically increasing fencing token
+and require every write path to reject stale tokens. Without receiver-side
+validation, the token is only metadata.
 
-    MODEL -> D1 [style=dashed, label="ignored: holds session tens of seconds"];
-    SBX -> D2 [style=dashed, label="ignored: holds for full grace period"];
+Scheduling uses the same model. Give each occurrence a stable identity such as
+`(schedule_id, scheduled_at)` and claim it through a durable unique record.
+Duplicate delivery and execution are still possible. Kubernetes documents that
+even a single-completion Job may start the same program twice
+[@kubernetes2026jobs]. A scheduler lease prevents overlap while it remains
+valid; it does not provide exactly-once effects.
+
+Effect safety depends on the receiver:
+
+| Operation | Retry rule |
+|---|---|
+| Read-only or proven idempotent | Bounded exponential backoff with jitter. |
+| Receiver-keyed write | Reuse the same idempotency key; reject a different input fingerprint for that key. |
+| Write with unknown outcome | Query status and reconcile before retry; compensate or require review if status is unavailable. |
+| Authentication, authorization, validation, or business-rule failure | Normally non-retryable; surface it. |
+
+Persist the error class, next-attempt time, absolute deadline, and retry budget
+so a restart cannot reset the policy. Automatic retries are useful precisely
+because operations can fail transiently, but an activity may execute more than
+once and should be designed accordingly [@temporal2026retry].
+
+Locks also belong at the resource they protect. A session lock serializes one
+conversation; it cannot protect a branch, customer account, or deployment
+touched by another run. Use resource-level concurrency through conditional
+writes, database constraints, protected branches, merge queues, or a lock keyed
+to the actual resource. A Git worktree separates local files; it does not
+serialize remote pushes or turn Git into a transaction.
+
+## A tool is a typed, authorized effect boundary
+
+A name and JSON input schema are not enough. The harness needs a contract that
+can drive admission, approval, execution, retry, and result handling:
+
+```text
+ToolSpec {
+  name, input_schema, output_schema, side_effect_class,
+  auth_scopes, approval_rule, timeout, retry_class,
+  idempotency, max_output_bytes, sandbox_profile
+}
+
+ToolResult {
+  status, payload | artifact_ref, receipt,
+  error_class, observed_at
 }
 ```
 
-Try setting `obeys` to `False` for one hop and watch the time-to-stop jump to that hop's grace period: the cancel is only as fast as its most-blind layer.
+Four gates must remain separate:
 
-:::: {.runnable}
-```python
-# Each hop either obeys the interrupt fast, or ignores it and only
-# stops when its own grace period expires. Time-to-stop is the slowest hop.
-hops = [
-    {"name": "model call",   "obeys": True,  "grace_s": 30.0},
-    {"name": "tool dispatch","obeys": True,  "grace_s": 5.0},
-    {"name": "sandbox cmd",   "obeys": False, "grace_s": 10.0},  # ignores SIGTERM
-    {"name": "RPC call",      "obeys": True,  "grace_s": 8.0},
-]
-flag_latency = 0.01  # harness sets the interrupt flag almost instantly
-stop_times = [flag_latency if h["obeys"] else h["grace_s"] for h in hops]
-for h, t in zip(hops, stop_times):
-    print(f"{h['name']:14s} stops after {t:6.2f}s")
-print(f"\ntime-to-stop = max = {max(stop_times):.2f}s "
-      f"(bounded by the most-blind hop)")
-```
-::::
+1. **Catalog admission** decides whether a tool definition and implementation
+   are trusted enough to register.
+2. **Per-turn exposure** selects the smallest relevant candidate set for the
+   model. Retrieval improves selection; it never grants permission.
+3. **Execution authorization** checks the current principal, tenant, action,
+   resource, arguments, policy, and bound approval immediately before dispatch.
+4. **Result handling** validates structure, caps inline size, stores large
+   outputs as artifacts, records receipts, and treats returned text as
+   untrusted data.
 
-The verb has four shapes, and the quality of human control is bounded by which
-one the harness offers. Hard cancel is `kill(session)` with no state
-preservation, simple and brutal, making every correction a context-losing
-event. Cooperative pause checks an interrupt flag at step boundaries and
-serializes state. Queued steering appends user input to the next turn without
-pausing, fast but able to commit a stale decision before it sees the message.
-Resume-at-point combines steering with a rewind. The pause that an approval
-depends on is exactly as good as the strongest of these the runtime implements,
-and no better.
+Tool names, descriptions, schemas, and results are all untrusted model input.
+Signing and review reduce tool poisoning, while authorization still applies to
+every concrete call, including calls made by a child agent. MCP similarly
+defines tools with input and optional output schemas, asks clients to validate
+results, and recommends keeping a human able to deny sensitive invocations
+[@mcp2025tools]. Its authorization guidance also forbids passing arbitrary
+tokens through to downstream servers and requires tokens to be bound to their
+intended resource [@mcp2025security; @campbell2020resource].
 
-## Who is allowed to run
+No universal tool-count threshold determines when a flat catalog fails. Measure
+selection quality with the actual model, schemas, and task distribution. When
+the catalog grows, retrieval, namespacing, or model-driven discovery can reduce
+per-turn exposure, but each adds a failure mode: missing the required tool,
+surfacing a dangerous irrelevant tool, or spending additional calls on
+discovery.
 
-When the loop runs on a schedule, every replica runs its own scheduler, so
-without coordination every replica fires every tick. The usual fix is an
-agent-level distributed lock acquired before the run. It prevents two replicas
-from firing the same tick concurrently. It does not make the tick's side
-effects exactly-once. If a tick posts to Slack, opens a ticket, then crashes
-before recording "done," recovery replays it and the Slack message posts twice.
-The lock coordinates who runs; exactly-once requires coordinating what already
-happened to the outside world. Idempotency keys at the side-effect call sites
-close that gap, and they are a different guarantee that a scheduler with only a
-lock does not have.
+## Stateful tools: separate three kinds of state
 
-A lock prevents overlap, not duplication, and there is a second, sharper way the
-altitude is wrong. A harness almost always has session-level locking, which
-stops two `Run()` calls from mutating one session at once. It says nothing about
-two different sessions of the same agent touching the same external resource.
-Two coding sessions push conflicting commits to one branch. A user session and
-a scheduled tick target the same external state, neither aware of the other. The
-lock is in the harness; the conflict is at the resource, and the harness lock
-does not reach it. @fig-harness-lock-altitude shows the mismatch directly.
+“Stateful tool” hides three different responsibilities:
 
-```{dot}
-//| label: fig-harness-lock-altitude
-//| fig-cap: "Session-level locking is the wrong altitude for a resource conflict. Each session is individually locked, yet two sessions of the same agent collide at a shared external resource the harness lock never reaches."
-digraph {
-    bgcolor="transparent";
-    rankdir=TB;
-    nodesep=0.4; ranksep=0.5;
-    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-    edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+- **Connection state** includes transport sessions, negotiated capabilities,
+  cursors, and backpressure.
+- **Durable resource state** lives in the external system: a file, ticket,
+  transaction, or remote job.
+- **Model-visible state** is an explicit handle or summary passed in later
+  turns.
 
-    A [label="Agent: acme-api"];
-    S1 [label="Session 1", fillcolor="#bfe3c0"];
-    S2 [label="Session 2", fillcolor="#bfe3c0"];
-    S3 [label="Scheduled tick", fillcolor="#bfe3c0"];
-    GIT [label="git repo: acme/api", fillcolor="#f2c2c2"];
-    JIRA [label="Jira: ACME project", fillcolor="#f2c2c2"];
+Recovery should reconnect, rediscover capabilities, and resume from a cursor or
+explicit handle when the protocol supports it. Otherwise it starts a new
+connection without pretending that durable resource state vanished. Protocols
+can change these mechanics; MCP, for example, has revised transports and
+authorization across dated specification versions [@mcp2025transports;
+@mcp2025changelog]. Pin the version and design to its declared guarantees, not
+to a story that every connection is a durable session.
 
-    A -> S1;
-    A -> S2;
-    A -> S3;
+## Context is a view, not the record
 
-    S1 -> GIT [label="git push main"];
-    S2 -> GIT [label="git push main"];
-    S3 -> JIRA [label="create ticket"];
-    S1 -> JIRA [label="create ticket"];
-}
-```
+The canonical history contains accepted commands, model and tool results,
+approval decisions, receipts, source links, and unresolved obligations. The
+working context is a lossy projection of that history:
 
-Every session in green is individually locked; every shared resource in red is
-unlocked. The fix lives at the resource: a worktree per session that moves the
-conflict to a merge, or a resource-level lock keyed on the named resource, or
-optimistic reconciliation on the external system. The collision is not
-hypothetical; merge conflicts in coding-agent pull requests are now frequent
-enough to form a labeled dataset [@ogenrwot2026agenticflict]. The right choice
-depends on whether the downstream system already has its own concurrency control
-to lean on. Git ref updates and database row locks are real coordination
-primitives; where they exist the harness can defer to them.
+$$
+K_t = P(H_{\le t}, B_t, T_t),
+$$
 
-The scheduler itself climbs the same pressure curve. In-process and
-external-cron schedulers give way to durable execution frameworks (Temporal,
-Inngest, Restate) once a tick needs multi-step choreography with external side
-effects, because probabilistic model behavior makes naive retry insufficient,
-which is exactly the case durable journaling is built for. Whether to keep the
-session persistent or ephemeral across ticks is a parallel choice with its own
-knee. A persistent session accumulates context, so a monitoring agent remembers
-last week's baseline, but events grow without bound, which makes context
-management mandatory. An ephemeral session is fresh per tick and correct when
-each tick is independent. Persistent for a stateless job buys unbounded storage
-for nothing; ephemeral for a job that needs memory throws the memory away every
-tick.
+where `P` selects material from canonical history `H`, within context budget
+`B`, for current task state `T`. Prompt context, durable execution history, and
+the personalization memory of @sec-personalization are different stores.
 
-## What survives a full window
+Compaction can summarize old turns. Masking can replace bulky observations with
+typed placeholders. Large outputs can become an artifact reference. Retrieval
+can restore evidence for the next decision. Every option loses something, so
+the projection should report what it omitted and preserve links back to source
+events. Compacting working context does not delete canonical evidence. In
+particular, it must preserve active constraints, pending approvals, incomplete
+plans, effect receipts, failures, and the provenance of any summary.
 
-A long-running loop hits the context window, and the harness has to answer two
-questions that do not answer themselves: what gets preserved, and who decides.
-Automatic compaction summarizes older turns so the session runs past the hard
-limit, and its failure mode is structural: summarization discards detail and the
-agent has no signal about what it lost. Anthropic's cookbook measured compaction
-preserving three of three high-level facts and zero of three obscure
-specifics [@anthropic2026context]. The alternative is externalization, where the
-agent writes what it wants to keep to a file (`progress.md`, `plan.md`) and
-reloads after compaction. That trades the summary's blindness for the agent's
-blindness about its own future needs. Neither is mechanical, which is the
-subject of the contested box below.
+Longer context does not remove this design problem. Controlled studies find
+that performance can degrade with input length even when retrieval is correct
+[@du2025context], while simple observation masking can rival more elaborate
+summarization in software-agent settings [@lindenbauer2025complexity]. The
+choice is empirical and task-specific.
 
-"Just use a bigger window" is the tempting third option, and it relocates the
-failure rather than removing it. A larger context window reduces compaction
-frequency but does not remove the degradation: accuracy drops as input length
-grows even with perfect retrieval [@du2025context], and the same rot shows up
-across realistic retrieval settings [@hong2025contextrot]. "Fit everything in"
-moves the failure from "context overflowed" to "context is full and the model
-is quietly worse."
+## A sandbox has several independent walls
 
-::: {.callout-important}
-## What's contested
-Whether long-session context management can be made mechanical is unsettled,
-and the evidence says it cannot yet. Lindenbauer et al. showed that simply
-masking old tool outputs with placeholders matches LLM summarization on solve
-rate at the lowest cost in four of five settings, and that summaries cause
-trajectory elongation: agents persist 13 to 15% longer than optimal because the
-summary masks the failure signals that would have told them to
-stop [@lindenbauer2025complexity]. Compaction work that does help, such as
-learned context compaction for long-horizon tasks [@acon2025context], still
-leaves the core question open. Bigger windows do not settle it either, since
-accuracy degrades with length even under minimal conditions and perfect
-retrieval [@du2025context]. Long-session quality rests on three things the
-runtime cannot guarantee mechanically: the model writing a good summary when
-asked, the model interpreting that summary on reload, and the runtime enforcing
-an externalization pattern rather than hoping the agent maintains one. The
-runtime can fire compaction at the right moment and reload the right file. It
-cannot make the summary true.
-:::
+“Runs in a container” is not an isolation contract. Specify each dimension:
 
-## How the model learns a tool exists
+| Dimension | Minimum question |
+|---|---|
+| Process | Can code signal, inspect, or escape into host or sibling processes? |
+| Filesystem | Which paths are mounted, writable, persistent, and shared? |
+| Network | Is egress default-deny, and which destinations and protocols are allowed? |
+| Credentials | Are long-lived secrets absent and capabilities issued only for a checked action? |
+| Resource limits | What CPU, memory, PIDs, disk, output, and network ceilings apply? |
+| Lifetime | What survives pause, restart, cancellation, kill, expiry, and deletion? |
 
-Dispatch is how a tool runs; the registry is how the model learns the tool
-exists. A static flat list sends every tool in every system prompt and runs out
-at roughly 30 to 50 tools, because function-calling accuracy falls as the
-catalog grows and robustness suffers specifically when irrelevant tools are
-present [@yan2025bfcl]. Beyond that the runtime needs per-turn selection. The
-security-flavored failure is the sharpest: a malicious tool description at the
-catalog layer can inject instructions into the model through the system prompt,
-bypassing the user prompt entirely (Invariant Labs' mcp-injection-experiments).
-The registry is not a neutral lookup table, which is why catalog admission is a
-trust decision handed to @sec-security-authorization. What the registry admits
-to the catalog, it admits to the model's instructions.
+A worktree is not a security boundary. It reduces file collisions between
+coding runs, but it does not isolate the kernel, processes, network, host
+credentials, or a container-runtime socket. Untrusted execution needs a
+sandbox appropriate to the threat model, such as a hardened container,
+user-space kernel, or microVM, plus non-root execution, restricted mounts,
+dropped privileges, system-call policy, and default-deny egress
+[@nist2017containers].
 
-Selection evolved as a ladder, each rung raising the catalog ceiling and adding
-a cost the runtime must then own. The static flat list gave way to dynamic
-tool-RAG, which retrieves only the tools relevant to each turn (embedding their
-schemas and fetching the top-k matches), scaling to thousands of tools at the
-cost of a retrieval layer with its own error modes. Hierarchical namespacing with mount and unmount shows a pruned
-subset per phase, read-only tools while understanding a problem and write tools
-while fixing it, which requires the runtime to track phase. Model-driven
-discovery gives the model a `list_available_tools` tool and lets it ask, which
-raises the ceiling but makes discovery quality a function of model capability
-the runtime does not own. @fig-harness-tool-ladder lays the four rungs against
-the scaling ceiling each one buys and the cost it adds.
+Do not mount long-lived secrets. A broker can issue short-lived, narrowly
+scoped, audience- and resource-bound credentials after validating the exact
+action. The broker must also redact logs and support rotation and revocation.
+These controls reduce credential theft and blast radius; they do not make an
+authorized action safe. Killing a local sandbox likewise does not revoke an
+external effect already committed under its credential.
 
-```{dot}
-//| label: fig-harness-tool-ladder
-//| fig-cap: "The tool-selection ladder. Each rung raises the catalog ceiling and adds a cost the runtime must then own, from a static prompt list to model-driven discovery."
-digraph tool_ladder {
-    rankdir=TB;
-    bgcolor="transparent";
-    node [shape=box, style=rounded, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-    edge [color="#6b7280", fontcolor="#6b7280"];
+## Budgets and admission must compose
 
-    R1 [label="Static flat list\nceiling 30 to 50 tools\nirrelevant tools hurt accuracy"];
-    R2 [label="Dynamic tool-RAG\nscales to thousands\ncost: a retrieval layer with its own errors"];
-    R3 [label="Hierarchical namespacing\nmount and unmount per phase\ncost: runtime must track phase"];
-    R4 [label="Model-driven discovery\nmodel calls list_available_tools\ncost: quality follows model capability"];
+Limits are a ledger, not warning counters. Before starting a model or tool call,
+reserve its worst allowed consumption; after completion, reconcile the actual
+usage and release the remainder. Reject work that cannot be reserved. Enforce
+independent ceilings for wall-clock and idle time, model calls, input and output
+tokens, money, tool calls, external mutations, bytes, child runs, concurrent
+operations, and sandbox resources.
 
-    R1 -> R2 -> R3 -> R4 [label="  catalog grows"];
-}
-```
+A child receives a sub-budget from its parent, not a fresh allowance. Parent
+and child reservations therefore remain under the same monotone ceiling. Store
+absolute deadlines so a restart cannot grant more wall-clock time, and
+propagate the remaining deadline downstream. A local timeout only bounds how
+long the harness waits; remote work or billing may continue and must be
+cancelled or reconciled separately.
 
-## What a stateful tool drags behind it
+Admission combines identity and policy checks with atomic quota or capacity
+reservation. A preflight capacity query is advisory because capacity can change
+before scheduling. Bounded queues, per-tenant concurrency, priority and
+fairness, startup deadlines, backpressure, and explicit `pending` conditions
+make scarcity visible. Kubernetes resource quotas constrain aggregate namespace
+consumption, while a Pod remains Pending when its request cannot be scheduled
+[@kubernetes2026quotas; @kubernetes2026resources].
 
-Tools fold into the design along a statefulness axis. Stateless tools (a web
-fetch, a sandbox exec given a sandbox ID) hold no harness-side state and scale
-trivially. Stateful-connection tools (MCP, gRPC streams) carry negotiated
-capabilities and cursors in a connection the harness holds for the session, and
-dispatching them through one mechanism shared with stateless calls mishandles
-one class or the other. The hardest variant is a single logical operation that
-mixes both, because its partial-failure space is the product of the two.
+Circuit breakers solve a different problem. They protect callers from a failing
+dependency with closed, open, and probe states. They do not replace run budgets
+and should not classify “exit code zero” as task success. Use structured result
+status, receipts, postcondition checks, and explicit goal verification.
 
-Stateful tool transport is the clearest lineage in the chapter. The simplest
-design holds connections in memory per replica, keyed by
-`(session_id, server_url)`, opened lazily. It works until the platform scales
-horizontally, and then statefulness fights the load balancer: the MCP 2026
-roadmap names stateful sessions as the primary scaling bottleneck
-[@mcp2026roadmap]. The concrete failure is the reconnect storm. When a replica
-holding N sessions, each connected to M servers, dies, recovery is N times M
-simultaneous reconnections against the surviving infrastructure, each
-renegotiating capabilities and losing cursor state. The mechanism dictated the
-mitigation: session affinity to keep a connection on one replica, reconnect
-backoff with jitter to desynchronize the herd, and resumable streams to make
-reconnection cheap. The MCP spec followed this curve directly, deprecating
-HTTP+SSE in favor of Streamable HTTP, where a reconnect replays from a cursor
-using `Mcp-Session-Id` plus `Last-Event-ID` instead of
-restarting [@mcp2025transport; @mcp2025transports]. The spec also hardened a
-related hazard pooling alone does not touch: a client that spends one broadly
-issued access token across every server it is connected to hands any one of
-them a credential that also works against the rest, so the 2025-06-18 spec
-revision requires clients to implement RFC 8707 resource indicators, naming
-the target server in the token request so the authorization server can
-audience-restrict what it
-mints [@campbell2020resource; @mcp2025changelog]. The 2026 spec work carries
-the lineage to its endpoint: the 2026-07-28 release candidate removes the
-protocol-level session entirely, dropping `Mcp-Session-Id` (SEP-2567) and the
-initialize handshake (SEP-2575), so any request can hit any replica and a
-server that needs state across calls mints an explicit handle the model passes
-back as an ordinary argument [@mcp2026rc]. The arc runs from held connections
-to resumable streams to no protocol session at all.
+## Evaluate the harness as a system
 
-Multi-agent composition has a parallel arc, with OpenAI's experimental Swarm
-superseded by the Agents SDK, but composition itself belongs to
-@sec-multi-agent-systems and the harness only owns whether the composed agents
-share or isolate session and sandbox state. That sharing choice is its own
-trade-off with a measured cost. Shared session and sandbox is cheapest and pays
-with races and prompt contamination. Full sandbox isolation is the most plumbing
-and the strongest containment: Geng and Neubig measured worktree isolation at
-59.1% against soft instruction-level isolation at 56.1% on Commit0-Lite, and
-showed soft isolation falling below a single-agent baseline on
-PaperBench [@geng2026asynchronous]. Instruction-level constraints are advisory;
-real isolation does not depend on the model's compliance.
+A harness change is a treatment, not background noise. Compare it under a fixed
+model, task set, tool implementations, policy, sampling configuration, and
+resource envelope. Record the exact agent definition, harness and adapter
+versions, effective request, tool schemas, sandbox profile, and environment.
+Report task quality alongside the mechanisms intended to protect it:
 
-## Hardening for the long night
+- task success and invalid-tool-call rate;
+- tool-selection precision and recall;
+- approval-bypass rate and unauthorized-effect rate;
+- cancellation acknowledgement latency and quiescence latency;
+- post-cancel effect count and duplicate-effect rate;
+- recovery divergence and unresolved-effect rate;
+- context-critical-loss rate after compaction;
+- isolation escape rate; and
+- added latency and added cost against a minimal baseline.
 
-The loop itself is small. The machinery around it is what the rest of this
-chapter has been about, and the last of it concentrates in a handful of
-operational choices that decide whether the loop survives running unattended.
-
-The lock has two gotchas that come straight from the locking literature.
-Redis-based locks need fencing tokens to be safe under network partitions
-(Kleppmann's Redlock critique) [@kleppmann2016distributed]. And with PgBouncer
-transaction pooling, `pg_advisory_lock` releases when the connection returns to
-the pool, so a caller that expects a session-scoped lock must use
-`pg_advisory_xact_lock` or a dedicated session pool, or the lock evaporates
-mid-tick.
-
-A wall-clock timeout on every session, regardless of trigger, is the one limit
-that holds even when token accounting is wrong or lagging, because wall-clock
-time is the quantity the harness can measure locally without trusting a
-downstream meter. The evidence for why it is load-bearing is stark: a Claude Code
-recursion consumed about 1.67 billion tokens in five
-hours [@claudecode2025tokens], and a practitioner postmortem reports a
-LangChain pipeline whose agents, talking over agent-to-agent messaging (A2A,
-@sec-multi-agent-systems), looped for eleven days and produced roughly a
-\$47,000 bill with neither agent carrying a budget ceiling [@waxell2025loop].
-
-Admission control belongs at the harness layer. Session creation that calls the
-Kubernetes API requests a sandbox rather than creating one, and the dangerous
-failure is not refusal but a hang: the pod sits Pending and the stream to the
-client never starts, with no error to surface because nothing errored. Checking
-capacity before promising the client a session turns a slow silent nothing into
-a fast legible "no" the client can retry against.
-
-The remaining controls follow the same mechanical reasoning. Jitter prevents a
-thundering herd when many agents share a schedule. A circuit breaker disables
-an agent after N consecutive failures so it cannot burn tokens indefinitely:
-in the AWS Cost Explorer outage of December 2025, an internal coding agent
-deleted and recreated a production environment; AWS attributed the root cause
-to a misconfigured role, press reporting to the agent acting autonomously, and
-on either reading the permissions were broad and no breaker
-tripped [@singh2025aws; @schuman2026aws]. The breaker's input signal needs the
-same care as its threshold: exit codes under-classify agent runs, because a
-process can exit cleanly having declined the task in prose, or having announced
-a plan and never called a write tool, so a breaker keyed on exit codes counts
-those runs as successes; deciding what actually happened takes reading the
-transcript [@ou2026goalless]. And self-healing at startup replays ticks whose end was
-never recorded, which is safe only because the idempotency keys above absorb the
-replay. Sandboxing itself is thin from the harness's seat: it owns worktree
-isolation for correctness and admission control for capacity, and the sandbox
-primitive owns the rest, including keeping high-value secrets out of the box, by
-scoped-token exchange or egress substitution, so generated code cannot read or
-exfiltrate them (@sec-security-authorization).
-
-The harness matters because it is where the agent loop becomes operable.
-It buys capability by letting the loop run at full speed across stateful tools
-and composed agents. The price of that efficiency is context management and
-admission control, the machinery that keeps a runaway from burning the budget.
-Trust it earns in one place only: human authority over a running agent is
-exactly as real as the runtime's ability to pause it, which is a property
-designed in from the start or done without.
+Then inject failures at the boundaries: crash between external commit and
+journal receipt; deliver a command twice; expire a lease while a worker is
+paused; revoke authorization after approval; hang a subprocess; fill the queue;
+poison a tool description; compact just before a critical constraint; and fork
+after an effect. A clean happy-path trace does not exercise the contract.
 
 ::: {.callout-tip}
-## Constraint arrow
-The harness moves an evaluation score as much as the model does. A benchmark
-number is produced by a model running inside a harness, and Berkeley RDI showed
-that top agent benchmarks can be gamed by exploiting the harness itself,
-reading answers from `git log` or reward-hacking the grader, with several
-benchmarks hitting near-100% without the agent solving the task at
-all [@rdi2025trustworthy]. The exploit lives in the harness, not the task. The
-consequence reaches up into @sec-benchmarks and @sec-evaluating-agents: a score
-is a joint property of the model and the scaffold around it, so a harness change
-is a measurement change, and the eval suite has to harden the harness, not just
-hold out a private answer key. A held-out set protects against memorizing
-answers; it does nothing against an agent that reads the grader. The joint
-property holds without an adversary too: in controlled harness swaps under a
-fixed model, the choice of output medium and topic tracked the model family and
-survived the swap, while form, elaboration, and reliability moved with the
-harness, and a CLI point release alone flipped one model's otherwise-stable
-behavior [@ou2026goalless]. So the scaffold a measurement must record includes
-the exact harness version, and since a harness rewrites the request it is asked
-to send, injecting defaults and metadata of its own, the trustworthy record of
-what was measured is wire-level capture, not the config file.
+## Lower-layer constraint arrow
+Scores attributed to an agent are joint properties of the model, harness,
+tools, and environment. Benchmark infrastructure can leak answers or expose a
+grader that an agent learns to exploit [@rdi2025trustworthy]. Therefore
+@sec-benchmarks and @sec-evaluating-agents must report and hold the harness
+version fixed when comparing models. A provider configuration file is useful,
+but the effective serialized request and observed response are the stronger
+reproduction artifacts when adapters insert defaults or omit unsupported
+fields.
 :::
+
+::: {.callout-important}
+## What remains contested
+Two questions remain open. First, no context-projection strategy reliably knows
+which detail a future step will need; compaction, masking, retrieval, and larger
+windows trade different errors. Second, a portable harness can normalize common
+operations but cannot manufacture provider capabilities or identical error and
+cancellation semantics. Both should be measured as explicit product choices,
+not hidden behind a generic “agent” API.
+:::
+
+## Operational contract checklist
+
+Before trusting a harness with a long run, verify that it can answer:
+
+- Which immutable definition and reducer version own this run?
+- What event was accepted last, and what work or effect is unresolved?
+- What exact payload and policy authorize the next side effect?
+- When is cancellation acknowledged, and when is owned work quiescent?
+- Which retry classes are safe, and who enforces idempotency?
+- What remains in each parent and child budget?
+- Which process, filesystem, network, credential, resource, and lifetime walls
+  contain execution?
+- Can recovery and fault-injection tests demonstrate these claims?
+
+The harness therefore makes an agent operable, not merely runnable. The next
+chapter, @sec-computer-use, puts this contract under more pressure: a graphical
+interface creates longer action chains, weaker state observations, more
+latency, and side effects that are harder to identify before execution.
 
 ## Further reading
 
-Cited sources appear on the book's References page. One item is referenced
-inline only as an attribution and is listed here for the reader who wants the
-primary artifact.
+Cited sources appear on the book's References page. The artifact below provides
+a compact reproduction of tool-description poisoning.
 
 ::: {#further-reading}
 :::

@@ -752,7 +752,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/orchestration/05-the-harness.qmd",
-      ["runtime around the model", "pause, redirect, fork, or kill", "move an evaluation score as much as a model swap"],
+      ["runtime around the model", "Pause, resume, steer, cancel, kill, and fork", "joint properties of the model, harness, tools, and environment"],
     ],
     [
       "zh/orchestration/05-the-harness.qmd",
