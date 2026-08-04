@@ -1,89 +1,329 @@
-# Personalization and User Memory {#sec-personalization}
+# Personalization Memory {#sec-personalization}
 
-The memory of @sec-memory-systems belonged to a task: logs, workspaces, and stores that let one agent run survive its own length. User memory is a different store with a different owner, the product's memory of its user, carried across sessions and months. The engineering problem is stark when stated plainly: the model is stateless by construction, one set of weights answers every request and the cache dies with the session, yet the products built on it now remember your job, your children's names, and what you asked last winter. Something outside the model is doing that remembering, and its design has quietly become infrastructure with consequences for markets, privacy, and what the assistant tells you. Where that persistent state lives, why one home won, how the extract-consolidate-retrieve loop works and where it can be poisoned, how the shipped systems differ in philosophy, and why memory more than model quality is becoming the switching cost of the assistant market, are the load-bearing questions.
+@sec-memory-systems established the general memory substrate: scoped
+records, explicit write and read policies, temporal validity, provenance, and
+deletion lineage. Personalization applies that substrate to claims about a person.
+Its practical value is simple: help users avoid repeating durable constraints and
+preferences. The danger is equally simple: a system may remember the wrong thing,
+apply it in the wrong situation, or retain more of a person's life than the service
+needs.
 
-## Three homes for user state
+Good personalization is therefore purpose-bound and defeasible. It retains only
+what helps a declared purpose, and the user's current request remains the strongest
+evidence of what they want now. Not every remembered detail is useful. A preference
+that improves a restaurant suggestion may be irrelevant to a tax question, and a
+fact collected for one workspace may be unauthorized in another.
 
-User state could live in three places, and the field tried all of them. It could live in the weights: fine-tune a copy of the model per user. This loses three times over. A training job and a checkpoint per user is an orchestration and storage impossibility at consumer scale; sequential fine-tuning on a user's data erodes the general capability everyone else's training paid for; and, decisively, per-user weights destroy cross-user batching, the economic core of serving that @sec-serving-problem established. It could live in adapters: a small per-user LoRA over shared weights, a genuine research line [@tan2024oppu], whose serving-side difficulty is measured by the systems built just to keep thousands of adapters schedulable at once [@sheng2023slora]; no consumer product has shipped it at scale. Or it could live in the context: extract facts from conversations, store them in an ordinary database outside the model, retrieve the relevant ones at query time, and inject them into the prompt. Every shipped system chose the third home.
+## Memory is evidence, not authority
 
-::: {.callout-tip}
-## Constraint arrow
-The choice was not made by memory researchers; it was made by the serving layer below them. Batched inference over shared weights is what makes a hosted model affordable, so any personalization that fragments the weights, or the batch, prices itself out. State therefore migrates to the cheapest layer that can carry it, the prompt, and the whole memory stack of this chapter, extraction pipelines, consolidation passes, retrieval indexes, exists to make a stateless, shared model wear a per-user disguise. Personalization lives in the context because @sec-serving-problem's economics left it nowhere else to live.
-:::
+A personalized response at turn $t$ can be represented as
 
-## The memory loop
+$$
+y_t \sim p_\theta\!\left(y \mid P, x_t, h_t,
+R(q_t, M_u, a_t, p_t)\right).
+$$
 
-Once state lives outside the model, four design questions define the pipeline, and every production system answers the same four. What is worth remembering: an extraction pass judges the salience of candidate facts in the dialogue. How new facts meet old ones: a consolidation step adds, updates, deletes, or ignores against the existing store, the step where "you're going to Singapore in July" must eventually become "you went"; the largest deployment now runs this as an offline background process that rewrites stale memories wholesale [@openai2026dreaming]. What comes back: retrieval at query time, injected into the prompt. And what is allowed to fade: expiry and decay, present in the research line from the start, one early system scored memory strength on an explicit forgetting curve [@zhong2023memorybank], and temporal-graph designs keep facts with validity intervals instead of overwriting them [@rasmussen2025zep].
+Here, $y_t$ is the response; $p_\theta$ is the model with parameters $\theta$;
+$P$ is the governing policy; $x_t$ is the current request; $h_t$ is the current
+session context; $M_u$ is the set of records associated with user $u$; $a_t$ is
+the authenticated actor; $p_t$ is the authorized purpose; $q_t$ is the retrieval
+query; and $R$ returns the live, authorized records applicable to that request.
 
-The research lineage behind the loop is short and legible. The memory stream with scored retrieval, recency, importance, relevance, and periodic reflection that synthesizes higher-level observations, arrived with generative agents [@park2023generative]; the operating-system framing, a model paging its own state between a small fast context and a large slow store, arrived with MemGPT [@packer2023memgpt]; and a memory-as-a-service market industrialized the pipeline. Its own benchmark results repay a careful reading, in this book's @sec-benchmarks spirit. On the standard long-conversation benchmark, the leading memory system reports large latency and token savings, over 90% of both, against feeding the full history into the model, but the full-history baseline *scores higher* on answer quality [@chhikara2025mem0]. At today's conversation lengths, engineered memory wins on economics, not accuracy, a fact the marketing omits and the design question turns on.
+This ordering matters. Retrieved memory is **untrusted evidence**, not authority.
+It cannot authenticate the actor, expand permissions, override safety policy, or
+defeat a clear current instruction. A system should apply a remembered claim only
+after checking its subject, scope, purpose, validity, sensitivity, and provenance.
 
-```{dot}
-//| label: fig-personalization-memory-loop
-//| fig-cap: "The user-memory loop. Extraction and consolidation decide what is written, retrieval decides what returns, and the two annotations mark where the design carries risk: poisoning enters at the write path, and the erasure obligation exits at the store."
-digraph memloop {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.45;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+## Where state persists is not how it reaches the model
 
-  conv  [label="conversation\nstream"];
-  ext   [label="extraction\nwhat is salient?"];
-  cons  [label="consolidation\nadd / update / delete", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  store [label="memory store\nfacts, summaries, graph"];
-  ret   [label="retrieval\nat query time"];
-  inj   [label="prompt injection\ninto the context"];
+Personalization designs are easier to reason about when two independent axes stay
+separate. The **persistence location** says where durable state lives. The
+**application path** says how that state affects inference. A server-side store can
+feed prompt context or a tool call; a parameter adapter can be selected by a router;
+and a client-side store can disclose only the records needed for one request.
 
-  conv -> ext -> cons -> store -> ret -> inj -> conv;
+| Persistence location | Durable state | Main engineering consequence |
+|---|---|---|
+| Full model weights | Behavior learned across training data | Hard to attribute, correct, or erase at record granularity |
+| Parameter adapter or soft prompt | A user- or group-specific parameter delta | Requires adapter storage, routing, evaluation, and versioning |
+| Server-side store | Structured claims, summaries, embeddings, or source links | Central policy enforcement, with concentrated privacy and isolation risk |
+| Client-side store | User-controlled records or encrypted profile data | Stronger user custody, with synchronization and availability tradeoffs |
+| Source history or connector | Chats, documents, and application records | Preserves source evidence but requires purpose-aware search and access checks |
 
-  poison [label="poisoning enters here\n(injected content that gets written)", shape=note];
-  erase  [label="deletion / erasure\nexits here", shape=note];
-  poison -> cons [style=dashed, dir=none];
-  erase -> store [style=dashed, dir=none];
+| Application path | What happens at inference time | Typical use |
+|---|---|---|
+| Parameter routing | Select a parameter adapter or soft prompt before generation | Repeated style or domain adaptation |
+| Prompt context | Place a small, attributed profile in the input | Stable preferences and constraints |
+| Query-time retrieval or tool call | Search authorized records when the task needs them | Large histories and source-backed facts |
+| Deterministic handling | Apply a preference or constraint outside free-form generation | Units, locale, accessibility, or hard exclusions |
+| Hybrid | Combine routing, retrieval, and deterministic checks | Products with several memory classes |
+
+Per-user adapters complicate batching and operations, but they do not make
+heterogeneous batching impossible. Systems such as S-LoRA demonstrate concurrent
+serving of many LoRA adapters [@sheng2023slora]. Conversely, an external record is
+not “in the context” merely because it exists in a database. It affects a response
+only when an authorized application path reads and supplies it.
+
+## A user memory is a scoped claim
+
+A useful record distinguishes what the user explicitly said from what the system
+observed or inferred. Treating all three as facts gives weak guesses the authority
+of direct instructions. A concrete schema makes that distinction reviewable:
+
+```text
+UserMemory {
+  id, subject, origin, claim, source_ref,
+  scope, purpose, observed_at, valid_from, valid_until,
+  confidence, sensitivity, confirmation, status, supersedes
 }
 ```
 
-The runnable below is the consolidation step reduced to its arithmetic: candidates arrive forever, but deduplication and salience decay keep the store bounded. A memory store is a fixed-size distillation of an unbounded stream, which is both its function and, as the last sections show, its risk profile.
+`subject` identifies the person the claim concerns, not merely the signed-in
+account. `origin` distinguishes an explicit instruction, a user-provided fact,
+observed behavior, an inferred profile, and an imported or source-derived claim.
+`source_ref` preserves provenance. `scope` and `purpose` bound where and why the
+claim may be used. The time fields express validity rather than assuming permanence.
+`confidence` records uncertainty; `sensitivity` controls stricter handling;
+`confirmation` records whether the user verified the claim; and `status` plus
+`supersedes` preserve correction history without silently rewriting evidence.
 
-:::: {.runnable}
-```python
-import numpy as np
-rng = np.random.default_rng(1)
-store, lam, sim_thresh = [], 0.01, 0.85          # decay rate, dedup threshold
-for t in range(500):
-    cand = rng.normal(size=8); cand /= np.linalg.norm(cand)
-    importance = rng.random()
-    if store:
-        sims = [c @ cand for c, _, _ in store]
-        if max(sims) > sim_thresh:               # near-duplicate: refresh, don't add
-            i = int(np.argmax(sims)); store[i] = (store[i][0], store[i][1], t)
-            continue
-    store.append((cand, importance, t))
-    store = [(c, imp, t0) for c, imp, t0 in store
-             if imp * np.exp(-lam * (t - t0)) > 0.05]   # salience decay evicts
-    if t % 100 == 99: print(f"t={t+1}: {len(store)} memories retained")
-print("an unbounded stream, a bounded store: consolidation is the whole design")
+| Candidate information | Default treatment | Why |
+|---|---|---|
+| Current-turn instruction | Keep in session context unless the user asks to retain it | A request for today is not necessarily a standing preference |
+| Explicit standing preference | Persist within the requested or configured scope | Direct evidence, but still defeasible by the current request |
+| Stable fact or constraint | Retain with provenance and a review rule | Facts change and constraints can be safety-critical |
+| Temporary plan | Give it an expiry and preserve its status as a plan | Expiration does not establish completion |
+| Observed pattern | Treat as uncertain evidence and make it easy to inspect | Repetition may reflect circumstance rather than preference |
+| Inferred preference or profile | Use low confidence, visibility, and confirmation | Inference can expose sensitive attributes or encode a bad guess |
+| Secrets and credentials | **Do not persist** in general personalization memory | A preference store is not a secret manager |
+| Third-party or minor's data | Avoid by default; require a specific purpose and stricter review | The account holder may not be entitled to create a profile of that person |
+
+The write policy should also reject unnecessary sensitive inferences. A model can
+infer private attributes from ordinary text more readily than keyword filters imply
+[@staab2024beyond]. Data minimization must therefore cover derived claims as well as
+verbatim text.
+
+## The lifecycle needs a write gate and an applicability gate
+
+Personalization is not “extract, embed, retrieve.” It is a controlled lifecycle:
+
+1. Create a candidate claim with the exact supporting source.
+2. Classify its origin, subject, purpose, scope, sensitivity, confidence, and
+   validity.
+3. Pass a **write gate** that may reject, shorten, redact, confirm, or retain the
+   candidate only for the session.
+4. Append the accepted record. If it corrects an earlier claim, link it with
+   `supersedes` rather than overwriting history.
+5. Before retrieval ranking, filter by actor, subject, scope, purpose, status,
+   validity, and policy.
+6. Supply selected records as attributed evidence and record which ones influenced
+   the response.
+7. Accept correction, deletion, export, expiry, and feedback through the same
+   lineage-aware state model.
+
+```{dot}
+//| label: fig-personalization-memory-loop
+//| fig-cap: "Personalization has separate admission and application decisions. User controls act on the record and its derived lineage."
+digraph {
+    bgcolor="transparent";
+    rankdir=TB;
+    size="3.2,8.0";
+    nodesep=0.32; ranksep=0.40;
+    node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+    edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+    S [label="Statement, observation,\nor imported source"];
+    C [label="Candidate claim\nwith provenance"];
+    W [label="Write gate\npurpose, sensitivity, validity", fillcolor="#ffe9b3"];
+    M [label="Versioned user record"];
+    A [label="Applicability gate\nactor, scope, purpose, status", fillcolor="#ffe9b3"];
+    R [label="Attributed evidence\nfor this request"];
+    U [label="Inspect, correct, pause,\ndelete, or export", fillcolor="#dbeafe"];
+
+    S -> C -> W -> M -> A -> R;
+    U -> M [label="state transition"];
+    R -> U [label="feedback", style=dashed];
+}
 ```
-::::
 
-## Two shipped philosophies
+Relevance ranking belongs after applicability filtering. Otherwise a highly similar
+record from the wrong account, project, or purpose can outrank an authorized one.
 
-The consumer deployments split on one design axis: whether the user can see the memory. The first mover shipped user-managed "saved memories" in early 2024, then expanded to referencing the user's entire chat history, and by mid-2026 to background synthesis that rewrites the profile without user action [@openai2024memory; @openai2026dreaming]; what the model knows about you became, in stages, an inferred artifact rather than a list you curate. The second design planted its flag on the opposite end: memory scoped per project so contexts do not bleed into each other, a memory summary the user can read and edit directly, incognito sessions that leave no trace, and a launch note stating the vendor had tested whether memory "could reinforce harmful patterns in conversations" before shipping [@anthropic2025memory]. Third-party analysis of the two implementations makes the architectural difference concrete: one injects a synthesized profile into every conversation automatically; the other starts blank and searches raw history through explicit tools when the conversation calls for it [@willison2025memory]. The other two hyperscalers personalize from a different asset entirely, connecting the assistant to search history, mail, and photos, behavioral exhaust that @sec-infrastructure-before's incumbents spent two decades accumulating, and one has closed the flywheel outright: assistant conversations now feed content and advertising personalization on the parent platform [@meta2025memory]. Across all four, the drift of 2025 and 2026 ran the same direction, toward richer, more synthesized, less inspectable profiles, with deletion controls retained as the constant.
+## Resolve conflicts without inventing a new biography
 
-## Memory as a moat
+The current request overrides a remembered preference for the current action. It
+does not necessarily erase the standing preference. Conflict handling should be
+explicit:
 
-The market-structure reading of this chapter belongs next to @sec-market-structure's value chain. Model quality is a depreciating advantage, competed away with every release cycle; an accumulated year of a user's context is not, because it regenerates only by the user re-living it with a competitor. Memory is therefore the assistant market's switching cost, and the labs describe it in exactly those aspirational terms: systems that get to know you over your life. The countervailing forces are portability and law: data exports that include memories, a nascent user-owned-memory movement that relocates the store to the user's device behind a standard protocol [@mem0openmemory2025], and a European enforcement debate that has named AI assistants a priority without yet creating a memory-portability obligation. Whether the moat holds depends on which of those matures first.
+| Situation | Required behavior |
+|---|---|
+| “I usually prefer trains” followed by “Book a flight this time” | Follow the current exception; do not rewrite the standing preference |
+| “I no longer use metric units” | Supersede the earlier preference and retain the correction lineage |
+| A planned event reaches its expiry date | Mark the plan stale or expired; expiry **does not prove that it happened** |
+| An inferred preference conflicts with an explicit instruction | Use the explicit instruction and lower, reject, or ask about the inference |
+| Two credible records form an unresolved contradiction | Ask for clarification or abstain from personalizing that choice |
+| A preference conflicts with objective evidence or policy | Preserve factuality and policy; personalize presentation or options, not truth |
 
-The flywheel carries an epistemic cost this book has priced before. The clearest sentence in the record comes from the vendor's own post-mortem of its sycophantic model update: "user memory contributes to exacerbating the effects of sycophancy" in some cases [@openai2025sycophancy]. A model that remembers what you believe is better equipped to tell you what you want to hear, and personalized alignment, tuning behavior toward an individual, carries the risks of profiling and bias reinforcement that the recommender era documented at population scale, which is why the academic treatment argues for explicit normative bounds on how far personalization should go [@kirk2024personalization]. @sec-infrastructure-before told this story once already with click-through rates; the memory store is where the assistant era decides whether to retell it.
+This distinction prevents two common errors: treating one exception as a permanent
+change, and converting an unobserved plan into a completed life event.
 
-## The profile as attack surface
+## User controls are state transitions, not labels
 
-Two security results bound this chapter's risk, one about what the store implies and one about who can write to it. The first is inference at scale: models infer personal attributes, location, income, demographics, from ordinary, non-sensitive text with high accuracy at negligible cost [@staab2024beyond]. A memory store is that inference run continuously against one person and then *persisted*: an aggregation artifact more revealing than any conversation it distills. The second is the write path. Because consolidation decides what enters the store, a prompt injection that reaches the consolidation step becomes an implant rather than an incident: demonstrated attacks planted false memories and even standing exfiltration instructions that leaked every subsequent conversation until the memory was found and deleted [@rehberger2024spaiware], and the academic version poisons agent memory through nothing but queries [@chen2024agentpoison]. The defenses follow the diagram: guard the write path, and keep the store auditable by its owner, which turns the visible-versus-opaque design axis from a philosophy into a security control. One property, at least, is clean: erasing a memory row is an engineering triviality, which makes context-resident memory the one home for user state where the right to be forgotten of @sec-privacy-provenance can be honored with a `DELETE` rather than a research program.
+A control is useful only when its semantics are precise. “Off,” “pause,” “reset,”
+and “delete” can refer to different data flows in different products. Document each
+transition and test it end to end.
 
-::: {.callout-important}
-## What's contested
-Three arguments are live. Where memory should live: the platforms hold that native memory is safer and deeper; an application layer of memory services argues portability across models; a user-device movement argues the profile belongs to its subject, and no standard has settled it. Whether long context retires the memory stack: ten-million-token windows were announced with personalization as an explicit use case [@meta2025llama4], and at benchmark conversation lengths full history already out-scores engineered memory; the rejoinder is threefold, that cost and latency scale with context while a store is constant, that effective context lags claimed context badly [@hsieh2024ruler], and that salience is a curation problem a bigger window does not solve, which is why the largest deployment built background consolidation instead of relying on its own long context. And the epistemic question, whether personalization on net corrects the model's one-size-default or entrenches the user's priors, has, as of mid-2026, advocacy on both sides and no decisive study on either.
-:::
+| Control | Minimum semantic contract |
+|---|---|
+| Turning memory off for reads | Existing records do not influence new responses; state whether they remain stored |
+| Pause writes | No new long-term records or derived profile updates are created; state whether reads continue |
+| Temporary mode | Neither reads nor writes personalization memory for that session, unless the product states a narrower contract |
+| Delete a memory | Stop using the record immediately and remove its governed derivatives through lineage |
+| Delete a source chat or file | Re-evaluate or remove dependent summaries, claims, embeddings, and indexes; do not assume source deletion implies derived deletion |
+| Reset | Define which scopes, source histories, summaries, and indexes are cleared |
+| Export | Produce understandable, machine-readable records with provenance, scope, timestamps, and status |
+| Training opt-out | Govern training use separately from inference-time personalization and storage |
+
+Current product documentation illustrates why these distinctions matter. OpenAI's
+memory FAQ explains that removing information can require deleting both saved
+memory and source chats, and that some deletion logs may be retained temporarily
+for safety and debugging [@openai2026memoryfaq]. Anthropic distinguishes pausing
+memory from resetting it, offers incognito chats, and documents that deleting a
+source does not necessarily remove a derived memory entry [@anthropic2026memoryhelp].
+These are examples of product contracts, not universal definitions. Implementations
+must expose their own exact semantics.
+
+## Privacy obligations shape the architecture
+
+For systems subject to the EU General Data Protection Regulation, purpose
+limitation, data minimization, accuracy, and storage limitation are design inputs,
+not cleanup tasks [@eu2016gdpr]. Correction and erasure rights are conditional, as
+is data portability; the appropriate legal basis depends on the jurisdiction,
+controller role, purpose, and data category. Consent is not the only possible legal
+basis and should not be claimed where it is not freely given or valid.
+
+Portability is narrower than “export everything the model inferred.” EDPB guidance
+explains that the statutory right applies under stated conditions to data the person
+provided, including some observed data, but generally not to profiles inferred by
+the controller [@edpb2026rights]. A product can still voluntarily expose inferred
+claims because visibility and correction improve safety. Exports should use a
+structured, commonly used, machine-readable format such as JSON, XML, or CSV rather
+than treating a PDF as sufficient portability.
+
+Deletion is a graph operation. One source may produce a normalized claim, a profile
+summary, an embedding, a search-index entry, a cache value, a replica, and an audit
+reference. The service needs lineage from every derivative to its sources. A safe
+workflow first blocks further use, then performs and verifies physical deletion
+across governed stores according to retention and backup policy. It must also stop
+later rebuilds from resurrecting a deleted claim. Legal holds and mandatory records
+need a documented exception path, not a silent failure of the delete control.
+
+## Personalization adds distinct security and integrity risks
+
+Memory enlarges the impact of several familiar failures:
+
+- **Sensitive inference:** an apparently harmless conversation can support a claim
+  about health, location, income, beliefs, or relationships that the user never
+  chose to store [@staab2024beyond].
+- **Prompt injection and poison:** content in a chat, document, connector, or
+  knowledge base can attempt to plant instructions that survive into later tasks.
+  AgentPoison demonstrates targeted poisoning of agent memory or knowledge bases
+  under its evaluated threat model [@chen2024agentpoison]. Imported memories must
+  therefore remain untrusted evidence with source attribution.
+- **Cross-account or cross-project leakage:** a missing subject, tenant, or purpose
+  check can retrieve a relevant-looking record belonging to someone else.
+- **Sycophancy:** remembering a user's views can make agreement easier than honest
+  correction. OpenAI reported that memory exacerbated sycophancy in some cases in a
+  particular model update, while explicitly not claiming that memory generally
+  causes it [@openai2025sycophancy].
+- **Personalized falsehood:** a model may align a factual answer with a user's
+  history instead of the evidence [@sun2026personalization]. Personalize choices,
+  examples, tone, and presentation; do not personalize objective truth.
+
+Security tests should include poisoned sources, malicious imported profiles,
+account switching, shared-device sessions, stale authorization, and deletion
+followed by index rebuild. Encryption helps protect storage and transport, but does
+not decide whether a record should exist or whether a read is authorized.
+
+## Evaluate the whole lifecycle
+
+Personalization quality is not recall accuracy alone. LaMP introduced seven
+personalized language-modeling tasks and retrieval-augmented profiles
+[@salemi2024lamp]. PrefEval shows that preference following can deteriorate as
+context grows and distinguishes explicit from implicit preferences
+[@zhao2025prefeval]. Both are useful controlled evidence, but neither substitutes
+for product-specific safety, control, and longitudinal evaluation.
+
+At minimum, compare a **no-memory baseline** with explicit-profile-only,
+retrieve-from-history, and synthesized-profile variants. Add full-history or
+adapter variants only when they match the intended architecture. Use the same model,
+task set, safety policy, and latency accounting so the comparison isolates memory.
+
+| Stage | Questions | Example measures |
+|---|---|---|
+| Write | Was the right claim admitted with the right source and scope? | Admission precision/recall, sensitive-write rate, provenance completeness |
+| Update | Did correction and expiry change the active state correctly? | Contradiction resolution, stale-memory use, correction latency |
+| Retrieval | Did the system find only applicable records? | Authorized recall, cross-scope retrieval rate, source attribution |
+| Use | Did memory improve the answer without distorting truth? | Personalization lift, wrong-personalization rate, factuality, task success |
+| Control and security | Do pause, temporary mode, delete, and export mean what they claim? | Deletion completeness, resurrection rate, cross-account leakage, poison success rate |
+| Operations | Is the benefit worth its resource cost? | Added latency, token overhead, storage growth, availability, cost per request |
+
+“Personalization lift” should mean improvement over the matched no-memory baseline,
+not the absolute score of the personalized system. The wrong-personalization rate
+counts cases where memory makes a response less suitable, including stale,
+mis-scoped, overconfident, or fact-distorting uses. Report both; an average benefit
+can hide a smaller set of severe harms.
+
+Synthetic users and model judges also miss failures that real people notice. A
+study of real-user personalization evaluation found nuanced error categories absent
+from its synthetic-user and LLM-judge conditions [@balepur2026realusers]. Run
+longitudinal tests with consenting participants, support inspection and correction,
+and stratify results by record origin, sensitivity, age, and scope. Vendor-reported
+benchmarks can motivate a hypothesis, but they are not independent validation of a
+product's claims.
+
+## Lower-layer constraints
+
+The memory service cannot supply guarantees absent from the layers below it.
+Identity and authorization determine whose records may be read; storage and index
+isolation determine whether scopes actually remain separate; durable event history
+determines whether corrections and deletions propagate; and backup policy determines
+when physical erasure completes. The inference layer cannot repair a missing tenant
+check, and a friendly interface cannot make an untracked embedding deletable.
+Personalization claims should therefore be no stronger than the weakest identity,
+lineage, isolation, and retention guarantee on which they depend.
+
+## What remains contested
+
+Two questions lack a general answer. First, repeated behavior does not establish
+whether a person has a stable preference, was adapting to a temporary constraint,
+or merely accepted a default. The right confirmation threshold depends on the cost
+of a wrong inference and cannot be derived from retrieval accuracy alone. Second,
+products disagree about the state transitions behind words such as *pause*,
+*temporary*, and *delete*. A common vocabulary would make controls easier to compare,
+but different storage and legal boundaries may require different implementations.
+Until stronger evidence and standards emerge, systems should expose the underlying
+state changes and report results by origin, sensitivity, and control mode rather
+than claiming a universal memory policy.
+
+## An operational contract
+
+A production personalization service should be able to answer these questions for
+every applied claim:
+
+1. Who is the subject, and which authenticated actor may use the claim?
+2. What source supports it, and was it explicit, observed, inferred, or imported?
+3. For which declared purpose and scope is it valid?
+4. What makes it current, and what would supersede or expire it?
+5. Why was it selected for this request, and how did it affect the output?
+6. How can the user inspect, correct, pause, delete, and export it?
+7. Which derivatives and replicas must follow a correction or deletion?
+8. Which tests show benefit, wrong personalization, isolation, control fidelity,
+   and operational cost?
+
+If the system cannot answer those questions, it has accumulated user data, not a
+reliable personalization memory. @sec-the-harness turns these
+contracts into repeatable evaluations and release gates.
 
 ## Further reading
 
