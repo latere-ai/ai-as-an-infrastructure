@@ -1,138 +1,204 @@
-# Factuality, Grounding, and Citations {#sec-factuality-grounding}
+# Factuality, Grounding, and Evidence {#sec-factuality-grounding}
 
-An answer can be fluent, preferred, and still false. It can cite a source and still not be supported by that source. Factuality evaluation therefore cannot be reduced to a benchmark score or a judge preference. It asks a narrower question: which claims were made, what evidence supports them, and whether the system knew when not to answer.
+An answer can be true without being grounded, grounded in a mistaken source without being true, and decorated with citations that support none of its claims. These are different failures. Calling all of them “hallucination” hides the decision an evaluation is supposed to inform.
 
-This chapter connects evaluation to @sec-rag-retrieval, @sec-context-engineering, @sec-learning-limits, and @sec-eval-practice. The unit of measurement is not just the response. It is the response decomposed into claims, linked to sources, and judged against the evidence those sources actually contain.
+The useful unit is a claim together with its evidence boundary, status, and provenance. The protocol must say which world or source counts, at what time, whether search is allowed, which claims require support, and what happens when the available evidence is insufficient. Only then can a score distinguish model error from retrieval, context, citation, or evaluator error.
 
-## Four Words That Should Not Collapse
+## Define the Claim Before the Metric
 
-Factual evaluation uses several words that are often blurred together.
+Several related terms answer different questions:
 
-- **Truthfulness** asks whether the model avoids repeating common false beliefs. TruthfulQA was built around questions where imitation of human text can produce false answers [@lin2021truthfulqa].
-- **Factuality** asks whether statements in the answer are true in the world or in an agreed reference.
-- **Faithfulness** asks whether the answer follows the provided source, even if that source is incomplete or wrong.
-- **Attribution** asks whether every claim that needs support is backed by a cited source that actually entails it, meaning the source states or logically implies the claim.
+| Axis | Question | Required reference |
+| --- | --- | --- |
+| truthfulness | Does the response avoid a benchmark's targeted false beliefs or misconceptions? | the benchmark's accepted answers and population |
+| factuality | Is the claim correct under a named authority and as-of time? | a world-state or reference policy |
+| faithfulness or grounding | Is the claim supported by the context the system was instructed to use? | the supplied context, even if it is incomplete or wrong |
+| attribution | Is an externally checkable claim supported by identified source material? | attached source spans under an annotation policy |
+| citation quality | Are support-required claims covered, are links correctly attached, and are the sources suitable? | claim-to-source mappings and a source policy |
 
-These axes can disagree. A model faithful to a misleading retrieved passage is, by that very fidelity, not factual. It can also state a true claim while citing a source that does not support it, or give a preferred answer that suppresses uncertainty. The evaluation protocol has to choose the axis before it scores.
+TruthfulQA operationalized truthfulness with 817 questions designed around false beliefs and misconceptions. Its finding that larger models were generally less truthful applies to the models and adversarial questions tested, not to model scaling in general [@lin2021truthfulqa]. Factuality is broader and must name an authority and time: an exchange rate, office holder, or clinical recommendation can change. Faithfulness is narrower. A faithful summary of an erroneous document can be untrue in the world; a true fact supplied from memory can be ungrounded when the task requires use of the given document.
 
-This is why factuality belongs in its own chapter. @sec-judging-holistic can tell which answer people prefer. @sec-benchmarks can tell which closed-ended questions a model answers. Neither is sufficient for a generated paragraph that contains twelve claims, nine supported by sources, two unsupported, and one contradicted.
+Attribution is not a proof of truth. The Attributable to Identified Sources framework asks whether a statement about the external world is supported by an independent, identified source under explicit annotation guidelines [@rashkin2023attribution]. Source quality and currentness remain separate judgments. Citation quality adds another layer: the interface must connect each check-worthy claim to the span that supports it, not merely list a document at the end.
 
-## From Answer to Claims
+Use these terms as record fields rather than synonyms. “Unsupported” means the evaluator did not find sufficient support inside its declared evidence boundary. It does not, by itself, mean false. “Contradicted” requires positive conflicting evidence. “Insufficient evidence” must remain distinct from both.
 
-Long-form factuality becomes measurable when the answer is decomposed. FActScore makes this move explicit: break a generation into atomic facts (the smallest separately-checkable statements a response divides into), then compute the fraction supported by a reliable source [@min2023factscore]. In schematic form,
+## Freeze the Evidence Contract
 
-$$
-\operatorname{FActScore}(y) =
-\frac{1}{m}\sum_{i=1}^{m} \mathbf{1}[\operatorname{supported}(c_i, E_i)],
-$$
+The evaluator is a versioned pipeline, not a prompt that asks whether an answer is factual. Freeze the full contract before comparing systems:
 
-where $y$ is the answer, $c_i$ is the $i$-th atomic claim, $E_i$ is the evidence retrieved or assigned for that claim, and $m$ is the number of extracted claims.
+```text
+FactualitySpec:
+  decision
+  failure_costs
+  case_population
+  authority
+  as_of_time
+  mode:
+    closed_book
+    supplied_context
+    bounded_search
+  corpus_snapshot
+  access_and_source_policy
+  claim_policy_and_revision
+  retrieval_and_span_policy
+  verdict_policy_and_judge
+  citation_mapping_policy
+  abstention_policy
+  aggregation_policy
+
+ClaimRecord:
+  case_id
+  response_id
+  claim_id
+  claim_text
+  resolved_context
+  checkworthiness
+  weight
+  candidate_evidence_spans
+  cited_evidence_spans
+  verdict
+  extractor_revision
+  retriever_revision
+  judge_revision
+  raw_verdict
+  rationale
+  adjudication
+```
+
+In closed-book mode, the reference set grades parametric answering; no retriever is part of the tested system. In supplied-context mode, the answer must stay within a fixed context. In bounded-search mode, the corpus, search provider, query date, access rights, and retrieval budget become part of the case. Results from these modes are not interchangeable.
+
+Keep exact document and span identifiers, content hashes, retrieval scores, context order, truncation, candidate text, citation offsets, and raw judge output. Regrading appends a new verdict. It must not erase the evidence or evaluator revision that produced the old one.
 
 ```{dot}
-//| label: fig-factuality-claim-graph
-//| fig-cap: "Claim-level factuality. The answer is decomposed into atomic claims; each claim is checked against evidence. A citation is useful only if the cited source supports the specific claim it is attached to."
+//| label: fig-factuality-evidence-contract
+//| fig-cap: "A factuality result is reproducible only when the decision, evidence boundary, system trace, claims, evidence spans, verdicts, and release policy retain their provenance."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.35; ranksep=0.45;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  A [label="generated\nanswer"];
-  C1 [label="claim 1"];
-  C2 [label="claim 2"];
-  C3 [label="claim 3"];
-  E1 [label="source span\nsupports"];
-  E2 [label="no supporting\nsource"];
-  E3 [label="source span\ncontradicts"];
-  S1 [label="supported", color="#14b8a6", fontcolor="#14b8a6"];
-  S2 [label="unsupported", color="#f59e0b", fontcolor="#f59e0b"];
-  S3 [label="contradicted", color="#ef4444", fontcolor="#ef4444"];
-  A -> C1; A -> C2; A -> C3;
-  C1 -> E1 -> S1;
-  C2 -> E2 -> S2;
-  C3 -> E3 -> S3;
+  rankdir=TB;
+  nodesep=0.22; ranksep=0.28;
+  node [shape=box, style="rounded,filled", fixedsize=true, width=2.75, height=0.42, fontname="Helvetica", fontsize=9.5, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280"];
+  D [label="decision and failure costs"];
+  B [label="authority and evidence boundary"];
+  T [label="retrieval and generation trace"];
+  C [label="resolved atomic claims"];
+  E [label="versioned evidence spans"];
+  V [label="claim and citation verdicts"];
+  O [label="metrics, limits, release policy"];
+  D -> B -> T -> C -> E -> V -> O;
 }
 ```
 
-This unit change matters. A binary answer-level score punishes a mostly correct answer the same way as a fabricated answer, or it rewards a mixed answer because most of it reads well. Claim-level scoring preserves the gradient. It also creates better debugging data: unsupported claims often point to retrieval failure, contradicted claims to synthesis failure, and overconfident claims to calibration failure.
+## Decompose Without Losing Coverage
 
-The cost is that claim extraction is itself a model-mediated step. A system can miss a claim, split one claim into several easier claims, or make the evidence search too forgiving. Human audits remain necessary for the scorer, not only for the generator.
+Evidence-based fact verification predates current language models. FEVER labeled claims against a fixed Wikipedia snapshot as supported, refuted, or not enough information; supported and refuted cases include evidence sentences, while the last label does not assert falsity [@thorne2018fever]. FActScore adapted the claim-level idea to long-form generation in 2023 by decomposing biographies into atomic facts and measuring factual precision against a knowledge source [@min2023factscore].
 
-SAFE, FActScore's search-augmented successor, makes the evidence step explicit: an LLM agent issues search queries for each atomic claim and reasons over the results, and on the LongFact prompt set the automated rater agreed with crowd annotators 72% of the time, won 76% of the disagreements, and cost roughly a twentieth as much [@wei2024longform]. That price makes claim-level checking cheap enough to run continuously rather than as a one-off study.
+Here $y$ denotes an answer, and the extraction policy produces the claim sequence $C(y)=(c_1,\ldots,c_m)$. The unweighted FActScore form is
 
-## Short Answers and Abstention
+$$
+F_K(y)=
+\frac{1}{m}\sum_{i=1}^{m}\mathbf{1}[S(c_i,K)=1].
+$$
 
-Short-form factuality is useful because it removes many degrees of freedom. SimpleQA deliberately uses questions with single, indisputable answers and grades responses as correct, incorrect, or not attempted [@wei2024simpleqa]. The third label is the design point. A model that answers fewer questions but avoids false claims may be safer than one that guesses confidently. The benchmark itself was not exempt from audit: SimpleQA Verified, a 1,000-prompt revision, found and fixed incorrect labels, topical bias, and duplicate questions in the original grading set [@haas2025simpleqaverified].
+Here $F_K(y)$ is the FActScore of answer $y$ relative to knowledge source $K$; $C(y)$ is the answer's sequence of extracted atomic claims; $c_i$ is claim $i$; $m$ is the number of extracted claims; $S(c_i,K)=1$ means the protocol finds $c_i$ supported by $K$, and $S(c_i,K)=0$ otherwise; and $\mathbf{1}[\cdot]$ is the indicator function. An automated implementation must record evidence retrieval separately from the support label. When $m=0$, the score is undefined, not a perfect result. Eligibility or task-completion logic must handle an answer with no checkable content.
 
-This connects factuality to calibration, the alignment between a model's confidence and its accuracy discussed in @sec-statistical-reliability. A system has two levers: whether it knows the answer, and whether it attempts the answer. The product risk often comes from the off-diagonal case: it does not know, but answers anyway. TruthfulQA exposed a related failure in an earlier generation of models: scale improved many NLP tasks, yet larger imitation-trained models could reproduce popular falsehoods more readily [@lin2021truthfulqa].
+An atomic claim is a self-contained statement conveying one independently checkable piece of information, after resolving pronouns, dates, units, and local context. Atomicity is a protocol choice, not a unique linguistic truth. “The trial enrolled 400 patients and reduced mortality” contains at least two claims; “it happened the following year” cannot be checked after its antecedent and date are discarded.
 
-For infrastructure, this means a factuality suite should report at least three rates:
+Claim extraction is itself a measurement step. Audit whether the extractor omits hedged claims, turns one conjunction into several easy wins, duplicates facts, or changes boundaries across writing styles and languages. Preserve the original span and parent relation so an adjudicator can reconstruct the answer. Measure extraction recall on human-marked samples and test whether reasonable re-splitting materially changes the result.
 
-- **Correct rate.** The share of questions answered correctly.
-- **Error rate.** The share answered incorrectly.
-- **Attempt rate.** The share not abstained.
+Factual precision alone rewards saying less. Report the supported fraction beside the number and weight of check-worthy claims, requested-content coverage, contradiction rate, and response eligibility. SAFE made this trade-off explicit by combining supported-fact precision with a user-chosen target for the number of facts. On the LongFact experiment, SAFE agreed with crowd labels on 72% of 16,011 already human-decomposed facts. In a separate audit of 100 disagreements, researchers with broader web access preferred its verdict 76% of the time; the reported evaluator was also more than 20 times cheaper under its 2024 model and search prices [@wei2024longform]. These figures do not validate end-to-end claim extraction or establish that search agents are generally more accurate than people.
 
-Only the first is not enough. A model can raise its correct rate by attempting everything, at the cost of a higher harmful error rate; it can drive the error rate to zero by refusing everything. The operating point is a policy choice, not a single score.
+## Validate the Evaluator Before the Model
 
-## Grounding in Retrieval Systems
+A claim scorer can fail at extraction, evidence search, source selection, or the final support judgment. Validate each stage on locked, independently adjudicated cases. Report claim-extraction misses, evidence-retrieval misses where exhaustive gold evidence exists, and the verdict confusion matrix for supported, contradicted, insufficient, and not-checkable claims. Break results down by domain, language, temporal sensitivity, numerical reasoning, multi-source claims, negation, and candidate style.
 
-Retrieval-augmented generation (RAG, the subject of @sec-rag-retrieval, where a model answers from documents fetched at query time rather than from parameters alone) changes the failure surface. Retrieval can fail to find the right evidence; even when it succeeds, the context packer may drop that evidence before the generator sees it, the generator may ignore what it does see, and the citation layer may point to the wrong span. RAGAS expresses this by splitting the evaluation into retrieval and generation dimensions such as context relevance, context recall, faithfulness, and answer relevance [@es2023ragas]. ALCE makes citation quality explicit, scoring whether generated answers cite sources that support the text [@gao2023alce]. FACTS Grounding turned grounded generation into a standing leaderboard: long-form responses must be fully grounded in a supplied document of up to 32k tokens, and a panel of judge models from different families scores eligibility and grounding separately [@jacovi2025facts].
+The verifier must use the declared evidence, not silently supplement it with parametric memory. Include adversarial cases in which the candidate instructs the evaluator to ignore its rubric, a citation points to a topically similar but non-supporting passage, evidence conflicts, or the correct outcome is insufficient evidence. As in @sec-judging-holistic, pin the judge and parser, retain abstentions and failures, compare model verdicts with raw human judgments, and revalidate after any material change.
 
-```{dot}
-//| label: fig-factuality-rag-failure
-//| fig-cap: "Grounded generation has separate failure surfaces. Retrieval, context selection, synthesis, and citation attachment can each fail independently, so one aggregate answer score cannot explain where the factuality error came from."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.35; ranksep=0.45;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  Q [label="question"];
-  R [label="retrieve\ncandidate passages"];
-  K [label="pack context\nand rank spans"];
-  G [label="generate\nanswer"];
-  C [label="attach\ncitations"];
-  E [label="claim-level\nevaluation"];
-  Q -> R -> K -> G -> C -> E;
-  R -> F1 [label="miss", style=dashed];
-  K -> F2 [label="drop", style=dashed];
-  G -> F3 [label="invent", style=dashed];
-  C -> F4 [label="mis-cite", style=dashed];
-  F1 [label="retrieval failure"];
-  F2 [label="context failure"];
-  F3 [label="synthesis failure"];
-  F4 [label="attribution failure"];
-}
-```
+Do not infer root cause from a final label alone. An unsupported claim may reflect a corpus gap, retrieval miss, packing loss, generator invention, bad citation attachment, extractor error, or verifier false negative. Root-cause attribution requires the recorded trace.
 
-The important distinction is source availability. Closed-book factuality asks what the model knows from parameters. Retrieval-grounded factuality asks whether a system can use supplied evidence. If a benchmark hides this distinction, the result is hard to act on. A closed-book failure may call for abstention or retrieval. A grounded failure points elsewhere: to better retrieval, chunking, reranking, context budgeting, or citation scoring.
+## Treat Abstention as a Decision Policy
 
-FEVER is useful historically because it framed fact checking as claim, evidence, and label rather than answer text alone [@thorne2018fever]. The same shape returns in RAG evaluation: a claim is supported, refuted, or unsupported by retrieved evidence. The difference is that an LLM application must run this protocol continuously, on messy generated answers, not just on dataset claims.
+Short answers remove the decomposition problem but not the decision problem. SimpleQA was designed around 4,326 short fact-seeking questions intended to have one indisputable answer, with grades of correct, incorrect, or not attempted [@wei2024simpleqa]. “Not attempted” describes the observed response; it does not prove the model recognized its own uncertainty. The automatic grader was checked manually on 300 sampled completions, but the paper did not report a formal grader study. The benchmark therefore tests one adversarially collected, closed-book question population and one grading protocol, not factuality in every form. A later SimpleQA Verified preprint created a filtered 1,000-question derivative after auditing labels, duplicates, and topic balance; it did not repair the original dataset in place [@haas2025simpleqaverified].
 
-## Weak Signals and Their Limits
+Rejection has a longer history than language-model evaluation. Chow formalized the error-reject trade-off for pattern recognition in 1970 [@chow1970reject]. When a system emits a candidate answer with confidence $p_n$, and the deployment releases it only above threshold $t$, report both coverage and selective risk:
 
-Some factuality signals do not require ground-truth evidence. SelfCheckGPT samples multiple responses from a black-box model and looks for contradictions: if the model knows a fact, repeated samples should agree; if it is hallucinating, samples may diverge [@manakul2023selfcheckgpt]. This is useful as a cheap warning signal, but it is not truth. Many samples can agree on the same falsehood, especially if the falsehood is common in training data.
+$$
+\begin{aligned}
+\operatorname{Coverage}(t) &= \frac{1}{N}\sum_n a_n(t), \\
+\operatorname{Risk}(t) &= \frac{\sum_n a_n(t)(1-z_n)}{\sum_n a_n(t)}.
+\end{aligned}
+$$
 
-Similarly, citation count is not citation support. A response with five citations can be worse than a response with one source when those five merely decorate the paragraph. A source title may assert the opposite of what the answer claims; a retrieved passage may be true and yet have nothing to do with the claim it is attached to. The scorer must check entailment between claim and evidence, not the mere presence of a URL.
+Here $N$ is the number of evaluation cases; $n$ indexes a case and each sum runs from $n=1$ through $N$; $p_n\in[0,1]$ is the reported confidence in its candidate answer; $t\in[0,1]$ is the locked release threshold; $a_n(t)=\mathbf{1}[p_n\ge t]$ records release; and $z_n=1$ when the candidate answer is correct or $0$ when it is wrong. Coverage is the released fraction. Selective risk is the error rate among released answers and is undefined when the system releases nothing. Overall correct rate, $N^{-1}\sum_n a_n(t)z_n$, must remain visible so refusing every case cannot look successful. A system that emits refusals directly needs those refusals labeled rather than assigned invented confidence values.
 
-## Where This Sits in the Stack
+Plot risk across the coverage range rather than choosing a threshold after seeing the test result. The deployed threshold belongs to a cost policy: a medical assistant, a trivia tool, and an internal search box do not have the same cost for error, refusal, or escalation. Calibration and selection are related but distinct. If random variables $P$ and $Z$ denote reported confidence and candidate-answer correctness on the target population, probability calibration requires $\Pr(Z=1\mid P=p)=p$ for relevant values $p$. Check that relation before applying the abstention threshold; calibration only on released answers describes a selected subset and can hide failures below the threshold.
 
-Factuality evaluation has three outputs for the rest of the book.
+## Diagnose the Grounding Pipeline
 
-First, it informs @sec-context-engineering. If the system repeatedly makes unsupported claims because evidence was in the middle of a long context and ignored, the problem is context placement, not only model quality.
+Retrieval-augmented generation adds failure surfaces; it does not make an answer grounded by construction. Test each stage with the artifact it actually receives:
 
-Second, it informs @sec-rag-retrieval. If claims fail because evidence was never retrieved, the failure belongs to indexing, retrieval, reranking, or document parsing.
+| Stage | Controlled test | What a failure establishes |
+| --- | --- | --- |
+| corpus | search for adjudicated evidence in the allowed snapshot | the evidence boundary contains or lacks known support |
+| candidate retrieval | retrieve cases with exhaustive gold evidence | recall at the recorded cutoff and query policy |
+| reranking and packing | trace whether known evidence survives selection, order, and truncation | context exposure, not generator use |
+| generation | give oracle evidence and preserve the exact prompt | whether the generator stays faithful when support is available |
+| citation attachment | use adjudicated claim-span pairs | whether links cover and support the intended claims |
+| end to end | replay the production pipeline | user-visible quality, without automatic causal diagnosis |
 
-Third, it informs @sec-operational-evaluation. In production, unsupported high-confidence claims should become regression items. If the failure came from missing evidence, the regression case must include the retriever state. If the failure came from synthesis, it must include the retrieved spans and the model output. Otherwise the next run cannot reproduce the error.
+If gold evidence is not exhaustive, do not call a model-judged relevance score retrieval recall. Report it as a relevance estimate under that judge. Likewise, finding a supporting passage after generation shows that support is available; it does not prove the generator causally used that passage.
+
+RAGAS proposed reference-free proxy metrics for faithfulness, answer relevance, and context relevance, using model and embedding judgments rather than human reference answers [@es2023ragas]. The archival paper did not define context recall. ALCE evaluates retrieval-backed answers along fluency, task-specific correctness, citation recall, and citation precision; its automatic citation judgments are themselves NLI-model estimates [@gao2023alce]. The original 2025 FACTS Grounding benchmark used long documents of up to 32,000 tokens, a separate eligibility gate, and an aggregate of three model judges to score response-level grounding [@jacovi2025facts]. Treat that design as a versioned benchmark contract. A panel can reduce dependence on one judge, but it does not turn the verdict into ground truth.
+
+## Score Citations as Claim-Source Links
+
+Citation completeness and citation correctness answer different questions. Here $I$ is the set of claims that require external support; $c_i$ is claim $i\in I$; $w_i>0$ is its declared importance weight; $A_i$ is the set of source spans attached to $c_i$; and $Q(A_i,c_i)=1$ when those spans jointly provide sufficient support without contradiction, or $0$ otherwise. Then
+
+$$
+C_{\mathrm{cite}}=
+\frac{\sum_i w_i Q(A_i,c_i)}{\sum_i w_i}.
+$$
+
+For link-level correctness, let $L$ be the set of attached claim-span links $(i,j)$, where $j$ identifies one cited span, and let $q_{ij}=1$ when span $j$ contributes support to claim $c_i$ without contradicting it, or $0$ otherwise:
+
+$$
+P_{\mathrm{link}}=
+\frac{\sum_{(i,j)\in L}q_{ij}}{|L|}.
+$$
+
+Here $C_{\mathrm{cite}}$ denotes citation completeness, and each $\sum_i$ runs over $i\in I$. The value $P_{\mathrm{link}}$ denotes link correctness, and $|L|$ is the number of citation links. If $I$ or $L$ is empty, the corresponding metric is not applicable unless the protocol independently establishes that no citations were required. Report contradiction, incorrect placement, stale sources, and source quality separately. A response can have high link correctness and low completeness by citing one claim perfectly while leaving the rest unsupported.
+
+## Use Weak Signals Only for Triage
+
+Signals that do not consult authoritative evidence can prioritize review, but they cannot certify truth. SelfCheckGPT sampled a black-box model repeatedly and used sentence-level inconsistency as a warning signal on a WikiBio experiment [@manakul2023selfcheckgpt]. Consistent samples may repeat the same common falsehood; inconsistent samples may reflect ambiguity or several valid answers. Citation count, URL validity, lexical overlap, judge confidence, and agreement among related models have the same limitation: each can reveal a suspicious case, but none establishes factual support.
+
+## An Operating Contract for Evidence Evaluation
+
+Before a factuality or grounding result can gate a release, its record should answer:
+
+1. Which decision, population, authority, as-of time, and error costs define the target?
+2. Is the system closed-book, supplied-context, or bounded-search, and what exact evidence boundary applies?
+3. Which claims require support, how are claims extracted, and how is extraction recall audited?
+4. Which statuses distinguish support, contradiction, insufficient evidence, and non-checkable content?
+5. Which corpus, retriever, ranking, packed-context, generator, and citation artifacts are retained?
+6. How were extractor, retriever, verifier, and model judge validated on locked cases and slices?
+7. Which metrics expose factual precision, requested-content coverage, contradiction, abstention, and citation quality without hiding omissions?
+8. How are temporal change, source conflict, access control, and source quality handled?
+9. Which failures trigger human review, deterministic checking, retrieval repair, or refusal?
+10. Which data, model, prompt, corpus, policy, or judge changes require revalidation?
+
+The handoff to @sec-context-engineering and @sec-rag-retrieval is the complete trace, not just a score. The handoff to @sec-operational-evaluation is an append-only regression case containing the evidence boundary and every stage needed to reproduce the failure.
 
 ::: {.callout-important}
 ## What's contested
-There is no settled universal factuality metric. Claim-level metrics give better diagnosis but depend on claim extraction and evidence retrieval. Short-form benchmarks give cleaner labels but miss synthesis over long documents. RAG metrics can run without human references but often rely on model judges, reintroducing judge bias. The durable lesson is narrower: report the axis being measured. Truthfulness, factuality, faithfulness, and attribution are related, but substituting one for another is how a fluent answer with decorative citations gets mistaken for a grounded one.
+
+There is no universal factuality metric because the target itself varies. Open-world truth may be disputed or time-dependent; supplied-context faithfulness can reward fidelity to a bad source; long-form atomic scoring depends on extraction and evidence search; and automatic support judgments inherit the limitations of their judges. The defensible claim is local: under this authority, evidence boundary, case population, and evaluator revision, these claims received these statuses with these measured errors.
 :::
 
 ::: {.callout-tip}
 ## Lower-layer constraint
-Grounding quality is constrained by retrieval and context before the generator ever speaks. If @sec-rag-retrieval returns the wrong passages, or @sec-context-engineering drops the right passage, no factuality scorer can recover a grounded answer afterward. The evaluation layer can expose the failure and route it to the right owner, but it cannot make missing evidence appear in the context window.
+
+Evaluation can locate a missing-evidence boundary only when retrieval and context artifacts are preserved. If the right span never entered the packed context, a later factuality score cannot make it available to the generator. If the span was present, the same trace can distinguish a generation failure from a citation-attachment failure and route the repair to the correct layer.
 :::
 
 ## Further reading

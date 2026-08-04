@@ -840,7 +840,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/05-factuality-grounding.qmd",
-      ["Four Words That Should Not Collapse", "From Answer to Claims", "Short Answers and Abstention", "Grounding in Retrieval Systems"],
+      ["An answer can be true without being grounded", "Define the Claim Before the Metric", "Treat Abstention as a Decision Policy", "Score Citations as Claim-Source Links"],
     ],
     [
       "zh/evaluation/05-factuality-grounding.qmd",
