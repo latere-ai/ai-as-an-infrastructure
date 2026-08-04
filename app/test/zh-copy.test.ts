@@ -920,7 +920,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/index.qmd",
-      ["Safety is not one layer", "what the model is doing internally", "where evidence is created", "where authority is granted"],
+      ["Safety is not a layer added after capability is built", "what control that evidence can justify", "Internal evidence is not itself a control", "None can substitute for the others"],
     ],
     [
       "zh/safety/index.qmd",
