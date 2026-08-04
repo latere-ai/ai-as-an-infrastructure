@@ -856,7 +856,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/07-operational-evaluation.qmd",
-      ["The Release Gate Is a Policy", "The Private Suite Is an Asset", "Drift Is Not One Thing", "Quality Is Not the Only Axis"],
+      ["Write the Release Policy Before the Run", "Collect Different Evidence at Each Stage", "Keep the Private Suite Useful", "Diagnose Drift Before Changing the Gate"],
     ],
     [
       "zh/evaluation/07-operational-evaluation.qmd",

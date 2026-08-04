@@ -1,139 +1,217 @@
 # Operational Evaluation and Governance {#sec-operational-evaluation}
 
-Offline evaluation tells a team what a model did on a controlled set. Production evaluation tells the team whether a living system should keep running, roll back, ask for review, or collect a new failure for the next regression suite. The two are connected, but they are not the same job.
+An offline evaluation ends with a result. Operational evaluation ends in an operational decision: promote, hold, narrow, roll back, or escalate the complete system revision. It also states what new evidence can change that decision. The object under review is not a model name alone. It is the model together with its prompt, retrieval data, tools, policies, routing, and serving configuration.
 
-This chapter closes Part VII by turning measurement into an operating discipline. It does not repeat the tool wiring in @sec-eval-practice. Instead, it defines the release gates, private suites, drift checks, cost-quality frontiers, documentation, and governance contracts that make those tools meaningful.
+This chapter closes Part VII by connecting measurement, deployment, monitoring, and learning. Earlier chapters define valid tasks, statistical comparisons, human rubrics, model judges, factuality checks, and agent outcomes. Here those instruments become one release loop. The implementation tools live in @sec-eval-practice; the concern here is the operating contract they must enforce.
 
-![Quality, cost, and latency form an operational frontier, a Pareto frontier: the set of operating points where you cannot improve one metric without worsening another. The best operating point is rarely the model with the highest raw benchmark score; dominated choices, the ones that sit off the frontier, cost more or run slower without enough quality gain. Schematic, not measured data.](/figures/operational-evaluation-1.svg){#fig-operational-evaluation-1}
+![Quality, cost, and latency form a Pareto frontier: the operating points for which no measured axis can improve without another worsening. A point behind the frontier is dominated by another measured option. The figure is schematic rather than measured data.](/figures/operational-evaluation-1.svg){#fig-operational-evaluation-1}
 
-## The Release Gate Is a Policy
+## Write the Release Policy Before the Run
 
-An operational evaluation suite has a different job from a research benchmark. A research benchmark asks which system is better under a public protocol. A release gate asks whether this particular system version is allowed to affect users. That makes the gate a policy, not a chart.
+A research comparison asks what happened under a published protocol. A release gate asks whether a named candidate may affect a named population. The gate is therefore a versioned policy, not a favorable chart or a meeting-time judgment.
 
-The policy needs four fields:
+The roots of this practice predate generative AI. Sculley and colleagues described how data dependencies, configuration, monitoring, and other surrounding machinery create hidden technical debt in machine-learning systems in 2015. Breck and colleagues then framed production readiness as tests across data, model, infrastructure, and monitoring in 2017 [@sculley2015debt; @breck2017mltestscore]. Generative systems enlarge the tested surface, but do not remove that lesson: a release decision belongs to the deployed system and its operating environment.
 
-- **Scope.** Which model, prompt, retrieval index, tool set, guardrail, and routing rule are under test.
-- **Threshold.** Which metrics must improve, which must not regress, and how uncertainty is handled.
-- **Authority.** Who can override the gate, and what evidence must be recorded.
-- **Fallback.** What happens if the gate fails: rollback, shadowing, human review, narrower traffic, or more data.
+A minimal gate specification makes that surface explicit:
 
-This is the operational counterpart of @sec-statistical-reliability. A number with no decision rule produces debate after every run. A decision rule with no uncertainty produces brittle automation. A gate needs both.
+```text
+ReleaseGateSpec:
+  decision_id
+  candidate_system_hash
+  baseline_system_hash
+  target_population
+  evaluation_manifest_hash
+  metric_and_scorer_versions
+  primary_decision_rule
+  guardrail_margins
+  invalid_outcome_policy
+  stage_plan
+  rollback_target
+  decision_authority
+  override_policy
+  evidence_expiry
+```
 
-Both halves have concrete shapes. The decision rule compares the candidate against a pinned baseline and is evaluated by machine: a metric, a threshold that may be absolute, relative, or a categorical change, and an action, flag or alert. A human noticing a delta on a dashboard is not a gate. The uncertainty half is a noise model. At the small run counts an operational suite can afford, the noise floor comes from run-to-run spread within a single condition, and a delta should be tested with methods that stay exact at small samples: a permutation test for numeric metrics and Fisher's exact test for pass rates, both of which compute how surprising the observed delta is directly from the handful of runs at hand rather than assuming large-sample approximations. A delta inside that noise floor must render as noise, not as a regression.
+The two system hashes cover every behavior-bearing component: model revision and route, decoding policy, prompts, tool and API schemas, retriever and corpus, safety policy, sandbox, and application code. The target population names the users, tasks, languages, risk classes, and time period to which the decision applies. The invalid-outcome policy decides in advance how timeouts, grader faults, missing labels, and infrastructure failures enter the analysis. The entire specification is written before the confirmation run. A dashboard is evidence; it is not the policy.
+
+The statistical rule can be stated compactly. Let $v$ be the candidate system revision and $b$ the baseline revision. For higher-is-better quality metric $j$ on predeclared slice $s$, let
+
+$$
+\Delta_{js}(v,b)=q_{js}(v)-q_{js}(b).
+$$
+
+Here $q_{js}(v)$ is the target value of metric $j$ for candidate $v$ on slice $s$, $q_{js}(b)$ is the corresponding baseline value, and $\Delta_{js}(v,b)$ is their difference. A useful release rule has the form
+
+$$
+G(v)=N(v)\land F(v)\land H(v)\land E(v).
+$$
+
+Here $G(v)$ is the final gate decision. $N(v)$ is true only when the lower confidence bound for every required $\Delta_{js}(v,b)$ exceeds $-\delta_{js}$, where $\delta_{js}\ge 0$ is the predeclared non-inferiority margin. $F(v)$ is true only when the lower confidence bound for every required $q_{js}(v)$ meets its absolute quality floor $f_{js}$. $H(v)$ is the hard operational predicate covering such conditions as safety assertions, valid outputs, latency limits, and error budgets. $E(v)$ is the evidence-validity predicate: the correct manifest ran, required sample sizes were reached, graders passed health checks, and no disallowed exclusions occurred. All four conditions must hold. Lower-is-better measures use the same logic after reversing the sign or defining an upper-bound predicate explicitly.
+
+This rule distinguishes three outcomes that dashboards often blur. A pass meets the declared margins. A fail crosses a blocking boundary. An unresolved result lacks enough valid evidence to exclude a material regression. An unresolved result is not a pass; the policy must say whether to collect more evidence, narrow exposure, or keep the baseline.
+
+Run candidate and baseline on the same independent units whenever possible. Analyze the paired difference rather than two unrelated score intervals. For paired binary outcomes with few disagreements, use the exact McNemar test; for numeric task scores, use a paired randomization or bootstrap procedure that preserves the sampling unit. In every case, retain the effect estimate and interval, not just a thresholded test result. @sec-statistical-reliability gives the full analysis contract. Do not search for a favorable slice after the run and promote it to the primary claim.
+
+## Collect Different Evidence at Each Stage
+
+No offline suite represents every production condition. Release engineering therefore widens exposure in stages. Google's SRE workbook defines a canary as a partial, time-limited deployment evaluated against a control, and emphasizes representative traffic, attributable metrics, isolation, and rollback [@warner2018canarying]. The same structure applies to an AI system, but each stage must inspect model-specific quality as well as ordinary service health.
 
 ```{dot}
 //| label: fig-operational-evaluation-gates
-//| fig-cap: "Operational evaluation moves through progressively more realistic gates. Each gate has a different blast radius and a different kind of evidence: offline regression catches known failures, shadow traffic catches integration failures, canary catches user-distribution failures, and production monitoring catches drift."
+//| fig-cap: "A release moves through four evidence stages. Failure or insufficient evidence at any stage holds or rolls back the candidate. Confirmed production failures return as candidates for the private suite rather than entering it without review."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.35; ranksep=0.45;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  CI [label="offline CI\nregression suite"];
-  SH [label="shadow traffic\nno user effect"];
-  CA [label="canary\nsmall blast radius"];
-  PR [label="production\nmonitoring"];
-  RB [label="rollback or\nhuman review"];
-  DS [label="new failure\nenters suite"];
-  CI -> SH -> CA -> PR;
-  CI -> RB [label="fail", style=dashed];
-  SH -> RB [label="fail", style=dashed];
-  CA -> RB [label="fail", style=dashed];
-  PR -> DS [label="sampled failure"];
-  DS -> CI;
+  rankdir=TB;
+  nodesep=0.24; ranksep=0.28;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1, width=2.15];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  OFF [label="offline confirmation"];
+  SH [label="shadow traffic"];
+  CAN [label="canary exposure"];
+  MON [label="production monitoring"];
+  IN [label="validated regression candidate"];
+  OFF -> SH [label="pass"];
+  SH -> CAN [label="pass"];
+  CAN -> MON [label="pass"];
+  MON -> IN [label="confirmed failure"];
 }
 ```
 
-The four gates should not all use the same metric. Offline regression suites catch known failures. Where shadow traffic earns its keep is integration problems: missing tools, bad schema, latency surprises, broken retrieval. Canary buys a look at distribution shift while keeping the blast radius small, and production monitoring is what finally surfaces drift and long-tail failures. Treating one of these as a substitute for the rest creates the familiar false comfort: a system passed the test it was easiest to pass.
+| Stage | What it can establish | Typical blockers | Main limitation |
+| --- | --- | --- | --- |
+| **Offline confirmation** | Reproducibility on known tasks and locked cases | quality or safety regression, invalid run, budget violation | misses unrepresented traffic and live dependencies |
+| **Shadow traffic** | Compatibility with current requests and production-shaped load | schema errors, missing tools, retrieval failure, latency or cost surprise | output does not affect the user, so downstream outcomes are absent |
+| **Canary exposure** | Behavior and service health on a bounded live population | absolute SLO breach or candidate-control regression | limited traffic may not cover rare or delayed outcomes |
+| **Continuous production monitoring** | Ongoing validity after full release | drift, long-tail failure, policy breach, delayed harm | detection occurs after some exposure |
 
-## The Private Suite Is an Asset
+Shadow traffic duplicates a request to the candidate but returns only the baseline response. It must not execute user-visible writes, send messages, charge accounts, or mutate a shared environment. A stateful agent needs a sandbox or a dry-run tool layer; otherwise “shadow” is a second production actor.
 
-The most valuable evaluation set in a production system is often the one that cannot be published. Public benchmarks make work comparable, but they decay through saturation and contamination. A private suite is less useful for public ranking, but more useful for release decisions, because it can contain the organization's own failures, policies, customer edge cases, and business costs.
+A canary does affect users. Assign traffic so the canary and control run at the same time, preserve assignment at the user or conversation level, and label every metric by revision. Before-and-after comparisons confound the release with time. Start with cheap, fast blockers such as crashes, invalid tool calls, severe policy violations, and tail latency. Widen only when enough evidence has accumulated for the next rule. Every stage needs an automatic stop or rollback path plus a named human owner for ambiguous results.
 
-That suite needs lifecycle management:
+No stage substitutes for another. Offline confirmation is strongest on known failures. Shadowing exposes integration faults without user-visible output. A canary measures bounded live impact. Production monitoring catches later changes and rare outcomes. Passing the easiest stage says nothing about the evidence available only in the next one.
+
+## Keep the Private Suite Useful
+
+A private suite is valuable because it contains the organization's real task distribution, policies, incidents, and expensive edge cases. Its secrecy alone does not make it valid. Repeated tuning spends its independence, labels age, customer data creates handling obligations, and executable graders break as dependencies change.
+
+Separate cases by purpose:
+
+- The **development suite** is visible to builders and runs frequently. It supports debugging, so it is not independent confirmation.
+- The **locked confirmation suite** is inaccessible during selection and is opened only by the release process. Its exposure ledger records every person, system, model, and training job that could have seen an item or its answer.
+- The **diagnostic suite** contains exploratory slices, red-team probes, and newly observed failures. It locates problems but does not silently acquire release authority.
+
+An incident is evidence for a candidate case. It does not become a blocking test until the case has passed de-identification, scope review, reproducibility checks, label or outcome validation, and positive and negative grader cases. A one-off support report may be real yet impossible to reproduce; a production trace may include private data; a judge may reward the wording of the original answer rather than the intended behavior. The intake process has to resolve those problems before the next release depends on the case.
+
+Each item needs a source, owner, target failure mode, population tag, severity, immutable input fixture, allowed behavior, grader revision, exposure status, and retirement condition. Run reset checks for stateful tasks. Audit a sample of passing items as well as failures so a permissive grader cannot make the suite look healthy. Retire or relabel an item when policy, facts, APIs, or product behavior change. Preserve its history rather than rewriting old release evidence.
+
+The lifecycle is therefore:
 
 ```text
-PrivateEvalSuite:
-  source             # incident, support ticket, red-team run, expert case, synthetic probe
-  owner              # team responsible for the failure mode
-  label_protocol     # human, executable, judge, state check
-  severity           # release-blocking, guardrail, exploratory
-  exposure           # who has seen the item or answer
-  version            # immutable item version
-  rotation_policy    # when to retire, refresh, or hide
+observe -> triage -> de-identify -> reproduce -> label and test grader
+        -> assign suite role -> version -> monitor exposure -> retire or relabel
 ```
 
-This is where operational evaluation inherits the lesson from @sec-benchmarks. A suite is not merely a folder of prompts. It is an asset whose integrity can be spent. Every time answers leak into training data, every time a prompt is pasted into a public issue, every time a model is tuned against the same item, the suite loses some ability to surprise the next model. Rotation is not bureaucracy. It is how the gate stays alive.
+This is evaluation-data maintenance, not clerical cleanup. Hidden dependencies and undeclared consumers are precisely how test infrastructure becomes technical debt [@sculley2015debt]. @sec-benchmarks covers contamination and benchmark validity; @sec-data-engine operates the intake and curation path from production.
 
-Sculley et al.'s hidden technical debt argument applies directly here: the evaluation harness, data dependencies, and undocumented consumers around a model can become the system's largest maintenance burden [@sculley2015debt]. Breck et al.'s ML Test Score made the same point operationally by treating tests across data, model, infrastructure, and monitoring as production-readiness criteria [@breck2017mltestscore].
+## Diagnose Drift Before Changing the Gate
 
-## Drift Is Not One Thing
+“Drift” is not a root cause. Three different things may have changed:
 
-Drift means the live input or behavior changing over time, after a version that passed its gate is already serving users. Production drift is often named as one phenomenon, but the useful debugging split is finer.
+- **System change:** the model endpoint, route, prompt, retriever, corpus, tool, policy, or application revision changed.
+- **Population change:** the mix of users, tasks, languages, threats, or external conditions moved away from the release population.
+- **Measurement change:** the rubric, judge, annotator mix, telemetry coverage, parser, or outcome definition changed.
 
-- **Input drift.** User requests change. A prompt distribution shifts from casual questions to high-stakes workflows.
-- **Context drift.** The retrieval corpus, index, ranking model, or document parser changes.
-- **Model drift.** A hosted model version changes, or a routing policy changes which model sees which tasks.
-- **Policy drift.** The allowed behavior changes because the product, law, or safety policy changes.
-- **Metric drift.** The judge, rubric, or telemetry schema changes.
+These changes require different responses. A system change calls for comparison with the last known revision. A population change may require a new slice, new weighting, or a narrower product claim. A measurement change requires replaying the old and new instrument on the same stored evidence before attributing a behavior change to the system.
 
-D'Amour et al. call attention to underspecification: many predictors can have similar held-out performance yet behave differently in deployment [@damour2020underspecification]. LLM systems inherit that problem and add more moving parts. Two versions can tie offline and diverge online because the prompt template routes users into different behavior, or because the retriever changed the evidence distribution.
+Use three complementary monitors. Fixed sentinel cases detect changes in a supposedly pinned system. Sampled live traffic estimates current behavior on the population being served. Delayed outcome labels connect proxy scores to events such as task completion, correction, appeal, or incident. The first is stable but narrow, the second is current but needs privacy-aware sampling and grading, and the third is closest to user value but often arrives late and selectively. Direct risk-monitoring methods can use sampled or delayed labels while preserving guarantees under repeated looks, but their validity still depends on the declared loss and sampling process [@podkopaev2022tracking].
 
-Operational evaluation therefore needs provenance for every score. A trace should say not only which model answered, but which prompt template, model gateway route, tool schema, retriever index, judge version, and policy version participated. OpenTelemetry's GenAI conventions are one attempt to make such traces portable across tools and vendors [@otel2026genai44]. @sec-eval-practice discusses the concrete wiring; here the principle is that a score without provenance cannot be audited.
+Input-distribution alarms can help locate change. Rabanser, Günnemann, and Lipton compared dataset-shift detectors and found representation-based two-sample approaches effective across the image shifts they studied [@rabanser2019failing]. That result does not turn a distance between prompt embeddings into a quality verdict. A distribution alarm does not prove a quality regression, and a stable input distribution does not prove stable behavior. Route the signal to investigation, then inspect outcomes on the affected slice.
 
-The provenance list is longer than intuition suggests. The unit of experimental identity is the full conditioning tuple: the model id together with the serving route, recording what the gateway actually served, since an alias resolves to a dated snapshot; the harness together with its exact version; the sandbox image tag; the API dialect in use, the request format the harness speaks; the reasoning-effort setting as configured, as actually sent, and as observed in reasoning tokens, because effort knobs are ceilings under adaptive thinking and harnesses ship silent defaults of their own; and a content hash of the prompt. Whether a comparison is single-variable is then computed from the diff of two tuples, never asserted by the person who ran it. One measurement study supplies the cautionary case: a point release of the harness CLI alone reversed a behavioral result, destroying one model's five-of-five topic fixation while the same behavior in another model survived, and an effort-default mismatch between two harnesses nearly produced a false claim of a harness effect; both were caught only because version and effort were recorded fields of the tuple [@ou2026goalless].
+Underspecification adds another warning. Systems with similar held-out scores can behave differently in deployment because the test did not constrain every relevant behavior [@damour2020underspecification]. Operational monitoring should therefore preserve outcome and slice evidence, not merely confirm that an aggregate resembles the release score.
 
-Provenance also settles what may be reused. Completed run evidence is immutable: an interrupted suite resumes by executing only the missing runs, and carrying results from an old suite into a new one must be explicit, age-guarded, and marked in the report, because a pinned tuple does not pin the provider side forever.
+Every score must be reconstructable. OpenTelemetry's development-status GenAI conventions provide shared names for common model, agent, tool, evaluation, and span data [@otel2026genai44]. They cover only part of an auditable evaluation record, and their prompt, output, and tool content can be sensitive. Pin the convention revision; store hashes or controlled artifact references instead of indiscriminately copying raw content. Semantic conventions do not identify the whole experiment. The application still needs its own immutable release record:
 
-Model drift is also the one kind that arrives on a schedule, because hosted catalogs churn. The workable response treats churn as a work queue: watch the model catalog and the harness registry, compute which cells of the tracked suite have never run, propose the missing runs with cost estimates, and let a human approve the budget, enforced by metered credentials with spend caps. Before committing the full run count, smoke-probe each new model and harness combination with a single run: new pairs frequently fail on dialect plumbing, and a failure that was never smoked enters the record as if it were data.
+```text
+ReleaseDecision:
+  decision_id
+  system_component_hashes
+  evaluation_result_ids
+  rollout_stage
+  traffic_assignment
+  stage_results
+  monitoring_window
+  override_actor_and_reason
+  override_expiry
+  decision_and_timestamp
+  rollback_target_and_trigger
+  incident_followup_ids
+```
 
-## Quality Is Not the Only Axis
+The `evaluation_result_ids` point to the immutable statistical records defined in @sec-statistical-reliability, which already carry the population, suite, scorer, raw outcomes, exclusions, estimates, and intervals. The release record adds what that analysis does not know: rollout stage, authority, monitoring window, and rollback action. Store it and later corrections as append-only evidence. Regrading creates a new result linked to the old one; it does not overwrite the decision that was actually made. Evidence copied from an earlier run must retain its original system identity and age. Otherwise a report can appear reproducible while quietly combining different conditions.
 
-The best model by raw quality may be the wrong production choice. Users feel latency, and the finance team watches cost. Risk is the safety team's axis, while the failure rate is what operators live with. Evaluation must therefore report frontiers rather than single winners.
+## Compare the Operating Frontier Before Choosing a Point
+
+Raw task quality is only one production axis. A candidate also consumes money and time, creates review load, and carries risks that may not be exchangeable. Report the Pareto frontier first: remove options that are no better on any measured axis and worse on at least one. Then choose among the remaining options under the product's constraints.
 
 ```{=html}
 <figure id="fig-operational-evaluation-frontier">
 <div class="viz" data-viz="eval-frontier"></div>
-<figcaption>Quality, cost, and latency define an operating frontier. Drag the penalty weights: the model with the highest raw quality stops being the best choice once cost or latency carries enough operational weight.</figcaption>
+<figcaption>Quality, cost, and latency define an operating frontier. Dragging the policy weights shows why the highest-quality point is not always the selected point. The visualization is illustrative, not a release calculator.</figcaption>
 </figure>
 ```
 
-One practical scalar is a utility score,
+When the trade-offs are genuinely commensurable, a declared utility function can make the choice inspectable:
 
 $$
-U(m) = Q(m) - \lambda_c C(m) - \lambda_l L(m) - \lambda_r R(m),
+\begin{aligned}
+U(m) &= Q(m) - \lambda_c C(m) \\
+     &\quad - \lambda_l L(m) - \lambda_r R(m).
+\end{aligned}
 $$
 
-where $Q$ is task quality, $C$ is cost per task, $L$ is latency, $R$ is risk or expected review burden, and the $\lambda$ values are weights you set by hand to express the product's operating priorities, not parameters learned from data. The formula is not a universal metric. It is a forcing function: it makes the trade-off explicit. A customer-support bot and a code-repair agent should not use the same weights.
+Here $m$ is a complete system option; $Q(m)$ is its task-quality value; $C(m)$ is metered cost per task; $L(m)$ is a declared latency statistic; and $R(m)$ is an expected review or incident burden measured under a stated policy. The nonnegative weights $\lambda_c$, $\lambda_l$, and $\lambda_r$ convert those burdens into the same decision scale as quality. The weights are policy choices, not facts learned automatically from the evaluation.
 
-One accounting rule keeps $C(m)$ tied to the bill: take cost from the gateway's metered usage records, joined per request to the evaluation run, rather than re-estimating it from token counts and a price sheet. The re-derived number drifts from what is actually billed.
+Keep the inputs concrete. Report median and tail latency, not only a mean. Join metered cost from the gateway or billing ledger to each run rather than reconstructing an approximate bill from a stale price sheet. Include invalid-run and fallback rates. State whose burden the utility represents.
 
-This is the bridge to @sec-economics. A price change can move a model onto or off the frontier with no change in capability at all. Faster serving in @sec-serving-stack often makes a slightly weaker model the better operating point, and a better human review surface in @sec-human-interface-oversight lowers $R(m)$ by catching uncertain cases before they cause harm.
+The scalar comes after hard boundaries. Quality guardrails remain constraints when the product cannot buy its way out of a severe regression. A scalar cannot authorize a safety trade merely because a dangerous option is cheaper or faster. @sec-economics develops the cost side; @sec-serving-stack and @sec-human-interface-oversight determine latency and review burden.
 
-## Governance Turns Evidence into Memory
+## Make the Decision Survive the Meeting
 
-Evaluation evidence becomes governance when it is written down in forms that survive the release meeting. Model cards report intended uses, evaluation procedures, and disaggregated performance [@mitchell2019modelcards]. Datasheets for Datasets do the same for the data that evaluation and training depend on [@gebru2021datasheets]. NIST's AI Risk Management Framework makes "measure" one of the core functions alongside govern, map, and manage [@nist2023airmf].
+Governance starts when the evidence, authority, and follow-up outlive the people in the release meeting. Model cards provide a structure for intended uses, evaluation procedures, and disaggregated performance [@mitchell2019modelcards]. Datasheets for Datasets record the motivation, composition, collection, use, and maintenance of data assets [@gebru2021datasheets]. NIST's AI Risk Management Framework organizes risk work around govern, map, measure, and manage, and is explicitly voluntary and use-case agnostic [@nist2023airmf]. These artifacts serve different scopes; none replaces the release record.
 
-These documents are sometimes treated as compliance paperwork. For a production AI system, they are more useful when treated as operational memory:
+Every blocking metric, suite, and production monitor needs a named owner. Every manual decision needs the evidence reviewed and the authority used. An override is a new decision, not deletion of a failed gate. Make every override time-bounded, name the accepting owner, record the reason and compensating controls, narrow traffic when appropriate, and set the evidence or date that forces reconsideration.
 
-- which evals blocked the last release;
-- which slices are known weak;
-- which private suites must not enter training;
-- which human review gates are mandatory;
-- which benchmark claims are public, private, or deprecated;
-- which incidents created which regression tests.
+After an incident, record four separate outputs:
 
-The final bullet is the most important. Every serious production failure should become either a regression test or an explicitly accepted risk. If neither happens, the organization has not learned from the failure. It has only recovered from it.
+1. the user or system impact;
+2. the contributing system and measurement failures;
+3. the corrective action and owner;
+4. a regression candidate or an explicitly accepted risk.
+
+The regression candidate then follows the private-suite intake process. If it proves reproducible and decision-relevant, it enters a versioned suite. If it cannot become a test, the accepted-risk record must state why and how the risk is monitored. That distinction prevents a slogan such as “every incident becomes a test” from filling the suite with brittle or privacy-unsafe fixtures.
+
+A practical operating review asks:
+
+1. What complete system and target population does this decision cover?
+2. Which locked evidence supports the primary claim and each guardrail?
+3. Are pairing, uncertainty, invalid outcomes, and slices handled as declared?
+4. What distinct evidence did offline, shadow, and canary stages add?
+5. Which production signals can stop or roll back the release?
+6. Who owns the decision, override, rollback, and evidence expiry?
+7. How will confirmed failures close the loop without contaminating confirmation data?
+
+If any answer exists only in someone's memory, the gate is not yet operational.
 
 ::: {.callout-important}
 ## What's contested
-The hard boundary is how much release authority should be automated. Fully manual review is slow and inconsistent. Fully automatic gates can overfit to stale suites and block improvements for the wrong reason. The workable middle is tiered authority: automatic gates for deterministic assertions and high-confidence regressions, human review for ambiguous or high-impact changes, and explicit override records when a business owner accepts risk. This is less elegant than a single score, but production systems rarely fail along one metric. The same boundary appears in reporting: aggregating results into tables automates well, but machine-written interpretation over-claims without review. Generated narrative should stay draft-only behind a lint, every claim citing a comparison, confounded comparisons naming their confounds inline, every number derivable from stored grades, with a human approving the text before it circulates.
+
+The disputed boundary is how much authority to automate. Deterministic safety assertions, schema validity, service SLOs, and predeclared statistical margins are good candidates for automatic hold or rollback. Open-ended quality judgments, policy changes, sparse severe harms, and conflicts between metrics often need human review. Human review is not a license to improvise: the reviewer still needs a declared role, the same evidence record, and a reasoned decision. Conversely, automation is not neutral; a stale suite or biased judge can enforce the wrong policy consistently.
 :::
 
 ::: {.callout-tip}
 ## Lower-layer constraint
-Operational evaluation is constrained by the deployment lifecycle. If @sec-deployment-lifecycle cannot route a new version to shadow or canary traffic, the evaluation layer has only offline evidence. If @sec-wiring-stack bypasses the model gateway, judge calls and application calls cannot be compared under the same routing, budget, and trace scheme. Release gates are only as real as the platform primitives underneath them.
+
+Operational evaluation depends on deployment and observability primitives. Without stable system hashes and trace identifiers, @sec-eval-practice cannot reconstruct evidence. Without isolated shadow execution, traffic assignment, staged routing, and a known-good rollback target, @sec-deployment-lifecycle cannot enforce the gate. Without versioned tasks and final-state checks from @sec-evaluating-agents, agent outcomes collapse back into self-reported success. Governance can assign authority to a control only after the lower layers make that control real.
 :::
 
 ## Further reading
