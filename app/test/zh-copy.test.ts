@@ -776,7 +776,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/orchestration/09-embeddings-representation.qmd",
-      ["generator's hidden states make a poor metric space", "alignment against uniformity", "query-document interaction", "negatives are the central training variable", "web-mined pairs", "decoder itself becoming the embedder"],
+      ["versioned scoring interface", "Nearness does not by itself mean", "Training data defines relevance", "hard false negative", "derived content, not anonymized content", "model choice is conditional"],
     ],
     [
       "zh/orchestration/09-embeddings-representation.qmd",

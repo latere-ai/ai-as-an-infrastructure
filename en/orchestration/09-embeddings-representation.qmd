@@ -1,524 +1,452 @@
 # Embeddings and Representation Learning {#sec-embeddings}
 
-The retrieval of @sec-rag-retrieval leaned on a model that maps a query and a
-chunk into one vector space, a dual-encoder, with a cross-encoder reranker and
-ColBERT's late interaction as the more expressive cousins. That chapter used
-those models. It did not say how they come to place related text near each
-other. The missing mechanism is representation learning. A generator's hidden
-states make a poor metric space. A contrastive objective repairs that by trading
-alignment against uniformity on a sphere, while the placement of the
-query-document interaction sets the cost-quality trade-off. In the end,
-negatives are the central training variable. Modern embedders then stretch one
-model across tasks and vector sizes, while the data path runs from web-mined
-pairs to LLM-generated pairs and finally to the decoder itself becoming the
-embedder.
+An embedding is a versioned scoring interface. It turns text, its role, and an
+optional task instruction into a fixed-length vector. A retrieval system can
+then compare one query vector with millions of stored document vectors without
+running a language model over every pair. The useful promise is narrow: text
+pairs judged relevant by the training process should receive higher scores than
+irrelevant pairs. Nearness does not by itself mean that two texts are synonyms,
+factually correct, authorized for the same user, or useful for every task.
+
+Chapter @sec-rag-retrieval treated dense retrieval as one candidate-generation
+channel. This chapter opens that channel. The central engineering problem is not
+to discover a universal geometry of meaning. It is to define one ranking
+contract, learn it from imperfect pairs, preserve it through indexing, and know
+when a model or index change has broken it.
 
 ![Schematic embedding plane showing clusters, near neighbors, and a hard negative. Representation learning is about shaping distances so retrieval and transfer use the right geometry. Idealized positions, not measured embeddings.](/figures/embeddings-representation-1.svg){#fig-embeddings-representation-1}
 
-## A geometry you can compare
+## Start with the scoring contract
 
-A language model is trained to predict the next token, and nothing in that
-objective asks two texts that mean the same thing to land near each other. The
-deeper problem is geometric. The hidden states of a trained language model are
-*anisotropic*: they do not spread over the representation space but crowd into a
-narrow cone, so two randomly chosen texts already point in almost the same
-direction. Ethayarajh measured this directly, defining anisotropy as the
-expected cosine similarity between uniformly random word representations, where
-$0$ is isotropic and a value approaching $1$ is a degenerate cone. In GPT-2's
-last layer that expected similarity is close to $0.99$, and even BERT, a
-bidirectional masked model, sits around $0.6$ to $0.7$ in its upper layers
-[@ethayarajh2019contextual]. When every pair is already near-parallel, cosine
-similarity has almost no dynamic range left to separate the related from the
-unrelated, which is exactly what a retriever needs it to do.
+An embedding has meaning only together with the transformation that produced
+it. Two arrays of 768 floating-point numbers are not necessarily comparable.
+They may come from different tokenizers, pooling rules, task prompts, model
+checkpoints, or normalization conventions. Record those choices as data:
 
-Two distinct phenomena hide under the word "cone," and they are easy to
-conflate. The first is *representation degeneration*: in a likelihood-trained model
-with tied input and output embeddings, the gradient from the softmax over rare
-tokens pushes their embedding vectors into a shared direction, collapsing the
-static embedding matrix toward low rank [@gao2019degeneration]. The second is the
-*contextual* anisotropy above, a property of the per-token hidden states that
-grows layer by layer and is, in Ethayarajh's reading, inherent to the act of
-contextualization itself. Autoregression alone is not the culprit, since the
-bidirectional BERT is anisotropic too. The broader issue is that
-language-model-style training produces spaces whose distances do not track
-meaning. Pooling a decoder's states gives a mediocre retriever for this reason,
-and the fix is not a different architecture but a different objective.
+```text
+EmbeddingSpec {
+  model_id, model_revision, tokenizer_revision
+  query_role, document_role, instruction_version
+  pooling, source_layer, max_tokens, truncation_policy
+  dimension, normalization, similarity, dtype, quantization
+}
 
-Retrieval needs the opposite of generation. It needs a space where a single
-distance, computed once and indexed, ranks a million chunks against a query. The
-embedding model exists to learn that space, and it is trained for it directly
-rather than borrowed from a generator.
-
-## The contrastive objective
-
-The principle is to pull a positive pair together and push negatives apart.
-InfoNCE, introduced for contrastive predictive coding [@oord2018cpc], scores a
-query $q$ against its positive document $d^{+}$ and a set of negatives
-$\{d^{-}_j\}$ as a softmax over similarities, with a temperature $\tau$. Softmax turns a row
-of scores into positive weights that sum to one, so they read as probabilities,
-and the temperature $\tau$ is a divisor that sharpens or flattens those weights.
-Here $q$ is the query embedding, $d^{+}$ is the document that should be
-retrieved, and the $d^{-}_j$ are competing documents:
-
-$$
-\mathcal{L} = -\log
-\frac{\exp(\operatorname{sim}(q, d^{+})/\tau)}
-{\exp(\operatorname{sim}(q, d^{+})/\tau) + \sum_j \exp(\operatorname{sim}(q, d^{-}_j)/\tau)}
-$$
-
-Here $\operatorname{sim}$ is the query-document similarity score and $\tau$ is
-the temperature that decides how sharply the softmax focuses on the hardest
-negative. The numerator is the positive pair; the denominator is the same score
-competing against all positives and negatives in the candidate set. The model
-learns by discrimination, not reconstruction: it never has to generate the
-document, only to rank the right one above the wrong ones. At its optimum the
-score recovers a density ratio, $\operatorname{sim}(q,d) \propto \log
-\frac{p(d \mid q)}{p(d)}$, and the original paper read this through information
-theory: with $N$ candidates the loss bounds the mutual information (how much knowing one item
-tells you about the other) between query and positive from below, $I(q; d^{+}) \ge \log N - \mathcal{L}$
-[@oord2018cpc]. That inequality has a sharp practical edge. The bound is ceilinged
-at $\log N$, so the only way to estimate a large dependency tightly is to score
-against many negatives at once, which is the first reason batch size and negative
-count run through every recipe below.
-
-The mutual-information story motivates the loss but does not explain why its
-embeddings are good, and treating a tighter MI bound as the goal can even make
-representations worse [@wang2020alignment]. The explanation that holds is
-geometric. Wang and Isola showed that, in the limit of many negatives, the
-contrastive loss on $\ell_2$-normalized vectors decomposes into two measurable
-properties on the unit hypersphere [@wang2020alignment]. In words, the first
-number tracks whether a related pair ends up near each other and the second
-whether unrelated text uses the whole sphere instead of collapsing together.
-*Alignment* asks that a
-positive pair land close,
-
-$$
-\mathcal{L}_{\text{align}} = \mathbb{E}_{(x,y)\sim p_{\text{pos}}}
-\big[\, \lVert f(x) - f(y) \rVert_2^{\alpha} \,\big],
-$$
-
-Here $x$ and $y$ are a positive pair and $f$ maps each item into the embedding
-space, so the loss is small only when paired items land nearby. *Uniformity*
-asks the complementary question, that the embeddings of unrelated text spread
-evenly over the sphere rather than collapse into a cone,
-
-$$
-\mathcal{L}_{\text{uniform}} = \log \;
-\mathbb{E}_{x,y\sim p_{\text{data}}}
-\big[\, e^{-t \lVert f(x) - f(y) \rVert_2^{2}} \,\big].
-$$
-
-Here $f$ is the embedding function, $p_{\text{pos}}$ draws true query-document or
-sentence-pair positives, and $p_{\text{data}}$ draws unrelated samples from the
-whole corpus. These two scalars, each directly measurable on a trained model, predict
-downstream quality, and optimizing them on their own matches InfoNCE. The frame
-also names exactly what was wrong in the previous section: a pre-trained language
-model has decent alignment but poor uniformity, the anisotropic cone made
-quantitative. SimCSE makes the connection mechanical. Its analysis shows that the
-uniformity term upper-bounds the sum of the entries of the embedding Gram matrix,
-and through that sum it bounds the largest eigenvalue, so minimizing it flattens
-the singular-value spectrum of the embedding space and pulls the cone open
-[@gao2021simcse]. Post-hoc fixes target the same isotropy from the outside,
-whitening the representations [@su2021whitening] or mapping them to a Gaussian
-with a normalizing flow [@li2020bertflow], but these improve uniformity at the
-cost of alignment, which is why a contrastive objective that improves uniformity
-while preserving alignment wins over both.
-
-Temperature is the last lever in this objective and a more consequential one than
-it looks. The gradient on a negative grows like $\exp(\operatorname{sim}/\tau)$,
-so the penalty is hardness-aware: nearer negatives are pushed harder, and a small
-$\tau$ concentrates almost all of the gradient on the single hardest negative,
-recovering a margin loss in the limit, while a large $\tau$ spreads the gradient
-evenly and ignores hardness [@wang2021behaviour]. The same knob trades against
-itself. A small $\tau$ buys uniformity but pushes apart even semantically similar
-neighbors, eroding the local structure that makes embeddings useful for
-similarity, so there is a *uniformity-tolerance dilemma* and a usable model lives
-in a middle band of $\tau$, commonly near $0.05$ to $0.1$ for text retrieval.
-
-::: {.callout-note}
-## Deep dive: the two ways to read InfoNCE
-There are two ways to read the contrastive loss. The information-theoretic reading
-(maximize a lower bound on $I(q;d)$) is the historical motivation and explains why
-more negatives help, through the $\log N$ ceiling. The geometric reading
-(jointly optimize alignment and uniformity) is what actually predicts embedding
-quality and connects the objective back to the anisotropy problem. The main line
-only needs the geometric reading; the MI bound is the lineage, not
-the load-bearing explanation.
-:::
-
-## Where the query and document meet
-
-Three architectures answer the same question differently: at what point are the
-query and document allowed to interact? The answer fixes the cost-quality
-trade-off, because interaction that happens early cannot be precomputed.
-
-A *cross-encoder* concatenates the query and document into one sequence and runs
-full token-to-token attention across both. It is the most accurate scorer, but
-its representation of the document depends on the query, so nothing can be
-indexed: scoring a corpus of $N$ documents costs $N$ transformer passes per
-query. Sentence-BERT put a number on the wall this builds, finding the most
-similar pair among ten thousand sentences with a BERT cross-encoder takes on the
-order of fifty million inferences and tens of hours [@reimers2019sbert]. The
-cross-encoder is therefore confined to reranking a short candidate list, the role
-it plays in @sec-rag-retrieval.
-
-A *dual-encoder*, or bi-encoder, breaks that wall by encoding the query and the
-document independently into one vector each, comparing them by cosine or dot
-product. Because the document vector does not depend on the query, the entire
-corpus is encoded once, offline, and indexed; the only online cost is encoding
-the query and a vector search. Sentence-BERT built this as a siamese network with
-shared weights and a mean-pooling layer over BERT's token outputs, chosen over
-the `[CLS]` vector or max-pooling in its ablation, and the ten-thousand-sentence
-search that took hours as a cross-encoder collapses to seconds
-[@reimers2019sbert]. The factorizability is bought by giving up cross-attention
-between the two sides, and that lost interaction is what the rest of the field
-spends its effort trying to recover cheaply.
-
-ColBERT occupies the middle. It encodes each side independently into a bag of
-*per-token* vectors and scores by *late interaction*: for each query token, take
-the maximum similarity over all document tokens, then sum, an operation called
-MaxSim [@khattab2020colbert]. The document token vectors still depend only on the
-document, so they remain precomputable and indexable, and only the cheap MaxSim
-aggregation runs online, giving roughly cross-encoder quality at orders of
-magnitude less compute per query. The price is storage, one vector per token
-rather than per document, which ColBERTv2 attacks with residual compression
-against cluster centroids and denoised distillation from a cross-encoder,
-cutting the index six to ten times smaller while improving quality
-[@santhanam2022colbertv2].
-
-```{dot}
-//| label: fig-encoder-interaction
-//| fig-cap: "Three placements of the query-document interaction. A cross-encoder mixes both sides with full attention and cannot precompute anything. A dual-encoder encodes each side to one vector independently, so documents are indexed offline. ColBERT keeps per-token vectors and interacts late through MaxSim, recovering much of the cross-encoder's quality while staying indexable. After Reimers and Gurevych (2019) and Khattab and Zaharia (2020)."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  subgraph cluster_CE {
-    label="Cross-encoder (rerank only)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    q1 [label="query"];
-    cat [label="concat + full attention"];
-    d1 [label="doc"];
-    s1 [label="score"];
-    q1 -> cat;
-    d1 -> cat;
-    cat -> s1;
-  }
-  subgraph cluster_BE {
-    label="Dual-encoder (corpus search)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    q2 [label="query"];
-    eq [label="encoder"];
-    vq [label="1 vector"];
-    d2 [label="doc (offline)"];
-    ed [label="encoder"];
-    vd [label="1 vector (indexed)"];
-    dot [label="dot product"];
-    s2 [label="score"];
-    q2 -> eq;
-    eq -> vq;
-    d2 -> ed;
-    ed -> vd;
-    vq -> dot;
-    vd -> dot;
-    dot -> s2;
-  }
-  subgraph cluster_LI {
-    label="Late interaction (ColBERT)"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    q3 [label="query"];
-    tq [label="per-token vectors"];
-    d3 [label="doc (offline)"];
-    td [label="per-token vectors (indexed)"];
-    mx [label="MaxSim sum"];
-    s3 [label="score"];
-    q3 -> tq;
-    d3 -> td;
-    tq -> mx;
-    td -> mx;
-    mx -> s3;
-  }
+EmbeddingRecord {
+  tenant, document_id, chunk_id, source_version, content_hash
+  embedding_spec_hash, vector, acl_version, index_generation
 }
 ```
 
-::: {.callout-tip}
-## Constraint arrow
-The serving layer chooses the architecture. The cost a retriever may spend
-*per query at scale* is what forbids the cross-encoder from first-stage search
-and forces the dual-encoder's independent encoding, and it is the same pressure
-that makes ColBERT's per-token index a real cost to be compressed away. The
-bi-encoder-versus-cross-encoder split @sec-rag-retrieval draws at retrieval time
-is, at training time, a decision about where the corpus's serving budget will let
-two pieces of text touch.
-:::
+The spec is part of the index schema. A query must use a compatible query-side
+spec, and every stored vector must use the corresponding document-side spec.
+For an asymmetric retrieval model, those two roles may add different prefixes
+or use different encoder weights. Omitting a required query instruction is not
+a harmless formatting change; it asks the model to apply a different scoring
+function.
 
-## Negatives are the design variable
+Let $E_q$ denote the query encoder and $E_d$ the document encoder. They may share
+weights, but they need not. For query text $x$ and document text $y$, define
 
-The positive is given; the skill is in what you push away. In a dual-encoder the
-model only ever learns from the negatives it is shown, so their distribution, not
-the loss formula, is the dominant lever, and the recipes are a history of finding
-harder ones.
+$$
+u = E_q(x),
+\qquad
+v = E_d(y),
+\qquad
+s(x,y) = u^\mathsf{T}v.
+$$
 
-The first move is to make negatives nearly free. *In-batch negatives*, introduced
-at scale by Dense Passage Retrieval, treat the other positives in a training batch
-as negatives for each query: a batch of $B$ pairs yields a $B \times B$
-similarity matrix in which each query's gold passage is its positive and the
-other $B-1$ passages are negatives, reused at no extra encoding cost
-[@karpukhin2020dense]. A larger batch therefore buys more negatives almost for
-free and directly raises retrieval quality, which is why embedding training runs
-push batch sizes into the tens of thousands. DPR added one BM25-mined hard
-negative per question on top, and reported nine to nineteen points of absolute
-top-20 accuracy over BM25 alone.
+Here $u,v\in\mathbb{R}^{d}$ are $d$-dimensional vectors,
+$u^\mathsf{T}v$ is their inner product, and $s(x,y)$ is the score used for
+ranking. If the contract applies $\ell_2$ normalization,
 
-In-batch negatives are mostly easy, though, and an easy negative teaches little.
-Once a model is decent, a random negative already sits far from the query, so its
-softmax probability is near zero and its gradient nearly vanishes. ANCE made this
-argument precise and drew the consequence: mine negatives that are actually hard
-by retrieving the current top-ranked but irrelevant documents from an approximate
-nearest-neighbor index over the whole corpus, refreshed asynchronously from a
-recent checkpoint so the negatives track the model as it improves
-[@xiong2021ance]. With genuinely hard negatives, a dot-product retriever nearly
-matched a far more expensive cross-encoder cascade. RocketQA pushed both axes
-further, gathering negatives *across* the data-parallel batch so each query sees
-many more of them than one device holds, and adding a denoising step
-[@qu2021rocketqa].
+$$
+\widehat{u}=\frac{u}{\lVert u\rVert_2},
+\qquad
+\widehat{v}=\frac{v}{\lVert v\rVert_2},
+\qquad
+\widehat{u}^{\mathsf{T}}\widehat{v}
+= 1-\frac{1}{2}\lVert\widehat{u}-\widehat{v}\rVert_2^2.
+$$
 
-That denoising step treats the deepest hazard in the whole scheme, the *false
-negative*. Retrieval corpora are sparsely labeled: a query may have many relevant
-passages but only one is annotated, so any scheme that calls everything unlabeled
-a negative will mislabel true positives as negatives, and it does so worst among
-the *hard* high-similarity candidates, punishing the model for being right. RocketQA scores
-candidate hard negatives with a cross-encoder and discards the most
-confidently-relevant ones, keeping only the confidently-irrelevant
-[@qu2021rocketqa]. Average the loss over many queries as the negatives are drawn
-closer to the query, and watch it climb, which is the signal that harder
-negatives carry more gradient.
+The hats denote unit-length vectors and $\lVert\cdot\rVert_2$ is Euclidean
+norm. On unit vectors, cosine similarity, inner product, and squared Euclidean
+distance induce the same ranking, with distance ordered in the opposite
+direction. Without normalization, vector length affects the inner product.
+Normalization must therefore match training and indexing; it is not a generic
+post-processing improvement. Dense Passage Retrieval, for example, trained and
+searched with an unnormalized inner product [@karpukhin2020dense].
+
+## Pooling decides what one vector contains
+
+A transformer produces one hidden state per input token. Retrieval usually
+needs one vector per query or chunk, so a pooling rule must compress those token
+states. For masked mean pooling,
+
+$$
+z(x)=
+\frac{\sum_{t=1}^{T} a_t h_t}
+     {\sum_{t=1}^{T} a_t}.
+$$
+
+Here $x$ contains $T$ token positions, $h_t\in\mathbb{R}^{d}$ is the hidden
+state at position $t$, and $a_t\in\{0,1\}$ excludes padding or any other token
+the contract says not to pool. A special-token pooler instead chooses one
+$h_t$; max pooling takes a coordinate-wise maximum; learned attention assigns
+data-dependent weights. The chosen layer, inclusion of special tokens, padding
+mask, and normalization after pooling all affect the result.
+
+Sentence-BERT showed why this extra training and pooling interface matters. Its
+siamese encoder produced sentence vectors that could be compared directly,
+avoiding pairwise BERT inference for semantic search. Mean pooling was its
+default and worked well in its reported ablations, but that experiment does not
+make mean pooling universal [@reimers2019sbert]. Decoder-based embedders may use
+the last token, bidirectional attention, or a learned pooler. Those are separate
+designs, not stages in a single historical progression.
+
+Unadapted language-model states are not a retrieval metric by default. The
+pretraining objective supervises token prediction, not the ordering of pooled
+query-document scores. Early contextual models also exhibited anisotropy:
+randomly sampled token representations often had a positive mean cosine rather
+than spreading evenly around the origin [@ethayarajh2019contextual]. That result
+concerned contextual token occurrences in particular BERT, ELMo, and GPT-2
+checkpoints. It is a geometric warning, not proof that anisotropy causes every
+pooling failure or that an isotropic space must retrieve well. Later analyses
+found that correcting anisotropy alone does not necessarily restore semantic
+isometry [@fuster2022anisotropy]. The operational test is still ranking quality
+on the intended query and corpus distribution.
+
+## Contrastive learning shapes the ranking
+
+Contrastive training makes the scoring contract explicit. Suppose a batch has
+$B$ labeled pairs $(x_i,y_i)$, where $y_i$ is relevant to query $x_i$. Let
+$u_i=E_q(x_i)$ and $v_j=E_d(y_j)$. A common in-batch loss for query $i$ is
+
+$$
+\mathcal{L}_i
+= -\log
+\frac{\exp\!\left(s(u_i,v_i)/\tau\right)}
+{\sum_{j=1}^{B}\exp\!\left(s(u_i,v_j)/\tau\right)}.
+$$
+
+Here $s$ is the contracted similarity function, $v_i$ is the labeled positive,
+the other $v_j$ are candidate negatives for query $i$, and $\tau>0$ is the
+temperature. The batch loss is $B^{-1}\sum_{i=1}^{B}\mathcal{L}_i$. The softmax
+compares the positive with the particular negative set presented during
+training. It does not compare with every document the model will meet in
+production.
+
+InfoNCE was introduced in contrastive predictive coding [@oord2018cpc]. Under
+its specific sampling construction, one candidate comes from the conditional
+distribution $p(d\mid q)$ and the others are independent draws from the marginal
+$p(d)$. The expected objective then gives a mutual-information lower bound whose
+ceiling grows as $\log B$. With an unrestricted scorer, the optimal logit differs
+by a query-only constant from
+$\log\!\left[p(d\mid q)/p(d)\right]$. If negatives instead come from a mining
+proposal $\nu(d)$, that ratio changes to $p(d\mid q)/\nu(d)$; query-dependent hard
+mining may invalidate the standard mutual-information interpretation entirely.
+More candidates raise the bound's ceiling, but they do not guarantee a tighter
+bound or a better retriever [@poole2019variational].
+
+The geometric view is often more useful in practice. On normalized vectors,
+contrastive training rewards *alignment* of labeled positive pairs and
+*uniformity* of the overall representation distribution on the sphere. Wang and
+Isola proved an asymptotic relationship under a symmetric sampling model and
+showed these quantities were useful diagnostics on their evaluated vision and
+language tasks [@wang2020alignment]. Query-document retrieval can be asymmetric,
+so this is a diagnostic analogy rather than a theorem about every dual encoder.
+SimCSE demonstrated the mechanism for sentence similarity: dropout created two
+views of one sentence in its unsupervised setting, while entailment and
+contradiction pairs supplied positives and hard negatives in its supervised
+setting [@gao2021simcse].
+
+Temperature controls how the model distributes gradient across candidates. A
+high-scoring negative receives more softmax mass and therefore more pressure.
+Lowering $\tau$ concentrates relative weight on the highest-scoring negatives,
+but it also amplifies mislabeled negatives and can destroy useful local
+neighborhoods. There is no task-independent best temperature. Tune it together
+with normalization, batch composition, duplicate masking, and the negative
+miner; a numerical value copied from another model has no stable meaning when
+the score scale changes.
+
+## Interaction placement fixes the cost envelope
+
+The moment at which query and document tokens can interact determines what can
+be precomputed.
+
+| Architecture | Pair score | What can be indexed | Main cost |
+|---|---|---|---|
+| Dual encoder | one-vector inner product or cosine | one vector per document | loses token-level cross-attention |
+| Late interaction | token-vector aggregation | document token vectors | larger index and more online scoring |
+| Cross-encoder | joint transformer over the pair | no query-independent document score | one model pass per candidate pair |
+
+A dual encoder is the usual first-stage dense retriever because the corpus side
+is independent of the query. A cross-encoder is more expressive because it
+reads the pair jointly, but that expressiveness does not guarantee the best
+result on every workload. Its common production role is reranking a bounded
+candidate set, where the number of pairwise passes is affordable.
+
+ColBERT occupies the middle. It encodes query and document tokens independently
+and applies late interaction through MaxSim:
+
+$$
+S_{\mathrm{LI}}(q,d)
+=\sum_{i=1}^{T_q}
+\max_{1\le j\le T_d}
+\widehat{q}_i^\mathsf{T}\widehat{d}_j.
+$$
+
+Here $T_q$ and $T_d$ are the query and document token counts, and
+$\widehat{q}_i,\widehat{d}_j\in\mathbb{R}^{d}$ are normalized token vectors.
+For each query token, MaxSim keeps the best document-token match and then sums
+those matches. Document vectors remain precomputable, but the index stores many
+vectors per document. ColBERTv2 reduced the footprint of an uncompressed
+late-interaction index by six to ten times in its experiments through residual
+compression and denoised supervision; that comparison was not against a
+single-vector index [@santhanam2022colbertv2].
+
+```{dot}
+//| label: fig-embedding-contract
+//| fig-cap: "The same text can produce incompatible vectors under different roles or embedding specifications. Only a matching query and index generation may meet at the scorer."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.22;
+  ranksep=0.30;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280"];
+
+  query [label="query + role"];
+  source [label="chunk + source version"];
+  qenc [label="query transform"];
+  denc [label="document transform"];
+  qvec [label="query vector"];
+  index [label="versioned vector index"];
+  score [label="compatible scorer"];
+  ranked [label="ranked candidates"];
+
+  query -> qenc -> qvec -> score;
+  source -> denc -> index -> score;
+  score -> ranked;
+}
+```
+
+## Training data defines relevance
+
+The loss cannot decide what “related” should mean. The positive-pair policy does
+that. A search click, a question with an answer-bearing passage, two duplicate
+records, a translation pair, and two sentences with similar meaning express
+different relations. Combining them without task labels asks one vector space
+to satisfy incompatible orderings. Every training row therefore needs the
+query and document roles, task, languages, source and license, source version,
+label origin and confidence, deduplication group, split assignment, and any
+teacher or miner revision.
+
+In-batch negatives reuse the other $B-1$ documents in the matrix above. Dense
+Passage Retrieval used this efficiently and added BM25-mined candidates in its
+open-domain QA experiments [@karpukhin2020dense]. Reuse is not free of semantics:
+two batch rows may share a relevant document, duplicate one another, or contain
+different valid answers to the same query. Known positives and duplicate groups
+must be masked before the loss treats off-diagonal cells as negatives. Larger
+batches add compute, communication, and false-negative exposure as well as more
+candidates.
+
+Once random negatives become easy, a frozen checkpoint can retrieve high-scoring
+unjudged documents from the corpus. ANCE refreshed such an index asynchronously
+so the miner tracked the model over training [@xiong2021ance]. Those candidates
+are *unjudged*, not known to be irrelevant. RocketQA reported that sparse labels
+made many top retrieved passages false negatives and used a cross-encoder to
+filter candidates [@qu2021rocketqa]. A teacher is still fallible. Preserve known
+positives, near duplicates, answer-bearing passages, and multi-positive labels;
+send uncertain high-impact examples to human judgment rather than converting a
+teacher score directly into truth.
 
 <figure id="fig-embeddings-representation-infonce-field">
 <div class="viz" data-viz="infonce-field"></div>
-<figcaption>A query, its positive, and a cloud of negatives. Drag the hardness slider to pull the negatives toward the query: their similarity rises, the softmax denominator swells, and the loss climbs, which is exactly the signal that a hard negative carries more gradient than an easy one resting far away. Temperature sets how sharply the single hardest negative dominates. Illustrative.</figcaption>
+<figcaption>A positive and candidate negatives under a contrastive score. Moving negatives closer raises their softmax weight and the loss. That is useful only when those candidates are genuinely irrelevant; a hard false negative supplies a strong signal in the wrong direction. Illustrative.</figcaption>
 </figure>
 
 :::: {.runnable}
 ```python
 import numpy as np
+
 rng = np.random.default_rng(0)
-d = 32
 
-def infonce(q, dpos, dnegs, tau=0.05):
-    sims = np.array([q @ dpos] + [q @ x for x in dnegs]) / tau
-    sims -= sims.max()                        # numerical stability
-    p = np.exp(sims) / np.exp(sims).sum()
-    return -np.log(p[0])                       # loss = -log P(positive)
+def unit(vector):
+    norm = np.linalg.norm(vector)
+    return vector / norm if norm else vector
 
-def unit(v): return v / np.linalg.norm(v)
+def infonce(query, positive, negatives, temperature=0.08):
+    candidates = [positive, *negatives]
+    logits = np.array([query @ item for item in candidates]) / temperature
+    logits -= logits.max()
+    probabilities = np.exp(logits) / np.exp(logits).sum()
+    return -np.log(probabilities[0])
 
-def mean_loss(hardness, n, trials=300):        # hardness 0=random, ->1 toward query
-    total = 0.0
-    for _ in range(trials):
-        q = unit(rng.normal(size=d))
-        dpos = unit(q + 0.4 * rng.normal(size=d))
-        negs = [unit(hardness * q + (1 - hardness) * rng.normal(size=d)) for _ in range(n)]
-        total += infonce(q, dpos, negs)
-    return total / trials
+query = unit(rng.normal(size=32))
+positive = unit(query + 0.4 * rng.normal(size=32))
 
-for h in [0.0, 0.3, 0.6]:
-    print(f"negative hardness {h:.1f}: mean loss = {mean_loss(h, 16):.3f}")
-print("harder negatives (closer to the query) -> larger loss -> stronger signal")
+for hardness in [0.0, 0.3, 0.6]:
+    negatives = [
+        unit(hardness * query + (1 - hardness) * rng.normal(size=32))
+        for _ in range(16)
+    ]
+    print(hardness, round(infonce(query, positive, negatives), 3))
 ```
 ::::
 
-The other side of the pair, the positive, is the bottleneck when labels are
-scarce, and two routes manufacture one. SimCSE makes its positive by encoding the
-same sentence twice under different dropout masks, an almost-free perturbation
-that works surprisingly well, and its supervised form draws positives from
-natural-language-inference entailment pairs while using contradiction pairs as
-labeled hard negatives [@gao2021simcse]. Contriever builds positives without any
-labels at all, cropping two spans from one document or pairing a sentence with its
-surrounding context, with negatives held in a momentum queue so their count is
-decoupled from the batch; unsupervised, it already beats BM25 on most of the BEIR
-suite [@izacard2022contriever]. A third route transfers accuracy rather than
-inventing data: distill the cross-encoder's judgments into a bi-encoder. Because
-architectures score on different scales, the method is to match the *margin*
-between a positive and a negative rather than the raw score, the Margin-MSE
-objective [@hofstatter2020marginmse], which TAS-B combines with topic-aware
-batch sampling, drawing each batch from one query cluster so the in-batch
-negatives are topically hard, to train a strong dense retriever on a single GPU
-[@hofstatter2021tasb].
+Weak supervision expands positive coverage at the cost of label noise. E5
+filtered naturally occurring web pairs before contrastive pretraining
+[@wang2022e5]. Later work generated diverse tasks and pairs with a language
+model, then trained an embedder on the synthetic data
+[@wang2023e5mistral]. Synthetic generation can cover rare intents and languages,
+but it also copies the generator's factual errors, style, and task assumptions.
+Keep prompts, generator revisions, filters, and source rights with the dataset.
+Split by source and time before mining so near duplicates cannot leak across
+train and evaluation.
 
-## One model, many tasks and many sizes
+Distillation is another label source. A cross-encoder can score a bounded set of
+query-document pairs, and the dual encoder can learn its pairwise margins rather
+than its raw score scale. Distillation inherits the teacher's bias and is limited
+to the candidate set the teacher sees. It cannot teach a distinction that mining
+never presents.
 
-A single embedder is asked to serve search, clustering, classification, and
-deduplication at once, and two ideas stretch one model across that range. The
-first conditions the embedding on a task instruction. Instructor prepends a short
-natural-language description of the task, encoding the concatenation and pooling
-only over the text tokens, so the same weights and the same input sentence land
-at different points depending on whether the declared task is retrieval or
-similarity, with no per-task fine-tuning; trained on a 330-dataset mixture with
-written instructions, it improves over the prior best across seventy tasks, most
-of them unseen [@su2022instructor]. TART carries the same idea into retrieval
-proper, letting a user state intent alongside the query and advancing zero-shot
-retrieval while outperforming models several times larger [@asai2022tart]. The
-move is the same in both: collapse many task-specific embedders into one model
-parameterized by a prompt.
+## One model can expose several contracts
 
-The second idea makes the vector size itself a dial. Matryoshka representation
-learning trains so that the first $m$ dimensions of the embedding are themselves a
-usable embedding, by attaching a loss to every nested prefix at once and summing
-them,
+General-purpose embedders often support task instructions. INSTRUCTOR trained a
+single model across a large mixture by embedding each input with a description
+of its task and domain [@su2022instructor]. This does not mean arbitrary prose is
+understood as a policy. FollowIR found that many tested retrievers used detailed
+instructions largely as extra keywords, while targeted fine-tuning improved
+constraint following [@weller2024followir]. Treat the exact instruction template
+as a versioned part of the spec and test paraphrases, negation, exclusions, and
+conflicting constraints.
+
+Dimension can also be a trained interface. Matryoshka representation learning
+attaches losses to selected vector prefixes. For a retrieval adaptation, write
 
 $$
-\min_{\theta,\,\{W^{(m)}\}}\;
-\sum_{i} \sum_{m \in \mathcal{M}}
-\mathcal{L}\big( W^{(m)} \cdot f(x_i)_{1:m}, \; y_i \big),
+z^{(m)}=
+\frac{z_{1:m}}{\lVert z_{1:m}\rVert_2},
+\qquad
+\mathcal{L}_{\mathrm{MRL}}
+=\sum_{m\in\mathcal{M}} c_m\,
+\mathcal{L}_{\mathrm{NCE}}^{(m)}.
 $$
 
-Here $\mathcal{M}$ is the set of prefix dimensions the model promises to support,
-$f(x_i)_{1:m}$ is the first $m$ coordinates of the embedding, and $W^{(m)}$ is the
-task head attached to that prefix during training. The formula makes truncation a
-training obligation rather than a post-hoc hope, so each leading slice is
-explicitly forced to be discriminative on its own
-[@kusupati2022matryoshka]. The leading coordinates come out as accurate as a model
-trained natively at that size, at no extra training cost, which turns truncation
-into a first-class operation: store the full vector once, and per query use a
-short prefix to build a cheap shortlist before reranking with the full vector.
-This is why API embedders now advertise truncatable dimensions, and it is a clean
-case of a serving cost reaching back to reshape what the training run is asked to
-produce.
+Here $z\in\mathbb{R}^{d}$ is the full embedding, $z_{1:m}$ is its first $m$
+coordinates, $\mathcal{M}\subseteq\{1,\ldots,d\}$ is the set of trained prefix
+dimensions, $c_m\ge0$ is the weight for prefix $m$, and
+$\mathcal{L}_{\mathrm{NCE}}^{(m)}$ applies the contrastive loss using independently
+normalized $m$-dimensional query and document prefixes. Only trained dimensions
+are promised. Slicing a normalized full vector does not leave a normalized
+prefix, and arbitrary intermediate dimensions are not guaranteed to work.
 
-## Where the training pairs come from
+The original Matryoshka work learned coarse-to-fine representations across
+vision and language evaluations and reported strong size and retrieval trade-offs
+on its tested datasets [@kusupati2022matryoshka]. Its main systems benefit is one
+model forward pass that can feed indexes of several supported dimensions. The
+multiple training losses are not literally free, and a shorter prefix is not
+always strictly worse or always equal to a separately trained model. Measure
+every offered dimension on the deployment workload.
 
-The bottleneck is rarely the loss; it is the supply of query-document pairs, and
-the field's recent history is two answers to that supply problem. The first mines
-pairs from the web at scale. E5 assembles a "colossal clean" corpus of naturally
-occurring pairs, posts and comments from Reddit, question-and-answer pairs from
-Stack Exchange, titles and passages from Wikipedia and Common Crawl, filtering
-roughly a billion noisy pairs down to a few hundred million with a
-consistency-based filter, contrastively pretrains on them, then runs a small
-supervised fine-tune; it was the first unsupervised model to beat BM25 on BEIR
-and reaches the top of the benchmarks while undercutting models with far more
-parameters [@wang2022e5]. GTE [@li2023gte] and the BGE / C-Pack family
-[@xiao2023cpack] follow the same multi-stage shape, mining hundreds of millions
-of pairs before a supervised stage, with C-Pack contributing the Chinese-language
-resources and a three-stage recipe that starts from masked-autoencoder
-pretraining.
+## Indexes make compatibility operational
 
-The route that now leads bootstraps from a generator, and it arrived in stages.
-Scaling the backbone came first: Sentence-T5 and GTR took the encoder of a T5
-model up to billions of parameters and showed that a large dual-encoder
-generalizes strikingly well out of domain on a fraction of the labeled data
-[@ni2022sentencet5; @ni2022gtr]. Then the generator took over the data. E5-mistral
-prompts a proprietary large language model to synthesize diverse retrieval tasks
-and their query-document pairs across dozens of languages, then fine-tunes
-Mistral-7B itself into the embedder with a brief low-rank adaptation, reaching the
-top of the benchmarks with little human-labeled data [@wang2023e5mistral]. The
-generative model trains the retrieval model, a clean instance of the
-synthetic-data loop of @sec-synthetic-data.
+For $N$ stored vectors, dimension $d$, and $b$ bytes per coordinate, the raw
+vector payload is
 
-Once the embedder is a decoder model, a specific architectural argument follows:
-the causal mask that a generator needs, the rule that each position may attend
-only to earlier ones, is a handicap for an encoder that should see the whole
-text at once. LLM2Vec turns any decoder into an encoder in three
-unsupervised steps, enabling bidirectional attention, adapting with masked
-next-token prediction, then a SimCSE-style contrastive pass
-[@behnamghader2024llm2vec]. NV-Embed makes the same bidirectional move and adds a
-learned latent-attention pooling layer that beats both mean and last-token
-pooling, reaching the top of MTEB on public data alone [@lee2024nvembed]. The
-frontier embedders extend the line: Gemini Embedding initializes from Gemini,
-runs bidirectionally, and tops the multilingual benchmark [@lee2025gemini], and
-the Qwen3 embedding models ship the recipe openly at several sizes
-[@zhang2025qwen3embedding]. The through-line is a steady migration, from finding
-the pairs, to generating the pairs, to making the language model itself the
-embedder, with pooling drifting from mean to last-token to learned attention and
-the decoder's causal mask deliberately removed along the way.
+$$
+S_{\mathrm{raw}} = N d b \quad\text{bytes}.
+$$
 
-## The shape of the field
+Here $S_{\mathrm{raw}}$ excludes document metadata, graph or inverted-index
+overhead, replicas, centroids, and temporary migration copies. Lower dimension,
+reduced precision, product quantization, and late-interaction compression change
+storage, memory bandwidth, latency, and neighbor recall in different ways. A
+smaller payload is useful only if the resulting end-to-end retrieval quality is
+still acceptable.
 
-Two threads run through this lineage, a *theory* thread that explains what a good
-embedding space is and an *engineering* thread that learns one ever more cheaply,
-and they meet in the modern LLM-bootstrapped embedder.
+Changing any `EmbeddingSpec` field creates a new index generation. Do not compare
+query vectors from one model with document vectors from another, even when the
+dimensions match. Build the replacement beside the current index, re-embed the
+complete authorized corpus, and dual-read representative traffic. Compare exact
+vector rankings first, then approximate-index rankings, so representation drift
+is not confused with ANN loss. Cut traffic over explicitly and retain a rollback
+window. Tombstones, source updates, and ACL changes must reach every live
+generation and every embedding cache.
 
-```{dot}
-//| label: fig-embed-lineage
-//| fig-cap: "Genealogy of embedding ideas. A theory thread (InfoNCE, then alignment and uniformity) explains the objective; an architecture thread fixes where query and document interact; a negatives thread sharpens the training signal; and a data thread walks from siamese sentence pairs through web-mined pairs to LLM-generated pairs and the decoder-as-embedder, where the threads converge."
-digraph lineage {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
+Embeddings are derived content, not anonymized content. They inherit the source's
+tenant, authorization, retention, residency, and deletion policy. A vector index
+must not become a path around the authorization invariant in
+@sec-rag-retrieval. Cache keys include the spec hash, input content hash, role,
+instruction version, and tenant or other isolation boundary. Provider logs and
+batching paths need the same data-handling review as any other model call.
 
-  cpc [label="InfoNCE 2018\nMI bound"];
-  au [label="Alignment+Uniformity 2020\nwhy it works"];
+## Evaluation must match the use
 
-  sbert [label="Sentence-BERT 2019\nsiamese bi-encoder"];
-  colbert [label="ColBERT 2020\nlate interaction"];
+An aggregate embedding leaderboard is useful for screening, not deployment
+selection. MTEB demonstrated that models which perform well on semantic textual
+similarity do not necessarily dominate clustering, classification, reranking,
+and retrieval [@muennighoff2022mteb]. MMTEB expanded the language and task
+coverage and showed why a single English average is even less informative
+[@enevoldsen2025mmteb]. These benchmarks compare many workloads efficiently;
+they cannot reproduce a private corpus, its permissions, its update pattern, or
+its exact definition of relevance.
 
-  dpr [label="DPR 2020\nin-batch negatives"];
-  ance [label="ANCE 2021\nhard negatives"];
-  rocketqa [label="RocketQA 2021\ndenoised negatives"];
+For a retrieval embedder, freeze the corpus version, chunking, query set,
+relevance judgments, query and document roles, spec hash, and index parameters.
+Then evaluate these boundaries separately:
 
-  e5 [label="E5 2022\nweb-mined pairs"];
-  e5m [label="E5-mistral 2023\nLLM-generated pairs"];
-  llm2vec [label="LLM2Vec / NV-Embed 2024\ndecoder as encoder", color="#3b82f6", penwidth=1.6];
+- **Representation:** exact-search recall@k and nDCG@k, hard-negative error,
+  calibration by score band, and performance against BM25 and the current model.
+- **Approximation:** ANN recall against exact neighbors, empty-result rate,
+  latency, memory, and index-build time at each compression or dimension setting.
+- **Slices:** query intent, document source, length and truncation, language,
+  script, cross-lingual direction, code switching, freshness, and permission
+  cohort. Report the worst material slice as well as the mean.
+- **Operations:** query encoding latency, document throughput, accelerator and
+  CPU cost, raw and total index bytes, cache hit rate, generation age, migration
+  duration, and rollback success.
+- **End to end:** evidence recall after packing, answer quality, citation support,
+  abstention, latency, and cost with the generator and reranker held fixed.
 
-  cpc -> au;
-  sbert -> dpr -> ance -> rocketqa;
-  cpc -> sbert;
-  dpr -> e5 -> e5m -> llm2vec;
-  au -> e5m;
-  colbert -> e5;
-  rocketqa -> e5m;
-}
-```
-
-The trade-offs that frame the field are consistent across the threads. A
-cross-encoder is the most accurate scorer and the least scalable; a dual-encoder
-is the most scalable and gives up the most interaction; late interaction buys back
-quality with index storage. Harder negatives carry more signal but risk false
-negatives that need a denoiser. A larger backbone generalizes better but costs
-more to serve, and the same Matryoshka vector that is cheap to index at 256
-dimensions is less accurate than the full 1024. Every gain here is paid for
-somewhere, usually at serving time, which is the lens the next box brings.
+Use paired per-query comparisons and bootstrap confidence intervals. Include
+queries with multiple valid passages and unanswerable queries. Perturb task
+instructions, shorten and lengthen documents, add near duplicates, change a
+fact, delete a source, revoke access, and shift the query language. A model that
+wins a clean average but fails deletion, one language, or a high-value query
+cohort is not the better production embedder.
 
 ::: {.callout-important}
 ## What's contested
-Whether one general embedder can dominate is unsettled. MTEB, which scores
-embedders across classification, clustering, retrieval, reranking, and semantic
-similarity, found that no single model wins every task, and its multilingual
-successor MMTEB sharpened the point: as of that study the best publicly available
-model was a 560-million-parameter multilingual encoder, beating decoder LLMs an
-order of magnitude larger [@muennighoff2022mteb; @enevoldsen2025mmteb]. The
-ranking has since flipped, with multi-billion-parameter decoder-based embedders
-such as Qwen3-Embedding-8B leading the multilingual leaderboard by
-2026 [@zhang2025qwen3embedding], which sharpens the point rather than settling
-it: which geometry wins is a property of the task mix the leaderboard weighs. One camp
-reads the churn as temporary, a strong enough LLM-bootstrapped embedder will
-generalize across all tasks; the other reads it as structural, because the geometry that
-separates topics for clustering is not the geometry that ranks an answer for
-retrieval, symmetric similarity and asymmetric relevance pulling the space in
-different directions, which is exactly why instruction-conditioning exists. Two
-further doubts attach. BEIR showed that dense retrievers generalize worse than
-BM25 out of domain, so a benchmark won in-distribution may not transfer
-[@thakur2021beir], and once a leaderboard becomes the target, models drift toward
-fitting it. And instruction-following retrieval remains largely unsolved: FollowIR
-finds that current retrievers use instructions as bags of keywords rather than as
-constraints, though fine-tuning can teach the skill [@weller2024followir]. Treat
-an embedding leaderboard score as task-shaped until tested on your own retrieval
-distribution.
+Whether one general embedding model can serve every task remains unsettled.
+Shared training can transfer useful structure and simplify operations.
+Instruction conditioning can expose several task-specific geometries through one
+checkpoint. Yet symmetric similarity, asymmetric relevance, clustering, and
+classification impose different neighborhoods. MTEB found no single method
+dominated every task in its study, while later large and multilingual models
+changed the frontier without removing that task dependence
+[@muennighoff2022mteb; @enevoldsen2025mmteb]. The stable conclusion is not that a
+particular architecture wins. It is that model choice is conditional on the task
+mixture, languages, corpus, and cost envelope being measured.
 :::
 
 ::: {.callout-tip}
-## Constraint arrow
-The vector index reaches back into how the representation is trained. The serving
-cost of retrieval scales with the embedding dimension times the corpus size
-(@sec-rag-retrieval), and that cost, paid on every query forever, is what
-justifies training for truncatability in the first place: Matryoshka exists
-because a 1024-dimensional vector over a billion chunks is expensive enough that
-being able to drop to 256 dimensions without retraining is worth designing for.
-The same arrow set the architecture two sections up and the negative-mining budget
-one section up. The retrieval layer's cost dictates the shape, the size, and even
-the training signal of the vector the run is asked to produce.
+## Lower-layer constraint
+The vector contract is paid for in storage and serving. Dimension multiplies the
+raw index payload; pooling and model size set encoding throughput; normalization
+and similarity constrain the search primitive; late interaction multiplies the
+number of stored vectors. These costs reach backward into training through
+Matryoshka losses, distillation, quantization-aware evaluation, and the choice of
+interaction architecture. They reach forward into the retrieval budgets and
+index migrations of @sec-rag-retrieval.
 :::
+
+The resulting boundary is precise. An embedder produces a versioned score under
+one task contract. Retrieval uses that score to select evidence; it still owns
+authorization, freshness, fusion, and abstention. The next chapter,
+@sec-context-engineering, starts after retrieval has selected evidence and asks
+how instructions, history, tool results, and retrieved material should share a
+bounded working context.
 
 ## Further reading
 
