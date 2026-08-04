@@ -768,7 +768,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/orchestration/08-rag-retrieval.qmd",
-      ["question into a few hundred tokens of evidence", "chunk and index", "embed the query", "retrieve and fuse", "context window that keeps growing"],
+      ["evidence supply chain", "does not make the answer true", "authorized candidate set", "untrusted data, not instructions", "explicit way to abstain"],
     ],
     [
       "zh/orchestration/08-rag-retrieval.qmd",

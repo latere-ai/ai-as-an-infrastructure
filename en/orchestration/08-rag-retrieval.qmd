@@ -1,513 +1,562 @@
 # RAG and Retrieval {#sec-rag-retrieval}
 
-A model's weights are a lossy, frozen snapshot of the corpus it was trained
-on. @gls-rag puts a live, queryable corpus next to the model and feeds the right
-passages into the prompt at answer time. RAG is the
-funnel that turns a question into a few hundred tokens of evidence: chunk and
-index the corpus, embed the query, retrieve and fuse candidates, rerank, and
-generate against the selected passages. Each stage prevents a specific failure
-and charges a specific cost. The field's later systems attack the funnel's weak
-points, while two forces decide how much of the funnel survives: an adversary
-who hides in the corpus and a context window that keeps growing.
+@gls-rag puts a live, queryable corpus next to the model. In production, that
+corpus becomes an evidence supply chain: the system selects a small authorized
+subset and gives it to a model for one response. The user value is not
+"vector search." It is an answer that can use current, private, or specialized
+evidence and show where that evidence came from.
 
-![Schematic of a retrieval funnel. Each stage narrows the candidate mass, so recall lost early cannot be recovered by a better final answerer. Idealized retained mass, not measured data.](/figures/rag-retrieval-1.svg){#fig-rag-retrieval-1}
+Retrieval does not make the answer true. A source may be wrong, an index may be
+stale, a retriever may miss the decisive passage, a context packer may drop it,
+or a generator may ignore it. Every stage therefore needs an input contract, an
+output contract, and a measurement. Retrieval cannot recover a source that was
+never indexed; generation cannot recover evidence that never reached its
+context. When the available evidence is insufficient or contradictory, the
+system needs an explicit way to abstain.
 
-## Knowledge inside the weights, or outside them
+![Schematic of a retrieval funnel. Each stage narrows the candidate mass, so evidence lost early cannot be recovered by later retrieval stages. Idealized retained mass, not measured data.](/figures/rag-retrieval-1.svg){#fig-rag-retrieval-1}
 
-A frontier model knows what was in its pre-training mixture, up to the day the
-mixture was frozen, blurred by the lossy compression of @sec-scaling-laws. It
-does not know your private documents, it does not know what happened after the
-cutoff, and when asked about a fact it half-remembers it will produce a fluent,
-confident, wrong answer. Fine-tuning the knowledge in is expensive, slow to
-update, and still lossy. The cleaner move is to keep the knowledge outside the
-weights and fetch it on demand.
+## Start with the evidence contract
 
-That reframes the problem as information retrieval married to generation. Given
-a question and a corpus of millions of passages, find the small set of
-passages that actually answer the question, place them in the context window,
-and let the model read and cite them. The hard parts are all in the retrieval.
-The corpus is large, so search must be sub-linear. The question and the answer
-rarely share exact words, which leaves lexical match alone brittle. And the
-context window is finite and expensive: you can pass only a handful of passages,
-so they had better be the right ones. Retrieval is the act of turning a question into
-the few hundred tokens of evidence that change the answer. Lewis et al. named
-retrieval-augmented generation and framed it as combining parametric memory,
-the model's weights, with non-parametric memory, a retrievable index, training
-the retriever and generator together on knowledge-intensive tasks
-[@lewis2020retrieval].
+Lewis et al. introduced RAG in 2020 as a model that combined parametric memory,
+held in a sequence-to-sequence model, with non-parametric memory in a dense
+Wikipedia index [@lewis2020retrieval]. The term now covers a broader production
+pattern: retrieve external material at request time, assemble a bounded context,
+then generate from it. That broader use makes the data contract more important
+than any particular vector database.
 
-## Down the funnel, one stage at a time
+An indexed chunk needs enough identity to survive parsing, re-embedding,
+permission changes, citations, and deletion. A request needs enough identity to
+constrain every search path and enough budgets to bound the work. Its freshness
+bound states how old an acceptable index snapshot may be. A generated claim
+needs a stable link back to the exact material that supported it.
 
-The naive RAG pipeline that froze out of that idea has four stages: chunk and
-index the corpus offline, embed the query online, retrieve the nearest chunks,
-and generate an answer conditioned on them. Each stage exists to answer a
-specific failure of the stage that would otherwise replace it, and each carries
-its own dial with a knee. We walk them in order.
+```text
+IndexedChunk {
+  tenant, document_id, chunk_id
+  text, source_uri, source_version, source_span, content_hash
+  title, section_path, language, source_trust
+  acl, acl_version, valid_from, valid_until
+  parser_version, chunker_version, embedding_model_version, index_version
+}
 
-**Chunking** exists because documents are too long to embed or retrieve whole.
-A single vector cannot represent a hundred-page report at the granularity a
-question needs, and you cannot paste the whole report into the prompt. So the
-corpus is split into chunks, typically a few hundred tokens, and each chunk is
-indexed independently. The chunk size is a direct trade with no universal
-answer: chunks too large dilute the relevant sentence among irrelevant ones and
-waste context budget; chunks too small sever the sentence from the context that
-disambiguates it. The knee depends on document structure and question type,
-which is why overlapping windows and structure-aware splitting (by section, by
-paragraph) exist to soften the boundary problem. A third softener augments the
-chunk itself: contextual retrieval prepends an LLM-generated sentence situating
-each chunk in its document before both the embedding and the keyword index are
-built, which Anthropic reports cuts top-20 retrieval failures by
-49% [@anthropic2024contextual].
+RetrievalRequest {
+  request_id, authenticated_principal, tenant
+  query, corpus_scope, policy_version, freshness_bound
+  candidate_budget, token_budget, latency_budget
+}
 
-**Dense retrieval** answers the brittleness of lexical match. A @gls-dual-encoder
-embeds the query and each chunk into the same vector space, trained so that a
-question and its answer land near each other even when they share no words. How
-a piece of text becomes that vector is the subject of @sec-embeddings.
-Karpukhin et al., in Dense Passage Retrieval, showed that a dual-encoder
-trained on a few thousand question-passage pairs beats a strong @gls-bm25
-lexical baseline, a sparse keyword-scoring method, by a wide margin on top-20
-retrieval accuracy across open-domain QA
-[@karpukhin2020dense]. Relevance becomes a dot product or cosine similarity in
-embedding space, a closeness score between two vectors:
+Candidate {
+  chunk_ref, retrieval_channel, raw_rank, raw_score
+  fused_score, rerank_score, index_snapshot
+}
+
+ClaimSource {
+  claim_id, document_id, source_version, chunk_id
+  quoted_span, source_uri, retrieval_request_id
+}
+```
+
+The fields are not decorative metadata. `document_id` and `chunk_id` provide
+stable document identity across indexes. `source_version`, `source_span`, and
+`content_hash` identify the exact evidence. The access control list (`acl`) and
+its version bind authorization to the same material. The parser, chunker,
+embedding model, and index versions make a retrieval result reproducible.
+
+This contract separates two systems that are often blurred together. The
+offline path ingests, parses, chunks, enriches, embeds, and indexes sources. The
+online path authenticates a request, constructs its authorized candidate set,
+retrieves, fuses, reranks, packs context, generates, and verifies citations.
+
+```{dot}
+//| label: fig-rag-runtime-contract
+//| fig-cap: "The retrieval contract has an offline path and an online path. Both meet at a versioned index snapshot; authorization constrains candidate generation before retrieved text reaches reranking or generation."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.25;
+  ranksep=0.30;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280"];
+
+  source [label="source + ACL"];
+  ingest [label="parse, chunk,\nversion"];
+  index [label="sparse + dense\nindexes"];
+  request [label="authenticated\nrequest"];
+  scope [label="authorized scope"];
+  retrieve [label="retrieve, fuse,\nrerank"];
+  pack [label="pack evidence\n+ provenance"];
+  answer [label="answer, cite, or abstain"];
+
+  source -> ingest -> index;
+  request -> scope -> retrieve;
+  index -> retrieve;
+  retrieve -> pack -> answer;
+}
+```
+
+## Ingestion must preserve meaning and deletion
+
+Parsing is the first retrieval decision. Headers, tables, lists, code blocks,
+page coordinates, and section ancestry often carry the context needed to
+interpret a sentence. Optical character recognition can introduce substitutions
+that look plausible to both an embedding model and a generator. Keep the raw
+source, parser output, parser version, and source offsets so a retrieved chunk
+can be checked against the original.
+
+Chunking then chooses the unit of retrieval. A whole report may be too coarse;
+one sentence may be too isolated. There is no universal chunk length. Start at
+semantic boundaries such as sections, paragraphs, records, or functions. When a
+small child chunk is retrieved, parent or neighboring text can be expanded later
+for interpretation. Overlap can protect boundary facts, but overlapping hits
+must be deduplicated before context packing or one passage can consume the
+budget several times.
+
+Choose chunking parameters on representative queries, not intuition alone.
+Measure whether the complete supporting span appears in at least one indexed
+unit, how much irrelevant text accompanies it, and how often the unit crosses a
+permission boundary. A generated contextual prefix can improve retrieval for
+some corpora, but it is derived data: keep it separate from source text, version
+the model that produced it, and evaluate it on the intended workload. Anthropic
+reported a relative reduction in top-20 retrieval failures on its evaluation
+corpora with this method; that vendor result is not a universal chunking rule
+[@anthropic2024contextual].
+
+Updates are part of ingestion. An idempotent write replaces all sparse, dense,
+and derived records for one source version. A tombstone must block reads as soon
+as a document is deleted or access is revoked, even if removal from embeddings,
+graphs, summaries, and caches continues asynchronously. Content and permission
+metadata must not tear across versions. One response should pin an index
+snapshot, or record every snapshot it mixed.
+
+Changing the embedding model is a schema migration, not a configuration edit.
+Store `embedding_model_version` with every vector, build the new index beside
+the old one, evaluate both on the same queries, and cut traffic over explicitly.
+Query vectors and document vectors from incompatible models must never be
+compared.
+
+## Candidate generation uses complementary signals
+
+The first online search stage should be broad and cheap enough to preserve
+candidate recall. Sparse and dense retrieval provide different signals; neither
+is the universal fallback for the other. BEIR found BM25 to be a strong
+zero-shot baseline across heterogeneous retrieval tasks, while late-interaction
+and reranking systems performed best on average at higher computational cost
+[@thakur2021beir]. Domain shift, query type, language, and corpus structure can
+reverse a ranking observed on one benchmark.
+
+### Sparse retrieval preserves lexical evidence
+
+The @gls-bm25 lexical baseline, a sparse keyword-scoring method, scores terms
+through an inverted index. A common BM25 form is
 
 $$
-\operatorname{sim}(q, c) = \mathbf{E}_q(q) \cdot \mathbf{E}_c(c)
+\begin{aligned}
+L_d
+&= 1-b+b\frac{|d|}{\overline{|d|}},
+\\
+s_{\mathrm{BM25}}(q,d)
+&=
+\sum_{t \in q}
+\operatorname{IDF}(t)
+\\
+&\quad {}\times
+\frac{f(t,d)(k_1+1)}
+{f(t,d)+k_1L_d}.
+\end{aligned}
 $$
 
-where $\mathbf{E}_q$ and $\mathbf{E}_c$ are the query and chunk encoders. The
-encoders can be tied or separate, and the chunk embeddings are computed once,
-offline, then frozen into an index. The dial here is dense against sparse:
-dense retrieval generalizes across paraphrase and fails on exact tokens, which
-the next stage corrects.
+Here $q$ is the query, $d$ is a document or chunk, and $t$ is a query term.
+The term frequency $f(t,d)$ counts occurrences of $t$ in $d$;
+$\operatorname{IDF}(t)$ weights terms that are rare in the corpus; $|d|$ and
+$\overline{|d|}$ are the document length and average document length; and $L_d$
+is their length-normalization factor. The positive constant $k_1$ controls
+term-frequency saturation, while $b$ between zero and one controls length
+normalization [@robertson2009bm25].
 
-**The vector store** is what makes dense search affordable at scale. With millions of chunk
-vectors, computing the dot product against every one for every query is too
-slow. Approximate nearest neighbor indexes trade a small, bounded recall loss
-for orders of magnitude in speed. The dominant structure is the @gls-hnsw graph
-of Malkov and Yashunin, which builds a
-multi-layer proximity graph and searches it greedily from a sparse top layer
-down, giving logarithmic-scale query time [@malkov2018efficient]. A vector
-store is HNSW (or a quantized variant) plus metadata filtering plus the
-plumbing to keep the index in sync with the corpus. The dial is recall against
-latency: exact nearest neighbor is correct and too slow, and the index
-parameters are a recall-latency knob, not a fixed setting.
+BM25 is lexical, but it is not exact string matching. Tokenization, case
+folding, stemming, stop-word policy, and field weights all change the result.
+Identifiers, product codes, error messages, names, and quoted phrases often make
+sparse retrieval valuable. Test those query cohorts separately from paraphrase
+and conceptual queries.
 
-**@gls-hybrid-search** answers the blind spot of dense retrieval. Embeddings
-generalize across paraphrase but lose exact tokens: a part number, a rare name,
-a code identifier, a literal string that the dense model has smoothed away.
-Sparse lexical retrieval, BM25 over an inverted index, is exact on those terms
-and complementary. Hybrid search runs both and fuses the rankings, commonly
-with reciprocal rank fusion, so that a chunk ranked highly by either method
-surfaces. It pays two indexes and a fusion step to get both halves, and that
-cost is usually worth it.
+### Dense retrieval learns a similarity function
 
-Try giving a chunk a mediocre rank in both lists and watch reciprocal rank
-fusion still float it above items that ranked first in only one list.
+A @gls-dual-encoder maps the query and each chunk into the same vector space.
+Its usual inner-product score is
+
+$$
+s_{\mathrm{dense}}(q,d)
+=
+E_Q(q)^{\mathsf T}E_D(d).
+$$
+
+Here $q$ is the query, $d$ is a chunk, $E_Q$ is the query encoder, $E_D$ is the
+document encoder, and the superscript $\mathsf T$ denotes vector transpose. If
+both vectors are normalized to unit length, the inner product is also cosine
+similarity. Otherwise it is not.
+
+Dense Passage Retrieval showed 9 to 19 percentage-point gains in top-20 passage
+accuracy over its Lucene BM25 baseline on several open-domain question-answering
+datasets [@karpukhin2020dense]. That result established a useful architecture,
+not a theorem that dense retrieval dominates sparse search. A dense retriever
+can fail after domain shift, on rare literals, or when its training negatives do
+not resemble production confusions. @sec-embeddings treats that representation
+and training problem in detail.
+
+### Approximate search is an empirical trade
+
+Exact vector search scores every eligible vector. It is a valuable correctness
+baseline and can be practical for small or strongly filtered collections. At
+larger scales, approximate nearest neighbor search reduces work by accepting a
+workload-dependent chance of missing an exact neighbor.
+
+The hierarchical navigable small-world (@gls-hnsw) graph is one common design.
+It searches a layered proximity graph from sparse upper layers into denser lower
+layers [@malkov2018efficient]. Parameters governing graph degree, construction
+effort, and search breadth trade memory, build time, query latency, and empirical
+neighbor recall. HNSW does not give a general per-query recall bound or a
+worst-case semantic guarantee. Measure ANN neighbor recall against exact vector
+search, then measure semantic relevance separately.
+
+A production vector store may use HNSW, a flat index, inverted files,
+quantization, disk-based graphs, or a combination. It also owns persistence,
+replication, metadata filtering, deletion, compaction, and consistency. Those
+properties matter as much as its distance function.
+
+### Hybrid retrieval needs stable fusion
+
+@gls-hybrid-search runs sparse and dense retrieval over the same authorized
+snapshot. Reciprocal rank fusion (RRF) combines ranks without assuming that
+scores from the two systems share a scale:
+
+$$
+s_{\mathrm{RRF}}(d)
+=
+\sum_{r \in \mathcal{R}:d \in r}
+\frac{1}{k_0+\operatorname{rank}_r(d)}.
+$$
+
+Here $d$ is a document, $\mathcal{R}$ is the set of input rankings, $r$ is one
+ranking that contains $d$, and `rank_r(d)` denotes its one-based position in
+that ranking. The positive constant $k_0$ reduces the influence of a single
+extreme rank [@cormack2009rrf]. The original study fixed $k_0=60$ after a pilot;
+that value is a starting point to validate, not a law.
+
+Fusion requires stable document identity. Deduplicate the same chunk returned
+through multiple channels, preserve every contributing rank, and define a stable
+tie break. RRF cannot surface an item omitted by every truncated input list. It
+also ignores score calibration and channel quality; learned or weighted fusion
+may be better when labeled traffic shows one retriever is consistently stronger.
 
 :::: {.runnable}
 ```python
-# Reciprocal rank fusion: score = sum over lists of 1/(k + rank).
-def rrf(rankings, k=60):
+# RRF uses rank positions, not incomparable raw scores.
+def rrf(rankings, k0=60):
     scores = {}
     for ranking in rankings:
-        for rank, doc in enumerate(ranking, start=1):
-            scores[doc] = scores.get(doc, 0.0) + 1.0 / (k + rank)
-    return sorted(scores, key=scores.get, reverse=True)
+        for rank, document_id in enumerate(ranking, start=1):
+            scores[document_id] = scores.get(document_id, 0.0) + 1 / (k0 + rank)
+    return sorted(scores, key=lambda d: (-scores[d], d))
 
-dense  = ["A", "B", "C", "D"]   # what embeddings rank highly
-sparse = ["E", "C", "F", "G"]   # what BM25 ranks highly
-fused = rrf([dense, sparse])
-print("dense :", dense)
-print("sparse:", sparse)
-print("fused :", fused)
-print("C wins: ranked 3rd and 2nd, never 1st, but agreed on by both.")
+dense = ["A", "B", "C", "D"]
+sparse = ["E", "C", "F", "G"]
+print(rrf([dense, sparse]))
 ```
 ::::
 
 ```{=html}
 <figure id="fig-rag-retrieval-rrf-fusion">
 <div class="viz" data-viz="rrf-fusion"></div>
-<figcaption>Reciprocal rank fusion of a dense and a sparse ranking. Each document's fused score sums 1/(k+rank) over the two lists, so a chunk ranked decently by both can beat one ranked first by only one. Shuffle the sparse list or change k and watch the fused order recompute. Illustrative.</figcaption>
+<figcaption>Illustrative reciprocal rank fusion of dense and sparse rankings. A document that appears in both lists accumulates evidence from both ranks; an item absent from both lists remains absent.</figcaption>
 </figure>
 ```
 
-**Reranking** addresses a different gap, the one between cheap retrieval and accurate scoring. The
-dual-encoder is fast because the query and chunk never meet until the final dot
-product, which is also why it is imprecise: it cannot model fine-grained
-interaction between the query's words and the chunk's. A @gls-cross-encoder reranker
-feeds the query and chunk together through a transformer and scores their joint
-representation, which is far more accurate and far too slow to run over the
-whole corpus. So the pipeline retrieves a few hundred candidates cheaply, then
-reranks the top candidates expensively, and the length of that shortlist is the
-dial: running the cross-encoder only on a retrieved shortlist buys most of the
-accuracy at a fraction of the cost. ColBERT sits between the two: its
-late-interaction architecture keeps per-token embeddings and does a cheap
-MaxSim interaction, recovering much of the cross-encoder's accuracy at
-retrieval-time cost [@khattab2020colbert].
+## Reranking cannot repair a missing candidate
 
-Drag the shortlist depth and watch answer accuracy climb fast at first, then
-flatten: the first dozen reranked candidates carry most of the gain, while a
-longer shortlist costs cross-encoder compute for diminishing returns.
+A dual-encoder is efficient because the query and chunk are encoded separately.
+A @gls-cross-encoder reads the pair together and can model token-level
+interactions before assigning one relevance score. This is more expressive but
+requires a model pass per query-candidate pair. The candidate depth is therefore
+a measured budget, not a fixed recipe.
 
-```{=html}
-<figure id="fig-rag-retrieval-curve">
-<div class="viz" data-viz="curve" data-family="diminishing" data-xlabel="rerank shortlist depth" data-ylabel="answer accuracy" data-plabel="saturation rate" data-pmin="0.02" data-pmax="0.4" data-p="0.12"></div>
-<figcaption>Reranking accuracy against shortlist depth, a diminishing-returns curve: the cross-encoder buys most of its accuracy on the first handful of candidates.</figcaption>
-</figure>
+The candidate recall ceiling is absolute for the reranker: if the required
+evidence is absent from its input set, no scoring improvement can restore it.
+Sweep shortlist depth while measuring candidate recall, nDCG, end-to-end answer
+quality, latency, and cost. More candidates can help ranking and still hurt the
+generator if the packed context gains distractors.
+
+ColBERT provides a different point in the design space. It stores per-token
+document embeddings and uses a late MaxSim interaction with query-token
+embeddings [@khattab2020colbert]. The interaction preserves finer evidence than
+one vector per chunk and can support full-corpus retrieval as well as reranking.
+The price is a larger index and more retrieval-time interaction.
+
+After reranking, context packing selects evidence under a token budget. It should
+deduplicate overlapping chunks, preserve source order when order matters, expand
+parent context when needed, and avoid letting one redundant document crowd out
+independent evidence. Relevance is not sufficiency. A passage can match the
+question without supporting the requested conclusion.
+
+Every material answer claim should carry a `ClaimSource` that points to a quoted
+span and source version. Citation precision asks whether cited sources support
+their attached claims. Citation recall asks whether claims that need evidence
+are cited at all. ALCE demonstrated that citation correctness and completeness
+must be evaluated separately from answer fluency [@gao2023alce]. A citation
+makes an answer inspectable; it does not prove that the source is trustworthy or
+that the model used it faithfully.
+
+Conflicting authoritative passages should remain visible to the answer policy.
+The system may explain the disagreement, prefer a source under an explicit
+freshness or authority rule, request clarification, or abstain. Silently picking
+the highest similarity score turns a ranking artifact into a factual policy.
+
+## Authorization constrains every candidate path
+
+Authorization is not a ranking feature and not a cleanup stage. It defines the
+authorized candidate set before sparse search, dense search, graph traversal,
+fallback search, fusion, reranking, generation, caching, or logging can expose
+content. Every retrieval subquery inherits the authenticated principal, tenant,
+corpus scope, and policy version from its `RetrievalRequest`.
+
+```text
+For every candidate c:
+  c.tenant == request.tenant
+  authorize(request.authenticated_principal, c.acl, request.policy_version)
+  c.valid_from <= request.time < c.valid_until
+
+These predicates must pass before c's text, score, or identifier leaves
+candidate generation.
 ```
 
-The cost and accuracy of these three architectures follow directly from one
-design choice: where in the network the query and the chunk first meet, shown
-in @fig-rag-interaction.
+Vector filters illustrate why placement matters. A prefilter constrains the set
+searched by the approximate index. A postfilter first retrieves from a broader
+set and intersects later, so selective filters can return too few results or
+miss eligible documents outside the unfiltered top results. Azure documents the
+recall, latency, and throughput trade among these modes
+[@microsoft2026vectorfilters]. For authorization, use a server-constructed
+prefilter or a physically isolated index. Postfiltering and over-fetching may be
+ranking experiments, but they are not a security boundary.
 
-```{dot}
-//| label: fig-rag-interaction
-//| fig-cap: "Three retrieval architectures, ordered by where the query and chunk interact. The bi-encoder meets them only at the final dot product, so chunk vectors precompute offline and retrieval is cheap. The cross-encoder fuses them at the input, which is accurate but must run per pair. ColBERT keeps per-token vectors and interacts late via MaxSim, between the two."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+Permission evaluation must fail closed. Missing identity, failed group
+resolution, stale required metadata, or an authorization-service error returns
+no protected content and no model-only fallback that implies access. Measure
+retrieval quality against entitlement-scoped gold evidence, especially for users
+with narrow access. A corpus-wide recall score hides the cohort most likely to
+receive an empty shortlist.
 
-  subgraph cluster_BI {
-    label="bi-encoder (retrieve)";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    bq [label="query"];
-    beq [label="query encoder"];
-    bc [label="chunk"];
-    bec [label="chunk encoder"];
-    bdot [label="dot product"];
-    bs [label="one score"];
-    bq -> beq;
-    bc -> bec;
-    beq -> bdot;
-    bec -> bdot;
-    bdot -> bs;
-  }
-  subgraph cluster_LATE {
-    label="ColBERT (late interaction)";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    lq [label="query"];
-    leq [label="per-token vectors"];
-    lc [label="chunk"];
-    lec [label="per-token vectors"];
-    lmax [label="MaxSim sum"];
-    ls [label="one score"];
-    lq -> leq;
-    lc -> lec;
-    leq -> lmax;
-    lec -> lmax;
-    lmax -> ls;
-  }
-  subgraph cluster_CROSS {
-    label="cross-encoder (rerank)";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    cqc [label="query plus chunk joined"];
-    ctf [label="transformer"];
-    cs [label="one score"];
-    cqc -> ctf;
-    ctf -> cs;
-  }
-  bs -> lq [style=dashed, label="cheaper, coarser"];
-  ls -> cqc [style=dashed, label="sharper, costlier"];
-}
-```
+Revocation needs a short synchronous path and a complete asynchronous path. The
+synchronous deny decision blocks the source or ACL version immediately. Cleanup
+then removes affected chunks, embeddings, lexical entries, graph nodes,
+summaries, prompt fragments, and answer-cache entries. Derived data must inherit
+an authorization policy at least as restrictive as every contributing source.
 
-Stacked end to end, the four stages form a funnel, shown in @fig-rag-funnel.
+A cache key includes the tenant, entitlement or ACL version, index snapshot,
+query, retrieval configuration, and model configuration. A hit produced for one
+principal must not become evidence for another. Access-control changes and
+source tombstones invalidate affected cache entries.
 
-```{dot}
-//| label: fig-rag-funnel
-//| fig-cap: "The naive RAG funnel. Cheap, broad stages on the left feed a short list to the expensive, sharp stages on the right, so the cross-encoder only ever scores a handful of candidates."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+## One-shot retrieval is only one policy
 
-  Q [label="query"];
-  DE [label="dense embed"];
-  SP [label="BM25 sparse"];
-  ANN [label="ANN index / HNSW"];
-  INV [label="inverted index"];
-  FUSE [label="rank fusion"];
-  RR [label="cross-encoder rerank"];
-  CTX [label="top-k chunks in context"];
-  GEN [label="generate + cite"];
+Single-shot retrieval works when one query can expose enough evidence. More
+complex requests may need query decomposition. Independent subqueries can run in
+parallel; sequential subqueries may depend on entities or constraints discovered
+earlier. Each subanswer retains its own provenance, and the merger deduplicates
+evidence before synthesis.
 
-  Q -> DE;
-  Q -> SP;
-  DE -> ANN;
-  SP -> INV;
-  ANN -> FUSE;
-  INV -> FUSE;
-  FUSE -> RR;
-  RR -> CTX;
-  CTX -> GEN;
-}
-```
+An adaptive loop needs a stop condition, maximum rounds, fan-out limit, token and
+latency budgets, and an insufficient-evidence terminal state. It must detect when
+query rewriting has drifted away from the user's request. IRCoT interleaved
+retrieval with intermediate reasoning on multi-step questions
+[@trivedi2023ircot]. Self-RAG learned tokens that choose whether to retrieve and
+assess relevance, support, and response utility [@asai2023selfrag]. Adaptive-RAG
+selected among no retrieval, single-step retrieval, and iterative retrieval by
+estimated question complexity [@jeong2024adaptive]. These are task-specific
+results, not evidence that a controller improves every query.
 
-Each stage is cheaper-and-broader or costlier-and-sharper than the next, and
-the order exists so that the expensive stages only ever see a short list. This
-is the workhorse design, and its strength is exactly its rigidity: embed once,
-retrieve once, generate once, with every dial set ahead of time.
+Graph-based retrieval addresses a different workload. GraphRAG extracts entities
+and relationships, builds communities, summarizes them, and uses those summaries
+for global questions about a corpus [@edge2024from]. Its reported gains concern
+global sensemaking on the authors' evaluation corpora. Graph extraction and
+summary generation add cost and new errors. Every node, edge, and summary needs
+links to raw source spans, compatible freshness, and inherited permissions.
 
-## The stage the funnel leaves out: who may read this
+Compare any adaptive or graph-based design with a single-shot baseline under a
+compute-matched budget. Extra queries, a stronger reranker, more context tokens,
+and a different generator are separate interventions. Without ablation, a gain
+cannot be assigned to orchestration.
 
-Every stage so far ranks by relevance, and relevance knows nothing about
-permission. In a company's corpus, the chunk that best answers "what are we
-paying for the acquisition?" is often one the person asking is not cleared to
-read. Chunking, embedding, ANN search and reranking never consult an access
-control list, so a permission stage has to be inserted, and inserting it
-forces two decisions: what the index stores, and where the check runs.
+## Retrieved text is untrusted data
 
-Start with the index. Azure AI Search documents four approaches, and two of
-them frame the choice for a corpus a team indexes itself. Both write the
-document's access control list into the index, as a filterable string field
-held non-retrievable so it never comes back in a result, listing the
-identifiers allowed to read that document [@microsoft2026securityfilters]. They
-differ in who vouches for the identity at query time.
-Under the security filter pattern the application resolves the caller's groups
-and passes them in as an ordinary filter value, and the service compares
-strings, with no authentication behind the principal. Under the permission
-filter pattern the query carries the user's Microsoft Entra token in an
-`x-ms-query-source-authorization` header, the service reads the user, group and
-scope claims out of it, builds the security filter internally, and appends it to
-whatever filter the query already had [@microsoft2026aclenforcement]. The two
-sit at different levels of maturity: the security filter is generally available
-and bound to no API version, while the permission filter is preview, part of
-the 2026-05-01-preview REST API. The index looks the same either way. The
-difference is whether the retriever believes the
-calling application about who is asking or verifies it, which is the question
-@sec-security-authorization answers with on-behalf-of token exchange.
+Retrieved material is untrusted data, not instructions. A trusted storage path
+does not make every author trusted, and a highly ranked passage does not acquire
+control authority. Retrieved text can propose facts for the answer, but it
+cannot grant tool authority, change the system policy, reveal secrets, widen the
+corpus scope, or select an outbound destination. Those decisions remain in the
+harness and authorization layer described in @sec-the-harness and
+@sec-security-authorization.
 
-Where the check runs is a recall decision. Azure exposes it as
-`vectorFilterMode`. Prefiltering evaluates the permission predicate during HNSW
-traversal, expanding the graph until $k$ permitted candidates are found, so it
-returns $k$ results whenever $k$ exist. Postfiltering traverses without the
-predicate and intersects afterwards, so each shard contributes possibly fewer
-than $k$, and a permitted document less similar than the unfiltered top-$k$
-never surfaces at all [@microsoft2026vectorfilters]. Filtering after retrieval
-therefore shortens the candidate list silently, and it shortens it most for the
-users with the narrowest permissions: the user cleared for one percent of the
-corpus is the one whose evidence quietly goes missing. Prefiltering buys that
-recall back and charges latency for it, and Microsoft has already picked a
-side: `preFilter` is the default for indexes created after October 2023 and the
-recommended mode in every scenario, on the stated ground that the bias should
-favor recall over speed. On Microsoft's own benchmark, at one million vectors
-of 1,536 dimensions, a filter selecting under 2% of the corpus made
-prefiltering about seven times slower than postfiltering, and the penalty
-does not fade with scale: the billion-vector index in the same tests, at 96
-dimensions on a larger service tier, showed the same sevenfold gap once the
-filter admitted under 10% [@microsoft2026vectorfilters].
+Two attacks need separate names. Corpus poisoning changes what the retriever is
+likely to return; PoisonedRAG showed that injected passages can steer answers in
+the evaluated RAG configurations [@zou2025poisonedrag]. Indirect prompt injection
+puts instructions inside external content so that a model changes behavior when
+the content is read [@greshake2023indirect]. Relevance filtering alone does not
+solve either problem.
 
-The reranker inherits whatever survives. A permission filter placed between
-retrieval and reranking hands the cross-encoder a shortlist shorter than the
-depth that was tuned, so the diminishing-returns curve in
-@fig-rag-retrieval-curve is being read at a shallower depth than the one
-configured. Placed after the reranker, it spends cross-encoder compute
-on chunks that are then discarded and still returns fewer than $k$. Either way
-the remedy is to over-fetch, retrieving on the order of $k$ divided by the
-fraction of the corpus this caller can see, which makes the retriever's $k$ a
-property of the requester rather than of the index. A funnel tuned once against
-a corpus-wide recall-at-$k$ target is tuned for a requester who can see every
-document, and in an enterprise deployment no such requester exists. The depth
-worth tuning against is the narrowest entitlement the system must still serve
-well.
+Preserve publisher, author, source type, signature or collection path, ingestion
+time, and source trust as provenance. Source trust can affect which evidence is
+acceptable for a claim, but it cannot widen authorization. Use independent
+source agreement for high-impact claims, scan and quarantine suspicious
+ingestion, separate quoted data from control instructions, and keep tool checks
+outside the model. Evaluate poisoning success rate and attempted exfiltration,
+not only answer relevance.
 
-Permissions also change faster than a corpus is re-embedded. Query-time
-enforcement compares the caller's claims against permission metadata already
-stored in the index, so a revocation takes effect only once that metadata is
-synchronized: a later indexer run, a push-API update, an explicit resync
-[@microsoft2026docaccess]. In between sits a window where the index encodes an
-entitlement that no longer holds, and the two directions of error are not
-symmetric, since a stale over-broad entry leaks and a stale narrow one only
-annoys. Granting by group rather than by user shrinks the window: group
-membership is resolved at query time through Microsoft Graph
-[@microsoft2026aclenforcement], so only the document-to-group edge ages with
-the index, and moving a person out of a group takes effect on their next query.
-
-## Three weaknesses, three lines of attack
-
-The funnel's rigidity is also where it breaks. The naive pipeline decouples its
-stages and runs each exactly once, which gives it three structural weaknesses,
-and most of the field's evolution is one line of work per weakness,
-@fig-rag-evolution.
-
-The first weakness is local-only reasoning. Naive RAG retrieves the chunks most
-similar to the query, which works for questions whose answer sits in a few
-passages and fails for questions whose answer is spread across the whole
-corpus. Asked "what are the main themes in these documents?", similarity search
-has nothing to grab, because no single chunk is about the themes. GraphRAG
-reframes this as query-focused summarization: it uses a model to extract an
-entity-and-relationship graph from the corpus, runs Leiden community detection
-to partition the graph hierarchically, and pre-summarizes each community. A
-global question is then answered by map-reduce over community summaries rather
-than over raw chunks, which the authors show improves the comprehensiveness and
-diversity of answers on sensemaking questions over corpora in the million-token
-range [@edge2024from]. LightRAG keeps the graph idea but cuts the cost: a
-dual-level retrieval that combines low-level entity retrieval with high-level
-concept retrieval over a graph index, with incremental updates so a new
-document does not force a full re-index [@guo2024lightrag].
-
-The second weakness is the static, single-shot control flow. Naive RAG always
-retrieves, retrieves exactly once, and never checks whether what it retrieved
-was any good. The fix is to put a controller in the loop. Self-RAG trains the
-model to emit reflection tokens that decide whether to retrieve at all and then
-critique each retrieved passage for relevance and support before using it
-[@asai2023selfrag]. CRAG adds a lightweight evaluator between retrieval and
-generation that scores retrieved chunks and, when they fall short, triggers a
-corrective web search instead of generating from weak evidence
-[@yan2024corrective]. These are the bridge from naive to agentic.
-
-The third move generalizes the second. Singh et al., surveying agentic RAG,
-describe the endpoint: the retrieval loop becomes an agent that plans,
-decomposes a question into sub-queries, chooses which tools and indexes to
-query, reflects on intermediate results, and iterates until it has enough
-evidence [@singh2025agentic]. Retrieval stops being a fixed funnel and becomes
-a policy the agent runs, drawing on the agent architectures of
-@sec-agent-architectures and, when multiple specialized retrievers are
-involved, the coordination of @sec-multi-agent-systems. The same passages,
-reordered and re-queried, get used very differently. The dial across this whole
-axis is naive against agentic: a single-shot pipeline is cheap, predictable,
-and low-latency; an agentic loop answers harder questions but multiplies token
-cost and latency and adds failure modes of its own. Most production traffic
-does not need the agent; the minority that does benefits enormously.
-
-Agentic control also exposes an assumption the funnel never questioned: that
-retrieval needs an index at all. Coding agents largely dropped it. When the
-corpus is a filesystem the agent can navigate, it searches live state with
-grep, glob, and file reads inside the same plan-act-observe loop, and a study
-of agent harnesses finds grep-style search generally beating vector retrieval
-in that setting, though the margin depends on the harness and its tool-calling
-style [@sen2026grep]. The trade is stark on both sides: no chunking, no
-embedding drift, no re-index lag, and always-fresh state, paid for in
-tool-call round trips and tokens on every query. The pattern works where the
-corpus has native structure to navigate, a repository or an API; at web scale
-nothing is greppable, and the funnel remains the only way in.
-
-```{dot}
-//| label: fig-rag-evolution
-//| fig-cap: "How the field extends naive RAG. Each of the three structural weaknesses spawns a line of work, and the corrective controllers generalize into the agentic loop."
-digraph rag_evolution {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style=rounded, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
-
-  naive [label="naive RAG\n(embed, retrieve, generate once)", style="rounded,filled", fillcolor="#f1ece1"];
-
-  w1 [label="weakness: local-only\nreasoning", shape=note];
-  w2 [label="weakness: static\nsingle-shot control", shape=note];
-
-  graphrag [label="GraphRAG\nentity graph plus\ncommunity summaries"];
-  lightrag [label="LightRAG\ndual-level, incremental"];
-  selfrag [label="Self-RAG\nreflection tokens"];
-  crag [label="CRAG\nevaluator plus web fallback"];
-  agentic [label="agentic RAG\nplan, decompose, iterate", color="#3b82f6", fontcolor="#3b82f6"];
-
-  naive -> w1;
-  naive -> w2;
-  w1 -> graphrag;
-  w1 -> lightrag;
-  w2 -> selfrag;
-  w2 -> crag;
-  selfrag -> agentic;
-  crag -> agentic;
-}
-```
-
-## Retrieved text is untrusted input
-
-Adding retrieval moves the security boundary. Once untrusted text from a corpus
-flows into the prompt, that text can carry instructions. SafeRAG benchmarks
-this directly, classifying attacks into silver noise, inter-context conflict,
-soft advertisement, and white denial-of-service, and finds that across many RAG
-components even simple injected passages bypass retrievers and filters and
-degrade answer quality [@liang2025saferag]. Retrieved content is untrusted
-input and must be treated as such, which connects directly to
-@sec-security-authorization. This is a weakness the funnel cannot tune away: no
-chunk size or rerank depth makes a planted instruction safe, because the
-problem is trust, not ranking.
-
-## Will long context make retrieval obsolete?
-
-The second force pressing on retrieval is friendlier in appearance and more
-fundamental: the context window keeps growing, and a large enough window might
-make the whole funnel unnecessary.
+## Long context changes the frontier, not the contract
 
 ::: {.callout-important}
 ## What's contested
-The live debate is whether long context will make retrieval obsolete. As
-context windows grow toward and past a million tokens, one camp argues the
-simplest design wins: drop the retrieval machinery, paste the whole corpus into
-the prompt, and let attention do the searching. The other camp argues retrieval
-stays necessary on three grounds the window does not address: cost, since
-attention over a million tokens per query is far more expensive than fetching a
-few thousand; freshness, since the corpus changes faster than you can re-prompt
-and an index updates incrementally; and scale, the plain fact that real corpora
-exceed any window. The evidence cuts against the pure long-context position: Liu et al.,
-in "Lost in the Middle," show that models use evidence placed mid-context
-markedly worse than evidence at the edges, so a full window is not a uniform
-substitute for a short, well-ranked one [@liu2023lost]. The accurate reading is
-that the two are converging. Long context makes retrieval coarser and more
-forgiving, and retrieval makes long context affordable and current. See
-@sec-structured-long-context for the window side and @sec-context-engineering
-for how the retrieved evidence is assembled into the prompt.
-:::
 
-The debate has a clean resolution once you ask who pays for the window, and the
-answer comes from a layer well below retrieval.
+The question is not whether a long-context model can read a whole corpus. Some
+corpora fit, and some tasks benefit from global access. The question is which
+design gives the intended workload the best quality, freshness, latency, and
+per-query cost.
+
+Long-context prompting avoids retrieval misses when the corpus fits and the
+model can use every relevant position. It pays to transmit and process more
+material, may include more distractors, and still needs authorization and
+provenance. Liu et al. found strong position sensitivity on their tested
+multi-document QA and key-value tasks, with relevant evidence often used less
+reliably in the middle of long inputs [@liu2024lost]. That result is a warning,
+not a universal ranking of architectures.
+
+A direct comparison by Li et al. found that sufficiently resourced long-context
+models performed better on average than RAG on its evaluated datasets, while RAG
+was substantially cheaper [@li2024raglong]. The useful production baseline is
+therefore not "RAG or no RAG." It includes a long-context baseline and a route:
+use direct context when the authorized corpus fits and global reasoning helps;
+use retrieval when the corpus exceeds the window, changes frequently, or needs a
+small evidence set; use a hybrid when query difficulty justifies the added cost.
+:::
 
 ::: {.callout-tip}
-## Constraint arrow
-Retrieval is kept economically necessary by a lower layer. The serving cost of
-attention, @sec-serving-problem, and the key-value cache it fills,
-@sec-memory-scheduling, make every token in the context window a recurring
-expense paid on every request. That cost is what forbids the simplest design,
-pasting the entire corpus into the prompt, and forces a retrieval funnel that
-delivers a few hundred high-value tokens instead of a few hundred thousand
-mediocre ones. The shape of the retrieval pipeline is dictated by what a token
-of context costs to serve.
+## Lower-layer constraint
+
+Retrieval spends serving resources to save serving resources. Embedding search,
+reranking, and index storage add cost, but a shorter prompt reduces attention,
+key-value cache, and model-input work (@sec-serving-problem;
+@sec-memory-scheduling). Prefix caching changes the price of repeated long
+contexts but not their authorization or freshness contract. Measure the complete
+quality-cost-latency frontier for the actual traffic mix.
 :::
 
-## Making it real
+## Evaluation must localize the failure
 
-A minimal naive RAG loop is short, and the brevity is the point: the
-sophistication lives in the index, the embeddings, and the reranker, not the
-control flow.
+An end-to-end answer score cannot tell whether the source was absent, parsing
+destroyed it, retrieval missed it, packing dropped it, or generation ignored it.
+Freeze a test contract containing the corpus version, permissions, query set,
+generator, prompt, retrieval unit, and gold supporting spans. Include answerable
+and unanswerable queries, then stratify identifier-heavy, paraphrase, multilingual,
+multi-step, global, fresh-update, and permission-restricted cases.
+
+For query $q$, retrieval recall at depth $k$ can be written as
+
+$$
+\operatorname{Recall@}k(q)
+=
+\frac{|R_q \cap T_k(q)|}{|R_q|}.
+$$
+
+Here $R_q$ is the set of relevant evidence units for query $q$, $T_k(q)$ is the
+top $k$ returned units, vertical bars denote set size, and $k$ is the evaluated
+depth. This definition requires complete relevance judgments; when only one
+passage is known, report hit rate rather than pretending the labels are complete.
+
+Graded relevance and ordering can be summarized with normalized discounted
+cumulative gain:
+
+$$
+\begin{aligned}
+\operatorname{DCG@}k(q)
+&=
+\sum_{i=1}^{k}
+\frac{2^{\operatorname{rel}_i}-1}{\log_2(i+1)},
+\\
+\operatorname{nDCG@}k(q)
+&=
+\frac{\operatorname{DCG@}k(q)}
+{\operatorname{IDCG@}k(q)}.
+\end{aligned}
+$$
+
+Here $i$ is a one-based rank, $\operatorname{rel}_i$ is the judged relevance of
+the result at rank $i$, $\operatorname{DCG@}k(q)$ is the observed discounted
+gain, and $\operatorname{IDCG@}k(q)$ is the maximum possible discounted gain for
+the same judgments. nDCG@k is useful when several passages have different value;
+MRR is useful only when the first sufficient result is the intended target.
+
+Measure the pipeline at its boundaries:
+
+- **Ingestion:** parse success, chunk coverage of gold spans, duplicate rate,
+  source-to-searchable delay, deletion delay, revocation delay, and index age.
+- **Candidate generation:** BM25 and dense recall@k, ANN neighbor recall against
+  exact search, fusion recall, nDCG@k, empty-result rate, and results by query and
+  entitlement cohort.
+- **Packing:** packing recall, relevant-token share, overlap waste, source
+  diversity, and contradictory-evidence retention.
+- **Generation:** supported-answer accuracy, abstention precision and recall,
+  citation precision, citation recall, claim-level faithfulness, and user utility.
+- **Security:** unauthorized-result rate, cross-tenant retrieval, poisoning
+  success rate, prompt-injection success, stale-citation rate, and cache leakage.
+
+Run the same generator with a no-retrieval baseline, an oracle-context baseline,
+and the actual retrieved context. The oracle-context gap isolates evidence use;
+the gap between oracle and actual context isolates retrieval and packing. Add
+BM25-only, dense-only, hybrid, reranked, long-context, and adaptive variants under
+matched token, dollar, and latency budgets. RAGChecker is one example of a
+fine-grained framework that separates retrieval and generation diagnostics
+[@ru2024ragchecker].
+
+Use paired per-query comparisons and a bootstrap confidence interval. Repeat
+stochastic generation, calibrate model judges against blinded human labels, and
+version judge prompts and models. Then inject operational failures: add a new
+source, update a fact, delete a source, revoke access, corrupt a parser output,
+remove supporting evidence, insert plausible distractors, add contradictory
+evidence, and poison a chunk. The expected response is part of the test contract.
+
+## A production retrieval outline
+
+The safe loop is still short, but its arguments carry the system contract:
 
 ```python
-def answer(query, k=5):
-    q = embed(query)
-    dense = ann_index.search(q, n=100)         # HNSW recall
-    sparse = bm25.search(query, n=100)          # exact terms
-    fused = reciprocal_rank_fusion(dense, sparse)
-    top = cross_encoder.rerank(query, fused)[:k]
-    return generate(prompt=build_context(query, top))
+def answer(request):
+    principal = authenticate(request)
+    scope = authorize_scope(principal, request.tenant, request.corpus_scope)
+    snapshot = pin_index(request.freshness_bound)
+
+    dense = dense_search(request.query, snapshot, prefilter=scope)
+    sparse = bm25_search(request.query, snapshot, prefilter=scope)
+    candidates = stable_rrf(dense, sparse)
+    candidates = verify_versions_and_acl(candidates, principal, snapshot)
+    ranked = rerank(request.query, candidates, request.candidate_budget)
+    context = pack_with_provenance(ranked, request.token_budget)
+
+    if not evidence_is_sufficient(request.query, context):
+        return abstain_with_retrieval_trace(request, snapshot)
+
+    response = generate_from_untrusted_evidence(request.query, context)
+    return verify_claim_sources_or_abstain(response, context)
 ```
 
-Three implementation realities decide whether this works in practice. The first
-is index freshness: the offline chunk-and-embed step must run incrementally as
-the corpus changes, or retrieval silently serves stale evidence. The second is
-evaluation, which is harder than it looks, because a RAG system can fail at
-retrieval (the right chunk was never fetched) or at generation (the right chunk
-was fetched and ignored or misread), and these need separate measurement.
-Retrieval quality is measured with ranking metrics like recall at k and nDCG;
-answer quality with faithfulness to the retrieved evidence and answer relevance,
-typically judged by a model as in @sec-judging-holistic, with the caveats about
-agentic and trajectory evaluation in @sec-benchmarks. The third is the
-provenance contract: because every claim should trace to a retrieved chunk, the
-pipeline must carry citations through to the answer, which is both the original
-selling point of RAG in Lewis et al. [@lewis2020retrieval] and the main defense
-against the confident hallucination that motivated it.
+Production behavior also needs a retention contract. Retrieved text may persist
+in traces, conversations, provider logs, prompt caches, evaluations, or response
+caches even when it is absent from long-term agent memory. State which copies
+exist, who may read them, when they expire, and how deletion reaches them.
 
-RAG sits beside, not inside, the agent's working memory. The retrieved context
-is ephemeral, assembled per request and discarded, which distinguishes it from
-the persistent state of @sec-memory-systems. Retrieval is how an agent reaches
-knowledge it does not hold; memory is how it keeps what it has learned. The two
-compose, and the strongest systems use both.
+RAG sits beside the persistent state of @sec-memory-systems. It supplies evidence
+for a request; it does not become durable memory unless a separate, authorized
+write accepts it. The next chapter, @sec-embeddings, opens the dense retrieval
+box and explains how the representation space is trained, evaluated, compressed,
+and migrated.
 
 ## Further reading
 
