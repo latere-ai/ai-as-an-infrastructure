@@ -960,7 +960,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/inference/01-serving-problem.qmd",
-      ["prefill reads the", "decode emits one token at a time", "Goodput, not raw throughput or raw latency", "key-value cache"],
+      ["Measure the request lifecycle", "Prefill and decode occupy different regimes", "KV state turns memory into an admission constraint", "Five mechanisms remove different waste", "Evaluate a serving policy under load"],
     ],
     [
       "zh/inference/01-serving-problem.qmd",
