@@ -236,6 +236,16 @@
   function enhance(block) {
     var codeEl = block.querySelector('code');
     if (!codeEl) return;
+    var zh = (document.documentElement.lang || '').toLowerCase().indexOf('zh') === 0;
+    var labels = {
+      editor: zh
+        ? '可运行的 Python 代码。按 Escape，然后按 Tab 退出编辑器。'
+        : 'Runnable Python code. Press Escape, then Tab, to leave the editor.',
+      run: zh ? '运行' : 'Run',
+      reset: zh ? '重置' : 'Reset',
+      output: zh ? 'Python 输出' : 'Python output',
+      figure: zh ? 'Python 图形输出' : 'Python figure output'
+    };
     var source = codeEl.textContent.replace(/\n$/, '');
     block.classList.add('live-ready');
     var pre = block.querySelector('pre, div.sourceCode');
@@ -250,15 +260,18 @@
     var hlCode = document.createElement('code'); hl.appendChild(hlCode);
     var ta = document.createElement('textarea'); ta.className = 'live-editor';
     ta.spellcheck = false; ta.value = source;
+    ta.setAttribute('aria-label', labels.editor);
     ta.rows = Math.min(24, source.split('\n').length + 1);
 
     var bar = document.createElement('div'); bar.className = 'live-bar';
-    var runBtn = document.createElement('button'); runBtn.className = 'live-run'; runBtn.textContent = 'Run';
-    var resetBtn = document.createElement('button'); resetBtn.className = 'live-reset'; resetBtn.textContent = 'Reset';
+    var runBtn = document.createElement('button'); runBtn.className = 'live-run'; runBtn.type = 'button'; runBtn.textContent = labels.run;
+    var resetBtn = document.createElement('button'); resetBtn.className = 'live-reset'; resetBtn.type = 'button'; resetBtn.textContent = labels.reset;
     var status = document.createElement('span'); status.className = 'live-status';
+    status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
     bar.appendChild(runBtn); bar.appendChild(resetBtn); bar.appendChild(status);
     var out = document.createElement('pre'); out.className = 'live-out';
-    var svg = document.createElement('div'); svg.className = 'live-svg'; svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', 'figure output'); svg.style.display = 'none';
+    out.setAttribute('role', 'region'); out.setAttribute('aria-label', labels.output); out.setAttribute('aria-live', 'polite');
+    var svg = document.createElement('div'); svg.className = 'live-svg'; svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', labels.figure); svg.style.display = 'none';
 
     // Keep the highlight layer in sync with the textarea (content + scroll).
     function paint() { hlCode.innerHTML = highlightPy(ta.value); }
@@ -266,14 +279,20 @@
     paint();
     ta.addEventListener('input', function () { paint(); syncScroll(); });
     ta.addEventListener('scroll', syncScroll, { passive: true });
-    // Insert a tab as spaces instead of moving focus.
+    // Insert a tab as spaces. Escape releases the next Tab so keyboard users
+    // can leave the editor without getting trapped.
+    var releaseTab = false;
     ta.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { releaseTab = true; return; }
       if (e.key === 'Tab') {
+        if (releaseTab) { releaseTab = false; return; }
         e.preventDefault();
         var s = ta.selectionStart, en = ta.selectionEnd;
         ta.value = ta.value.slice(0, s) + '    ' + ta.value.slice(en);
         ta.selectionStart = ta.selectionEnd = s + 4; paint();
+        return;
       }
+      releaseTab = false;
     });
 
     function setStatus(t) { status.textContent = t; }
