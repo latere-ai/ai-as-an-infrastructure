@@ -1673,12 +1673,15 @@
   // synthetic utility optimum after a small latency penalty.
   R['ttc-budget'] = function (host) {
     var lang = host.getAttribute('data-lang') === 'zh' ? 'zh' : 'en';
+    host.setAttribute('role', 'img');
     var L = lang === 'zh' ? {
       difficulty: '难度', tokens: '推理词元', accuracy: '准确率',
-      optimum: '预算', window: '有效窗口', over: '过度思考'
+      optimum: '预算', window: '有效窗口', over: '过度思考',
+      description: '合成的自适应测试时计算曲线'
     } : {
       difficulty: 'difficulty', tokens: 'reasoning tokens', accuracy: 'accuracy',
-      optimum: 'budget', window: 'useful window', over: 'overthinking'
+      optimum: 'budget', window: 'useful window', over: 'overthinking',
+      description: 'Synthetic adaptive test-time compute curve'
     };
     var diff = 0.55;
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
@@ -1720,6 +1723,7 @@
       ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.fillText(L.tokens, W / 2, H - 12 * cv.dpr);
       ctx.save(); ctx.translate(13 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.accuracy, 0, 0); ctx.restore();
       read.textContent = L.optimum + '≈' + Math.round(bestK) + ' · ' + L.accuracy + '=' + Math.round(acc(bestK) * 100) + '%';
+      host.setAttribute('aria-label', L.description + ': ' + read.textContent);
     }
     host.appendChild(slider(L.difficulty, 0, 1, 0.01, diff, function (v) { diff = v; draw(); }).wrap);
     draw();

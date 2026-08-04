@@ -305,6 +305,16 @@ test("reasoning-search budget reports exact node growth instead of invented qual
   expect(searchBudget).not.toContain("verifier quality");
 });
 
+test("test-time compute budget exposes its synthetic status to assistive technology", () => {
+  const start = rt.indexOf("R['ttc-budget']");
+  const end = rt.indexOf("R['midtraining-bridge']", start);
+  const component = rt.slice(start, end);
+  expect(component).toContain("setAttribute('role', 'img')");
+  expect(component).toContain("setAttribute('aria-label'");
+  expect(component).toContain("Synthetic adaptive test-time compute curve");
+  expect(component).toContain("合成的自适应测试时计算曲线");
+});
+
 test("expanded reasoning chapters use the new interactive visualizations in both languages", () => {
   const uses: [string, string][] = [
     ["reasoning/02-structured-reasoning-search", "reasoning-search-budget"],
