@@ -1,422 +1,343 @@
-# Benchmarks and Their Discontents {#sec-benchmarks}
+# Benchmarks as Measurement Contracts {#sec-benchmarks}
 
-Evaluation is how you know any stage of the stack worked, the cross-cutting
-gate that data, architecture, pre-training, and post-training all answer to.
-Its oldest and most contested instrument is the static benchmark. The thread
-running through static evaluation is a single uncomfortable claim: a published
-benchmark score is never a fact about a model alone. It is a claim about a
-model and its measurement apparatus together, and most of the discipline of
-evaluation is the work of making that claim survive scrutiny. A @gls-held-out
-is data deliberately kept out of every training stage; it is a pipeline
-contract. Benchmark families saturate, train/test @gls-contamination silently
-inflates numbers, and a score counts as evidence only when the harness, data
-contract, and uncertainty are visible.
+A benchmark score is not a property of model weights alone. It is the result of
+running one model revision through one harness, on one version of a test set,
+with one scorer and aggregation rule. Change any of those inputs and the number
+may change. A useful report therefore begins with the claim the evaluation is
+meant to support, then preserves enough evidence for someone else to reconstruct
+that claim.
 
-## The anatomy of a wrong number
+This chapter develops that measurement contract. It explains how to choose test
+cases, keep them separate from development, pin the execution harness, audit the
+answer key, and retain per-case records. The next chapter, @sec-statistical-reliability,
+asks how much uncertainty remains after those choices have been made.
 
-A training pipeline produces a new set of weights every time a stage runs, and
-the only reliable way to know a stage worked is an independent number that moved
-for a reason that survives scrutiny. A benchmark is meant to be that falsifier.
-The recurring failure is not the absence of a number but belief in a wrong one:
-a score contaminated by test data leaking into training, gamed by tuning toward
-a known format, or simply noise dressed up as signal. Each of these produces a
-number that looks excellent and does not transfer, and the damage is silent,
-because nothing in the score itself announces that it is wrong.
+## Begin with the decision, not the dataset
 
-No single layer of evaluation catches all three failures. A practical pipeline
-treats automated benchmarks, production monitoring, A/B tests, user feedback,
-and human studies as a @gls-swiss-cheese stack, where each layer catches what the
-others let through. The first layer here is the static benchmark: the cheapest,
-the most comparable across labs, and the most prone to
-quietly lying.
+Suppose a team asks, “Is the new model better?” No benchmark can answer that
+question until *better* is made specific. Better at answering whose questions,
+under what conditions, at what cost, and for which decision? A multiple-choice
+exam can measure performance on its questions. It cannot, without further
+evidence, establish general intelligence, production usefulness, or safety.
+Raji et al. call out this gap between a benchmark's narrow task and the broad
+construct it is often made to represent [@raji2021everything].
 
-@fig-benchmarks-swiss-cheese shows why no single layer is enough: each of the
-three failures slips past whatever layer is blind to it, and only the full stack
-catches all of them.
+Write the intended claim before choosing the test:
+
+> For English-language support requests from the last quarter, using the
+> production prompt and retrieval stack, model B resolves more cases than model
+> A without regressing policy compliance or exceeding the latency budget.
+
+That sentence identifies a population, a system boundary, a comparison, and
+guardrails. It also reveals that no single public benchmark can settle the
+decision. Public suites remain useful for external comparison and regression
+testing, but product claims need samples that resemble the product. The
+evidence-centered benchmark design framework makes this order explicit: define
+the capability and intended use, justify the content, document how the model is
+adapted or prompted, assemble enough representative items, and explain how
+item-level evidence becomes a test-level conclusion [@liu2024ecbd].
+
+The common benchmark families are implementations of different measurement
+choices, not interchangeable measures of one capability:
+
+| Test form | What it can observe | Important limitation |
+|---|---|---|
+| Closed-answer questions, such as MMLU [@hendrycks2020mmlu] | Correctness on a fixed academic sample | The sample may be unrepresentative, exposed, or mislabeled |
+| Executable tasks, such as HumanEval or SWE-bench [@chen2021humaneval; @jimenez2023swebench] | Whether generated code passes a specified test environment | Tests and environment only approximate software quality |
+| Synthetic probes, such as configurable long-context tasks | A controlled mechanism under chosen conditions | Synthetic regularity may not transfer to natural inputs |
+| Human preference comparisons | Which output selected raters prefer | Preference depends on raters, rubric, presentation, and context |
+| Interactive environments | Whether an agent reaches a defined state | Success also depends on tools, environment state, and repeated-run reliability |
+
+Breadth helps only when the suite's composition matches the claim. The
+“benchmark lottery” describes how conclusions and rankings can change with the
+chosen tasks, datasets, and metrics [@dehghani2021benchmarklottery]. Adding
+unrelated tests can make a dashboard larger while making its meaning less clear.
+
+## Specify the evaluation object
+
+An evaluation should be a versioned artifact, not a command remembered from a
+terminal. At minimum, its specification pins the data, model, harness, and
+scorer:
+
+```text
+EvaluationSpec:
+  benchmark_id, benchmark_revision, item_manifest_hash
+  model_id, model_revision, tokenizer_revision
+  prompt_template_revision, system_policy_revision
+  few_shot_policy, tool_environment_revision
+  decoding_parameters, seeds, repetitions
+  scorer_revision, normalization, exclusion_policy
+  contamination_audit_revision, run_environment
+
+EvaluationCase:
+  case_id, source, license, created_at, language, domain
+  input_hash, reference_hash, rubric_revision
+  slice_labels, dependencies, leakage_status
+
+EvaluationRecord:
+  spec_hash, case_id, attempt, raw_output_hash
+  parsed_output, score, scorer_trace
+  latency, token_cost, tool_cost
+```
+
+The separation matters. `EvaluationSpec` says how the run behaves.
+`EvaluationCase` documents what an item represents. `EvaluationRecord` preserves
+what happened. An aggregate score can be recomputed from those records; it
+cannot recreate them after they have been discarded. Dataset documentation has
+the same purpose at a broader scale: it makes motivation, composition,
+collection, recommended uses, and limitations inspectable rather than implicit
+[@gebru2021datasheets].
+
+Let $y_i$ be the score on case $i$, let $w_i \ge 0$ be its predeclared weight,
+and let $n$ be the number of cases. The reported weighted mean is
+
+$$
+\widehat{\mu} =
+\frac{\sum_{i=1}^{n} w_i y_i}{\sum_{i=1}^{n} w_i}.
+$$
+
+Here, $i$ identifies one evaluation case, $y_i$ may be binary correctness or a
+numeric rubric score, $w_i$ controls how much that case contributes, and
+$\widehat{\mu}$ is the estimated mean for the population implied by those
+weights. Equal weights do not mean “no assumption”; they assume every sampled
+case should contribute equally.
+
+For a comparison on the same cases, retain
+$d_i = y_i^{(B)} - y_i^{(A)}$, the case-level difference between systems B and
+A, and aggregate the $d_i$ values. This paired record shows whether B fixed A's
+failures or traded them for different ones. If a stochastic code or agent task
+is attempted repeatedly, average or model repetitions within the task before
+treating tasks as independent units. Twenty attempts on one repository are not
+twenty independent repositories. @sec-statistical-reliability develops the
+appropriate intervals and tests.
+
+@fig-benchmarks-contract shows the dependency chain. A score is the final
+projection of several versioned decisions, not the first-class evidence.
 
 ```{dot}
-//| label: fig-benchmarks-swiss-cheese
-//| fig-cap: "The Swiss-cheese model of evaluation. Contamination, format gaming, and noise each slip past the layers blind to them, so confidence comes from the stack rather than any single layer."
+//| label: fig-benchmarks-contract
+//| fig-cap: "A benchmark result begins with an intended claim. The versioned specification governs case execution; immutable per-case records support aggregation, audit, and a decision."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  rankdir=TB;
+  nodesep=0.25; ranksep=0.3;
+  node [shape=box, style="rounded,filled", fixedsize=true, width=2.5, height=0.42, fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", margin="0.08,0.05"];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
 
-  C [label="Contamination"];
-  G [label="Format gaming"];
-  N [label="Noise"];
+  C [label="Intended claim"];
+  S [label="Versioned spec"];
+  I [label="Case manifest"];
+  R [label="Per-case records"];
+  A [label="Aggregate + slices"];
+  D [label="Decision"];
 
-  L1 [label="Static benchmark"];
-  L2 [label="Production monitoring"];
-  L3 [label="A/B tests"];
-  L4 [label="User feedback"];
-  L5 [label="Human studies"];
-  OK [label="Trustworthy signal"];
-
-  C -> L1;
-  G -> L1;
-  N -> L1;
-  L1 -> L2 [label="leak passes"];
-  L1 -> L4 [label="gamed format passes"];
-  L1 -> L3 [label="noise passes"];
-  L2 -> OK;
-  L3 -> L5;
-  L4 -> L5;
-  L5 -> OK;
+  C -> S;
+  S -> I;
+  I -> R;
+  R -> A;
+  A -> D;
 }
 ```
 
-These three failures, contamination, gaming, and noise, are the spine of the
-argument. The analysis below builds the static benchmark up from what it
-measures, exposes where each failure enters, and ends with the discipline that
-keeps a number trustworthy in spite of them.
+## Held out from what?
 
-One more failure sits outside that spine because it lives in the instrument
-itself: the answer key can be wrong. FutureHouse's 2025 audit of Humanity's
-Last Exam found roughly 29% of its text-only chemistry and biology answers
-contradicted by peer-reviewed literature; the maintainers' own review estimated
-18% and moved the benchmark to a rolling expert revision
-[@futurehouse2025hle; @zhai2026hleverified], and MMLU carries an estimated
-6.5% label-error rate of its own [@gema2024mmluredux]. Label error does not
-flatter a result the way contamination does. It caps the score a correct model
-can reach, and nothing in the number announces it either, so auditing the
-instrument belongs to the same discipline as auditing the pipeline.
+A @gls-held-out is data deliberately kept out of every training stage; it is a
+pipeline contract, not a property a file can prove by itself. In a closed
+training pipeline, the contract can cover pre-training, supervised tuning,
+preference data, synthetic-data generation, prompt selection, and checkpoint
+selection. For an external model trained on undisclosed web data, an evaluator
+usually cannot establish that a public test was never seen. The honest status is
+“exposure unknown,” not “clean.”
 
-## What a benchmark actually measures
+Several different failures are often compressed into the word contamination:
 
-The capability surface is too large to measure with one test, so benchmarks
-decompose it into families, each probing a different axis and each failing in a
-characteristic way.
+1. **Training leakage:** an input, answer, or close duplicate enters pre-training
+   or later training data.
+2. **Indirect leakage:** synthetic examples inherit benchmark content from a
+   teacher or retrieval source.
+3. **Development leakage:** prompts, parsers, checkpoints, or policies are
+   repeatedly chosen against evaluation results.
+4. **Reporting leakage:** items are filtered or reinterpreted after outputs are
+   visible, without the exclusions appearing in the report.
 
-- **Knowledge.** Broad factual and academic recall, in the style of MMLU
-  [@hendrycks2020mmlu]. It saturates and contaminates easily, and frontier
-  high-water marks now sit near the ceiling, which is why harder expert-level
-  successors such as Humanity's Last Exam move toward broad, closed-ended
-  questions at the edge of human academic knowledge [@phan2025hle].
-- **Reasoning.** Multi-step inference beyond recall. It is harder to contaminate
-  but harder to score objectively, which pushes the field toward
-  graduate-level, google-proof variants like GPQA [@rein2023gpqa] and
-  abstraction-heavy successors such as ARC-AGI-2 [@chollet2025arcagi2]; when
-  frontier systems closed in on that too, the family moved to the interactive
-  game environments of ARC-AGI-3, dropping the static answer key altogether
-  [@arcprize2026arcagi3].
-- **Math.** Grade-school through competition, from GSM8K [@cobbe2021verifiers] to
-  MATH [@hendrycks2021math]. The answer is checkable, which is exactly the
-  property that bridges evaluation to verifiable-reward reinforcement learning in
-  @sec-training-to-reason.
-- **Code.** Function completion and repository-level repair, from HumanEval
-  [@chen2021humaneval] to SWE-bench-style tasks [@jimenez2023swebench], now
-  usually reported on the human-validated SWE-bench Verified subset
-  [@openai2024swebenchverified]. It is
-  executable, so the judge is a test runner rather than a model.
-- **Multilingual.** The same task across languages. It exposes tokenizer and
-  data-mixture decisions made in @sec-data-curation that were invisible while
-  the model was measured only in English.
-- **Long-context.** Retrieval and reasoning over long inputs, from
-  needle-in-a-haystack to harder probes like RULER [@hsieh2024ruler]. It gates
-  the long-context extension discussed in @sec-structured-long-context.
-- **Multimodal.** Joint perception and reasoning over diagrams, charts, tables,
-  images, and text. MMMU made this explicit by testing college-level subject
-  knowledge across heterogeneous visual formats rather than treating vision as
-  captioning alone [@yue2023mmmu].
-- **Agentic.** Tool use, multi-step task completion, and web or operating-system
-  interaction, named by benchmarks like GAIA [@mialon2023gaia], WebArena
-  [@zhou2023webarena], and τ-bench [@yao2024taubench]. These do not reduce to a
-  single static answer, and their evaluation method is the subject of
-  @sec-evaluating-agents.
+The third failure is ordinary adaptive overfitting. A test set stops acting like
+fresh evidence when developers query it, change the system, and query it again.
+The reusable-holdout literature formalized this problem for adaptive data
+analysis: repeated access needs controlled disclosure or fresh data if validity
+is to survive [@dwork2015reusable]. A private final set, accessible only to a
+release service, can preserve one last independent check. It is not permanently
+trustworthy; access history and prior decisions determine how much independence
+remains.
 
-Each family carries its own characteristic failure, but all of them rest on the
-same precondition, and it is that precondition, not the family taxonomy, that
-decides whether any of these numbers mean anything.
+Audits provide evidence about exposure, not proof of absence. Exact hashes and
+n-gram matching find exact or near duplicates when the training corpus is
+available. Canaries reveal ingestion when a model reproduces a unique planted
+string. @gls-membership-inference, tests that ask whether a specific example was
+in the training data, can probe weights without access to the corpus. Min-K%
+Prob, for example, uses unusually high probabilities on a text's least likely
+tokens as a membership signal [@shi2023detecting]. Its ICLR study evaluates a
+detection method under particular data and model conditions; a negative result
+does not certify that an item was unseen.
 
-## The held-out contract
+Record the audit's scope in the status itself: `known_overlap`,
+`suspected_overlap`, `no_overlap_found_under_audit_X`, or `not_auditable`.
+Calling a case `clean` after one detector returns a negative result discards the
+most important qualification.
 
-Underneath every family sits the same precondition: a held-out set whose answers
-the model has never seen during training. Held-out is not a property of a file,
-it is a property of the whole pipeline. A set is held-out only if it appears in
-no training mixture, which is a contract the data layer must honor, not a
-checkbox the evaluation layer can tick on its own.
+There is no universally safest publication policy. Each choice protects one
+property by giving up another:
 
-Contamination is the violation of that contract, the first of the
-three failures and the most consequential, because it is silent and it inflates
-in exactly the direction that flatters a result. Since it announces nothing, it
-has to be hunted rather than waited for. Detection works on overlap and
-@gls-membership-inference, tests that ask whether a specific example was in the
-training data. Exact and near-duplicate matching, typically n-gram overlap against
-the training corpus, catches verbatim and lightly-edited leakage. Embedded
-@gls-canary take a different route: unique markers planted in a held-out set,
-they betray that the set was ingested the moment a model reproduces them.
-Membership-inference signals go further still, asking whether a specific example
-was likely trained on at all, for instance
-Min-K% Prob, which flags an example when its least-probable tokens are
-suspiciously high-probability under the model [@shi2023detecting]. SWE-bench
-makes the risk concrete: state-of-the-art models can name the buggy
-file from the issue text alone, with no repository to look at, up to 76% of
-the time, and the same models drop sharply on repositories the benchmark never
-touched, memorization posing as repair capability
-[@liang2025swebenchillusion]. None of these
-is conclusive alone, which is why contamination is reported as a contract and an
-audit rather than a single test.
+| Design | Strength | Cost or risk |
+|---|---|---|
+| Public, static set | Reproducible and independently runnable | Easy to study, tune against, and ingest into later corpora |
+| Private, static set | Limits direct access | Harder to audit; repeated submissions still adapt to it |
+| Rotating or newly sourced set | Reduces exposure to older training data | Scores across revisions are less directly comparable |
+| Generated or live environment | Can sample many fresh states | Generator, judge, and environment introduce new biases |
 
-@fig-benchmarks-contamination traces the held-out contract end to end: the two
-paths by which a benchmark reaches the weights, and the three detection signals
-that audit whether it did. The second path, a teacher model that was itself
-trained on the benchmark, bypasses the corpus entirely and returns in the final
-section.
+LiveBench is one example of rotating questions with automatic grading
+[@white2024livebench]. Its design reduces some exposure risks; it does not make
+the questions representative, the scorer correct, or comparisons across changing
+revisions automatic. “Fresh” and “valid” answer different questions.
 
-```{dot}
-//| label: fig-benchmarks-contamination
-//| fig-cap: "How a benchmark contaminates a model and how the contract is audited. The direct path leaks through the training corpus; the indirect path arrives through a teacher model's synthetic data. Detection signals (Shi et al., 2023) audit the trained weights after the fact."
-digraph {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style=rounded, fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+## Audit the instrument
 
-  Bench ["label"="Held-out\nbenchmark set", style="rounded,filled", fillcolor="#f1ece1"];
-  Corpus ["label"="Training\ncorpus"];
-  Teacher ["label"="Teacher model\ntrained on benchmark"];
-  Synth ["label"="Synthetic\ntraining data"];
-  Weights ["label"="Student\nweights", style="rounded,filled", fillcolor="#f1ece1"];
+Even a genuinely unseen test can be wrong. Items may have incorrect keys,
+ambiguous wording, stale facts, broken dependencies, or a parser that rejects a
+valid answer. MMLU-Redux manually re-annotated 5,700 MMLU questions and estimated
+that 6.49% contained errors, with large variation among subjects
+[@gema2024mmluredux]. That result is a warning against treating the answer key as
+ground truth by definition.
 
-  Bench -> Corpus ["label"="direct leak", fontsize=10];
-  Corpus -> Weights;
-  Bench -> Teacher ["style"="dashed", "label"="prior training", fontsize=10];
-  Teacher -> Synth -> Weights ["style"="dashed"];
+Before using a suite as a release gate, audit a sample of cases and every case
+that changes the decision. Check:
 
-  subgraph cluster_audit {
-    label="Detection and audit";
-    style=dashed;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=11;
-    Ngram ["label"="n-gram overlap\nvs corpus"];
-    Canary ["label"="canary string\nreproduced"];
-    MinK ["label"="Min-K% Prob\nmembership signal"];
-  }
+- whether the prompt has one defensible interpretation;
+- whether the reference answer and rationale agree;
+- whether alternative valid forms survive normalization and parsing;
+- whether duplicates or shared sources make cases dependent;
+- whether dates, tools, packages, websites, and repositories are still valid;
+- whether language, domain, difficulty, and user slices cover the intended
+  population;
+- whether licenses and access terms allow the proposed use; and
+- whether exclusions were declared before results were examined.
 
-  Corpus -> Ngram ["style"="dotted", arrowhead=none];
-  Weights -> Canary ["style"="dotted", arrowhead=none];
-  Weights -> MinK ["style"="dotted", arrowhead=none];
-}
-```
+Keep an adjudication log. Correcting an item creates a new benchmark revision;
+silently changing the key under the old name destroys comparability. Also run
+simple baselines: random choice where applicable, a trivial lexical heuristic,
+the previous production system, and an oracle or qualified human estimate when
+one is meaningful. A sophisticated model losing to a trivial heuristic often
+reveals a shortcut in the test rather than a subtle model failure.
 
-## Why benchmarks decay
+## The harness is part of the measured system
 
-A held-out set is only useful while it stays both held-out and hard. The history
-of benchmarks is a history of saturation, the slow erosion of the second
-property. A benchmark discriminates between systems only while models fail some
-of it; once a family clusters near its ceiling, the remaining headroom is noise,
-the third failure, and the benchmark stops telling systems
-apart.
+The same weights can produce different scores under different prompt templates,
+few-shot examples, chat templates, decoding settings, tool versions, and answer
+parsers. Standardized frameworks such as @gls-helm make these choices explicit
+and evaluate more than accuracy, improving comparison and auditability
+[@liang2022helm]. Standardization does not remove the harness; it fixes one so
+that participants are measured under the same declared conditions.
 
-Knowledge benchmarks reached this first. MMLU was a meaningful spread when it
-appeared [@hendrycks2020mmlu] and is now near ceiling for frontier models, which
-is why the field moved to deliberately harder, contamination-resistant variants.
-GPQA was built to be google-proof, with questions that experts outside the field
-cannot answer even with web access, precisely so that recall and retrieval
-cannot substitute for reasoning [@rein2023gpqa]. That defense held only a few
-years: by 2026 GPQA Diamond had followed MMLU to the ceiling, with frontier
-models clustered above 90% [@vals2026gpqa], and the discriminating rung moved
-on again, to Humanity's Last Exam and whatever follows it.
+That creates two legitimate but different experiments:
 
-@fig-benchmarks-1 shows the shape of saturation. As successive model
-generations climb toward the ceiling, the spread between systems collapses
-into noise, which is why a harder successor benchmark has to be introduced to
-restore discrimination, only to inherit the same fate.
+- A **controlled model comparison** fixes the harness as far as possible and
+  asks how model revisions differ under the same interface.
+- A **best-system comparison** permits model-specific prompting or tools and asks
+  how complete deployed systems differ under a shared budget and task contract.
 
-![Schematic illustration of benchmark saturation, after Hendrycks et al. (2020). Successive model generations climb a fixed benchmark toward its ceiling; once the frontier clusters near the top, the remaining headroom is noise and the benchmark stops separating systems, so a harder successor is introduced. The curves are idealized, not measured scores.](/figures/benchmarks-1.svg){#fig-benchmarks-1}
+Do not label the second as a comparison of weights. Conversely, forcing every
+model through a prompt format poorly matched to its training may answer a clean
+but operationally unhelpful question. State which experiment is being run.
 
-Saturation pushes the design in two directions at once, and the choice between
-them is the central trade-off of static evaluation. One direction is toward
-harder static sets, which buys time but inherits the same fate: any fixed set is
-a target, and a target eventually gets hit, whether by genuine capability or by
-contamination. The other is toward living evaluation that resists a fixed target
-altogether. Chatbot Arena replaces a frozen test set with a stream of fresh
-human-preference comparisons, so there is no static answer key to leak and the
-measurement renews itself as the model population changes [@chiang2024chatbot].
-Removing the answer key does not remove the gaming surface, though;
-@sec-judging-holistic returns to what replaced it.
-The arc runs from a fixed academic exam, to a harder google-proof exam, to a
-moving evaluation with no answer key to memorize.
-
-LiveBench occupies the middle ground between these poles. It tries to keep the
-objectivity of automatic grading while refreshing questions from recent math
-competitions, papers, news, and data sources, adding new tasks over time so the
-target is not a single frozen file [@white2024livebench]. That design is a
-useful boundary marker for this chapter: if the task still has an objective
-answer, a moving benchmark can postpone contamination without handing the whole
-measurement to a human or model judge. When the target is preference,
-grounding, or a multi-step environment state, the later chapters of Part VII
-need different instruments.
-
-Two trade-offs fall out of that arc, and a published number is only as
-meaningful as the reader's awareness of which side of each it came from.
-
-- **Static versus dynamic.** Static benchmarks are cheap to run, reproducible to
-  the bit, and comparable across labs and over time, which is why leaderboards
-  are built on them. They also saturate, contaminate, and miss anything that is
-  not a single static answer. Dynamic evaluation, meaning rotating sets and live
-  environments, resists gaming because there is no fixed target to overfit, but
-  costs more to run and is harder to compare across time because the test itself
-  is moving.
-- **Public versus private held-out.** A public benchmark should be assumed
-  contaminated over time, since its answer key is on the internet and flows into
-  the next training run by default. A private held-out set is trustworthy, but
-  only while its integrity holds, and integrity is a wasting asset: every leak,
-  every accidental inclusion, every published example erodes it. The right
-  posture is to trust a private set until it leaks and to assume a public set
-  already has.
-
-Those trade-offs hand the reader to the rest of the part. @sec-statistical-reliability
-asks whether an observed benchmark gap is large enough to believe, @sec-human-evaluation-rubrics
-examines who defined the label when the answer key runs out, @sec-factuality-grounding
-separates fluent preference from grounded truth, and @sec-operational-evaluation
-turns held-out sets into release gates rather than leaderboard decorations.
-
-## Model, or harness?
-
-Contamination and saturation both attack the test. The third failure attacks the
-act of measuring itself, and it is where the central claim becomes
-sharpest: even a clean, unsaturated benchmark does not produce a number until a
-harness wraps it, and the harness moves the number.
+The scorer needs the same discipline. Preserve raw output before parsing, record
+the parser and scorer revision, and distinguish `invalid`, `unknown`, `timeout`,
+and `scorer_error` from an ordinary wrong answer. A model-based judge adds its
+own model revision, prompt, order effects, and stochasticity; @sec-judging-holistic
+develops that case. A test runner adds container images, dependencies, clocks,
+network state, and flaky tests. “Automatically graded” does not mean
+“interpretation-free.”
 
 ::: {.callout-important}
 ## What's contested
-Do benchmark scores measure the model, or the harness around it? The same
-weights produce different scores depending on the prompt template, the number of
-few-shot examples (worked examples placed in the prompt before the real
-question), how the answer is parsed out of the generation, and the decoding
-settings (sampling choices like temperature), and these choices are not
-standardized across labs. A
-reported number is therefore a property of the model and its measurement harness
-together, and two labs running the same benchmark on the same model can disagree,
-and rankings can flip, purely because their harnesses differ. This is the
-motivation behind standardized evaluation frameworks like @gls-helm
-[@liang2022helm], which compare models across many scenarios while pinning the
-harness so that a score reflects the model rather than the measurement
-apparatus. The contested question is how much of any
-cross-model gap is capability and how much is harness, and the only sound answer
-is to fix and publish the harness, not to trust a bare number.
-
-@fig-benchmarks-harness makes the worry concrete: one frozen set of weights
-produces different scores, and can even change rank order, depending only on the
-harness knobs between the model and the reported number.
-
-```{dot}
-//| label: fig-benchmarks-harness
-//| fig-cap: "Why a benchmark score is a property of the model and its harness together. Fixed weights pass through unstandardized harness choices, so the same model can post different scores and rankings can flip across labs."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  W [label="Fixed weights"];
-  subgraph cluster_H {
-    label="Harness knobs";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    P [label="Prompt template"];
-    F [label="Few-shot count"];
-    A [label="Answer parsing"];
-    D [label="Decoding settings"];
-  }
-  W -> P;
-  S1 [label="Score under harness A"];
-  S2 [label="Score under harness B"];
-  P -> S1;
-  P -> S2;
-  S1 -> R;
-  S2 -> R;
-  R [label="Rankings can flip"];
-}
-```
+Should every model receive exactly the same harness, or should each receive the
+best harness its developer can build? A fixed harness improves attribution and
+reproducibility. A model-specific harness may better estimate the best system a
+user could deploy. Neither number is intrinsically superior because they answer
+different questions. The mistake is publishing either one without its harness
+and then making the other claim.
 :::
 
-## Keeping a number trustworthy
+## Benchmarks decay
 
-Each of the three failures has a discipline that answers it, and operationalizing
-held-out integrity is where those disciplines become procedure rather than
-principle. A set earns the word held-out only if it is never placed in any
-training mixture, version-pinned so a score names the exact set it was measured
-against, access-controlled so it does not leak through carelessness, rotated when
-a leak is detected, and large enough to give a usable signal rather than a single
-fragile number. This is the asset the evaluation layer owns and defends, and it
-is the answer to noise as much as to contamination, since a set too small to be
-stable is itself a source of false signal.
+A fixed benchmark loses decision value through several independent processes:
 
-@fig-benchmarks-2 makes the size requirement concrete. The confidence
-interval on an accuracy estimate (a range that likely contains the true score)
-shrinks only as the square root of the
-held-out set size, so a small set carries an error bar wide enough to swamp the
-gap between two systems, which is precisely how noise masquerades as signal.
+- **Exposure:** cases or answers enter training and development loops.
+- **Adaptive reuse:** repeated result-driven changes overfit the test even
+  without direct training leakage.
+- **Saturation:** scores cluster near the ceiling, leaving too little variation
+  to separate systems.
+- **Population drift:** the users, tasks, languages, or threats relevant to the
+  decision change.
+- **Scorer drift:** a formerly valid answer key, package, website, policy, or
+  judge no longer represents the desired behavior.
 
-![Schematic illustration of why a held-out set must be large enough. The 95% confidence half-width on an accuracy estimate shrinks as one over the square root of the number of held-out examples, so below a critical size the error bar swamps the true gap between two systems. The curve is idealized from the binomial standard error, not measured results.](/figures/benchmarks-2.svg){#fig-benchmarks-2}
+@fig-benchmarks-1 illustrates saturation. The curves are schematic: the point is
+not that every benchmark follows the same timeline, but that a bounded test loses
+resolution when most systems succeed on almost every item.
 
-Try editing `p1` and `p2` to two accuracies you want to tell apart, and watch how many held-out examples it takes before the error bar fits inside the gap.
+![Schematic benchmark saturation. Successive systems approach the ceiling of a fixed test, reducing the score spread available to distinguish them; a harder successor restores headroom but begins its own lifecycle. The curves are illustrative, not measured results.](/figures/benchmarks-1.svg){#fig-benchmarks-1}
 
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
+Do not respond by adding harder questions blindly. Difficulty is useful only if
+the new cases still represent the construct and decision. Maintain a benchmark
+like a production dependency: record revisions, monitor item statistics and
+coverage, retire broken cases, add newly relevant slices, and preserve a stable
+anchor set when longitudinal comparison matters.
 
-p1, p2 = 0.70, 0.72          # two systems' true accuracies
-gap = abs(p2 - p1)
-N = np.arange(100, 30001, 100)
-p = (p1 + p2) / 2            # pooled accuracy for the standard error
-half = 1.96 * np.sqrt(p * (1 - p) / N)   # 95% CI half-width
+## Run, retain, and report
 
-crossover = N[np.argmax(half < gap)]     # first N where the error bar fits in the gap
-print(f"gap between systems: {gap:.3f}")
-print(f"held-out size where 95% error bar < gap: {crossover} examples")
+A defensible benchmark run can be implemented as a short procedure:
 
-plt.plot(N, half, label="95% CI half-width")
-plt.axhline(gap, color="r", ls="--", label=f"true gap = {gap:.2f}")
-plt.xlabel("held-out set size N"); plt.ylabel("accuracy +/- half-width")
-plt.legend(); plt.title("Below the crossover, noise swamps the signal")
-plt.show()
-```
-::::
+1. State the construct, population, intended use, primary metric, and
+   guardrails.
+2. Freeze the model, harness, scorer, item manifest, weights, exclusions, seeds,
+   and repetition policy in an `EvaluationSpec`.
+3. Audit provenance, rights, answer quality, dependencies, and exposure risk.
+4. Run baselines and candidate systems under the declared comparison design.
+5. Store raw outputs, parsed outputs, scorer traces, costs, and failures for
+   every attempt.
+6. Aggregate at the correct sampling unit; report paired changes, slices, and
+   uncertainty.
+7. Stress the instrument with format changes, option-order permutations,
+   paraphrases, and environmental reruns where those should preserve meaning.
+8. Apply only predeclared release rules, and log every exception or post-hoc
+   analysis.
 
-The evaluation layer does not, however, scrub the training corpus. The build-time
-removal of test data, the deduplication and overlap filtering, belongs to the
-data pipeline. The evaluation layer supplies the held-out sets and the canaries,
-consumes the data layer's decontamination contract, and audits that the contract
-held. Auditing is the load-bearing word: the evaluation layer's job is to verify,
-after the fact, that nothing it defined as held-out made it into a mixture, and
-to surface it loudly when something did.
+Four invariants make the procedure auditable: no evaluation case enters a
+training or tuning path; no item disappears silently; raw output remains
+immutable; and every reported number resolves to a spec hash and case-level
+records. These rules do not guarantee a valid benchmark. They make errors
+visible and repairable.
 
-A subtler contamination path bypasses the corpus entirely, the indirect path
-@fig-benchmarks-contamination drew earlier. Synthetic data generated by a teacher
-model that was itself trained on a benchmark carries that benchmark's content
-into the student, even though the student never saw the benchmark directly. This
-is one reason the synthetic-data practice in @sec-synthetic-data and the held-out
-contract here are coupled: a clean corpus is not enough if the teacher was dirty.
-
-All of this is why a single benchmark number, reported without context, is
-folklore rather than measurement. Contamination-aware reporting is the minimum
-discipline: state the decontamination contract version the score was produced
-under, and disclose any known leakage alongside the number, so a reader can tell
-a real result from a contaminated one before building on it.
+A report should therefore lead with the qualified claim, not the largest score.
+Name the benchmark revision, model and system boundary, harness, sample and
+weights, scorer, known leakage and item defects, uncertainty, relevant slices,
+and the decision the evidence supports. A leaderboard row omits most of this
+context. It can point to a result record; it should not replace one.
 
 ::: {.callout-tip}
-## Constraint arrow
-Whether an evaluation number means anything is decided one layer down. The
-build-time decontamination in @sec-data-curation, the removal of test data from
-the training corpus, is what makes a held-out score a measurement at all. The
-evaluation layer can define held-out sets, supply canaries, and audit the
-result, but it cannot clean the corpus itself. If the data layer leaks the sets
-the evaluation layer defined, every downstream number is silently inflated and
-no amount of statistical care upstream of the leak can recover it. The integrity
-of the upper layer's measurement is dictated by the discipline of the lower
-layer's pipeline.
+## Lower-layer constraint
+Held-out integrity is decided below the evaluation layer. The data pipeline must
+exclude protected cases and their near duplicates from training mixtures, while
+the model registry, prompt registry, orchestration layer, and serving traces must
+retain the revisions used in each run. Evaluation can define the contract and
+audit the evidence, but it cannot reconstruct provenance that lower layers did
+not preserve. If those layers lose lineage, a precise score can still be
+uninterpretable.
 :::
+
+With the measurement object defined, the next question is how stable its
+aggregate is. @sec-statistical-reliability turns the saved case-level records
+into intervals, paired comparisons, and release decisions without mistaking
+precision for validity.
 
 ## Further reading
 

@@ -808,7 +808,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/01-benchmarks.qmd",
-      ["published benchmark score is never a fact about a model alone", "@gls-held-out is data deliberately kept out of every training stage; it is a pipeline contract", "@gls-contamination silently inflates numbers", "harness, data contract, and uncertainty"],
+      ["A benchmark score is not a property of model weights alone", "@gls-held-out is data deliberately kept out of every training stage; it is a pipeline contract", "Audits provide evidence about exposure, not proof of absence", "The harness is part of the measured system"],
     ],
     [
       "zh/evaluation/01-benchmarks.qmd",
