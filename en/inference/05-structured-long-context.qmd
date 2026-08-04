@@ -1,244 +1,408 @@
 # Structured and Long-Context Inference {#sec-structured-long-context}
 
-Two demands sit on top of a serving engine that the earlier chapters did not
-settle. One caller needs output that is valid JSON or that matches a grammar.
-Another brings a context far longer than the cache can comfortably hold. Both
-are handled at inference time, without retraining the model. Structured output
-masks logits against a @gls-fsm, a machine that tracks which grammar state the
-partial output is in, then makes that mask cheap through a precomputed index and
-jump-forward over forced spans. Long-context serving decides which
-keys and values survive, from sliding windows, @gls-attention-sink behavior
-where early tokens keep attracting attention, and heavy-hitter eviction to newer
-query-aware policies. In both cases, the serving engine bends a fixed model by
-constraining the decode loop.
+Two serving-time interventions change the decoder without changing model
+weights. Structured generation restricts which next tokens are admissible.
+Long-context policies restrict which previously computed key-value states
+attention retains or reads. They share the inference loop, but they provide
+different guarantees. A grammar can guarantee membership in an implemented
+formal language. Cache eviction and sparse reads approximate full attention and
+must be evaluated against the task.
 
-![Schematic of position-dependent recall in long contexts. Plain attention can lose middle evidence, while structured caches and retrieval flatten the curve. Idealized curves, not measured data.](/figures/structured-long-context-1.svg){#fig-structured-long-context-1}
+This distinction matters in production. Parseable JSON can still contain the
+wrong value. A bounded cache can keep a stream fluent while forgetting a fact
+that appeared thousands of tokens earlier. Neither mechanism should be sold as
+a general correctness guarantee.
 
-## Two Ways to Constrain a Fixed Model
+## Constrained decoding changes the token distribution
 
-The decoder of @sec-faster-decoding emits one token at a time by sampling from a distribution over the whole vocabulary. Two callers stress that loop in opposite directions, and neither is willing to retrain the model.
+Consider @gls-constrained-decoding, the grammar-checked decode loop. Here
+$p(v\mid x_{<t})$ be the model probability of vocabulary token $v$ after prefix
+$x_{<t}$. Let $s_t$ be the current parser configuration and $A(s_t)$ the tokens
+that preserve the possibility of a valid completion. Grammar-constrained
+sampling uses
 
-The first caller wants structure. A program that calls a model to extract fields, choose a tool, or fill a form needs the output to parse: valid JSON against a schema, a value from a fixed enum, a SQL statement that a parser accepts. An unconstrained model produces text that is usually well-formed and occasionally not, and the occasional failure is the expensive one, because the program downstream cannot recover from a missing brace or an invented field name. Prompting and retrying narrows the failure rate but never closes it, and each retry pays a full generation. The problem is to make malformed output impossible rather than improbable, without retraining the model and without paying a large per-token tax.
+$$
+p_G(v\mid x_{<t},s_t)=
+\frac{p(v\mid x_{<t})\,\mathbf 1[v\in A(s_t)]}
+{\sum_{u\in A(s_t)}p(u\mid x_{<t})}.
+$$
 
-The second caller wants length. A request may carry a long document, a multi-hour transcript, or an agent history that grows without bound, and the key-value cache of @sec-memory-scheduling grows linearly with that length. Past some point the cache no longer fits, or fits only by capping the batch size so low that throughput collapses. Worse, a model trained at one context length often degrades when asked to attend over a much longer one at inference time, even before memory runs out. The training-time fixes for that, extending the positional encoding through RoPE scaling and YaRN, live in @sec-transformer-architecture. The inference-time question is different: given a fixed model and a context too long to keep whole, which keys and values do you keep, and how do you keep generation coherent when you drop the rest.
+Here $\mathbf 1[v\in A(s_t)]$ is one for an allowed token and zero otherwise.
+The denominator renormalizes the remaining probability mass. After sampling
+$v$, the parser consumes it and advances from $s_t$ to $s_{t+1}$. An
+end-of-sequence token is legal only when the parser is in an accepting
+configuration. If the allowed set is empty, the engine has reached a bug,
+unsupported constraint, or incompatible prefix; it must fail explicitly rather
+than sample from the original distribution.
 
-The two problems are not obviously related, yet both are answered by intervening in the decode loop rather than retraining: one masks the distribution before sampling, the other prunes the cache that attention reads. They share this chapter because they are the two ways a serving engine adapts a fixed model to a caller's constraint. Each track below is a sequence in which every step removes a cost the previous one paid.
+The definition of $A(s_t)$ is stronger than "the next character is legal." A
+token belongs to that set only if it keeps at least one accepting completion
+reachable. Otherwise a locally valid token can lead to a dead end from which no
+complete document can be formed. On accepted termination, a correct
+implementation guarantees that the emitted byte string belongs to the
+implemented language. A maximum-token stop,
+cancellation, or engine failure can still leave an incomplete document.
 
-## Track one: @gls-constrained-decoding, the grammar-checked decode loop
-
-### The mask, and why it is not a one-liner
-
-The core idea for structure is small. At each decode step the model produces a logit, the raw pre-softmax score, for every token in the vocabulary. If you know which tokens could legally come next under the target format, you set the logits of all the others to negative infinity before the softmax, so they have zero probability and cannot be sampled. Generation then walks only the legal continuations, and the output is guaranteed to be a member of the formal language. Nothing about the model changes; the intervention is a mask applied between the logits and the sampler.
-
-The work is in knowing the legal set at every step. Express the target format as a formal language: a regular expression for a phone number or an enum, a context-free grammar for JSON or for a programming language. Compile that into an automaton, a finite-state machine for a regular language or a pushdown automaton for a context-free one. The automaton has a current state; from that state, only some tokens keep the string within the language. The mask at each step is the set of vocabulary tokens whose first character, or whose whole spelling, the automaton accepts from its current state. After a token is sampled, advance the automaton and repeat.
-
-```{dot}
-//| label: fig-slc-mask
-//| fig-cap: "Constrained decoding as a mask. Logits are masked to the tokens an FSM allows from its current state, then the sampled token advances the FSM."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  L [label="logits over\nfull vocabulary"];
-  M [label="mask: allowed\ntokens from\nFSM state"];
-  S [label="sample from\nmasked logits"];
-  T [label="token"];
-  A [label="advance FSM\nto next state"];
-  L -> M;
-  M -> S;
-  S -> T;
-  T -> A;
-  A -> M [style=dashed, label="next step"];
-}
-```
-
-Try changing `allowed` to a different set of legal tokens and watch the disallowed probabilities collapse to exactly zero while the legal ones renormalize.
+The following runnable shows the renormalization itself. It deliberately uses a
+small allowed set rather than pretending to implement a full JSON parser.
 
 :::: {.runnable}
 ```python
-import numpy as np
-vocab = ['{', '}', '"', 'name', 'age', ':', ',', 'true', 'hello', '42']
-logits = np.array([2.1, 0.3, 3.0, 1.2, 1.0, 0.5, 0.4, 0.8, 2.5, 1.1])
-# FSM is just after '{' : the only legal next token is an opening quote.
-allowed = {'"'}
-mask = np.array([t in allowed for t in vocab])
-masked = np.where(mask, logits, -np.inf)
-def softmax(x):
-    x = x - np.max(x[np.isfinite(x)])
-    e = np.exp(np.where(np.isfinite(x), x, -np.inf))
-    return e / e.sum()
-p_free, p_masked = softmax(logits), softmax(masked)
-for t, a, b in zip(vocab, p_free, p_masked):
-    print(f'{t:>6}  unconstrained={a:.3f}  masked={b:.3f}')
-print('masked mass on legal tokens:', round(p_masked[mask].sum(), 3))
+from math import exp
+
+def constrained_softmax(logits, allowed):
+    if not allowed:
+        raise ValueError("empty allowed set")
+    peak = max(logits[i] for i in allowed)
+    weights = [exp(logits[i] - peak) if i in allowed else 0.0
+               for i in range(len(logits))]
+    total = sum(weights)
+    return [weight / total for weight in weights]
+
+vocab = ["{", "}", '"', "name", "age", ":", ",", "true", "hello", "42"]
+logits = [2.1, 0.3, 3.0, 1.2, 1.0, 0.5, 0.4, 0.8, 2.5, 1.1]
+allowed = {2}  # Just after "{", this toy state accepts only an opening quote.
+probabilities = constrained_softmax(logits, allowed)
+
+for token, probability in zip(vocab, probabilities):
+    print(f"{token:>6}  {probability:.3f}")
+print("legal mass:", round(sum(probabilities[i] for i in allowed), 3))
+print("illegal mass:", round(sum(probabilities[i] for i in range(len(vocab))
+                                 if i not in allowed), 3))
 ```
 ::::
 
-The catch that makes this an engineering problem rather than a one-liner is the mismatch between the automaton, which is defined over characters, and the model, which emits tokens that are multi-character pieces of the byte stream from @sec-tokenization. A token may span several automaton transitions, and only some tokens are valid from a given state. Computing the allowed-token set naively means walking the automaton over the spelling of every one of tens of thousands of vocabulary entries, at every step, which would dominate the cost of decoding. So the first implementation of this idea was correct but slow, a per-step vocabulary scan against a hand-written automaton, and the history of the track is a chain of removing that cost.
+### The parser runs on token bytes, not token labels
 
-### Removing the per-step scan: a precomputed index
+A model emits tokenizer IDs, while a grammar is defined over an alphabet such
+as bytes or Unicode code points. The runtime must compose the two. For each
+candidate token, it obtains the bytes produced by the tokenizer and asks whether
+the parser can consume the token's complete byte string. One token may cross
+several grammar transitions. A byte sequence for one character may also be
+split across tokens. Special tokens require explicit rules because they may not
+decode to ordinary text at all.
 
-The design that makes constrained decoding practical is to precompute the relationship between automaton states and allowed tokens once, before generation, rather than at every step. Willard and Louf's formulation, the basis of the Outlines library, builds an index over the vocabulary keyed by automaton state: for each state of the finite-state machine, the set of tokens that are legal from it, and the state each of those tokens leads to [@willard2023guided]. With that index in hand, the per-step work is a dictionary lookup by current state, not a scan over the vocabulary, which turns the per-token overhead from proportional to vocabulary size into roughly constant. The index is built from the regular expression and the tokenizer once and reused for every request that shares the format. This 2023 leap is what made guided generation cheap enough to use by default.
+Regular languages can be recognized by an @gls-fsm, a machine that tracks which
+grammar state the partial output is in. A context-free grammar also needs a
+parser stack to represent nested structures. JSON-like objects, for example,
+need unbounded nesting in the general case. Calling every constraint an FSM
+hides that difference and leads to incorrect caching assumptions.
 
-### Removing the forced tokens: jump-forward over a compressed machine
+The generation loop therefore has five states that must agree:
 
-Even with a constant-time mask, a second cost remains, because large stretches of a constrained output are forced. Inside `{"name": "`, the next several characters are not a choice, they are the only continuation the grammar allows until the value begins. A token-by-token loop still runs a full forward pass for each of those forced characters, paying decode cost to generate text that was never in doubt. The compressed finite-state machine, introduced in SGLang, collapses runs of single-transition edges in the automaton into one edge, so the runtime can recognize a forced span and emit it directly [@yin2024compressed]. This is jump-forward decoding: when the machine has only one path forward, write those tokens into the sequence without a model call, then resume sampling where the format branches. The model is consulted only where the output is genuinely undetermined.
+```{dot}
+//| label: fig-slc-structured-loop
+//| fig-cap: "A structured decode step. The parser and tokenizer determine the admissible token IDs; the sampler chooses among them; the sampled token updates both model state and parser state."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.35; ranksep=0.45;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  P [label="parser configuration\nstate + stack"];
+  T [label="tokenizer mapping\ntoken ID → complete bytes"];
+  A [label="admissible token IDs\nwith accepting futures"];
+  M [label="masked sampler\nrenormalize + choose"];
+  U [label="commit token\nupdate KV + parser"];
+  P -> A;
+  T -> A;
+  A -> M;
+  M -> U;
+  U -> P [label="next step"];
+}
+```
 
-@fig-slc-jumpforward contrasts the two regimes. The forced span between two branch points is one edge in the compressed machine, written in a single step, while the model runs only at the points where the grammar leaves a real choice.
+### What the guarantee includes
+
+Syntactic validity is not value correctness. A grammar may ensure that output
+parses as JSON and that a field has an integer spelling. It cannot establish
+that the integer was copied from the source, that a tool call is authorized, or
+that a SQL statement is safe to execute. Those are semantic and policy checks.
+
+JSON Schema adds another boundary. Engines commonly implement a supported
+subset of JSON Schema by translating it into a grammar or parser. Keywords for
+cross-field relationships, remote references, numeric ranges, or string
+semantics may be unsupported or enforced after generation. The advertised
+guarantee is therefore the intersection of the requested schema, the backend's
+grammar coverage, its tokenizer integration, and its termination behavior.
+Benchmarks of structured-generation engines find meaningful differences across
+schema coverage, compilation behavior, and output quality
+[@geng2025jsonschemabench].
+
+The consumer validates the finished object again. It should reject extra bytes,
+unsupported schema features, incorrect field values, unsafe operations, and
+truncated output. Constrained decoding removes one class of failure; it does not
+replace the application validator or authorization layer.
+
+Hard token masking also changes the model's sequence distribution. The local
+renormalization above does not, in general, sample from the original model
+conditioned on eventual grammar membership because it ignores how much valid
+probability mass lies beyond each prefix. Grammar-Aligned Decoding formalizes
+this distinction and reports cases where ordinary grammar-constrained decoding
+produces valid but lower-quality outputs [@park2024grammaraligned]. The effect is
+workload- and model-dependent, so compare content accuracy as well as parse rate.
+
+## Making grammar execution affordable
+
+The direct implementation tests every vocabulary token against the live parser
+at every step. That repeats tokenizer and parser work tens of thousands of times
+per generated token. Practical engines move as much of that work as possible
+out of the decode loop.
+
+For a regular constraint, a runtime can precompute transitions from each
+automaton state through every vocabulary token. Willard and Louf describe a
+vocabulary index that makes the state-to-allowed-token lookup inexpensive
+[@willard2023guided]. The compile cache key must include the canonical grammar,
+tokenizer revision, special-token policy, byte encoding, and backend version.
+Reusing an index with a different tokenizer can admit the wrong token IDs.
+
+Precomputation does not make the whole operation constant-cost. Mask
+application still touches the selected logits or a vocabulary-sized mask;
+device transfer, synchronization, heterogeneous grammars within a batch, and
+parser-stack updates can remain visible. XGrammar reduces context-free grammar
+overhead by prechecking context-independent tokens, checking a smaller
+context-dependent set against persistent parser stacks, and overlapping CPU
+grammar work with accelerator execution. Its near-zero end-to-end overhead is
+an empirical result for evaluated engines and workloads, not a universal bound
+[@dong2025xgrammar].
+
+### Forced spans use an extend pass
+
+A grammar often has deterministic spans such as punctuation and field names.
+SGLang compresses singular paths and jumps to the next branch
+[@zheng2024sglang]. This avoids one autoregressive decode iteration per forced
+token, but it does not make those tokens free. The forced span must still enter
+the model state so later tokens attend to it. The runtime retokenizes the
+combined suffix at the boundary, reconciles any changed tokenization, and
+processes the deterministic tokens together in a prefill-style pass that
+extends the KV cache.
 
 ```{dot}
 //| label: fig-slc-jumpforward
-//| fig-cap: "Jump-forward decoding over a compressed FSM. Forced spans collapse to a single edge emitted without a model call, after Yin et al. (2024)."
+//| fig-cap: "Jump-forward processing. A sampled branch is followed by a deterministic byte span; the runtime retokenizes the boundary and extends model state for the whole span before sampling again."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
+  rankdir=TB;
+  nodesep=0.35; ranksep=0.45;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  B1 [label="branch point:\nmodel samples a key"];
-  F1 [label="forced span\nquote, colon, quote\nemitted, no model call"];
-  B2 [label="branch point:\nmodel samples a value"];
-  F2 [label="forced span\nquote, comma\nemitted, no model call"];
-  B3 [label="branch point:\nnext key or close"];
-  B1 -> F1;
-  F1 -> B2;
-  B2 -> F2;
-  F2 -> B3;
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  B1 [label="model samples\nat a grammar branch"];
+  F [label="parser finds one\ndeterministic byte span"];
+  R [label="retokenize boundary\nand reserve KV space"];
+  E [label="one extend/prefill pass\ncommits the forced tokens"];
+  B2 [label="resume decode\nat next branch"];
+  B1 -> F -> R -> E -> B2;
 }
 ```
 
-### Removing the grammar overhead: hiding behind the forward pass
+This path needs the same reserve, commit, and rollback discipline as other
+cache updates. If boundary retokenization changes an already cached suffix, the
+runtime must invalidate and recompute the affected KV entries. A failed extend
+must not leave the parser ahead of model state. Jump-forward performance depends
+on deterministic-span length, retokenization cost, extend-kernel efficiency,
+and scheduler load.
 
-The precomputed index and jump-forward both target regular languages. The remaining step generalizes the mask from regular to context-free languages while keeping the per-step cost near zero. A context-free grammar needs a stack, not just a state, so the allowed-token set depends on the current stack, which seems to defeat precomputation. XGrammar's insight is to split the vocabulary into tokens whose legality does not depend on the stack, which can be checked once and cached, and the smaller set of context-dependent tokens that must be checked against the live stack at runtime [@dong2024xgrammar]. With a persistent stack structure and by overlapping the grammar computation with the model's forward pass on the accelerator, the engine drives a full grammar constraint at close to the speed of unconstrained decoding. The arc of this track, taken whole, pushes the constraint from a per-step vocabulary scan down to a precomputed table, then to skipped tokens, then to a grammar engine that hides behind the forward pass.
+## Long context has four separate limits
 
-## Track two: pruning the cache
+"Supports 128K" does not answer every long-context question. A deployment must
+separate four limits:
 
-### Attention is concentrated, so most keys are dead weight
+1. **The model's supported context length.** Position encoding, training
+   distribution, and architecture determine whether the model behaves sensibly
+   at a given logical position. Evicting KV entries does not extend this learned
+   capability.
+2. **KV capacity.** Resident keys and values grow with retained tokens, layers,
+   heads, batch, and element width. This can cap admitted concurrency.
+3. **Attention traffic.** Even when the full cache fits, decode attention may
+   read an increasingly large state for every new query. Chapter 34's IO model
+   applies directly.
+4. **Information retention.** A policy that drops or skips state may remove the
+   evidence a later query needs. Stable perplexity or fluent generation is not
+   proof of long-range recall.
 
-The long-context half rests on a different observation. Attention does not weight all past tokens equally. For most heads, the probability mass concentrates on a small subset of positions: the most recent tokens, plus a few specific earlier ones. If most keys and values receive almost no attention, keeping all of them is paying full memory for tokens that barely contribute. The design move is to keep only the keys and values that matter and let attention run over that reduced set, trading a controlled approximation for a cache that no longer grows without bound. The first cut at this rule is blunt, and each step that follows files down a little more of that bluntness.
+Here $\kappa$ is the logical KV bytes per retained token from
+@sec-quantization-kernels. Full attention retains approximately
 
-### The blunt rule and the dropped-prefix failure
+$$
+M_{\mathrm{full}}(T)=T\kappa
+$$
 
-The simplest keep rule is a sliding window: retain only the last $w$ tokens and drop everything older. This bounds the cache to a constant size and matches how local-attention models already behave. But a plain sliding window fails in a specific and revealing way. When the earliest tokens fall out of the window, perplexity, a measure of how well the model predicts held-out text where lower is better, spikes and generation degrades sharply, far more than dropping unimportant tokens should cost.
+bytes for a sequence of $T$ tokens, before allocator and metadata overhead.
+Here $T$ is the logical sequence length. A sink-plus-window policy with $s$
+initial tokens and a recent window of $w$ tokens has budget $K=s+w$ and, after
+warm-up, retains at most
 
-The explanation is the attention sink, the central finding of StreamingLLM [@xiao2023streaming]. The softmax that turns attention scores into weights forces those weights to sum to one, so a head always spends a full unit of attention across the tokens it can see, even when none of them is worth attending to. When a head has no informative place to attend, it dumps that unavoidable surplus onto the first few tokens of the sequence, which therefore receive large scores regardless of their content. These initial tokens act as a sink. Drop them, as a naive sliding window does, and every head loses the place it was parking its spare attention, and the distribution destabilizes. The fix is to keep a handful of initial tokens permanently, the sinks, alongside the sliding window of recent tokens. With four sink tokens plus a recent window, a model trained at a fixed length can stream over millions of tokens with stable perplexity, no fine-tuning required [@xiao2023streaming].
+$$
+M_{\mathrm{window}}\lesssim K\kappa+M_{\mathrm{policy}}.
+$$
+
+Here $M_{\mathrm{policy}}$ covers block tables, scores, page summaries, and
+padding. The formula describes resident decode state. A method that compresses
+only after processing a full prompt may still pay prompt-prefill peak memory
+and compute for all $T$ tokens.
+
+## Three policy families, three failure modes
+
+Long-context methods are easier to compare by what they store and read than by
+publication date.
+
+| Policy | Stored KV after setup | KV read for a query | Selection time | Primary failure mode |
+|---|---|---|---|---|
+| Sink plus recent window | Bounded by sinks and window | All retained entries | Fixed by position | Evicted middle evidence cannot be recalled |
+| H2O-style eviction | Bounded by recency and historical heavy hitters | All retained entries | Updated during generation | Past attention may not predict future importance |
+| SnapKV prompt compression | Compressed prompt plus generated state | All retained entries | End-of-prompt observation window | Prompt evidence outside selected per-head positions is discarded |
+| Query-aware page selection | Full cache plus page summaries | Selected pages | Recomputed for each query | Relevant pages may not enter the top-$k$ read set |
+
+The first three reduce resident KV by deleting entries. Eviction is
+irreversible unless the system stores enough source state to recompute them.
+Query-aware page selection instead keeps the full cache and reduces attention
+traffic by reading a subset. Selected pages can change at the next query, so an
+unselected page remains recoverable even though the current attention result is
+still approximate.
+
+### Sinks and a recent window
+
+Some evaluated transformer families exhibit @gls-attention-sink behavior where
+early tokens keep attracting attention even when they are not semantically
+important. StreamingLLM reports that preserving a few initial KV entries along
+with a recent window avoids the sharp degradation observed when a naive window
+drops the prefix. In its evaluated Llama-2, MPT, Falcon, and Pythia settings,
+the policy supported stable streaming language-model evaluation for very long
+sequences without fine-tuning [@xiao2023streaming].
+
+The paper proposes softmax normalization as part of the explanation: when a
+head has no strongly relevant token, initial positions can absorb attention
+mass. This is an observed model behavior, not a theorem that every head follows.
+Sink count and window size are model- and workload-specific. Most importantly,
+the policy does not remember evicted content. It supports continuing generation,
+not unlimited recall.
 
 ```{=html}
 <figure id="fig-structured-long-context-attention-heatmap">
-<div class="viz" data-viz="attention-heatmap" data-tokens="t1,t2,t3,t4,t5,t6,t7,t8" data-cap-query="query" data-pattern="sink" data-hint="Each row is one query token attending over the key columns; the bright first column is the attention sink."></div>
-<figcaption>Attention over an 8-token window. Rows are queries, columns are keys, darker means more attention. Every query parks spare attention on the first key column (t1, the sink) on top of the recent diagonal; a naive sliding window that evicts t1 removes exactly that parking column, which destabilizes the distribution and spikes perplexity. Illustrative weights, not from a trained model.</figcaption>
+<div class="viz" data-viz="attention-heatmap" data-tokens="t1,t2,t3,t4,t5,t6,t7,t8" data-cap-query="query" data-cap-key="key" data-pattern="sink" data-hint="Choose a query row. Stronger color indicates more attention in this illustrative causal pattern; the first columns act as sinks."></div>
+<figcaption>An illustrative causal attention pattern, not a trained model measurement. Rows are queries and columns are keys. The first columns receive sink mass while recent keys receive local mass; future keys receive zero.</figcaption>
 </figure>
 ```
 
-```{dot}
-//| label: fig-slc-sink
-//| fig-cap: "Sink-plus-window cache. A few initial sink tokens and a recent window stay in cache and feed attention, while the middle tokens are evicted."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_keep {
-    label="What stays in cache"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    sink [label="sink tokens\n(first few)"];
-    win [label="recent window\n(last w tokens)"];
-  }
-  subgraph cluster_drop {
-    label="Dropped"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    mid [label="middle tokens"];
-  }
-  attn [label="attention"];
-  X [label="x"];
-  sink -> attn [style=dashed, label="kept"];
-  win -> attn [style=dashed, label="kept"];
-  mid -> X [style=dashed, label="evicted"];
-}
-```
+### Attention-history eviction and prompt compression
 
-### Letting content decide: eviction by attention history
+H2O retains recent tokens and tokens with large accumulated attention scores in
+the models and tasks it evaluates [@zhang2023h2o]. The score is historical. A
+token with little attention so far may still become essential to a later query,
+so the heavy-hitter budget must be tested against future-use patterns rather
+than only average language-model loss.
 
-Sinks plus a window is a fixed rule that ignores content; the middle of a long document may hold the one fact the answer needs. Content-aware compression keeps the cache small while letting which tokens survive depend on the input. H2O reframed the cache as an eviction problem and keeps the heavy hitters, the tokens that have accumulated the most attention so far, retained alongside the most recent tokens, with the rest evicted [@zhang2023h2o]. SnapKV makes a sharper observation for the prompt: each head consistently attends to particular prompt positions, and those positions can be identified from the attention in a small observation window at the end of the prompt, then the rest of the prompt's cache compressed away before generation even starts [@li2024snapkv]. Both keep a budget-sized cache whose contents are chosen by the model's own attention rather than by position alone.
+SnapKV is a different operation. It observes attention near the end of the
+prompt, selects important prompt positions separately by head, and compresses
+prompt KV before generation [@li2024snapkv]. This is prompt compression, not a
+continually updated heavy-hitter cache. It can reduce decode-state memory and
+reads, but it may not reduce prefill peak cost because the observation is made
+after the prompt has been processed.
 
-The two arcs are dated steps that line up step for step: window attention and recompute baselines bounded memory but broke on the dropped prefix; H2O in 2023 kept heavy hitters by accumulated attention [@zhang2023h2o]; StreamingLLM, also in 2023, explained why naive windows fail and fixed it with the attention sink [@xiao2023streaming]; SnapKV in 2024 pushed compression into the prompt itself using the end-of-prompt observation window [@li2024snapkv]. The frontier continues toward query-aware and learned eviction, deciding what to keep based on what the current generation is actually attending to. The sharpest version of that move stops evicting altogether: Quest keeps the full cache, summarizes each page of keys by its per-channel extremes, and fetches only the top-$k$ pages relevant to the current query [@tang2024quest]. Selection changes the failure mode, because which tokens matter shifts with every query in multi-turn use: an evicted token is gone, while an unselected one is merely cold and can be fetched next step, or parked in the tiered cache of @sec-memory-scheduling until a query wants it. A connected development is designing the sink in at training time: models can be trained with a dedicated sink token so the attention parking is explicit rather than emergent, which makes the inference-time keep rule cleaner. The same is happening to sparsity itself. NSA trains the token selection into the architecture rather than bolting a fixed pattern onto a model trained with full attention [@yuan2025nsa], and its production descendant, DeepSeek sparse attention, shipped in DeepSeek-V3.2-Exp alongside a cut in long-context API prices: a lightweight indexer scores the past tokens, each query reads only the top-$k$ of them, and the whole mechanism is added to a dense checkpoint by continued pre-training [@deepseek2025v32]. Both make the model attend over a selected subset, which turns this chapter's approximation into an architecture guarantee. That training-time choice belongs to @sec-transformer-architecture; this chapter inherits its consequence.
+### Query-aware page selection
 
-### The two lineages, side by side
+Quest keeps the full cache and stores per-channel key extrema for each page.
+For a new query, those summaries provide an upper-bound score used to choose
+the top-$k$ pages to load for attention [@tang2024quest]. Storage remains close
+to full KV plus summaries, while device-memory traffic and attention work can
+fall. This changes the failure from permanent deletion to query-specific
+omission, but it does not guarantee that every relevant page is selected.
 
-@fig-slc-lineage sets the two tracks beside each other, and both obey the same logic: every step pays off a cost the one before it left behind. On the structured side the path runs from a per-step vocabulary scan to a precomputed table, on to skipped forced tokens, and finally to a grammar engine that hides behind the forward pass. The long-context side begins with a position-only window that breaks on the dropped prefix, adds a few permanent sinks, and ends by letting attention decide what to keep.
+Native sparse-attention architectures make token selection part of training.
+They are an important alternative, but they do not belong to the fixed-model
+inference policies above. Retrofitting an eviction or selection rule onto a
+dense-attention checkpoint and training a model to use sparse attention are
+different interventions.
 
-```{dot}
-//| label: fig-slc-lineage
-//| fig-cap: "Two parallel lineages: constraining the decode loop and pruning the cache. Each step removes a cost paid by the one before it."
-digraph lineage {
-  bgcolor="transparent";
-  rankdir=LR;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, fillcolor="#f1ece1", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", arrowsize=0.7];
+## Cache state must remain internally consistent
 
-  subgraph cluster_struct {
-    label="Structured decoding";
-    labeljust=l; color="#6b7280"; fontcolor="#6b7280"; fontname="Helvetica"; fontsize=12;
-    s1 [label="logit masking\nover a hand-written\nautomaton (slow scan)"];
-    s2 [label="Willard and Louf\nindex 2023\nprecomputed table"];
-    s3 [label="SGLang compressed\nFSM 2024\njump-forward"];
-    s4 [label="XGrammar 2024\ngrammar engine\noverlaps forward pass"];
-    s1 -> s2 -> s3 -> s4;
-  }
+A keep or read policy operates on more than key and value arrays. Each retained
+entry needs its logical position, layer and head identity, numeric format, and
+ownership state. Position metadata must remain consistent with the model's
+rotary or other positional encoding. Renumbering retained tokens as if gaps had
+never existed changes attention geometry unless the method explicitly requires
+and validates that transformation.
 
-  subgraph cluster_ctx {
-    label="Long-context keep";
-    labeljust=l; color="#6b7280"; fontcolor="#6b7280"; fontname="Helvetica"; fontsize=12;
-    c1 [label="window attention\nbreaks on\ndropped prefix"];
-    c2 [label="H2O 2023\nevict by accumulated\nattention"];
-    c3 [label="StreamingLLM 2023\nkeep attention sinks\nplus window"];
-    c4 [label="SnapKV 2024\ncompress the prompt\nby observation window"];
-    c1 -> c2 -> c3 -> c4;
-  }
-}
-```
+Paged allocation helps when a policy keeps or evicts whole blocks. It does not
+make arbitrary per-token or per-head eviction free. A physical block may contain
+both retained and discarded slots, may be shared by prefix-cached requests, and
+may have outstanding readers. Fine-grained policies need block-aligned choices,
+gather indirection, compaction, or specialized sparse kernels. Reference counts,
+reserve/commit/rollback, cancellation, and prefix-cache identity from
+@sec-memory-scheduling still apply.
 
-## Where the two tracks converge
+The policy metadata also consumes memory and bandwidth. H2O-style scores,
+SnapKV per-head indices, and Quest page summaries should be included in peak and
+resident measurements. A policy that stores less KV but launches slow gather
+kernels can lose latency even while capacity improves.
 
-The two tracks meet at the same place: each bends a fixed model by accepting an approximation, and the open question is what the approximation costs. For the structured track the cost is mostly bounded and known; for the long-context track it is genuinely unsettled.
+## Verify the complete service path
+
+Structured generation and long-context policies need different correctness
+tests, followed by one shared load test.
+
+For structured generation:
+
+1. Run the official parser or schema validator over adversarial and real
+   schemas. Include nested objects, Unicode, token pieces that span several
+   transitions, special tokens, empty allowed set, and maximum-length stops.
+2. Report schema-valid rate, grammar coverage, field-level correctness, and
+   downstream rejection separately. A valid object with wrong fields is not a
+   successful extraction or tool call.
+3. Measure grammar compilation latency, compiled-cache hit rate and memory,
+   mask preparation and application time, allowed-set size, and time per output
+   token. Test mixed grammars in one batch.
+4. Compare jump-forward output and KV state with ordinary token-by-token
+   extension across tokenizer boundaries, cancellation, and allocation failure.
+
+For long-context inference:
+
+1. Compare with a full-KV baseline inside the model's supported context length.
+   Sweep prompt length, generation length, cache budget, and page-selection
+   budget.
+2. Report retrieval accuracy by evidence position, multi-hop answer quality,
+   long-generation quality, and adversarial cases where a low-attention fact is
+   needed later. Perplexity alone is insufficient. Comparative studies find
+   that cache-compression rankings vary across tasks and models
+   [@yuan2024kvcompression].
+3. Measure prompt peak memory, resident and peak KV memory, metadata, KV bytes
+   read per step, time to first token, time per output token, throughput,
+   goodput, and latency tails at matched load.
+4. Exercise shared prefixes, block reference counts, cancellation, position
+   boundaries, quantized KV, unsupported kernels, and rollback after failed
+   compaction or selection.
 
 ::: {.callout-important}
 ## What's contested
-KV-cache compression trades memory for an approximation of full attention, and how much that approximation costs is genuinely unsettled. On many long-context benchmarks, sink-plus-window and heavy-hitter eviction recover most of the quality at a fraction of the memory. But the dropped tokens are gone, and a task that later needs an evicted token, a fact buried in the middle of a long document, a constraint stated once early, cannot recover it. The size of that penalty depends on the task in a way that aggregate perplexity hides: streaming language modeling tolerates eviction well, while retrieval over long context and multi-hop reasoning are far more sensitive. Whether fixed-budget compression is safe for a given workload, or whether the model needs the whole cache, is a per-task empirical question, not a settled default. Query-aware and learned eviction policies aim to narrow this gap, and selection over a retained cache (Quest) bounds it outright by demoting tokens instead of deleting them, at the price of keeping the full cache in a cheaper tier [@tang2024quest].
+
+There is no workload-independent best cache policy. Streaming generation may
+tolerate a sink-plus-window budget while question answering fails on one
+evicted sentence. Attention-history scores can work well on one model and miss
+a future dependency on another. Query-aware selection preserves stored KV but
+still approximates the pages read for each query. Report the model, task,
+prompt distribution, generation length, budget, kernel, and full-cache baseline
+with every quality or speed claim.
 :::
 
 ::: {.callout-tip}
 ## Constraint arrow
-The cache layout of @sec-memory-scheduling decides how cheaply this chapter's keep rules can run. Paged key-value storage makes eviction a matter of freeing blocks and rewriting a block table, and makes sink-plus-window a matter of pinning the sink blocks and recycling the rest, rather than copying a contiguous buffer. The per-token cache size set by the attention variant in @sec-transformer-architecture, grouped-query or latent attention, sets the baseline memory that compression starts from, so a model already economical in key-value heads needs less aggressive eviction to fit. The compression policy a serving engine can afford is shaped by the memory manager one layer down.
+
+The preceding chapters determine whether these policies are cheap enough to
+use. The scheduler must admit grammar compilation and heterogeneous masks; the
+allocator must preserve cache ownership through eviction or compaction; the
+quantization contract must cover any retained KV and policy metadata; and
+speculative decoding must apply the same grammar to the target distribution.
+The next chapter adds multimodal tokens, whose larger and less uniform prefixes
+make grammar batching, prefill peaks, and cache selection more demanding.
 :::
 
-### What each move costs
+## Payoff and boundary
 
-Each technique buys its benefit at a stated cost.
-
-- **Constraint versus fluency.** Masking guarantees the output parses, but it can force the model down a path its own distribution disfavors, lowering quality on the content inside the structure. A constraint that is too tight, an over-specified schema, can push the model into locally legal but globally awkward text, because the mask removes the token the model wanted without removing the reason it wanted it. The constraint should be as loose as correctness allows.
-- **Index build versus reuse.** The precomputed index pays an up-front cost to compile the regular expression or grammar against the tokenizer [@willard2023guided]. For a format used across many requests this amortizes to nothing, but for a one-off schema generated per request the build can rival the generation it saves. Engines cache compiled grammars by format for exactly this reason.
-- **Jump-forward correctness.** Emitting forced tokens without a model call is only safe where the automaton truly has a single continuation, and tokenizer boundaries complicate that: the jumped text must re-tokenize the same way the model would have produced it, or the cache and the output diverge [@yin2024compressed]. The speedup is real but the boundary handling is where the bugs live.
-- **Compression budget versus recall.** A smaller cache budget saves more memory and fits more concurrent requests, but raises the chance that an evicted token was the one the answer needed. The budget is the dial between throughput and the recall of long-range facts, and the safe setting is workload-specific.
-
-```{=html}
-<figure id="fig-structured-long-context-curve">
-<div class="viz" data-viz="curve" data-family="diminishing" data-xlabel="cache budget (fraction of full)" data-ylabel="task quality recovered" data-plabel="eviction sensitivity" data-pmin="0.5" data-pmax="6" data-p="2.5"></div>
-<figcaption>Schematic, not measured: recovered quality rises steeply with the first slice of cache budget and flattens, so a fraction of the memory recovers most of the quality, while the sensitivity dial sets how fast a retrieval-heavy task pays for an evicted token.</figcaption>
-</figure>
-```
-- **Sink count and window size.** Too few sink tokens and the parking insight fails; too large a window and the memory saving shrinks. The small published defaults, a handful of sinks and a window in the thousands, are starting points, not constants [@xiao2023streaming].
-
-## Putting it in the engine
-
-A constrained decoder is a mask hooked into the sampler. The engine compiles the format into an automaton and its index once, then at each step looks up the allowed-token set for the current state, sets every other logit to negative infinity, samples, and advances the automaton. In vLLM this is a logits processor invoked inside the sampling path, backed by a structured-output backend such as XGrammar or Outlines that owns the grammar and the index. With jump-forward enabled, the runtime checks the compressed machine before each model call: if the current state has a single forced continuation, it appends those tokens directly and only invokes the model when the format branches. The grammar engine runs alongside the forward pass so the mask is ready when the logits are [@dong2024xgrammar].
-
-A compressing long-context engine is the memory manager of @sec-memory-scheduling with a keep policy on top. For sink-plus-window streaming, the engine pins the first few token blocks as sinks, keeps a rolling window of recent blocks, and frees the rest, so the cache stays at constant size as generation continues. For attention-based eviction, the engine tracks an attention score per cached token, accumulated for heavy hitters or measured in the end-of-prompt observation window for prompt compression, and evicts the lowest-scoring tokens down to the budget, freeing their blocks back to the pool. The keep policy is a small layer; paging is what makes it cheap, because evicting a token is freeing a block, not compacting a buffer.
-
-Two operational realities are worth naming. First, a constraint is only as correct as its grammar: a schema that permits a value the parser downstream rejects moves the failure rather than removing it, so the grammar and the consumer must agree on the exact format. Second, compression quality is workload-shaped in a way aggregate metrics hide, so the real test is the downstream task, retrieval accuracy or answer correctness at the chosen budget, not perplexity, which can stay flat while the specific evicted fact is exactly the one a query needed.
-
-These two mechanisms split the chapter between efficiency and trust. Constrained decoding buys trust, a guarantee the output parses, at a small efficiency cost that the index and jump-forward nearly erase. Long-context compression buys efficiency, a bounded cache, at a trust cost: the risk of evicting the fact a later query needed, which query-aware policies try to bound.
+Constrained decoding can make malformed syntax unreachable when grammar,
+tokenizer, and termination agree. It cannot make the values true. Long-context
+policies can bound resident state or reduce attention reads. They cannot make
+discarded evidence available. Production readiness means stating that boundary,
+then measuring the guarantee, task quality, and service result together.
 
 ## Further reading
 

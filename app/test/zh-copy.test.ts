@@ -992,7 +992,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/inference/05-structured-long-context.qmd",
-      ["masks logits against a @gls-fsm", "precomputed index and jump-forward", "decides which keys and values survive", "heavy-hitter eviction"],
+      ["different guarantees", "Syntactic validity is not value correctness", "Long context has four separate limits", "Eviction is irreversible"],
     ],
     [
       "zh/inference/05-structured-long-context.qmd",
