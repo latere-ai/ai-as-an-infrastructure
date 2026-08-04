@@ -1376,32 +1376,87 @@
     watchTheme(host, draw);
   };
 
-  // RL systems split: colocated keeps generation and learning on one GPU pool
-  // and alternates them, leaving reshard idle gaps but staying on-policy;
-  // disaggregated/async runs them on separate pools in parallel, near-full
-  // utilization at the cost of a controlled off-policy staleness. Toggle the two.
+  // Agent-RL systems have two independent design axes: resource placement
+  // (shared or separate pools) and update synchronization (barriered or async).
+  // This view switches axes instead of incorrectly equating disaggregation with
+  // stale data or colocation with an on-policy update.
   R['rl-timeline'] = function (host) {
-    var mode = 'colocated';
-    var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
-    bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 180);
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
+    var L = zh ? {
+      placement: '资源位置', schedule: '更新时序', colocated: '共享资源池', separate: '独立资源池',
+      shared: '同一 GPU 池', rollout: '推演', learn: '学习', rolloutPool: '推演池', learnPool: '学习池',
+      sync: '同步屏障', async: '异步重叠', update: '更新', weights: '权重同步', versioned: '带版本的数据',
+      placementRead: '资源位置决定角色运行在哪里；它本身不决定数据是否在策略。',
+      scheduleRead: '更新时序决定何时等待；异步模式必须测量策略陈旧度。',
+      placementDesc: '资源位置比较：共享 GPU 池与独立推演、学习池。',
+      scheduleDesc: '更新时序比较：同步屏障与带策略版本的异步重叠。'
+    } : {
+      placement: 'placement', schedule: 'update schedule', colocated: 'colocated', separate: 'separate pools',
+      shared: 'shared GPU pool', rollout: 'rollout', learn: 'learn', rolloutPool: 'rollout pool', learnPool: 'learning pool',
+      sync: 'synchronous', async: 'asynchronous', update: 'update', weights: 'weight sync', versioned: 'versioned data',
+      placementRead: 'Placement decides where roles run; it does not determine whether data is on-policy.',
+      scheduleRead: 'Update timing decides when roles wait; asynchronous runs must measure policy lag.',
+      placementDesc: 'Resource placement comparison: a shared GPU pool and separate rollout and learning pools.',
+      scheduleDesc: 'Update schedule comparison: a synchronous barrier and asynchronous overlap with policy versions.'
+    };
+    var axis = 'placement';
+    var bar = el('div', 'viz-pa-bar');
+    var placementBtn = el('button', 'viz-pa-toggle'); placementBtn.type = 'button'; placementBtn.textContent = L.placement;
+    var scheduleBtn = el('button', 'viz-pa-toggle'); scheduleBtn.type = 'button'; scheduleBtn.textContent = L.schedule;
+    var read = el('span', 'viz-pa-read'); read.setAttribute('aria-live', 'polite');
+    bar.appendChild(placementBtn); bar.appendChild(scheduleBtn); bar.appendChild(read); host.appendChild(bar);
+    var cv = canvas(host, 250);
+    cv.c.setAttribute('role', 'img');
     function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, x0 = 78 * cv.dpr, x1 = W - 18 * cv.dpr, span = x1 - x0;
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
       ctx.clearRect(0, 0, W, H);
-      function lane(y, label) { ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right'; ctx.fillText(label, x0 - 8 * cv.dpr, y + 4 * cv.dpr); ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
-      function block(y, a, b, col, lab) { ctx.fillStyle = col; ctx.fillRect(x0 + span * a, y - 11 * cv.dpr, span * (b - a), 22 * cv.dpr); ctx.fillStyle = '#fff'; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(lab, x0 + span * (a + b) / 2, y + 3.5 * cv.dpr); }
-      if (mode === 'colocated') {
-        var y = H / 2; lane(y, '1 GPU pool');
-        block(y, 0, 0.28, t.accent, 'gen'); block(y, 0.32, 0.5, t.accent2, 'learn'); block(y, 0.55, 0.83, t.accent, 'gen'); block(y, 0.87, 1, t.accent2, 'learn');
-        read.textContent = 'colocated · reshard idle gaps · on-policy, no staleness';
-      } else {
-        var yg = H * 0.36, yl = H * 0.66; lane(yg, 'gen pool'); lane(yl, 'learn pool');
-        block(yg, 0, 1, t.accent, 'generate'); block(yl, 0.1, 1, t.accent2, 'learn');
-        read.textContent = 'disaggregated/async · near-full utilization · ~1 step off-policy';
+      var d = cv.dpr, pad = 12 * d, gap = 10 * d, top = 38 * d, panelH = H - top - 12 * d;
+      var panelW = (W - 2 * pad - gap) / 2;
+      ctx.font = (11 * d) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = t.ink;
+      ctx.fillText(axis === 'placement' ? L.placement : L.schedule, W / 2, 20 * d);
+      function panel(x, title) {
+        ctx.strokeStyle = t.grid; ctx.lineWidth = d; ctx.strokeRect(x, top, panelW, panelH);
+        ctx.fillStyle = t.ink; ctx.font = (10 * d) + 'px sans-serif'; ctx.fillText(title, x + panelW / 2, top + 18 * d);
       }
+      function box(x, y, w, h, label, accent) {
+        ctx.fillStyle = accent === 2 ? 'rgba(224,147,107,0.18)' : 'rgba(59,130,246,0.16)';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = accent === 2 ? t.accent2 : t.accent; ctx.strokeRect(x, y, w, h);
+        ctx.fillStyle = t.ink; ctx.font = (9 * d) + 'px sans-serif'; ctx.fillText(label, x + w / 2, y + h / 2 + 3 * d);
+      }
+      function link(x1, y1, x2, y2, dashed) {
+        ctx.save(); ctx.strokeStyle = t.ink; ctx.lineWidth = d; if (dashed) ctx.setLineDash([4 * d, 3 * d]);
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); ctx.restore();
+      }
+      var left = pad, right = pad + panelW + gap, inner = 10 * d, bw = panelW - 2 * inner, bh = 30 * d;
+      if (axis === 'placement') {
+        panel(left, L.colocated); panel(right, L.separate);
+        box(left + inner, top + 40 * d, bw, panelH - 54 * d, L.shared, 1);
+        box(left + 2 * inner, top + 70 * d, bw - 2 * inner, bh, L.rollout, 1);
+        box(left + 2 * inner, top + 118 * d, bw - 2 * inner, bh, L.learn, 2);
+        box(right + inner, top + 55 * d, bw, bh, L.rolloutPool, 1);
+        box(right + inner, top + 125 * d, bw, bh, L.learnPool, 2);
+        link(right + panelW / 2, top + 85 * d, right + panelW / 2, top + 125 * d, true);
+        read.textContent = L.placementRead; cv.c.setAttribute('aria-label', L.placementDesc + ' ' + L.placementRead);
+      } else {
+        panel(left, L.sync); panel(right, L.async);
+        box(left + inner, top + 48 * d, bw, bh, L.rollout, 1);
+        box(left + inner, top + 96 * d, bw, bh, L.update, 2);
+        box(left + inner, top + 144 * d, bw, bh, L.weights, 1);
+        link(left + panelW / 2, top + 78 * d, left + panelW / 2, top + 96 * d, false);
+        link(left + panelW / 2, top + 126 * d, left + panelW / 2, top + 144 * d, false);
+        box(right + inner, top + 58 * d, bw, bh, L.rollout, 1);
+        box(right + inner, top + 132 * d, bw, bh, L.learn, 2);
+        link(right + panelW / 2, top + 88 * d, right + panelW / 2, top + 132 * d, true);
+        ctx.fillStyle = t.ink; ctx.font = (8 * d) + 'px sans-serif'; ctx.fillText(L.versioned, right + panelW / 2, top + 112 * d);
+        read.textContent = L.scheduleRead; cv.c.setAttribute('aria-label', L.scheduleDesc + ' ' + L.scheduleRead);
+      }
+      placementBtn.setAttribute('aria-pressed', axis === 'placement' ? 'true' : 'false');
+      scheduleBtn.setAttribute('aria-pressed', axis === 'schedule' ? 'true' : 'false');
     }
-    btn.addEventListener('click', function () { mode = mode === 'colocated' ? 'async' : 'colocated'; btn.textContent = 'mode: ' + mode; draw(); });
-    btn.textContent = 'mode: colocated'; draw();
+    placementBtn.addEventListener('click', function () { axis = 'placement'; draw(); });
+    scheduleBtn.addEventListener('click', function () { axis = 'schedule'; draw(); });
+    draw(); watchTheme(host, draw);
   };
 
   // Reciprocal rank fusion: a document's fused score sums 1/(k+rank) across the

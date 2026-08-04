@@ -371,6 +371,25 @@ test("wave-5 components are used in their chapters, both languages", () => {
   }
 });
 
+test("the RL systems view separates placement from synchronization", () => {
+  const start = rt.indexOf("R['rl-timeline']");
+  const end = rt.indexOf("R['rrf-fusion']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  expect(component).toContain("var axis = 'placement'");
+  expect(component).toContain("placementBtn.setAttribute('aria-pressed'");
+  expect(component).toContain("scheduleBtn.setAttribute('aria-pressed'");
+  expect(component).toContain("read.setAttribute('aria-live', 'polite')");
+  expect(component).toContain("cv.c.setAttribute('role', 'img')");
+  expect(component).toContain("cv.c.setAttribute('aria-label'");
+  expect(component).toContain("watchTheme(host, draw)");
+  expect(component).toContain("资源位置");
+  expect(component).toContain("更新时序");
+  expect(component).not.toContain("~1 step off-policy");
+  expect(component).not.toContain("near-full utilization");
+});
+
 test("the SSM comparison visualizes state shape without inventing recall accuracy", () => {
   const start = rt.indexOf("R['ssm-vs-attention']");
   const end = rt.indexOf("R['rl-timeline']", start);
