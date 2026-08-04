@@ -288,6 +288,7 @@
   // ILLUSTRATIVE pattern (self + neighbor decay + one structured link), not a
   // trained model's; the caption says so. Tokens come from data-tokens.
   R['attention-heatmap'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
     var toks = (host.getAttribute('data-tokens') || 'the,cat,sat,on,the,mat,.')
       .split(',').map(function (s) { return s.trim(); }).filter(Boolean);
     var n = toks.length;
@@ -304,7 +305,7 @@
           w = 0.03 + 0.85 * Math.exp(-Math.abs(i - j) / 1.1); // recent window
           if (j === 0) w += 1.5;                              // the sink
           if (j === 1) w += 0.45;                             // weaker second sink
-          if (j > i) w = 0.02;                                // causal-ish
+          if (j > i) w = 0;                                   // causal mask
         } else {
           w = 0.05 + 0.6 * Math.exp(-Math.abs(i - j) / 1.5);
           if (j === i) w += 1.0;
@@ -316,10 +317,14 @@
       W.push(row);
     }
     var sel = Math.min(2, n - 1); // default selected query row
-    var t = (host.getAttribute('data-cap-query') || 'query'); // label word ("查询位置" in zh)
+    var t = host.getAttribute('data-cap-query') || (zh ? '查询' : 'query');
+    var keyLabel = host.getAttribute('data-cap-key') || (zh ? '键' : 'key');
+    var toLabel = zh ? '到' : 'to';
 
     var wrap = el('div', 'viz-attn');
     var grid = el('div', 'viz-attn-grid');
+    grid.setAttribute('role', 'group');
+    grid.setAttribute('aria-label', zh ? '注意力权重矩阵' : 'attention-weight matrix');
     grid.style.gridTemplateColumns = 'auto repeat(' + n + ', 30px)';
     var rowEls = []; // [{lbl, cells:[]}] per query row, for highlight
     // header: empty corner + column (key) labels
@@ -327,7 +332,8 @@
     for (var c = 0; c < n; c++) { var cl = el('div', 'viz-attn-lbl col'); cl.textContent = toks[c]; grid.appendChild(cl); }
     for (var r = 0; r < n; r++) {
       (function (r) {
-        var lbl = el('div', 'viz-attn-lbl'); lbl.textContent = toks[r];
+        var lbl = el('button', 'viz-attn-lbl'); lbl.type = 'button'; lbl.textContent = toks[r];
+        lbl.setAttribute('aria-label', t + ' ' + toks[r]);
         lbl.addEventListener('click', function () { select(r); });
         grid.appendChild(lbl);
         var cells = [];
@@ -336,6 +342,8 @@
             var cell = el('div', 'viz-attn-cell');
             cell.style.background = 'color-mix(in srgb, var(--accent, #c2603f) ' + (W[r][cc] * 100).toFixed(1) + '%, transparent)';
             cell.title = toks[r] + ' → ' + toks[cc] + ': ' + (W[r][cc] * 100).toFixed(0) + '%';
+            cell.setAttribute('role', 'img');
+            cell.setAttribute('aria-label', t + ' ' + toks[r] + ' ' + toLabel + ' ' + keyLabel + ' ' + toks[cc] + ': ' + (W[r][cc] * 100).toFixed(0) + '%');
             cell.addEventListener('click', function () { select(r); });
             grid.appendChild(cell); cells.push(cell);
           })(cc);
@@ -346,6 +354,7 @@
 
     var bars = el('div', 'viz-attn-bars');
     var qTitle = el('div', 'viz-attn-q');
+    qTitle.setAttribute('aria-live', 'polite');
     bars.appendChild(qTitle);
     var barEls = []; // [{fill, pct}]
     for (var b = 0; b < n; b++) {
@@ -366,9 +375,12 @@
       rowEls.forEach(function (re, i) {
         var on = i === r;
         re.lbl.classList.toggle('viz-attn-sel', on);
-        re.cells.forEach(function (cell) { cell.classList.toggle('viz-attn-sel', on); });
+        re.lbl.setAttribute('aria-pressed', on ? 'true' : 'false');
+        re.cells.forEach(function (cell) {
+          cell.classList.toggle('viz-attn-sel', on);
+        });
       });
-      qTitle.innerHTML = t + ' <b>“' + toks[r] + '”</b>';
+      qTitle.textContent = t + ' “' + toks[r] + '”';
       for (var j = 0; j < n; j++) {
         barEls[j].fill.style.width = (W[r][j] * 100).toFixed(1) + '%';
         barEls[j].pct.textContent = Math.round(W[r][j] * 100) + '%';

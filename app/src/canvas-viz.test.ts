@@ -10,6 +10,19 @@ test("the viz runtime registers the superposition component", () => {
   expect(rt).toMatch(/R\['superposition'\]\s*=\s*function/);
 });
 
+test("the attention heatmap exposes keyboard row controls without 64 tab stops", () => {
+  const start = rt.indexOf("R['attention-heatmap']");
+  const end = rt.indexOf("R['stepper']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("el('button', 'viz-attn-lbl')");
+  expect(component).toContain("el('div', 'viz-attn-cell')");
+  expect(component).toContain("cell.setAttribute('aria-label'");
+  expect(component).toContain("qTitle.setAttribute('aria-live', 'polite')");
+  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  expect(component).toContain("if (j > i) w = 0");
+});
+
 test("viz theme reads palette vars from .reader, not body's default-black color", () => {
   // getComputedStyle(document.body).color defaults to black, invisible on the
   // dark canvas. The theme must read --fg-1/--bg-surface off .reader instead.
