@@ -4,7 +4,6 @@ import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
-const themeCss = readFileSync(new URL("./theme.css", import.meta.url), "utf8");
 function src(p: string) { return readFileSync(new URL("../../" + p, import.meta.url), "utf8"); }
 
 test("the viz runtime registers the superposition component", () => {
@@ -200,8 +199,10 @@ test("the stepper stops animation for reduced motion, focus, and detached hosts"
   expect(component).toContain("if (!host.isConnected) { pause(); return; }");
 });
 
-test("the stepper removes dangling arrows on narrow screens", () => {
-  expect(themeCss).toMatch(/@media\s*\(max-width:\s*520px\)[\s\S]*?\.viz-step-arrow\s*\{\s*display:\s*none;/);
+test("the stepper does not insert separators that can wrap away from their controls", () => {
+  const start = rt.indexOf("R['stepper']");
+  const end = rt.indexOf("R['cost-crossover']", start);
+  expect(rt.slice(start, end)).not.toContain("el('span', 'viz-step-arrow')");
 });
 
 test("ch03 scaling-laws adds a u-shape compute-optimal curve in both languages", () => {

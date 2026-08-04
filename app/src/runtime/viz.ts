@@ -404,7 +404,6 @@
     var chipRow = el('div', 'viz-step-chips');
     var chipEls = [];
     steps.forEach(function (s, i) {
-      if (i) { var a = el('span', 'viz-step-arrow'); a.textContent = '→'; chipRow.appendChild(a); }
       var ch = el('button', 'viz-step-chip'); ch.type = 'button'; ch.textContent = s.chip || String(i + 1);
       ch.setAttribute('aria-label', zh ? L.step + (i + 1) + '步' : L.step + (i + 1));
       ch.addEventListener('click', function () { go(i, true); });
