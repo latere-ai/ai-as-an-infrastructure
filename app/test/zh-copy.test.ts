@@ -784,7 +784,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/orchestration/10-context-engineering.qmd",
-      ["prompt engineering to context engineering", "longer context window does not by itself solve", "token budgets", "tool protocols", "agent can actually do"],
+      ["Context engineering decides what a model sees", "bounded, versioned view", "Authorize before selection", "lossy state transition", "A valid schema is not permission", "cache reuse is an optimization, not durable memory"],
     ],
     [
       "zh/orchestration/10-context-engineering.qmd",

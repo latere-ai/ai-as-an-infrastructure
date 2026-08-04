@@ -1,401 +1,379 @@
 # Context Engineering {#sec-context-engineering}
 
-A frontier model does not act on the world. It acts on its context window,
-the bounded sequence of tokens it can attend to in a single forward pass.
-Everything the model knows about a task at the moment of generation, the
-instructions, the retrieved documents, the conversation so far, the tool
-results, must be assembled into that window by something outside the model.
-The field renamed this work from prompt engineering to context engineering in
-2025 because the unit of work had changed from a single string to the assembly
-of the whole window. A longer context window does not by itself solve the
-problem; token budgets and tool protocols shape what an agent can actually do.
+Context engineering decides what a model sees for one inference step. It does
+not replace the knowledge in the model's weights, and it is not a way to pour
+an application's entire state into a prompt. It constructs a bounded,
+versioned view of the current task from instructions, user input, retrieved
+evidence, conversation state, tool descriptions, and tool results. The useful
+question is therefore not “how much text fits?” but “which authorized tokens
+give this call the evidence and constraints it needs, without hiding conflicts
+or spending the space reserved for an answer?”
 
-![Schematic of context quality under a growing window. Dumping more raw text eventually hurts, while packed context keeps improving until the useful evidence is already present. Idealized curves, not measured data.](/figures/context-engineering-1.svg){#fig-context-engineering-1}
+Prompt engineering remains part of that work: instructions still need clear
+language. The broader label became popular in 2025 as agent systems made the
+rest of the assembly visible [@anthropic2025context]. The underlying mechanism
+is older. Brown et al.
+showed in 2020 that demonstrations in the input could change GPT-3's task
+behavior without a weight update [@brown2020language]. Retrieval, tools, and
+multi-turn agents then turned a hand-written prompt into a per-step data
+pipeline. Context engineering is the discipline of specifying and testing that
+pipeline, not a claim that prompting was renamed on a particular date.
 
-The argument turns on one stubborn fact: a bigger window does not make the
-problem go away. It moves the problem. Each section below pushes on that
-claim from a different side, from why the window misbehaves, to what lever is
-left, to how a running agent assembles its context and where that assembly
-breaks.
+![Schematic comparison of indiscriminate context growth and selective context assembly. The curves are illustrative: actual quality depends on the model, task, evidence, and ordering.](/figures/context-engineering-1.svg){#fig-context-engineering-1}
 
-## The window is the only channel
+## Define the assembly contract
 
-The context window is a fixed, scarce resource, and it is the only channel
-through which a model perceives a task. That one sentence is the key to
-the whole chapter, so it is worth getting clear.
+An application has more state than a model call should contain. The source
+corpus, event log, permissions, pending actions, and user profile remain in
+durable stores. The context is a temporary projection of that state. If the
+projection is wrong, a capable model can still answer the wrong question,
+follow stale instructions, cite obsolete evidence, or repeat an action that
+already happened.
 
-The window is finite, and every token in it competes for the same space. A
-system prompt, a tool catalog, retrieved passages, and a long conversation
-history all draw from one budget. When the budget is exceeded, something must
-be dropped, summarized, or retrieved on demand, and each of those choices
-changes what the model can answer. There is no second channel. Whatever the
-model does not see in the window, it does not know.
+Treat the projection as a versioned interface:
 
-A reader may reasonably expect that a larger window dissolves this pressure.
-The next section is the reason it does not.
+```text
+ContextSpec {
+  model_revision, tokenizer_revision, chat_template_revision
+  max_input_tokens, max_total_tokens, output_reserve
+  instruction_policy_revision, tool_catalog_revision
+  retrieval_spec_hash, compaction_policy_revision
+  ordering_policy_revision, trust_policy_revision
+  tool_server_identities, retention_policy_revision
+}
 
-## Why a bigger window does not help
-
-A model does not use the tokens in its window uniformly. Even when the
-relevant information is present, a model tends to attend most reliably to the
-beginning and the end of its input and least reliably to the middle. Liu et
-al. named this the lost-in-the-middle effect [@liu2023lost], measuring a
-characteristic U-shaped accuracy curve on multi-document question answering
-and key-value retrieval: performance is highest when the needed fact sits
-near the start or the end of the context and degrades, sometimes below the
-closed-book baseline, when it sits in the middle. A bigger window does not
-repeal this. It enlarges the middle.
-
-@fig-ce-position sketches the consequence as a placement map. Reliability is
-high at the two boundaries and sags through the long middle, so where a fact
-sits in the window, not merely whether it is present, governs whether the
-model uses it.
-
-```{dot}
-//| label: fig-ce-position
-//| fig-cap: "A schematic placement map of the context window. Attention is reliable near the two boundaries and weakest through the middle, after the lost-in-the-middle effect of Liu et al. (2024). The shape is illustrative, not measured."
-digraph position {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontsize=11, fontname="Helvetica", fillcolor="#f1ece1", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [arrowhead=none, color="#6b7280", fontcolor="#6b7280"];
-
-  head [label="head of window\nhigh-value evidence,\nkey instruction", color="#3b82f6", fontcolor="#3b82f6"];
-  mid  [label="middle\nweak attention,\nfacts underused"];
-  tail [label="tail of window\nrecent turns,\nthe live question", color="#3b82f6", fontcolor="#3b82f6"];
-
-  head -> mid -> tail;
-
-  reliable_l [shape=plaintext, style="", label="reliable", fontcolor="#3b82f6"];
-  weak [shape=plaintext, style="", label="lost in the middle"];
-  reliable_r [shape=plaintext, style="", label="reliable", fontcolor="#3b82f6"];
-  reliable_l -> head [style=invis];
-  weak -> mid [style=invis];
-  reliable_r -> tail [style=invis];
-  { rank=same; reliable_l; head; }
-  { rank=same; weak; mid; }
-  { rank=same; reliable_r; tail; }
+ContextItem {
+  item_id, kind, role, authority, content_hash
+  source_uri, source_version, observed_at, expires_at
+  tenant, acl_version, trust, token_count
+  dependencies, supersedes, derived_from
+  parent_call_id, mandatory
 }
 ```
+
+`kind` distinguishes instructions, task data, demonstrations, evidence,
+history, memory, tool schemas, and tool results. `role` records how the item is
+serialized for the model; `authority` records whose policy it may change.
+Those fields are deliberately separate. A database row or web page can appear
+in a user message or a tool result, but it does not thereby gain permission to
+override application instructions. Source and access-control fields make the
+item traceable to the authorized state from which it was derived.
+
+The exact rendered request is part of the contract. A provider's chat template
+can add role markers, separators, tool-call records, and hidden formatting.
+Changing that template or tokenizer can change both behavior and token count
+even when the visible strings are identical. Hash the spec, record the ordered
+item IDs and content hashes, and make a new version whenever one of those
+transformations changes.
+
+## Count the request that will actually run
+
+Token budgeting begins after serialization, not by adding word counts from the
+source documents. Let the final request be
+
+$$
+\begin{aligned}
+X &= \operatorname{serialize}\!\left(F,\pi(S)\right), \\
+T(X) &\le W_{\mathrm{in}}, \\
+T(X)+R &\le W_{\mathrm{total}}.
+\end{aligned}
+$$
+
+Here $F$ is the ordered sequence of mandatory items, such as the application
+instructions and active user request; $S$ is the selected subset of optional
+candidate items; $\pi$ is their ordering policy; and
+$\operatorname{serialize}$ is the model-specific chat and tool template. $X$
+is the exact input sent to the model, $T(X)$ is its token count under the
+contracted tokenizer, $W_{\mathrm{in}}$ is the model or API's input limit,
+$W_{\mathrm{total}}$ is the combined input-and-generation limit, and $R$ is
+the output reserve. When an API exposes only one combined limit, the two
+constraints reduce to the second one.
+
+The inequalities are admission checks, not targets. Filling every available
+token can raise prefill latency, enlarge the key-value cache, dilute useful
+evidence, and leave later tool results nowhere to go. A production policy
+normally sets smaller budgets for categories such as tool schemas, retrieved
+evidence, demonstrations, and history. Those allocations are policy choices to
+measure, not universal percentages. A multi-step tool loop also needs headroom
+for the assistant's tool request and the result that becomes input to the next
+call; reserving only the final prose answer can strand the run halfway through.
+
+Never delegate overflow behavior to an undocumented backend default. Some
+interfaces reject an oversized request; others truncate or limit one field.
+The assembler should count the final payload, rebuild it under an explicit
+policy if it is too large, and fail visibly if mandatory content cannot fit.
+Silent clipping destroys reproducibility because the logged source items no
+longer match what the model received. Reconcile the preflight count with the
+provider's returned usage so tokenizer or template drift becomes observable.
+
+## Selection and placement are empirical policies
+
+More context can help because the model can condition on task-specific
+information that its weights do not contain. It can also hurt because items
+compete for finite space and influence one another. In-context demonstrations
+are a simple example. GPT-3 established that zero-, one-, and few-shot prompts
+could produce useful behavior without gradient updates, but the effect varied
+substantially by task and model size [@brown2020language]. Later controlled
+experiments found that changing the order of the same four demonstrations
+could sharply change classification accuracy for the evaluated GPT-family
+models [@lu2022ordered]. Example identity, order, format, and label balance are
+therefore inputs to an evaluation, not decoration around a fixed method.
+
+Irrelevant information is not neutral either. Shi et al. inserted distracting
+sentences into grade-school arithmetic problems and measured accuracy losses
+in the evaluated language models [@shi2023distracted]. That result does not
+prove that every extra passage lowers quality. It does show why retrieval score
+alone is insufficient: test distractors that are lexically related, plausible,
+stale, duplicated, or in conflict with the answer-bearing evidence.
+
+Position can matter as well. Liu et al. varied the location of relevant
+information in multi-document question answering and synthetic key-value
+retrieval. Several models in that study performed best when the relevant item
+was near the beginning or end and worse when it was in the middle
+[@liu2023lost]. “Lost in the middle” names that empirical pattern. It is not a
+law that every model, task, or context length follows, and it does not imply
+that the middle is unusable. Query placement, model training, task structure,
+and later architectures can change the curve.
 
 ```{=html}
 <figure id="fig-context-engineering-curve">
-<div class="viz" data-viz="curve" data-family="u-shape" data-xlabel="position of the fact in the window" data-ylabel="recall" data-plabel="U sharpness" data-pmin="0.6" data-pmax="3" data-p="2"></div>
-<figcaption>Recall is U-shaped over a fact's position in the window: high near the start and the end, lowest through the middle. The middle is a dead zone, and a bigger window only stretches it wider, which is why placement beats a bigger window. Move the slider to flatten or steepen the U. The shape is illustrative, not measured.</figcaption>
+<div class="viz" data-viz="curve" data-family="u-shape" data-xlabel="position of the relevant item" data-ylabel="task score" data-plabel="schematic curvature" data-pmin="0.6" data-pmax="3" data-p="2"></div>
+<figcaption>A controllable schematic of the U-shaped position effect reported for particular models on multi-document QA and key-value retrieval. The slider changes an illustration; it does not predict a model's score. Measure the deployed model with the real serialized prompt.</figcaption>
 </figure>
 ```
 
-Vary where the needed fact sits and watch the recall move: this simulates a
-U-shaped recall profile, then Monte-Carlo places one fact at the head, the
-middle, and a random slot to compare hit rates.
+The practical response is a permutation test, not a slogan such as “always put
+evidence at the edges.” Hold the selected items fixed, move the answer-bearing
+and conflicting items through the rendered request, and measure the change.
+Chat roles and templates may place text differently from the source order, so
+inspect the actual payload. Adopt an ordering rule only when that rule wins on
+the target workload and remains stable across important slices.
 
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
+## Preserve authority and provenance
 
-rng = np.random.default_rng(0)
-pos = np.linspace(0, 1, 41)              # position in the window, 0=head 1=tail
-recall = 0.45 + 0.5 * (2 * pos - 1) ** 2 # U-shape: high at edges, low in middle
+The context is one token sequence to the model, but its contents do not have
+equal standing in the application. Platform policy constrains the application;
+application instructions constrain the task; the user supplies goals and
+data; retrieved documents and tool results supply evidence. The assembler must
+retain those distinctions even though the model can still misinterpret them.
 
-def hit_rate(p, trials=20000):
-    prob = np.interp(p, pos, recall)
-    return rng.random(trials) < prob
+Three rules follow:
 
-for name, p in [("head", 0.0), ("middle", 0.5), ("random", None)]:
-    where = rng.random(20000) if p is None else p
-    print(f"{name:7s} recall = {hit_rate(where).mean():.3f}")
+1. **Authorize before selection.** Retrieval and memory lookup operate on the
+   caller's authorized candidate set. Filtering after generation is too late;
+   unauthorized content has already influenced the answer.
+2. **Keep data as data.** Quote or structure retrieved text and tool output,
+   attach its source, and state that embedded instructions are untrusted. Do
+   not concatenate external text into a higher-authority instruction field.
+3. **Surface conflict instead of erasing it.** Preserve source versions,
+   timestamps, and disagreement among credible items. A summary that silently
+   chooses one claim converts uncertainty into false certainty.
 
-plt.plot(pos, recall); plt.xlabel("position (head to tail)")
-plt.ylabel("recall probability"); plt.title("lost in the middle"); plt.show()
-```
-::::
+Roles, XML tags, and delimiters help the model parse these boundaries, but
+formatting alone is not a security boundary. Indirect prompt injection works
+precisely because untrusted data and executable instructions meet inside one
+model input. StruQ demonstrated a stronger separation by pairing a structured
+front end with a model specifically trained to ignore instructions in the data
+channel [@chen2025struq]. Its result should not be generalized to an arbitrary
+model that merely sees tags. Authorization, least-privilege tools, confirmation
+for consequential actions, output validation, and the controls in
+@sec-adversarial-robustness remain necessary.
 
-So the problem is not only "how do I fit everything in," it is "what do I
-put in, in what order, so the model uses it." That is a budgeting and
-placement problem, and it is the work context engineering takes over.
+## Compaction is a lossy state transition
 
-## The lever: context as a programming surface
+Long conversations and agent trajectories eventually exceed any fixed window.
+Dropping old turns loses state; carrying every turn forward consumes the
+budget; summarizing creates a new, fallible representation. Compaction is
+therefore a state transition with an explicit loss policy, not routine text
+cleanup.
 
-The model's weights are fixed at inference time. The only lever left is what
-enters the window and where, so the design idea is to treat the context
-window as a managed buffer, not a prompt.
+Separate at least three kinds of state:
 
-The lever is real because of in-context learning. Brown et al. showed with
-GPT-3 that a sufficiently large autoregressive model can perform a task from
-demonstrations placed in its context, with no weight update at all
-[@brown2020language]. They distinguished three regimes by how many
-demonstrations the prompt carries: zero-shot, an instruction with no
-examples; one-shot, a single example; and few-shot, a handful, typically ten
-to one hundred, that fit in the window. The finding that mattered for
-everything since is that the context is a programming surface. You can change
-a model's behavior by changing its input, within one session, at the cost of
-the tokens the demonstrations consume.
+- **Durable truth:** source records, user approvals, tool effects, artifacts,
+  and the event log remain outside the prompt. A summary may point to them but
+  must not replace them.
+- **Working state:** the current goal, completed steps, unresolved questions,
+  constraints, and next action can be compacted into a checkpoint with source
+  pointers.
+- **Ephemeral detail:** exploratory prose, redundant tool output, and superseded
+  drafts may be dropped once their useful result is represented elsewhere.
 
-Once the context is a programming surface, the assembly of it becomes the
-artifact worth engineering, which is the work a survey of the field now
-catalogs as a discipline in its own right [@mei2025survey]. Andrej Karpathy
-made the argument for the name in mid-2025, proposing context engineering
-over prompt engineering on the grounds that a "prompt" connotes a short
-instruction, while real applications perform "the delicate art and science of
-filling the context window with just the right information for each step"
-[@karpathy2025context]. Tobi Lutke framed it from the application side the
-same week: context engineering is "the art of providing all the context for
-the task to be plausibly solvable by the LLM" [@lutke2025context]. The rename
-is not cosmetic. It moves the unit of work from a single string a human
-writes to a pipeline a system assembles: system prompt, retrieved documents,
-conversation history, distilled memory, and tool outputs, composed for each
-step of a running agent.
+Every compacted checkpoint records its input range, policy version, content
+hash, source pointers, unresolved uncertainty, and actions already performed.
+Later calls can retrieve the original evidence when a decision depends on
+detail the summary omitted. This is the same separation used by
+@sec-memory-systems: durable storage owns truth; the window holds a working
+set.
 
-## Three moves: budget, place, compress
+Compression quality is task-dependent. RECOMP trained extractive and
+abstractive compressors against downstream retrieval-augmented tasks and also
+learned when augmentation should be omitted [@xu2024recomp]. That is stronger
+evidence than assuming a generic summary preserves whatever the next step will
+need. Evaluate compaction on delayed questions, commitments, negations,
+multi-step dependencies, and recovery after failure. For irreversible actions,
+reconcile against the external system rather than trusting a prose summary.
 
-Three design moves follow directly from the two facts above, that the window
-is finite and that the model underuses its middle.
+## Tools expand the candidate set, not the authority
 
-**Budgeting.** Treat the window as a cost-accounted resource. Account for the
-fixed overhead first, the system prompt and the tool definitions, then divide
-what remains among history, retrieval, and headroom for the model's own
-output. Retrieval (@sec-rag-retrieval) exists precisely so that not
-everything has to live in the window at once; the corpus stays outside and
-only the relevant slice is paged in per query.
+A tool protocol determines how capabilities are described and invoked. It does
+not decide which capabilities a model should see, whether a call is authorized,
+or how much of a result belongs in the next context.
 
-**Placement.** Because the middle is the weak position, order matters.
-Put the instruction the model must follow and the highest-value evidence
-where attention is reliable, near the boundaries, not buried in a long
-undifferentiated dump. Lost-in-the-middle is a property of the model, and it
-dictates a choice in the layer above it.
+The Model Context Protocol (MCP) standardizes a client-host-server exchange for
+resources, prompts, and tools. In its architecture, the host coordinates
+clients, permissions, consent, and context aggregation; each client maintains a
+separate connection to a server [@mcp2025spec]. This removes bespoke message
+formats at an integration boundary, but it does not collapse all trust domains
+into one safe hub. Server identity, capability negotiation, authorization,
+schema versioning, result validation, and isolation still belong to the host
+and surrounding runtime.
 
-**Compression over accumulation.** A conversation or an agent trajectory grows
-without bound, but the window does not. Old turns are summarized into distilled
-state, tool outputs are filtered before they re-enter the window, and durable
-facts are written to an external memory (@sec-memory-systems) and retrieved
-when needed rather than carried forward verbatim.
+A valid schema is not permission. Before execution, reauthorize the action,
+destination, and sensitive arguments against current policy. When a result
+returns, link it to the originating call ID, validate its error state, media
+type, size, and declared output schema, and retain the server and schema
+revision. Treat annotations supplied by a remote server as hints until local
+policy says otherwise.
 
-::: {.callout-tip}
-## Constraint arrow
-Context budgeting is not a stylistic preference; it is forced from below by
-the cost of a token. Every token in the window must sit in the key-value
-cache and be attended to anew at every generated token, and the serving problem in @sec-serving-problem and
-the cache scheduling in @sec-memory-scheduling show that this cost grows with
-context length, in memory and in compute. A longer window is not free
-capacity you may as well fill. The per-token serving cost is what makes a
-tight, well-ordered context the right design even when a larger window is
-technically available.
-:::
+Tool catalogs also consume tokens. Load the small, common set directly; expose
+larger catalogs through deterministic discovery; and fetch a full schema only
+when the task may need it. The discovery mechanism needs recall tests of its
+own. Hiding a necessary tool saves tokens and makes the task impossible, while
+showing many near-duplicate tools raises selection errors. Similarly, filter
+large results in code when the operation is deterministic, but keep the raw
+result and transformation trace outside the window so the filtered view can be
+audited.
 
-## From a string to a pipeline
+## Build one model call
 
-The three moves did not arrive all at once. The lineage runs from a single
-string toward a managed pipeline, and tracing it shows why each move became
-necessary.
+A context assembler can now be stated as an algorithm rather than a prompt
+template:
 
-The first era was prompt engineering. With in-context learning established,
-practitioners learned to coax behavior from a model by wording: phrasing an
-instruction carefully, adding a few worked examples, appending "let's think
-step by step" to elicit a chain of thought (@sec-eliciting-reasoning). The
-artifact was a prompt template, and the skill was writing it.
+```text
+Inputs:
+  request q, caller identity a, durable state D, ContextSpec V
 
-The limits of that era showed up as applications grew. A single hand-written
-string cannot hold a large knowledge base, a long conversation, or the output
-of tools the model calls. Retrieval-augmented generation (@sec-rag-retrieval)
-answered the knowledge-base limit by fetching relevant passages at query
-time. For the action limit, agent harnesses (@sec-the-harness,
-@sec-agent-architectures) let the model call tools and fed the results back
-into the window. Both turned the context into something assembled at runtime
-from many sources, which is the moment prompt engineering became too small a
-word for the job. The rename to context engineering in 2025 was the field
-naming what it had already started doing: Karpathy and Lutke gave it a label,
-but the practice of budgeting, retrieving, ordering, and compressing the
-window predated the term.
-
-## The recursion: budgeting the tools themselves
-
-Tools created their own integration problem and their own protocol, and that
-protocol then turned the budgeting problem back on itself.
-
-Before late 2024, every application wired each model to each data source with
-bespoke glue, an N-times-M problem. Anthropic released the Model Context
-Protocol (MCP) in November 2024 as an open standard for that wiring
-[@anthropic2024model]: a model speaks one protocol, and any MCP server, for a
-filesystem, a database, an issue tracker, exposes its tools and data through
-it. MCP standardized how external context and capabilities enter the window.
-@fig-ce-mcp contrasts the two wirings: the bespoke mesh where every model
-integrates every source directly, against the hub where each side speaks the
-protocol once.
-
-```{dot}
-//| label: fig-ce-mcp
-//| fig-cap: "From an N-times-M integration mesh to a single protocol. MCP replaces bespoke per-pair glue with one standard each side speaks once, after Anthropic (2024)."
-digraph mcp {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontsize=10, fontname="Helvetica", fillcolor="#f1ece1", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", arrowsize=0.6];
-
-  subgraph cluster_before {
-    label="Before: bespoke glue, N times M"; labeljust=l; color="#6b7280"; fontcolor="#6b7280"; fontsize=11;
-    mA [label="model A"]; mB [label="model B"];
-    sA [label="filesystem"]; sB [label="database"]; sC [label="issue tracker"];
-    mA -> sA; mA -> sB; mA -> sC;
-    mB -> sA; mB -> sB; mB -> sC;
-  }
-
-  subgraph cluster_after {
-    label="After: one protocol"; labeljust=l; color="#6b7280"; fontcolor="#6b7280"; fontsize=11;
-    m2A [label="model A"]; m2B [label="model B"];
-    hub [label="MCP", shape=hexagon, color="#3b82f6", fontcolor="#3b82f6"];
-    s2A [label="filesystem"]; s2B [label="database"]; s2C [label="issue tracker"];
-    m2A -> hub; m2B -> hub;
-    hub -> s2A; hub -> s2B; hub -> s2C;
-  }
-}
+1. Resolve V to one model, tokenizer, chat template, and policy bundle.
+2. Build mandatory items F from authorized instructions and the active request.
+3. Collect candidate items C from history, memory, retrieval, and tool discovery.
+4. Reject items outside a's tenant or access policy; preserve provenance on the rest.
+5. Remove exact duplicates, mark conflicts and superseded versions, and expand
+   required dependencies.
+6. Select S from C under the category budgets; record why every item was kept,
+   transformed, or omitted.
+7. Order S with policy pi, serialize X = serialize(F, pi(S)), and count X with
+   V's tokenizer and chat template.
+8. If X violates an input or output-reserve constraint, rebuild under the next
+   explicit reduction policy; never silently truncate mandatory content.
+9. Reauthorize any proposed tool action at execution time; link each validated
+   result to its call before assembling the next model request.
+10. Emit X and a ContextManifest containing V's hash, ordered item IDs and hashes,
+   token counts, transformations, omissions, and source pointers.
 ```
 
-The protocol then revealed the budgeting problem at the layer above it. As
-agents connected to dozens of MCP servers, the tool definitions themselves
-filled the context before the agent read a single request. In November 2025
-Anthropic described code execution with MCP as the response [@anthropic2025code]:
-rather than loading every tool definition upfront, present MCP servers as code
-APIs that the model discovers and calls by writing code, loading only the
-definitions a task needs and filtering tool results in the execution
-environment before they return to the window. Their illustrative example
-reduces a workflow from about 150,000 tokens of loaded definitions and
-intermediate results to roughly 2,000, a 98.7 percent reduction. The same
-lesson recurs: the constraint is the context budget, and the design moves to
-defend it.
-
-## Where the balances bite
-
-Context engineering is a set of balances, each with a knee.
-
-- **Few-shot versus zero-shot.** Demonstrations raise reliability on a
-  task but cost tokens, and every demonstration token is a token unavailable
-  for retrieval, history, or output. As instruction-tuned models improved,
-  the break-even shifted: many tasks that once needed several examples now run
-  zero-shot, and examples are worth their cost only where they pin down a
-  format or a corner case the instruction cannot convey concisely.
-- **More context versus better context.** Stuffing the window with everything
-  plausibly relevant is the easy move and often the wrong one. It raises cost
-  per call, and it pushes high-value evidence into the lost-in-the-middle dead
-  zone where the model underuses it. A smaller, well-selected, well-ordered
-  context frequently beats a larger indiscriminate one.
-- **Static prompt versus assembled pipeline.** A fixed template is simple,
-  debuggable, and cheap to reason about. A pipeline that retrieves, ranks,
-  summarizes, and orders per step is more capable but introduces moving parts
-  that fail in their own ways: a bad retrieval poisons the context, a faulty
-  summary drops the fact the next step needed.
-- **Tool breadth versus token cost.** Connecting many tools makes an agent
-  more capable in principle, but loading all their definitions upfront spends
-  the budget before work begins. Progressive disclosure, loading definitions
-  on demand as in code execution with MCP, recovers the budget at the cost of
-  an extra discovery step and a more complex runtime. The principle has since
-  generalized beyond tools: Agent Skills hold only a name and description in
-  context and load the full instruction file on
-  demand [@anthropic2025skills], and compaction, summarizing older turns as
-  the conversation nears the window limit, is now a platform primitive rather
-  than harness custom code [@anthropic2026compaction].
-
-::: {.callout-important}
-## What's contested
-The live disagreement is whether long-context models make context curation
-obsolete. One camp argues that as windows grow to hundreds of thousands or
-millions of tokens, you can simply load everything and let attention sort it
-out, so retrieval and careful ordering become legacy workarounds. The other
-camp points to lost-in-the-middle and to per-token cost: a model that
-underuses its middle and a window that is paid for on every call mean that
-selecting and placing context still wins, regardless of how large the window
-grows. A second, sharper dispute is whether "context engineering" names a
-real discipline or rebrands prompt engineering; Karpathy answered directly
-that he is not coining a term but resisting the oversimplification that
-"prompt" invites. A third concerns MCP's original load-everything design:
-Anthropic's own code-execution follow-up suggests that loading all tool
-definitions upfront was the wrong default, and the right abstraction for
-exposing tools to a model is still unsettled.
-:::
-
-## Building one context, and how it breaks
-
-In practice the context for one model call is built, not written. A
-budget-aware assembler is the minimal shape:
-
-```python
-def build_context(task, history, tools, retriever, window):
-    budget = window - reserve_for_output(window)
-    parts = []
-    parts.append(system_prompt(task))          # fixed, goes first
-    parts.append(tool_manifest(tools))         # load on demand if large
-    evidence = retriever.search(task.query)    # only the relevant slice
-    parts.append(rank_and_trim(evidence, budget))
-    parts.append(summarize_old(history, budget))  # compress, do not accumulate
-    return order_for_attention(parts)          # high-value near boundaries
-```
-
-@fig-ce-pipeline traces the same assembler as a data flow. Many sources feed
-one budgeted buffer: the fixed overhead is accounted first, retrieval pages in
-only a slice of the corpus, history is compressed rather than carried forward,
-and a final ordering step lifts the highest-value parts to the boundaries
-where @fig-ce-position says the model will read them.
+Here $q$ is the current task request, $a$ is the authenticated caller, $D$ is
+the durable application state, and $V$ is the selected context contract. $F$,
+$C$, $S$, $\pi$, and $X$ have the meanings defined in the budget formulation
+above. A `ContextManifest` is metadata for replay and diagnosis; sensitive raw
+content remains subject to its source retention and access policy.
 
 ```{dot}
 //| label: fig-ce-pipeline
-//| fig-cap: "Context as an assembled pipeline. Sources are budgeted, retrieved as slices, compressed, then ordered so high-value parts land near the boundaries."
+//| fig-cap: "A context assembler produces both a bounded model input and a replayable manifest. Authorization precedes selection; durable state remains outside the model call."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  rankdir=TB;
+  nodesep=0.20;
+  ranksep=0.28;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", arrowsize=0.65];
 
-  sys [label="system prompt\n+ tool definitions\n(fixed overhead)"];
-  corpus [label="knowledge base\n(stays outside)", shape=cylinder];
-  hist [label="conversation\n+ tool outputs"];
-  mem [label="external\nmemory", shape=cylinder];
+  state [label="durable state\n+ caller policy", shape=cylinder];
+  candidates [label="authorized candidates\nwith provenance"];
+  select [label="dedupe, resolve,\nselect, order"];
+  render [label="serialize and\ncount exact tokens"];
+  input [label="bounded model input"];
+  manifest [label="context manifest"];
 
-  ret [label="retrieve a slice\nrank and trim"];
-  comp [label="summarize old turns\nfilter tool results"];
-  budget [label="budget\n= window minus\noutput reserve", shape=diamond];
-  order [label="order for attention"];
-  win [label="context window\nhigh-value near boundaries"];
-  model [label="model forward pass"];
-
-  corpus -> ret;
-  hist -> comp;
-  mem -> ret;
-
-  sys -> budget;
-  ret -> budget;
-  comp -> budget;
-
-  budget -> order;
-  order -> win;
-  win -> model;
+  state -> candidates -> select -> render -> input;
+  select -> manifest;
+  render -> manifest;
 }
 ```
 
-Three properties of this sketch carry the chapter's argument. The output
-reserve comes off the top, because a context that fills the window leaves the
-model no room to answer. Retrieval returns a slice, not the corpus, so the
-knowledge base lives outside the window and only its relevant part is paged
-in. And `order_for_attention` is not cosmetic: it places the instruction and
-the strongest evidence near the reliable boundaries.
+The manifest makes absence observable. When a response lacks a fact, an
+operator can distinguish retrieval failure, authorization filtering, budget
+exclusion, compaction loss, serialization error, and model non-use. Without
+that record, all six failures look like “the model forgot.”
 
-Budget and placement fail in distinct ways:
-Context overflow truncates silently, dropping whatever fell off the end,
-often the very history the next turn needed. Lost-in-the-middle degradation
-hides behind a green build: the fact is present, the model just does not use
-it, and the only way to see the loss is to vary placement and watch the score
-move. Retrieval poisoning is cruder: a confidently wrong passage sits in the
-window, and the model treats it as evidence. Tool-definition bloat, finally,
-spends the budget before the agent even starts, the problem code execution
-with MCP exists to solve. Each of these is a budgeting or placement failure,
-which is why
-budgeting and placement, not wording, are the substance of the discipline.
+## Evaluate the assembler, not just the answer
+
+Freeze the model revision, tokenizer and chat template, context spec, corpus
+and permission snapshot, tool catalog, and evaluation cases. Compare against
+the current production policy, a no-added-context baseline, a full-context
+baseline, and, where possible, an oracle containing only the necessary
+authorized items. Then test four boundaries separately:
+
+- **Selection and use:** task success, evidence recall after packing, supported
+  claims, instruction adherence, and abstention when required evidence is
+  absent.
+- **Robustness:** permute relevant-item position; add duplicates, plausible
+  distractors, stale versions, conflicting sources, long tool results, and
+  demonstrations with different labels or order.
+- **Continuity and security:** compact at different turns; resume from the
+  checkpoint; revoke access; delete a source; inject instructions into
+  retrieved pages and tool output; and verify that already completed actions
+  are not repeated.
+- **Operations:** serialized input and reserved output tokens, prefill and
+  generation latency, cache reuse, retrieval and tool calls, context rebuilds,
+  cost, and manifest coverage.
+
+Use paired cases so only the context policy changes, and report uncertainty
+over tasks, the worst relevant position, and the mean rather than one average
+from unrelated workloads. Inspect material slices such as language, request
+length, tool family, permission cohort, and conversation age. A shorter context
+is not better if it drops decisive
+evidence; a longer one is not better if it adds latency and distractors without
+improving the task. Synthetic retrieval probes are useful diagnostics but do
+not establish long-context capability by themselves; HELMET combines recall,
+retrieval-augmented generation, many-shot learning, question answering, and
+summarization to expose different failure modes [@yen2025helmet].
+
+::: {.callout-important}
+## What's contested
+
+There is no settled universal policy for selecting, compressing, or ordering
+context. Larger trained windows can reduce the need for retrieval on some
+tasks, while selective retrieval remains cheaper or more accurate on others.
+Position effects documented for one model family can weaken or change after
+training. Extractive compression preserves wording but may miss cross-document
+synthesis; abstractive compression can combine evidence but may invent or erase
+qualifiers. Even instruction/data separation spans a spectrum from formatting
+conventions to models trained for distinct channels. These choices are
+competing hypotheses to test on the deployed system, not stages of one
+inevitable architecture.
+:::
+
+::: {.callout-tip}
+## Lower-layer constraint
+
+Every selected input token must be processed during prefill and represented in
+the attention state used during generation. With a key-value cache, earlier
+keys and values are reused rather than recomputed, but each generated token
+still attends over the active cached sequence. Context length therefore affects
+prefill work, cache memory, decode cost, batching, and admission control. The
+serving mechanics in @sec-serving-problem and @sec-memory-scheduling turn a
+context policy into a latency and capacity policy. Provider prompt caches can
+reuse work for an exact stable prefix, but cached tokens still occupy the
+window; cache reuse is an optimization, not durable memory.
+:::
+
+Context engineering closes the orchestration loop: retrieval, memory, tools,
+and agent state become one bounded, authorized input with a replayable
+manifest. The next part begins with @sec-benchmarks and asks what evidence is
+strong enough to show that this machinery works beyond a hand-picked example.
 
 ## Further reading
-
-The sources cited inline above appear on the book's References page. The
-survey below is a fuller map of the field for a reader who wants the broader
-landscape.
 
 ::: {#further-reading}
 :::
