@@ -760,7 +760,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/orchestration/07-multi-agent-systems.qmd",
-      ["Voting among similar agents buys less", "structured disagreement buys", "liveness failures", "safety failures", "escalates recoverable failures", "blocks silent ones"],
+      ["single-agent baseline", "measurable marginal value", "does not create authority", "Agreement is not proof", "nothing bad happens", "something good eventually happens"],
     ],
     [
       "zh/orchestration/07-multi-agent-systems.qmd",
