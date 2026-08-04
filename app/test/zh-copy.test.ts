@@ -1000,7 +1000,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/inference/06-serving-multimodal.qmd",
-      ["chooses the visual token count", "serving-cost decision", "encoder placement", "Image prefix caching"],
+      ["architecture-dependent", "resource vector", "Cache the stage you intend to skip", "Media generation is a different serving path"],
     ],
     [
       "zh/inference/06-serving-multimodal.qmd",

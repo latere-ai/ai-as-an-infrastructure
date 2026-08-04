@@ -1,283 +1,452 @@
 # Serving Multimodal Models {#sec-serving-multimodal}
 
-This part built a serving stack on one assumption: tokens arrive cheaply. A
-tokenizer turns a prompt into a few hundred integers, and from there the cost
-model of @sec-serving-problem holds: prefill is compute-bound, decode is
-memory-bound, and the key-value cache grows one entry per token. Multimodal
-serving starts before the language model sees a token. A vision encoder
-converts raw pixels into visual tokens, often thousands of them, and it chooses the visual token count
-before the scheduler can react. That count sets prefill FLOPs,
-key-value cache bytes, and batch size. A resolution setting is therefore a
-serving-cost decision, and where the encoder runs weighs on that cost just as
-directly. The fusion architectures these pipelines
-serve, the cross-attention and projection connectors that turn pixels into
-tokens a language model can read, are @sec-multimodal; here the concern is
-running them.
+A text server receives token IDs. A multimodal server may first have to fetch,
+decode, resize, sample, encode, and project an image, a video, or an audio clip.
+Those stages add their own queues and failure modes before language-model
+prefill begins. They may also produce hundreds or thousands of features whose
+count depends on the media and its preprocessing policy. Prompt length alone is
+therefore not enough for admission control.
 
-![Schematic of why multimodal serving can be token-expensive. Fixed image patching grows quickly with resolution, while adaptive crops or routing reduce the slope. Idealized token counts, not measured data.](/figures/serving-multimodal-1.svg){#fig-serving-multimodal-1}
+This chapter covers two workloads that share media formats but little else.
+In **media-input serving**, an encoder supplies evidence to a language model,
+which then generates text. In **media-generation serving**, a model produces an
+image or video through an iterative or autoregressive process. The first extends
+the serving path developed in this part; the second needs a different cost
+model and scheduler.
 
-## The token the tokenizer never made
+## Start with the fusion contract
 
-In a text request, the expensive object is the prompt, and its length is the
-user's to set. In a multimodal request, the expensive object is the image, and
-its length is set by a model the user never sees. A vision encoder, almost
-always a Vision Transformer (the image counterpart of the text Transformer,
-running self-attention over patches the way a language model runs it over words;
-@sec-multimodal), cuts the image into a grid of fixed-size patches and produces
-one embedding per patch, a fixed-length vector standing in for that patch
-[@dosovitskiy2021vit]. The grid is the whole
-story of cost. A CLIP-style encoder at 336 pixels with a patch size of 14 emits
-a 24 by 24 grid, 576 tokens, for a single image. Those 576 tokens are not
-metaphorical. They are concatenated into the backbone's input sequence and from
-that point are indistinguishable from text tokens: they consume positions, they
-attend and are attended to, and each one takes a full row in the key-value
-cache at every layer.
+The architecture determines where media features live and which cache pays for
+them. Two common contracts illustrate why there is no universal “visual token”
+cost [@qiu2025modserve].
 
-So a one-sentence question about a screenshot does not enter the model as a
-short sequence. It enters as 576 image tokens plus a handful of text tokens, and
-if the product allows high-resolution images the count climbs into the
-thousands. The serving consequences follow directly. Prefill, already
-compute-bound, now has far more tokens to process, and the encoder itself is an
-extra compute stage in front of it. The key-value cache, already the binding
-constraint on batch size in @sec-memory-scheduling, fills with image tokens that
-were generated in a single forward pass rather than decoded one at a time. The
-image is paid for entirely at prefill and then resides in the cache for the life
-of the request, like an enormous prefix nobody typed.
+| Fusion contract | What enters the language backbone | Persistent state during text generation | Main serving consequence |
+|---|---|---|---|
+| **Decoder-only fusion** (also called projected-prefix or early fusion) | A connector maps media features to the language-model width and inserts them among the input embeddings. LLaVA is the canonical example [@liu2023llava]. | The inserted positions normally create self-attention keys and values in the same cache allocation as text positions. They are continuous embeddings, not tokenizer-produced vocabulary IDs. | Media length increases language-model prefill, self-attention KV memory, and the KV bytes read during every decode step. |
+| **Cross-attention fusion** | Text remains the self-attention sequence. Selected layers read a separate media memory through cross-attention. Flamingo resamples each image to 64 features before these layers [@alayrac2022flamingo]. | Text self-attention KV and media cross-attention state are separate. The number of cross-attention layers and their cache implementation determine the media cost. | Media need not consume ordinary text positions, but encoding, cross-attention computation, and persistent media keys and values still cost time and memory. |
+
+Discrete image or audio codes add another representation choice, but they do
+not remove this architectural question: after lookup, code IDs also become
+continuous vectors, and the model must still specify whether they join
+self-attention or a separate memory. @sec-multimodal develops these model
+designs. Here, the important point is operational: capacity accounting is
+architecture-dependent.
 
 ```{dot}
-//| label: fig-mm-pipeline
-//| fig-cap: "The multimodal serving pipeline. The vision encoder and projector run once per image at prefill, producing visual tokens that are concatenated with text tokens and then live in the key-value cache exactly like text. The encoder is an extra compute stage the text stack never had."
+//| label: fig-mm-input-contracts
+//| fig-cap: "Two media-input serving contracts. Decoder-only fusion inserts projected media features into the language-model sequence, while cross-attention fusion retains a separate media memory. The two paths do not have the same KV-cache cost."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
+  size="3.2,8.0";
+  rankdir=TB;
+  nodesep=0.25; ranksep=0.35;
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  IMG [label="raw pixels"];
-  ENC [label="vision encoder\n(ViT)"];
-  PROJ [label="projector\n(MLP / resampler)"];
-  TXT [label="text tokens"];
-  CAT [label="concatenated\nsequence"];
-  PREFILL [label="backbone prefill"];
-  KV [label="KV cache\ntext + visual tokens", shape=cylinder];
-  DEC [label="decode loop"];
-  IMG -> ENC;
-  ENC -> PROJ;
-  TXT -> CAT;
-  PROJ -> CAT [label="visual tokens"];
-  CAT -> PREFILL;
-  PREFILL -> KV;
-  KV -> DEC;
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  MEDIA [label="media bytes"];
+  PRE [label="decode + preprocessing"];
+  ENC [label="media encoder"];
+  REDUCE [label="optional merge / resampler"];
+  PROJ [label="width projection"];
+  TEXT [label="text embeddings"];
+  PREFIX [label="decoder-only fusion\ninsert media positions"];
+  CROSS [label="cross-attention fusion\nretain media memory"];
+  SELFKV [label="self-attention KV\ntext + media positions", shape=cylinder];
+  MEDIAKV [label="text KV + separate\nmedia state", shape=cylinder];
+  OUT1 [label="text decode"];
+  OUT2 [label="text decode"];
+
+  MEDIA -> PRE -> ENC -> REDUCE -> PROJ;
+  PROJ -> PREFIX;
+  PROJ -> CROSS;
+  TEXT -> PREFIX;
+  TEXT -> CROSS;
+  PREFIX -> SELFKV -> OUT1;
+  CROSS -> MEDIAKV -> OUT2;
 }
 ```
 
-## Three stages, one sequence
+## Account for the input after preprocessing
 
-The pipeline has three stages, and keeping them separate is what makes the cost
-legible. The vision encoder turns pixels into visual features. A projector,
-usually a small multilayer perceptron or a resampler, maps those features into
-the backbone's embedding space, reshaping them into vectors of the same width and
-format the language model's own token vectors use, so they can sit in the same
-sequence as text. The
-backbone, an ordinary decoder, then processes text and visual tokens together.
-The early bridged designs froze a language model and attached vision through
-cross-attention, with a Perceiver Resampler compressing variable visual features
-into a fixed small budget, on the order of 64 tokens, before they reached the
-backbone [@alayrac2022flamingo]. The design that became standard instead
-projects visual features into the input sequence directly and trains the
-projector on instruction data, the recipe that made open multimodal models
-tractable [@liu2023llava]. The two choices set the cost ceiling: a resampler
-fixes the visual token budget regardless of image size, while direct projection
-lets the budget grow with the grid, trading a fixed cost for fidelity.
+For decoder-only fusion, let the final input length be
 
-The reason direct projection won despite its cost is resolution. A fixed
-576-token grid at 336 pixels is too coarse to read a dense document, a chart, or
-a phone screenshot, the tasks that make a multimodal model useful for work. The
-field's response was to raise the effective resolution, and every method for
-doing so multiplies the token count.
+$$
+N_{\mathrm{in}}
+= n_{\mathrm{text}} + n_{\mathrm{special}}
++ \sum_{i=1}^{q} n_i,
+\qquad
+n_i = g(m_i; P,E,C).
+$$
 
-## The levers that set the count
+Here, $m_i$ is media item $i$; $q$ is the number of media items; $P$ is the
+decode, resize, crop, frame-sampling, and padding policy; $E$ identifies the
+media encoder revision; $C$ identifies the connector, merger, or resampler;
+$g$ returns the number of features inserted for one item; and
+$n_{\mathrm{text}}$ and $n_{\mathrm{special}}$ count text and model-specific
+separator positions. Every symbol is a deployment value. Counting raw image
+patches without $P$, $E$, and $C$ is not enough to predict the sequence seen by
+the language model.
 
-Three levers govern how many tokens an image becomes, and a serving engineer
-should be able to read all three off a model card.
+If all $N_{\mathrm{in}}$ positions remain in self-attention, their KV allocation
+is
 
-The first is the base grid: input resolution divided by patch size, squared.
-Doubling the resolution quadruples the tokens. The second is tiling. To reach
-high resolution without retraining the encoder, AnyRes-style schemes cut a large
-image into tiles, encode each tile at the native resolution, and concatenate the
-results, so a 1344 by 1344 image becomes a grid of sub-images and its token
-count is the per-tile count times the number of tiles, often several thousand.
-The third is dynamic resolution: rather than forcing every image to a fixed
-size, an encoder can process the image at its native aspect ratio and emit a
-variable number of tokens, with positional information carried by a multi-axis
-rotary embedding so the backbone knows the two-dimensional layout
-[@wang2024qwen2vl]. Dynamic resolution makes the token count a function of the
-input, which is faithful but turns capacity planning into a distribution problem:
-the same endpoint might serve a 256-token thumbnail and a 16000-token
-full-page scan in adjacent requests.
+$$
+M_{\mathrm{KV}}
+= 2 L N_{\mathrm{in}} n_{\mathrm{kv}} d_h b_{\mathrm{kv}}.
+$$
 
-The runnable below makes the explosion concrete. Token count scales with image
-area, and the key-value bytes scale with it linearly, so a product decision to
-support larger images is a decision about cache pressure and batch size. The
-estimate applies the formula of @sec-serving-problem with the grouped-query
-attention of a Llama-3-class backbone, eight key-value heads against
-thirty-two query heads.
+In this expression, $L$ is the number of language-model layers that store
+self-attention KV state, $n_{\mathrm{kv}}$ is the number of key-value heads,
+$d_h$ is one head's width, and $b_{\mathrm{kv}}$ is the bytes used for each
+cached scalar. The factor 2 represents keys and values. This formula applies to
+the projected-prefix contract. A cross-attention model needs a separate term
+for media keys and values at the layers that actually contain cross-attention;
+it should not be charged as though every feature were an ordinary text prefix.
+
+The time to first token has more stages as well:
+
+$$
+T_{\mathrm{TTFT}}
+= T_{\mathrm{ingress}} + T_{\mathrm{preprocess}} + T_{\mathrm{encoder\ queue}}
++ T_{\mathrm{encode}} + T_{\mathrm{connector/transfer}}
++ T_{\mathrm{LM\ queue}} + T_{\mathrm{prefill}}.
+$$
+
+Each $T$ is elapsed time in the named stage. Some terms can overlap, so the
+sum is an upper-level accounting model rather than a promise that every system
+runs them serially. It is still more useful than a single “prefill latency”
+number because it reveals whether a slow request waited for an encoder, crossed
+a network boundary, or occupied the language backbone.
+
+Language prefill itself is not simply linear in media length. Dense layers add
+work roughly proportional to $N_{\mathrm{in}}$, while dense self-attention has
+a quadratic attention term in the combined sequence length. Optimized kernels
+change constants and memory traffic, not this distinction. During decode, each
+new text query also reads the retained media state: from the self-attention KV
+cache in decoder-only fusion or through the model's cross-attention path.
+
+## Derive visual length from the actual policy
+
+For a fixed grid with preprocessed height $H'$, width $W'$, and patch dimensions
+$P_h \times P_w$, the raw patch count is
+
+$$
+n_{\mathrm{patch}}
+= \left\lceil \frac{H'}{P_h} \right\rceil
+  \left\lceil \frac{W'}{P_w} \right\rceil.
+$$
+
+Here, $H'$ and $W'$ are dimensions *after* resizing, cropping, or padding;
+$P_h$ and $P_w$ are the patch height and width; and the ceiling accounts for a
+policy that pads incomplete edge patches. A policy that rejects or center-crops
+non-divisible dimensions has different behavior. The language-model count may
+then remove a class feature, add separators or a global view, concatenate
+several tiles, merge neighboring features, or replace the whole grid with a
+fixed number of resampler queries.
+
+For example, LLaVA-1.5 uses a 336-pixel CLIP ViT-L/14 encoder. After the class
+feature is removed, its $24\times24$ patch grid contributes 576 projected image
+positions [@liu2023llava15]. That is a model-specific result, not a generic
+property of CLIP or of 336-pixel images.
+
+The runnable below isolates that one fixed-grid contract. It assumes divisible
+dimensions, no class or separator positions, no tiling or merge, and insertion
+of every patch into all 32 language-model layers. It uses explicit GQA head
+dimensions and reports binary MiB.
 
 :::: {.runnable}
 ```python
-# Visual token count and KV-cache footprint as resolution grows.
-# Tokens = (W/patch) * (H/patch); KV bytes ~ tokens * layers * 2 * (hidden/gqa) * dtype.
-patch, layers, hidden, dtype = 14, 32, 4096, 2  # ViT patch 14; a 7B-class backbone, fp16
-gqa = 4  # n_head / n_kv: GQA divides KV bytes by this (8 KV heads vs 32 query heads)
-for w, h in [(336, 336), (672, 672), (1008, 1008), (1344, 1344)]:
-    tokens = (w // patch) * (h // patch)
-    kv_mb = tokens * layers * 2 * (hidden // gqa) * dtype / 1e6
-    print(f"{w}x{h}: {tokens:5d} visual tokens, {kv_mb:6.1f} MB of KV cache")
-# One high-res image can cost more cache than a long text conversation.
+def visual_tokens(width, height, patch=14):
+    if width <= 0 or height <= 0 or patch <= 0:
+        raise ValueError("dimensions and patch must be positive")
+    if width % patch or height % patch:
+        raise ValueError("this fixed-grid example requires divisible dimensions")
+    return (width // patch) * (height // patch)
+
+def kv_mib(tokens, layers=32, n_kv_heads=8, head_dim=128, bytes_per_value=2):
+    if min(tokens, layers, n_kv_heads, head_dim, bytes_per_value) <= 0:
+        raise ValueError("KV dimensions must be positive")
+    kv_bytes = 2 * layers * tokens * n_kv_heads * head_dim * bytes_per_value
+    return kv_bytes / 2**20
+
+for width, height in [(336, 336), (672, 672)]:
+    tokens = visual_tokens(width, height)
+    print(f"{width}x{height}: {tokens:4d} visual tokens, {kv_mib(tokens):5.1f} MiB KV")
 ```
 ::::
+
+Real systems use several mechanisms to change this count:
+
+- A **fixed grid** makes cost predictable but may resize away small text or
+  small objects.
+- **Tiling** preserves more spatial detail by encoding multiple supported
+  crops. It is a trained model feature, not an arbitrary server-side operation;
+  global views, overlap, separators, and padding make the final count
+  model-specific.
+- **Dynamic resolution** lets count vary with aspect ratio and input size.
+  Qwen2-VL combines this policy with a $2\times2$ visual merger and multimodal
+  rotary positions, so its raw patch count and language-backbone count are not
+  the same [@wang2024qwen2vl].
+- A **spatial merge** or pixel shuffle folds neighboring spatial features into
+  channels before projection. This shortens the sequence, but it does not by
+  itself prove that fine detail was discarded; the trained connector decides
+  what survives. InternVL 1.5 combines such a connector with dynamic tiling
+  [@chen2024internvl15].
+- A **fixed-budget resampler** maps a variable encoder grid to a chosen number
+  of features. Language-model cost becomes predictable per media item, although
+  the encoder and resampler still process the larger input [@alayrac2022flamingo].
+- **Token pruning** removes features after some backbone layers. FastV, for
+  example, applies a layer-2 attention-based policy to evaluated vision-language
+  models and reports lower FLOPs [@chen2024fastv]. Earlier layers still pay for
+  the full sequence; only later layers become cheaper. Attention weight is not
+  a proof of causal importance, so aggressive pruning must be tested on OCR,
+  charts, small text, and small objects rather than accepted from an average
+  VQA score.
+
+Video and audio add time as another length axis. A video policy may sample
+frames, form spatiotemporal patches, or merge across time. An audio policy may
+chunk a waveform or spectrogram into encoder frames. Duration, sample rate,
+frame rate, temporal stride, and per-request media limits therefore belong in
+the same capacity model as image resolution. None of these policies can be
+inferred from the user's text-token count.
 
 ::: {.callout-tip}
 ## Constraint arrow
 
-The visual token count is set at the modality layer, by the encoder's
-resolution and tiling policy, and it dictates the two quantities
-@sec-serving-problem and @sec-memory-scheduling treat as given. Prefill FLOPs
-scale with the token count, and key-value bytes scale with it linearly, so the
-product decision "support 4K screenshots" reaches down and sets the prefill
-budget and the maximum batch size. A resolution choice is a serving-cost choice.
-The encoder, sitting one layer below the serving stack, decides how expensive
-every image is before the scheduler in @sec-memory-scheduling ever sees it.
+The trained model defines valid preprocessing and connector choices, but the
+serving layer still chooses limits within that contract. Its resolution, tile,
+frame, duration, and downsampling rules choose the visual token count or audio
+feature count presented to the backbone. That choice is a serving-cost decision
+and a quality decision at the same time.
 :::
 
-## Cutting the count back down
+## Schedule a resource vector, not a prompt length
 
-Because the count drives the cost, much of multimodal serving is the problem of
-spending fewer tokens per image without losing the pixels that matter. The
-methods divide by where they reduce the count.
+A useful admission record describes the work before it reaches any queue. At a
+minimum it contains a resource vector with media bytes, decoded pixels, image
+count, video frames or audio duration, estimated encoder work, projected token
+count, text-token count, output-token limit, required model and adapter, and the
+applicable latency class. Limits should be checked before allocating large
+decoded buffers or accelerator memory.
 
-Some reduce it before the backbone. Pixel-shuffle and similar spatial-to-channel
-folds merge a small neighborhood of patches into one token, dividing the visual
-token count by four at the cost of fine spatial detail, a trade many production
-encoders take by default [@chen2024internvl]. A resampler, the Flamingo move,
-goes further and fixes the budget outright, attending a large set of patches
-down to a constant small set [@alayrac2022flamingo]. Both decide the count
-before a single backbone layer runs, which makes them cheap and predictable but
-forces the loss to happen blind to the prompt.
+The request then passes through two different batching problems:
 
-Others reduce it inside the backbone, after the model has begun to read. The
-observation that drives them is that visual token contribution falls early:
-after the first couple of layers, attention to image tokens collapses, so
-most of them can be pruned with little effect on the answer. FastV prunes visual
-tokens after an early layer and reports that an image is worth roughly half its
-tokens past layer two [@chen2024fastv]. Pruning inside the backbone can be
-prompt-aware, keeping the tokens the question actually looks at, but it
-complicates the serving path, because a pruned sequence changes length partway
-through prefill and the key-value cache must be compacted rather than simply
-appended to.
+1. The media side benefits from shape buckets. Grouping compatible resolutions,
+   frame counts, or audio lengths reduces padding waste and makes encoder kernels
+   efficient. A single large item should not force every item in the batch to
+   pad to its shape.
+2. The language side batches by total prefill and KV demand. It must reserve
+   enough cache for the projected token count and output-token limit, and may
+   chunk a long multimodal prefill so that it does not monopolize the engine.
 
-::: {.callout-important}
-## What's contested
+Separate encoder and language-model queues make their backlogs visible. They
+also allow admission control and fairness policies to prevent a burst of
+high-resolution requests from causing head-of-line blocking for short text or
+small-image traffic. Production traces are commonly heavy-tailed and bursty,
+so averages hide the requests that set tail latency [@qiu2025modserve].
 
-- **Continuous embeddings or discrete tokens?** Projecting continuous visual
-  features into the sequence preserves fidelity but keeps vision outside the
-  clean next-token abstraction; quantizing images into discrete tokens unifies
-  the model at the cost of a quantization cliff (cross-ref @sec-beyond-text).
-  The flagships have not converged.
-- **How many tokens does an image deserve?** A fixed small budget is cheap and
-  predictable; native dynamic resolution is faithful but makes capacity
-  planning a distribution problem. There is no agreed answer, and the same lab
-  ships different budgets for documents and for natural images.
-- **Is aggressive pruning free?** FastV-style pruning reports large savings at
-  little accuracy cost on average, but the average hides the dense-text and
-  small-object cases where the pruned tokens were the answer. Whether pruning
-  is safe is task-dependent, not a global setting.
-:::
+Colocation keeps media features on the same accelerator and avoids network
+transfer, but encoder work can interfere with prefill and decode. Disaggregation
+lets encoder replicas scale independently and protects the language tier from a
+modality burst. Its cost is explicit: feature tensors must be serialized,
+transferred, routed, and invalidated across another service boundary. The
+transfer grows with feature count and width, and an undersized encoder pool or
+network simply becomes the new queue.
 
-## Where the encoder runs
+EPD systems separate encode, prefill, and decode for this reason. An ICML 2025
+study reports that the stages have different resource profiles and benefits
+from independent placement [@singh2025epd]. vLLM later exposed native encoder
+disaggregation and reported roughly 2--2.5 times goodput in specific Qwen3-VL
+benchmarks on four A100 GPUs [@vllm2025epd]. Those figures demonstrate the
+mechanism; they are not a capacity promise for another model, workload, or
+network.
 
-The encoder is a compute stage the text stack never had, and encoder placement is a
-serving decision in its own right. Colocating it with the backbone on the same
-accelerator is simplest and keeps the visual features local, but it lets a burst
-of image-heavy requests starve the decode loop of compute, because the encoder
-and prefill now contend for the same matrix units. Disaggregating it, running a
-pool of encoder workers that ship visual embeddings to the backbone over the
-network, mirrors the prefill/decode disaggregation of @sec-memory-scheduling and
-for the same reason: it isolates a bursty, compute-bound stage from a
-latency-sensitive one, at the cost of moving embeddings across the wire and
-managing a second fleet. That mirror is no longer hypothetical: encoder
-disaggregation shipped as a native mode in vLLM (encode-prefill-decode, EPD,
-since v0.11.1), with the encoder pool scaled by data parallelism independently
-of the backbone's tensor parallelism and goodput roughly doubling on
-multi-image workloads [@vllm2025epd].
+## Cache the stage you intend to skip
 
-Image prefix caching helps more here than in text, because images repeat. A conversation that
-refers back to the same uploaded document re-sends it every turn, and a system
-that decorates every request with the same brand image pays for it every time,
-unless the encoder output or the resulting key-value entries are cached and
-reused. Prefix caching, already standard for shared text prefixes, extends
-naturally to a leading image: hash the pixels, and on a hit skip both the
-encoder and the image's prefill entirely (cross-ref @sec-memory-scheduling).
-The economics are better than for text caching, since an image is a far larger
-block of tokens to reuse.
+“Image caching” can refer to three different objects. They have different keys
+and save different work.
 
-Video is the same problem with a larger multiplier. A clip is a sequence of
-frames, each frame is an image, and each image is hundreds to thousands of
-tokens, so a few seconds of video at a naive frame rate exceeds the context
-window before the question is even appended. Every video model therefore pools
-in time, sampling frames sparsely and merging tokens across adjacent frames, and
-the pooling rate is the same kind of lever as image resolution: it trades
-temporal fidelity for a token budget the serving stack can afford.
+| Cache | Stored object | A hit skips | Required identity |
+|---|---|---|---|
+| **Processor cache** | Decoded and normalized media or processor outputs | Fetch, decode, resize, frame sampling, or other CPU-side processing | Canonical media identity, decode library and preprocessor revision, policy parameters |
+| **Encoder-output cache** | Media embeddings produced by the encoder and connector boundary | Encoder execution; language-model prefill still runs unless its prefix also hits | Processor identity plus encoder revision, projector revision, precision, and layout |
+| **KV prefix cache** | Completed language-model KV blocks | Prefill for the exact cached prefix blocks | Model and adapter revision, exact prefix order and positions, media-derived embeddings or their stable identity, cache format, and block alignment |
 
-## Serving generation: when the model makes the pixels
+vLLM, for example, manages encoder outputs by multimodal-item hash and reference
+count, separately from its language-model prefix cache [@vllm2026encodercache].
+This separation matters. An encoder-output hit does not imply a KV prefix-cache
+hit, and a changed system prompt, adapter, preprocessing rule, or projector can
+invalidate one cache while leaving another usable.
 
-Everything so far has treated media as input, consumed and turned into tokens the decode loop of @sec-serving-problem understands. Turn the arrow around, and the serving problem inverts with it. A model that generates an image or a video is almost always a diffusion model, and diffusion breaks every assumption the autoregressive serving stack was built on. There is no @gls-kv-cache dribbling out one token at a time, because the sample does not exist until the final step: a diffusion model starts from noise and denoises it over many passes, each pass a full dense forward over every latent element of the image, and only the last pass yields something a user can see. So there is nothing to stream. The user gets a progress bar, not a token stream, and the cost is not bytes-per-token but FLOPs-per-step times the number of steps, with the per-step FLOPs scaling with resolution and, for video, with frame count.
+Cache keys also need a tenant scope, authorization decision, collision-safe
+comparison, retention policy, and revision-based invalidation. Reuse across a
+conversation can be valuable for a document or repeated video, but global reuse
+must not reveal that another tenant supplied the same private media. Measure hit
+rate and saved stage time under the real workload before reserving a large cache.
 
-That single structural fact reshapes the serving tier. Autoregressive decode is memory-bandwidth-bound and packs many cheap concurrent sequences into one batch; a diffusion request is compute-bound and a single high-resolution sample can saturate an accelerator by itself, so the serving shape is a job queue with latencies in seconds to minutes, not an interactive stream [@li2024distrifusion]. It also opens optimizations that have no autoregressive analogue. Because the same network runs many times over activations that change only slowly between steps, work can be reused: feature maps cached across adjacent steps and only the fast-changing parts recomputed [@ma2024deepcache], or a single sample split across GPUs by tolerating one-step-stale patch boundaries [@li2024distrifusion]. What gets cached here is the denoiser's own intermediate features across timesteps, not context across requests, and the caching is what a text stack would call recomputation avoidance rather than a KV cache.
+## Verify media-input serving end to end
 
-Since cost is steps times per-step FLOPs, the dominant lever is collapsing the step count, and it is a training-time intervention with a direct line to the invoice. Progressive distillation halves a sampler's steps per round, taking thousands of steps down to single digits [@salimans2022progressive]; consistency models map any point on the denoising trajectory straight to the result, enabling one-step generation [@song2023consistency]; adversarial distillation reaches one-to-four-step synthesis good enough for real-time use [@sauer2023add]. The pricing follows the physics closely: at one image API, the same flow-matching architecture in its full-sampler form and its few-step distilled form are billed per megapixel at an eight-fold price gap that tracks the step-count gap [@bfl2024flux]. Nothing about the bill is per-token; it is resolution times a quality tier, which is the cost model passed straight through. The runnable reconstructs the gap from the FLOPs alone: cut the steps, and the cost per image drops in proportion.
+Profile the complete request path under a replay that preserves modality mix,
+item counts, resolution, duration, text length, output length, and arrival
+bursts. Report p50, p95, and p99 rather than a single average.
+
+For language-producing requests, record at least:
+
+- ingress/decode time, preprocessing time, encoder queue and execution time,
+  connector or transfer time, language queue time, time to first token, and
+  inter-token latency;
+- decoded pixels or frames, projected token count, peak encoder memory, peak KV
+  memory, rejected or downsampled requests, and accelerator utilization by
+  stage;
+- processor, encoder cache hit rate, and KV prefix-cache hit rate, including
+  bytes retained and time actually saved;
+- goodput and tail latency at matched load, both for the total workload and for
+  each modality and size bucket;
+- answer quality at each shipped resolution, frame, merge, resampler, or pruning
+  policy on the product's OCR, chart, small-object, multi-image, video, and audio
+  tasks, compared with a full-detail baseline.
+
+This measurement prevents two common mistakes: calling an optimization useful
+because one isolated kernel is faster, and calling compression safe because an
+aggregate benchmark hides the detail-sensitive cases.
+
+## Media generation is a different serving path
+
+Media output should not be forced into the input-serving model. A common latent
+image pipeline has a text encoder, an iterative denoiser or flow model, and a
+latent decoder [@rombach2022ldm]. Other systems generate discrete visual codes
+autoregressively or predict coarse-to-fine blocks. The scheduler must know which
+contract it is running.
+
+For an iterative latent model, a useful latency decomposition is
+
+$$
+T_{\mathrm{output}}
+= T_{\mathrm{condition}} + \sum_{s=1}^{S} e_s T_{\mathrm{denoise}}(z_s)
++ T_{\mathrm{decode}} + T_{\mathrm{encode/store}}.
+$$
+
+Here, $S$ is the number of solver steps or neural-function evaluations;
+$s$ identifies one step; $z_s$ is the latent state processed at that step;
+$e_s$ is the number of denoiser evaluations required at that step, including
+any guidance branches that are not fused; $T_{\mathrm{condition}}$ covers text
+or reference-media conditioning; $T_{\mathrm{denoise}}$ is measured denoiser
+time for the chosen shape and batch; $T_{\mathrm{decode}}$ converts the final
+latent to media; and $T_{\mathrm{encode/store}}$ covers output encoding,
+storage, or delivery. The sum makes clear why fewer steps help without claiming
+that steps are the only cost.
+
+Resolution and duration change the latent length. For a two-dimensional latent
+with image size $H\times W$, autoencoder compression $f_h\times f_w$, and
+transformer patch size $p_h\times p_w$, the latent token count is
+
+$$
+N_z
+= \left\lceil \frac{H}{f_h p_h} \right\rceil
+  \left\lceil \frac{W}{f_w p_w} \right\rceil.
+$$
+
+In this formula, $H$ and $W$ are output pixels; $f_h$ and $f_w$ are the
+autoencoder's spatial compression factors; $p_h$ and $p_w$ are the denoiser's
+latent-patch dimensions; and $N_z$ is the number of latent tokens per denoiser
+evaluation. Video adds a temporal factor after temporal compression and
+patching. Dense global attention can add a quadratic term in $N_z$; local,
+factorized, or sparse attention changes that term.
+
+The runnable computes a transparent token-pass proxy for a 1024-pixel square,
+8-fold latent compression on each spatial axis, $2\times2$ latent patches, and
+two guidance branches. It is not a FLOPs estimate: it omits attention shape,
+model width, fixed stages, communication, sparsity, batching, and utilization.
 
 :::: {.runnable}
 ```python
-# one image = steps x a dense forward over every latent token; no KV cache, no stream
-P, TOK = 12e9, 4096                        # 12B diffusion transformer, ~4096 latent tokens/megapixel
-tflops_per_step = 2 * P * TOK / 1e12       # ~98 TFLOPs per step per megapixel
-gpu_tflops, mfu, price_hr = 989, 0.40, 2.0 # H100 bf16 dense, utilization, illustrative $/GPU-hr
-def per_image(steps, mp=1.0):
-    secs = steps * tflops_per_step * mp / (gpu_tflops * mfu)
-    return secs, secs / 3600 * price_hr
-for name, steps in [("base sampler", 50), ("distilled", 4), ("one-step", 1)]:
-    s, usd = per_image(steps)
-    print(f"{name:>12}: {s:5.2f} GPU-s  ${usd:.4f}/image")
-print("50 -> 4 steps is ~12x cheaper: step count is the pricing knob")
+def latent_tokens(width, height, compression=8, patch=2):
+    if min(width, height, compression, patch) <= 0:
+        raise ValueError("all dimensions must be positive")
+    stride = compression * patch
+    return ((width + stride - 1) // stride) * ((height + stride - 1) // stride)
+
+def token_pass_proxy(tokens, steps, guidance_branches=2):
+    if min(tokens, steps, guidance_branches) <= 0:
+        raise ValueError("tokens, steps, and branches must be positive")
+    return tokens * steps * guidance_branches
+
+tokens = latent_tokens(1024, 1024)
+base = token_pass_proxy(tokens, 50)
+fast = token_pass_proxy(tokens, 4)
+print(f"latent tokens: {tokens}")
+print(f"50-step proxy: {base} token-passes")
+print(f" 4-step proxy: {fast} token-passes")
+print(f"denoiser-only ratio: {base / fast:.1f}x")
 ```
 ::::
 
-Video multiplies every term. A diffusion transformer over spatiotemporal patches [@brooks2024sora] must attend over a sequence whose length scales with frames as well as pixels: one production video model carries a 73,000-token context for sixteen seconds of high-definition footage, against roughly four thousand latent tokens for a single megapixel image [@polyak2024moviegen], and attention cost grows with the square of that length. A single video sample is therefore a minutes-long, multi-GPU dense job, which is exactly why the product shape is submit-poll-download priced in credits or per output-second rather than a chat stream. The frontier is now bending this batch shape back toward streaming: few-step distillation combined with causal generation, generating frames left to right conditioned on past frames, streams video at interactive frame rates, and to do it the field reinvented the KV cache it had discarded [@yin2024causvid]. Real-time interactive world models push further still, turning a request from a job into a stateful per-user session with a frame deadline measured in tens of milliseconds, which is game-server economics rather than throughput serving [@deepmind2025genie3].
+Progressive distillation, consistency models, and adversarial diffusion
+distillation show that a trained model can reduce neural-function evaluations
+from many steps to a few [@salimans2022progressive; @song2023consistency;
+@sauer2023add]. The result is a new quality--latency point, not a free runtime
+switch: sampler, guidance, and step count can all change output quality and must
+be evaluated together.
+
+Repeated denoising creates other serving opportunities. Compatible requests can
+batch at the same model, shape, and iteration, while mismatched step counts can
+cause head-of-line blocking or padding-like waste. A scheduler should support
+cancellation between iterations so abandoned jobs stop consuming accelerator
+time. Within a request, DeepCache reuses selected U-Net features across nearby
+steps [@ma2024deepcache], and DistriFusion partitions a high-resolution sample
+across devices using stale context from the previous step [@li2024distrifusion].
+Both are method-specific approximations with quality and hardware assumptions,
+not generic KV-cache behavior.
+
+A conventional bidirectional denoiser updates the whole latent repeatedly, so
+it does not provide independent finalized tokens like autoregressive text.
+Services can still decode and stream a preview, but preview cadence adds decoder
+work and a noisy intermediate image is not a completed result. Causal video is
+different again: CausVid generates frame blocks left to right and uses a KV
+cache, demonstrating that causal media generation can expose a streaming
+contract [@yin2024causvid].
+
+For media output, measure queue time, first-preview latency, final latency,
+neural-function evaluations, guidance branches, accelerator-seconds per output,
+cancellation waste, output encoding and egress, and quality at each step count,
+resolution, duration, sampler, and batch policy. Compare quality with matched
+prompts, seeds, and settings. A cheap output that no longer meets the product's
+quality target is not a serving improvement.
 
 ::: {.callout-important}
 ## What's contested
-Whether generative-media serving converges with the LLM serving stack is unsettled and still moving. The convergence case is already in production: unified engines now fold diffusion transformers into the same runtime as language models, sharing sequence-parallel and classifier-free-guidance parallelism and reusing the same kernels, and the causal-video path reimports the KV cache and continuous batching wholesale. The divergence case is that the two workloads share almost nothing operationally: dense compute-bound multi-second kernels against bandwidth-bound millisecond iterations, queue and session scheduling against continuous batching, per-sample multi-GPU parallelism against per-token weight amortization, and no prefix-cache economics at all. The likely resolution is that the kernels and engines converge while the tier above them, the scheduler, the SLO, the pricing unit, stays split until interactive generation makes video look enough like decode to merge.
+
+- **Fixed or variable media budgets?** Fixed resampling simplifies capacity
+  planning. Dynamic resolution and tiling preserve more input detail but create
+  a heavier-tailed workload. Neither policy is best across documents, natural
+  images, video, and audio.
+- **Colocate or disaggregate?** Disaggregation protects stages from interference
+  and allows independent scaling. Colocation avoids transfer and can use idle
+  capacity more efficiently. The answer depends on the measured stage mix and
+  network, not the architecture diagram alone.
+- **Compress before or after seeing the prompt?** Early merging and resampling
+  save the most language-model work but cannot use deep prompt context. Later
+  pruning can be query-aware but pays the early layers and complicates cache
+  shapes.
+- **One serving engine or two?** Input VLMs, iterative image generators, and
+  causal video can share kernels and fleet management, but their admission
+  units, batching constraints, progress semantics, and service objectives remain
+  different.
 :::
 
-## Resolution is a serving decision
+## The operating rule
 
-Multimodality buys capability mostly by spending efficiency. The capability is
-real: reading a chart, a screenshot, or a scanned form is what makes a model useful
-beyond chat. But every increment of visual capability is an increment of tokens,
-and tokens are prefill FLOPs and key-value bytes, the two quantities the whole
-serving stack is built to conserve. Efficiency is therefore the binding term,
-and the engineering, dynamic resolution, pixel-shuffle, resampling, prompt-aware
-pruning, encoder disaggregation, image prefix caching, is all in service of
-spending the fewest tokens that still let the model see. Trust enters as the
-quiet risk under pruning: a token-reduction setting that looks free on a natural
-image benchmark can silently drop the one region a dense document or a small
-defect lived in, so the safe deployment couples any aggressive reduction to an
-evaluation on the dense-detail tasks the product actually serves
-(cross-ref @sec-evaluating-agents). The constraint arrow is the lesson to carry
-up the stack: the cheapest place to control multimodal serving cost is the
-resolution policy at the modality layer, long before the scheduler sees the
-request.
+Treat media policy as part of the service contract. Publish accepted formats,
+byte and dimension limits, image and frame counts, duration, resize or sampling
+behavior, token or feature ceilings, downsampling and rejection behavior, and
+output quality tiers. Then make the scheduler enforce the same contract used by
+capacity tests.
+
+The point is not that every extra pixel is bad. It is that media capability has
+an explicit path through preprocessing, encoder work, persistent state, queueing,
+and quality. Once those terms are visible, encoder placement, image prefix
+caching, resolution limits, pruning, and step reduction become testable
+engineering choices instead of slogans.
 
 ## Further reading
 
