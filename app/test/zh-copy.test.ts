@@ -824,7 +824,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/03-human-evaluation-rubrics.qmd",
-      ["The human label is not a primitive", "The Protocol Creates the Label", "Rubrics Are Interfaces for Judgment", "Agreement Is a Property to Measure"],
+      ["A human judgment is not ground truth merely because", "Begin with the Claim, Not the Crowd", "Preserve Raw Judgments Before Adjudication", "Agreement is reliability, not validity"],
     ],
     [
       "zh/evaluation/03-human-evaluation-rubrics.qmd",
