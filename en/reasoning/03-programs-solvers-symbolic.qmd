@@ -1,169 +1,333 @@
-# Programs, Solvers, and Symbolic Work {#sec-programs-solvers-symbolic}
+# Programs, Solvers, and Symbolic Scaffolds {#sec-programs-solvers-symbolic}
 
-Natural-language chains are flexible, but they ask one model to do two different
-jobs. It must decompose the problem and execute the decomposition. That is a bad
-division of labor for arithmetic, code, tables, theorem proving, and many forms
-of planning, because the model may understand the structure and still make a
-local computation error. Program-aided reasoning keeps the model in the role it
-is good at, translating a messy question into a structured artifact, and gives
-execution to a runtime that has exact rules.
+A language model can recognize the structure of a problem and still lose the answer
+to arithmetic, a malformed query, or one invalid proof step. Executable reasoning
+separates those jobs. The model proposes a program, query, constraint system, or proof;
+a runtime interprets that artifact under specified rules; and a task-level check decides
+whether the result answers the original request. The runtime makes some failures visible,
+but it does not make the translation correct. A precisely executed solution to the wrong
+formalization is still wrong.
 
-![Reasoning can be split into translation and execution. The model turns natural
-language into a program, query, symbolic chain, or proof script; an external
-runtime computes or checks the result; the model then explains or repairs the
-artifact.](/figures/programs-solvers-symbolic-1.svg){#fig-programs-solvers-symbolic-1}
+![An executable reasoning pipeline. A translator turns the request into a structured
+artifact, an executor produces a typed result, and a task check compares the request,
+artifact, and result before release. A failed check can trigger a bounded repair.](/figures/programs-solvers-symbolic-1.svg){#fig-programs-solvers-symbolic-1}
 
-## Translation Is the Learned Part
+This pattern matters because natural language and formal systems fail differently.
+Language is forgiving enough to express an underspecified problem. A program or proof
+must satisfy a grammar and interface before it can run. Moving work into an executable
+artifact therefore creates better places to test the system, while leaving a semantic
+gap between what the user meant and what the artifact says.
 
-The core pattern is:
+## The artifact contract
+
+The useful abstraction is not “the model calls Python.” It is a typed boundary between a
+probabilistic translator and a controlled executor:
 
 $$
-p = T_\theta(x), \qquad y = E(p),
+p \sim q_\theta(p \mid x,C),
+\qquad
+r = E_\Gamma(p),
+\qquad
+r=(s,o,\tau,u).
 $$
 
-where $x$ is the natural-language task, $T_\theta$ is the model as translator,
-$p$ is a program, query, symbolic derivation, or proof script (a
-machine-checkable proof), and $E$ is an
-executor with explicit semantics. PAL uses the model to generate Python programs
-for math, symbolic, and algorithmic reasoning, then lets the interpreter compute
-the answer [@gao2022pal]. Program of Thoughts makes the same separation for
-numerical and financial reasoning: the model writes code-like reasoning, and an
-external computer handles arithmetic [@chen2022program]. Faithful Chain-of-Thought
-pushes the idea toward interpretability by translating into a symbolic reasoning
-chain that a deterministic solver executes [@lyu2023faithful].
+Here $x$ is the original request; $C$ is the **artifact contract**, including the
+grammar, types, allowed operations, input schema, and output schema; $q_\theta$ is the
+model's distribution over artifacts under parameters $\theta$; $p$ is one sampled
+artifact; $\Gamma$ is the pinned execution environment, including runtime and dependency
+versions, data snapshot, permissions, and resource limits; $E_\Gamma$ is the executor in
+that environment; and $r$ is its structured result. Its four fields are status, value,
+trace, and resource usage: status $s$, typed output $o$, execution trace $\tau$, and
+resource usage $u$. Typical statuses include
+`ok`, `parse_error`, `type_error`, `policy_violation`, `runtime_error`, and `timeout`.
 
-The important shift is not that code is magical. It is that the error surface
-changes. A natural-language chain can be fluent and wrong without ever crossing
-a crisp boundary. A program either parses or it does not. A unit test comes back
-pass or fail, and a proof script either checks or returns a type error (a
-rejected proof step). The
-symbolic artifact gives the system a handle for feedback, which is why this
-chapter sits between search and verifiers.
+Even a deterministic program is deterministic only relative to that environment. A SQL
+query reads a particular database snapshot. Python code inherits floating-point rules,
+package versions, locale, and time sources. A solver may reach `unknown` or exhaust its
+budget. Reproducibility requires recording $\Gamma$, not merely saving the generated
+text.
 
+The contract should be narrow enough to validate before execution. A calculator task may
+accept a small expression language rather than arbitrary Python. A reporting task may
+accept a read-only query over an allowlisted schema. A proof service may accept one
+theorem statement and one proof term, with imports fixed by the service. A smaller
+language reduces both ambiguity and authority.
+
+## A valid execution is not yet a valid answer
+
+Three checks answer three different questions:
+
+1. **Well-formedness:** does $p$ satisfy contract $C$? Parsing, schema validation, type
+   checking, import policy, and static restrictions belong here.
+2. **Execution success:** did $E_\Gamma$ finish with status `ok` inside its permission and
+   resource budget?
+3. **Task agreement:** do the artifact, assumptions, inputs, and result still match $x$?
+
+An acceptance rule can make that separation explicit:
+
+$$
+\operatorname{Accept}(x,p,r)
+= W_C(p) \land [s=\texttt{ok}] \land A(x,p,r).
+$$
+
+$W_C(p)$ is the well-formedness predicate induced by contract $C$; $s$ is the executor
+status contained in $r$; and $A(x,p,r)$ is the task-agreement check. The brackets around
+$s=\texttt{ok}$ denote the Boolean truth of that condition. `Accept` is true only when
+all three conditions hold.
+
+The first two checks are often mechanical. The third is the hard one. A program can run
+perfectly while using the wrong tax rate. A query can be valid SQL while joining customer
+and account identifiers incorrectly. A proof can establish a theorem whose quantifiers
+do not match the informal claim. Exact execution contains a wrong formalization; it does
+not repair it.
+
+This runnable example keeps the translation visible as a small data artifact. The task
+asks how many boxes hold three fifths of 240 bolts when each box holds 12. Both artifacts
+execute, but only one preserves the fraction stated in the problem.
+
+:::: {.runnable}
 ```python
-def program_aided_reasoning(question):
-    program = model.generate(
-        "Translate the problem into a small deterministic program.\n" + question
-    )
-    try:
-        value = sandboxed_python(program, timeout=2.0)
-    except RuntimeError as err:
-        repair = model.generate(format_error(question, program, err))
-        value = sandboxed_python(repair, timeout=2.0)
-    return model.generate(format_final_answer(question, value))
+from fractions import Fraction
+
+problem = {"total": 240, "fraction": "3/5", "per_box": 12}
+
+artifacts = [
+    (
+        "wrong but runnable",
+        {"total": 240, "fraction": "2/5", "per_box": 12},
+    ),
+    (
+        "correct artifact",
+        {"total": 240, "fraction": "3/5", "per_box": 12},
+    ),
+]
+
+def execute(artifact):
+    packed = artifact["total"] * Fraction(artifact["fraction"])
+    boxes = packed / artifact["per_box"]
+    if boxes.denominator != 1:
+        raise ValueError("the result is not a whole number of boxes")
+    return boxes.numerator
+
+def check_task(problem, artifact, result):
+    for field in ("total", "fraction", "per_box"):
+        if artifact[field] != problem[field]:
+            return f"contract rejects: {field} mismatch"
+    expected = execute(problem)
+    if result != expected:
+        return "contract rejects: result mismatch"
+    return "contract accepts"
+
+for label, artifact in artifacts:
+    result = execute(artifact)
+    verdict = check_task(problem, artifact, result)
+    print(f"{label}: executes to {result}; {verdict}")
 ```
+::::
 
-This is also the first place where the boundary between reasoning and
-orchestration begins to blur. The interpreter is a tool. The sandbox, timeout,
-and repair loop are harness decisions. @sec-the-harness later generalizes this
-into a full agent runtime, but the minimal version already appears here.
+The output is `wrong but runnable: executes to 8; contract rejects: fraction
+mismatch` and `correct artifact: executes to 12; contract accepts`. This checker works
+because the example already exposes the task as structured fields. For a free-form legal,
+medical, or business request, constructing $A$ can be harder than executing $p$. Human
+review, independent tests, source-grounded constraints, or abstention may still be
+necessary.
 
-## Faithfulness by Construction
+## What each runtime establishes
 
-Chain-of-thought faithfulness is contested because a visible explanation may not
-be the computation that caused the answer. Symbolic execution offers a narrower
-but stronger property. If the final answer is computed by running $E(p)$, then
-the artifact $p$ is causally upstream of the answer. The model may still have
-chosen $p$ for opaque reasons, and its natural-language explanation may still be
-post-hoc, but the executed part is inspectable.
+“Tool use” groups together systems with very different semantics. The right question is
+not whether a tool is formal, but what its successful return actually establishes.
 
-Faithful CoT makes this distinction explicit. It asks the language model to
-translate natural language into a symbolic chain, then uses a deterministic
-solver to derive the answer [@lyu2023faithful]. The guarantee is conditional:
-the explanation is faithful to the solver's computation, provided the
-translation is correct. That is a smaller claim than "the model's hidden
-computation is visible," but it is a claim engineering can use.
+| Runtime | What success establishes | What it does not establish |
+|---|---|---|
+| Interpreter or database | The program or query produced this result in environment $\Gamma$ | Correct specification, exact floating-point arithmetic, fresh data, or deterministic row order |
+| Computer algebra system | The transformation follows the system's algebraic rules under stated assumptions | That omitted domain, sign, or branch assumptions match the request |
+| SMT solver | The encoded formula is satisfiable or unsatisfiable in the supported theory, or the solver reports `unknown` | That the encoding represents the real problem, or that every formula can be decided |
+| Proof assistant | A proof term establishes the stated proposition from the declared definitions, imports, and axioms | That the proposition is the intended one or that every imported assumption is acceptable |
+| Retrieval or action tool | An observation or side effect entered the trajectory | That the observation is true, current, authoritative, or formally verified |
 
-The same structure appears in code generation. A model may hallucinate an
-algorithm, but once a candidate is turned into code, tests and static checks can
-find a large class of mistakes. That is why programming tasks became central to
-reasoning models: they supply both a rich language for decomposition and a
-runtime that can answer back.
+An SMT solver, short for satisfiability modulo theories solver, extends Boolean
+satisfiability with theories such as arithmetic, arrays, or bit-vectors. It can give a
+model for a satisfiable encoding, establish unsatisfiability for supported fragments, or
+return `unknown`. A computer algebra system manipulates expressions under domain
+assumptions. Neither system understands the user's intention outside the encoding.
 
-## The Runtime Becomes Part of the Reasoner
+Proof assistants offer a narrower and stronger boundary. In Lean, tactics and automation
+construct proof terms, then a small kernel checks those terms against the formal
+environment [@demoura2021lean]. This architecture reduces the trusted checking core, but
+the guarantee remains relative to the theorem statement, definitions, imports, and
+axioms. It also does not make an untrusted proof package safe to build; tactics and other
+metaprograms can execute code before the final kernel check.
 
-An external executor is not passive infrastructure. It changes what reasoning
-means.
+Retrieval belongs in the table to mark a category boundary. ReAct interleaves reasoning,
+actions, and observations, which can ground a trajectory in external evidence
+[@yao2022react]. The observation is new information, not a certificate. A web page can be
+stale, a tool can fail, and an action can change state. Retrieval therefore needs source
+validation and authorization, not only execution.
 
-- **Python and SQL** turn arithmetic, aggregation, and table reasoning into
-  execution. The model's task is to choose variables, operations, and schema
-  references.
-- **CAS and SMT solvers** (a computer algebra system that manipulates symbolic
-  math, and a satisfiability-modulo-theories solver that checks logical
-  constraints) turn algebra and constraint satisfaction into a search problem
-  with exact semantics. The model supplies the formalization.
-- **Proof assistants** turn a proof into a sequence of type-checked steps. The
-  model writes tactics (commands that build a proof) or terms, and a small
-  trusted core called the kernel checks them.
-- **Web or retrieval tools** turn missing facts into observations. ReAct showed
-  that interleaving reasoning and actions can reduce hallucination in question
-  answering because observations enter the trace as external evidence
-  [@yao2022react].
+## What the program-aided methods demonstrated
 
-This list is a gradient from broad but weak checks to narrow but strong ones.
-It mirrors the verifier ladder of @sec-verifiers-process-supervision. The more
-formal the runtime, the less room remains for a fluent wrong answer, but the
-more work the model must do to translate the task into that formal language.
+Gao and colleagues introduced Program-Aided Language Models (PAL) in 2022 and published
+the work at ICML 2023. PAL prompts a model to express intermediate reasoning as a Python
+program, then delegates execution to the interpreter. Its evidence covered thirteen
+mathematical, symbolic, and algorithmic tasks [@gao2022pal]. The result supports a focused
+claim: when decomposition can be written as code, external execution can remove local
+calculation work from the model.
 
-The proof-assistant rung is no longer speculative. AlphaProof, an
-AlphaZero-style RL agent that writes Lean proofs, reached silver-medal standard
-on the 2024 IMO problems [@hubert2025alphaproof], and DeepSeek-Prover-V2
-combines RL with recursive subgoal decomposition in Lean 4 to reach 88.9% on
-the miniF2F-test benchmark [@ren2025deepseekprover]. AlphaProof's reported
-limiting factor is autoformalization, translating an informal statement into
-Lean: the same translation cost the gradient above names.
+Program of Thoughts (PoT), published by Chen and colleagues in TMLR in 2023, uses a
+similar split for numerical reasoning. Its evaluation covered five math word-problem
+datasets and three financial question-answering datasets [@chen2022program]. PoT can
+interleave explanatory text and program statements, but only the executed statements
+receive interpreter semantics. Comments and prose remain ordinary model output.
 
-## Failure Moves to the Interface
+Faithful Chain-of-Thought, introduced by Lyu and colleagues in 2023, generalizes the
+artifact beyond Python. It translates a request into a chain containing task-specific
+symbolic language, then uses Python, Datalog, or a PDDL planner to execute the symbolic
+portion. The paper evaluated math word problems, planning, multi-hop question answering,
+and relational inference [@lyu2023faithful]. These domains expose useful formal
+intermediates. The results do not establish that arbitrary open-ended reasoning can be
+translated or checked the same way.
 
-Program-aided reasoning does not remove failure. It moves failure to boundaries
-that can be tested.
+The shared contribution is an interface, not a new source of truth. The model still
+chooses variables, operations, relations, and assumptions. The runtime gives those
+choices explicit consequences. That is valuable precisely because a failed parse,
+violated type, counterexample, or rejected proof can return structured feedback to the
+controller.
 
-- **Translation error.** The program solves a different problem from the one the
-  user asked. Execution is exact, but exact for the wrong formalization.
-- **Underspecified state.** The model omits a unit, a table column, or a hidden
-  constraint. The runtime has no way to recover information that never entered
-  the artifact.
-- **Sandbox error.** The generated program is unsafe, too slow, nondeterministic,
-  or dependent on unavailable packages. The executor must be a controlled
-  service, not a raw shell.
-- **Repair loop drift.** Error messages help, but repeated repair can move the
-  artifact away from the original question unless the verifier keeps grounding
-  it.
+## Faithfulness has three meanings
 
-The first failure is the hardest. A program can pass its own tests while
-answering the wrong question. For production systems, this is why program-aided
-reasoning belongs with structured outputs, test generation, and review. The
-runtime makes some errors crisp; it does not certify the specification.
+Executable reasoning is often called faithful, but three claims must remain separate.
+
+- **Execution faithfulness** means the returned value was mechanically derived from the
+  executed artifact. If the system obtains $r=E_\Gamma(p)$ with status `ok` and renders
+  its typed output $o$ without an unchecked model-generated bypass, then $p$ is causally
+  upstream of the answer.
+- **Semantic faithfulness** means $p$ correctly represents the original request, including
+  its entities, units, assumptions, and constraints. Execution alone does not establish
+  this claim.
+- **Narrative faithfulness** means any explanation accurately describes the artifact and
+  execution trace. A model-written explanation can still be post-hoc or contradict the
+  code.
+
+Faithful CoT strengthens the first property. It does not expose the model's hidden
+computation or explain why the translator selected $p$. Correct translation is required
+for task correctness, not for the narrower causal fact that the executor produced the
+answer from the artifact.
+
+This distinction changes the final presentation step. Returning
+`model.generate(explain(result))` without a check opens a new path for the model to alter a
+correct result. A production system should render typed values deterministically, or
+extract the answer from generated prose and verify that it equals the executor output.
+The explanation may be flexible; the answer binding should not be.
+
+## Repair is a controlled search loop
+
+Execution feedback can improve a candidate, but a repair loop needs the same discipline
+as the search controller in @sec-structured-reasoning-search. First classify the failure:
+
+- parse, schema, or type failures concern the artifact contract;
+- policy failures concern forbidden imports, operations, or authority;
+- runtime, timeout, and resource failures concern execution in $\Gamma$;
+- failed task checks concern the translation or its assumptions;
+- presentation failures concern the binding from typed output to user-visible answer.
+
+Each attempt should retain the immutable request, produce a versioned artifact, and
+receive a structured diagnostic for one failure class. The controller needs an attempt
+budget and an overall cost or wall-clock limit. Every repaired artifact must pass the
+full contract again; a syntax repair does not inherit semantic approval from the previous
+version. If no candidate passes, the system should abstain or fall back rather than return
+the last runnable artifact.
+
+Diagnostics are also an input boundary. Do not feed raw secrets, arbitrary tool output,
+or unrestricted compiler logs back into the model. Normalize errors, remove sensitive
+values, cap their size, and label untrusted text. A repair prompt is still a prompt, and
+tool output can carry instructions the controller should not follow.
+
+## Formal proof is strong after formalization
+
+A proof kernel makes its guarantee precise. Let $K$ be a sound kernel, $\Delta$ a formal
+environment of definitions and axioms, $\pi$ a proof term, and $\varphi$ the proposition
+being checked. Then
+
+$$
+K(\Delta,\pi,\varphi)=\operatorname{accept}
+\quad\Longrightarrow\quad
+\Delta\vdash\varphi.
+$$
+
+The turnstile $\vdash$ means that $\varphi$ is derivable from $\Delta$. This is a strong
+statement about the formal object. It says nothing by itself about whether $\varphi$
+faithfully translates an informal problem, whether $\Delta$ contains acceptable axioms,
+or whether the surrounding build process was safe. For high-assurance checking, the
+theorem statement and allowed environment must come from a trusted source, and generated
+proofs should be built in isolation and rechecked by the kernel or an independent checker.
+
+Recent theorem-proving systems show both the strength and the cost of this boundary. In
+the 2024 International Mathematical Olympiad evaluation, AlphaProof proved three of the
+five non-geometry problems, whose statements experts manually formalized. AlphaGeometry 2
+solved the geometry problem. The combined AlphaProof and AlphaGeometry 2 system scored 28
+of 42 points, equivalent to a silver medal. The hardest problems used multi-day
+computation [@hubert2025alphaproof]. The live evaluation therefore did not measure
+informal-to-formal translation: experts formalized the non-geometry statements before
+proof search.
+
+DeepSeek-Prover-V2 also starts from formal Lean statements. The 671-billion-parameter
+model proved 82.4% of the 244-problem miniF2F test set with 32 samples per theorem and
+88.9% with a Pass@8192 budget, meaning that at least one of up to 8,192 generated proofs
+was accepted [@ren2025deepseekprover]. Pass@8192 is not per-sample accuracy, and the
+benchmark does not measure informal-to-formal translation. These qualifiers do not weaken
+the accepted proofs. They locate what the experiment measured: proof generation after a
+formal statement and checker already exist.
+
+## The executor is a security boundary
+
+Generated artifacts are untrusted code, even when their purpose is arithmetic. A timeout
+alone is not a sandbox. A production executor should enforce a narrow authority envelope:
+
+- isolate each run under an unprivileged identity in a disposable environment;
+- deny network access and filesystem access by default, exposing only explicit inputs;
+- enforce CPU, memory, output, and wall-time limits, plus process and syscall controls;
+- pin the runtime, dependencies, schemas, and data snapshot used by the artifact;
+- use read-only database credentials, allowlisted schemas, and query cost and row limits;
+- keep authorization for messages, payments, deployments, and writes outside the code
+  sandbox;
+- record provenance, including the request, artifact hash, environment version, inputs,
+  status, trace, resource use, checker version, and final rendering;
+- validate outputs against their schema and task check before release.
+
+These controls serve correctness as well as security. A pinned environment makes a result
+reproducible. Least privilege limits the damage from a mistaken translation. Provenance
+lets an operator distinguish a translator error from a runtime change, stale data, a
+checker failure, or a presentation bug. @sec-security-authorization develops the authority
+boundary in detail, while @sec-the-harness places it inside the larger agent runtime.
 
 ::: {.callout-important}
 ## What's Contested
-The unresolved question is how much trust executable reasoning should inherit
-from its executor. PAL and Program of Thoughts show that offloading arithmetic
-or table operations to code can reduce local computation errors
-[@gao2022pal; @chen2022program]. Faithful CoT shows a stronger version when a
-symbolic solver executes the translated chain [@lyu2023faithful]. None of those
-results removes the translation problem. The program can be faithful to the
-wrong formalization, and a proof script can check only the theorem it was asked
-to prove. The dispute is therefore not whether tools help. It is where the
-specification enters, and who checks that the artifact still matches the
-original task.
+
+The open question is not whether execution can improve arithmetic or proof checking. It
+can. The dispute is how often the cost of formalization, task checking, and sandboxing is
+justified by the reduction in silent error. PAL, PoT, and Faithful CoT studied tasks with
+formalizable intermediate structure [@gao2022pal; @chen2022program; @lyu2023faithful].
+Their results should not be projected onto tasks whose requirements remain ambiguous or
+whose success cannot be checked. A runtime is most useful when the task exposes a narrow
+artifact language and an independent acceptance condition. Otherwise, the system may
+only replace a fluent mistake with a precisely executed one.
 :::
 
 ::: {.callout-tip}
 ## Constraint Arrow
-The executable artifact creates a stronger downstream verifier. Once a reasoning
-trace is a program, unit tests, type checks, resource limits, and reproducible
-logs become available. That pulls the topic toward @sec-serving-problem and
-@sec-security-authorization as much as toward prompting. The best program-aided
-reasoner is not just a better prompt. It is a better translator, a safer
-runtime, and a checker that knows what "correct" means for the task.
+
+An executable artifact creates stronger downstream evidence: parse results, type errors,
+counterexamples, proof checks, resource measurements, and reproducible traces. It also
+creates a new attack surface and a new specification boundary. The useful unit is
+therefore not model plus tool. It is translator plus artifact contract plus isolated
+executor plus task check plus answer binding. The weakest of those interfaces determines
+how much trust the result deserves.
 :::
 
-Programs, solvers, and proof scripts therefore form a bridge. They let models
-use natural language where ambiguity is useful, and formal systems where
-ambiguity is expensive. The next chapter studies that formal side directly:
-what kinds of verifier exist, how process supervision differs from outcome
-supervision, and when a checker becomes the scarce asset in the reasoning stack.
+Programs and solvers turn part of reasoning into an observable computation. They do not
+decide which observations deserve trust or how intermediate work should be scored. The
+next chapter examines that missing component directly: outcome checkers, process
+supervision, learned judges, and formal verifiers.
 
 ## Further reading
 

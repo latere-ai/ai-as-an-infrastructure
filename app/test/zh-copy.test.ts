@@ -680,7 +680,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/03-programs-solvers-symbolic.qmd",
-      ["Translation Is the Learned Part", "Faithfulness by Construction", "Runtime Becomes Part", "Failure Moves to the Interface"],
+      ["artifact contract", "valid execution is not yet a valid answer", "What each runtime establishes", "Faithfulness has three meanings", "executor is a security boundary"],
     ],
     [
       "zh/reasoning/03-programs-solvers-symbolic.qmd",

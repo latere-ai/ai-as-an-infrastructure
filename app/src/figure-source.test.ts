@@ -130,7 +130,11 @@ test("structured reasoning search figure keeps modes in separated lanes", () => 
 test("programs solvers figure keeps repair loop off the main pipeline", () => {
   const source = readFileSync(join(figuresSrc, "programs-solvers-symbolic-1.py"), "utf8");
   expect(source).toContain("MAIN_FLOW = [");
-  expect(source).toContain("REPAIR_Y");
+  expect(source).toContain("CHECK_Y");
+  expect(source).toContain('"task check"');
+  expect(source).toContain('"accept"');
+  expect(source).toContain("figsize=(5.2, 3.2)");
+  expect(source).not.toContain("figsize=(7.0, 2.75)");
   expect(source).not.toContain("rad=-0.12");
   expect(source).not.toContain("rad=0.18");
   expect(source).not.toContain('"repair loop"');
