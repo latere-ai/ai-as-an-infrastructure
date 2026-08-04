@@ -832,7 +832,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/04-judging-holistic.qmd",
-      ["@gls-llm-as-judge, a model used as the grader, is biased", "arena-style preference ranking", "@gls-pairwise-comparison votes, head-to-head choices between two responses, into a single number", "private test set is worth more"],
+      ["An @gls-llm-as-judge, a model used as the grader, can turn", "Use the Narrowest Grader That Fits", "Turn Pairwise Votes into a Conditional Ranking", "Protect Confirmation as an Information Boundary"],
     ],
     [
       "zh/evaluation/04-judging-holistic.qmd",
