@@ -172,6 +172,33 @@ test("human-interface oversight adds an approval stepper in both languages", () 
   expect(src("zh/practice/11-human-interface-oversight.qmd")).toContain('data-chip="批准"');
 });
 
+test("the stepper exposes localized controls and current-step state", () => {
+  const start = rt.indexOf("R['stepper']");
+  const end = rt.indexOf("R['cost-crossover']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("host.getAttribute('data-lang')");
+  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  expect(component).toContain("Previous step");
+  expect(component).toContain("上一步");
+  expect(component).toContain("ch.type = 'button'");
+  expect(component).toContain("ch.setAttribute('aria-pressed'");
+  expect(component).toContain("d.setAttribute('aria-current'");
+  expect(component).toContain("cap.setAttribute('aria-live', 'polite')");
+});
+
+test("the stepper stops animation for reduced motion, focus, and detached hosts", () => {
+  const start = rt.indexOf("R['stepper']");
+  const end = rt.indexOf("R['cost-crossover']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("prefers-reduced-motion: reduce");
+  expect(component).toContain("if (reduceMotion) return");
+  expect(component).toContain("wrap.addEventListener('focusin', pause)");
+  expect(component).toContain("wrap.addEventListener('focusout', restart)");
+  expect(component).toContain("if (!host.isConnected) { pause(); return; }");
+});
+
 test("ch03 scaling-laws adds a u-shape compute-optimal curve in both languages", () => {
   expect(src("en/foundations/01-scaling-laws.qmd")).toContain('data-viz="curve" data-family="u-shape"');
   expect(src("zh/foundations/01-scaling-laws.qmd")).toContain('data-viz="curve" data-family="u-shape"');

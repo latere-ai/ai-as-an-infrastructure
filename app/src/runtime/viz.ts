@@ -392,47 +392,59 @@
     host.textContent = '';
     var n = steps.length, cur = 0, timer = null;
     var DELAY = +(host.getAttribute('data-interval') || 3600);
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
+    var L = zh
+      ? { group: '交互流程', previous: '上一步', next: '下一步', step: '第' }
+      : { group: 'Interactive process', previous: 'Previous step', next: 'Next step', step: 'Step ' };
+    var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
     var wrap = el('div', 'viz-stepper');
+    wrap.setAttribute('role', 'group');
+    wrap.setAttribute('aria-label', L.group);
     var chipRow = el('div', 'viz-step-chips');
     var chipEls = [];
     steps.forEach(function (s, i) {
       if (i) { var a = el('span', 'viz-step-arrow'); a.textContent = '→'; chipRow.appendChild(a); }
-      var ch = el('span', 'viz-step-chip'); ch.textContent = s.chip || String(i + 1);
+      var ch = el('button', 'viz-step-chip'); ch.type = 'button'; ch.textContent = s.chip || String(i + 1);
+      ch.setAttribute('aria-label', zh ? L.step + (i + 1) + '步' : L.step + (i + 1));
       ch.addEventListener('click', function () { go(i, true); });
       chipRow.appendChild(ch); chipEls.push(ch);
     });
 
     var cap = el('div', 'viz-step-cap');
+    cap.setAttribute('aria-live', 'polite');
     var capTitle = el('div', 'viz-step-title');
     var capBody = el('div', 'viz-step-body');
     cap.appendChild(capTitle); cap.appendChild(capBody);
 
     var nav = el('div', 'viz-step-nav');
-    var prev = el('button', 'viz-step-btn'); prev.type = 'button'; prev.textContent = '‹'; prev.setAttribute('aria-label', 'previous');
+    var prev = el('button', 'viz-step-btn'); prev.type = 'button'; prev.textContent = '‹'; prev.setAttribute('aria-label', L.previous);
     var dots = el('div', 'viz-step-dots');
     var dotEls = [];
-    steps.forEach(function (_, i) { var d = el('button', 'viz-step-dot'); d.type = 'button'; d.setAttribute('aria-label', 'step ' + (i + 1)); d.addEventListener('click', function () { go(i, true); }); dots.appendChild(d); dotEls.push(d); });
-    var next = el('button', 'viz-step-btn'); next.type = 'button'; next.textContent = '›'; next.setAttribute('aria-label', 'next');
+    steps.forEach(function (_, i) { var d = el('button', 'viz-step-dot'); d.type = 'button'; d.setAttribute('aria-label', zh ? L.step + (i + 1) + '步' : L.step + (i + 1)); d.addEventListener('click', function () { go(i, true); }); dots.appendChild(d); dotEls.push(d); });
+    var next = el('button', 'viz-step-btn'); next.type = 'button'; next.textContent = '›'; next.setAttribute('aria-label', L.next);
     prev.addEventListener('click', function () { go((cur - 1 + n) % n, true); });
     next.addEventListener('click', function () { go((cur + 1) % n, true); });
     nav.appendChild(prev); nav.appendChild(dots); nav.appendChild(next);
 
     function render() {
-      chipEls.forEach(function (c, i) { c.classList.toggle('on', i === cur); });
-      dotEls.forEach(function (d, i) { d.classList.toggle('on', i === cur); });
+      chipEls.forEach(function (ch, i) { ch.classList.toggle('on', i === cur); ch.setAttribute('aria-pressed', i === cur ? 'true' : 'false'); });
+      dotEls.forEach(function (d, i) { d.classList.toggle('on', i === cur); d.setAttribute('aria-current', i === cur ? 'step' : 'false'); });
       capTitle.textContent = steps[cur].title;
       capBody.innerHTML = steps[cur].body;
     }
-    function go(i, manual) { cur = i; render(); if (manual) restart(); }
-    function tick() { cur = (cur + 1) % n; render(); }
-    function restart() { if (timer) clearInterval(timer); timer = setInterval(tick, DELAY); }
+    function pause() { if (timer) { clearInterval(timer); timer = null; } }
+    function go(i, manual) { cur = i; render(); if (manual) pause(); }
+    function tick() { if (!host.isConnected) { pause(); return; } cur = (cur + 1) % n; render(); }
+    function restart() { pause(); if (reduceMotion) return; timer = setInterval(tick, DELAY); }
 
     wrap.appendChild(chipRow); wrap.appendChild(cap); wrap.appendChild(nav);
     host.appendChild(wrap);
-    // Pause auto-advance while the reader is hovering.
-    wrap.addEventListener('mouseenter', function () { if (timer) { clearInterval(timer); timer = null; } });
+    // Pause auto-advance while the reader is hovering or using the controls.
+    wrap.addEventListener('mouseenter', pause);
     wrap.addEventListener('mouseleave', restart);
+    wrap.addEventListener('focusin', pause);
+    wrap.addEventListener('focusout', restart);
     render(); restart();
   };
 
