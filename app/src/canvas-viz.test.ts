@@ -291,6 +291,20 @@ test("the viz runtime registers expanded reasoning components", () => {
   }
 });
 
+test("reasoning-search budget reports exact node growth instead of invented quality", () => {
+  const start = rt.indexOf("R['reasoning-search-budget']");
+  const end = rt.indexOf("R['rlvr-boundary']", start);
+  const searchBudget = rt.slice(start, end);
+  expect(searchBudget).toContain("fullNodes");
+  expect(searchBudget).toContain("beamNodes");
+  expect(searchBudget).toContain("beam width");
+  expect(searchBudget).toContain("Math.log10(1 + b.v)");
+  expect(searchBudget).toContain("setAttribute('role', 'img')");
+  expect(searchBudget).toContain("setAttribute('aria-label'");
+  expect(searchBudget).not.toContain("Math.exp(-states / 75)");
+  expect(searchBudget).not.toContain("verifier quality");
+});
+
 test("expanded reasoning chapters use the new interactive visualizations in both languages", () => {
   const uses: [string, string][] = [
     ["reasoning/02-structured-reasoning-search", "reasoning-search-budget"],

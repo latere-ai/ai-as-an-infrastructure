@@ -1554,66 +1554,59 @@
     watchTheme(host, draw);
   };
 
-  // Reasoning search budget: branching and depth buy coverage, but only a
-  // verifier turns coverage into useful selected states. The numbers are
-  // deliberately synthetic; the component shows the trade-off shape.
+  // Reasoning search budget: exact node counts for a full tree and a
+  // layer-wise beam under fixed branching, no duplicates, and no early exits.
   R['reasoning-search-budget'] = function (host) {
     var lang = host.getAttribute('data-lang') === 'zh' ? 'zh' : 'en';
     var L = lang === 'zh' ? {
-      branching: '分支数', depth: '深度', verifier: '验证器质量',
-      coverage: '状态覆盖', useful: '有效工作', wasted: '浪费工作',
-      gen: '生成', score: '评分', verify: '验证', states: '状态数'
+      branching: '分支数', depth: '深度', width: '束宽',
+      full: '完整树', beam: '束搜索', peak: '峰值前沿',
+      nodes: '生成节点', log: '对数刻度'
     } : {
-      branching: 'branching', depth: 'depth', verifier: 'verifier quality',
-      coverage: 'state coverage', useful: 'useful work', wasted: 'wasted work',
-      gen: 'generation', score: 'scoring', verify: 'verification', states: 'states'
+      branching: 'branching', depth: 'depth', width: 'beam width',
+      full: 'full tree', beam: 'beam search', peak: 'peak frontier',
+      nodes: 'generated nodes', log: 'log scale'
     };
-    var branching = 3, depth = 4, verifier = 0.65;
+    var branching = 3, depth = 4, width = 4;
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 285);
+    cv.c.setAttribute('role', 'img');
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
-      var states = 0, frontier = 1;
-      for (var d = 0; d < depth; d++) { frontier *= branching; states += frontier; }
-      var coverage = 1 - Math.exp(-states / 75);
-      var duplicate = Math.min(0.38, 0.05 * (branching - 1) + 0.025 * depth);
-      var useful = Math.max(0, coverage * (0.25 + 0.75 * verifier) * (1 - duplicate));
-      var wasted = Math.min(1, coverage - useful + duplicate * 0.35);
-      var genCost = Math.min(1, states / 300);
-      var scoreCost = Math.min(1, states * (0.25 + 0.25 * (1 - verifier)) / 260);
-      var verifyCost = Math.min(1, frontier / 250 * (0.35 + verifier));
+      var fullNodes = 1, fullLevel = 1;
+      for (var d = 0; d < depth; d++) { fullLevel *= branching; fullNodes += fullLevel; }
+      var beamNodes = 1, beamFrontier = 1, peakFrontier = 1;
+      for (var level = 0; level < depth; level++) {
+        var generated = beamFrontier * branching;
+        beamNodes += generated;
+        beamFrontier = Math.min(width, generated);
+        peakFrontier = Math.max(peakFrontier, beamFrontier);
+      }
+      var bars = [
+        { n: L.full, v: fullNodes, c: 'rgba(128,128,128,0.55)' },
+        { n: L.beam, v: beamNodes, c: t.accent },
+        { n: L.peak, v: peakFrontier, c: t.accent2 }
+      ];
+      var maxLog = Math.max.apply(null, bars.map(function (b) { return Math.log10(1 + b.v); }));
       function X(i) { return pd + (i + 0.5) * (W - 2 * pd) / 3; }
-      function Y(v) { return H - pd - v * (H - 2 * pd); }
+      function Y(v) { return H - pd - Math.log10(1 + v) / maxLog * (H - 2 * pd); }
       ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
-      [
-        { n: L.coverage, v: coverage, c: 'rgba(128,128,128,0.45)' },
-        { n: L.useful, v: useful, c: t.accent },
-        { n: L.wasted, v: wasted, c: t.accent2 }
-      ].forEach(function (b, i) {
+      bars.forEach(function (b, i) {
         var x = X(i), bw = 58 * cv.dpr, y = Y(b.v);
         ctx.fillStyle = b.c; ctx.fillRect(x - bw / 2, y, bw, H - pd - y);
-        ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
         ctx.fillText(b.n, x, H - pd + 20 * cv.dpr);
-        ctx.fillText(Math.round(b.v * 100) + '%', x, y - 8 * cv.dpr);
+        ctx.fillText(b.v.toLocaleString('en-US'), x, y - 8 * cv.dpr);
       });
-      // Cost-breakdown legend sits in the gap right of the (often full-height)
-      // coverage bar, so it never overlaps that bar or its percentage label.
-      var sx = X(0) + 58 * cv.dpr, sy = pd + 8 * cv.dpr, sw = 96 * cv.dpr, sh = 11 * cv.dpr;
-      [
-        [L.gen, genCost, t.accent],
-        [L.score, scoreCost, 'rgba(128,128,128,0.55)'],
-        [L.verify, verifyCost, t.accent2]
-      ].forEach(function (r, i) {
-        ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(r[0], sx, sy + i * 20 * cv.dpr);
-        ctx.fillStyle = t.grid; ctx.fillRect(sx + 58 * cv.dpr, sy - 9 * cv.dpr + i * 20 * cv.dpr, sw, sh);
-        ctx.fillStyle = r[2]; ctx.fillRect(sx + 58 * cv.dpr, sy - 9 * cv.dpr + i * 20 * cv.dpr, sw * r[1], sh);
-      });
-      read.textContent = L.states + '=' + states + ' · ' + L.useful + '=' + Math.round(useful * 100) + '%';
+      ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right';
+      ctx.fillText(L.log, W - pd, pd - 10 * cv.dpr);
+      read.textContent = L.full + '=' + fullNodes.toLocaleString('en-US') + ' · ' + L.beam + '=' + beamNodes.toLocaleString('en-US');
+      cv.c.setAttribute('aria-label', L.nodes + ': ' + read.textContent + ' · ' + L.peak + '=' + peakFrontier.toLocaleString('en-US'));
     }
     host.appendChild(slider(L.branching, 1, 6, 1, branching, function (v) { branching = Math.round(v); draw(); }).wrap);
     host.appendChild(slider(L.depth, 1, 7, 1, depth, function (v) { depth = Math.round(v); draw(); }).wrap);
-    host.appendChild(slider(L.verifier, 0, 1, 0.01, verifier, function (v) { verifier = v; draw(); }).wrap);
+    host.appendChild(slider(L.width, 1, 16, 1, width, function (v) { width = Math.round(v); draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };

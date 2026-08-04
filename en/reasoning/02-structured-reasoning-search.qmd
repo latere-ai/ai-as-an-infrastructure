@@ -1,189 +1,370 @@
 # Structured Reasoning as Search {#sec-structured-reasoning-search}
 
-Once a model is allowed to write intermediate work, the next question is how to
-move through that work. A chain commits to one path. A tree keeps its alternatives
-alive, and a graph goes further still, letting partial results be combined,
-revised, and reused. Search is
-the family of methods that turns reasoning from "produce the next token" into
-"choose which partial state deserves the next unit of compute." It is still
-inference-time work on a frozen model, as in @sec-eliciting-reasoning, but the
-control problem is now explicit.
+A language model still generates one token after another. Search adds an outer
+controller that decides which model call to make next, which partial result to retain,
+and when to stop. A chain retains one continuation. A beam retains several at the same
+depth. A tree can revisit alternatives, while a graph can also reuse or combine earlier
+work. The model still generates tokens in every case; the search procedure allocates
+model calls around those generations.
 
-![Schematic map of reasoning search. A fixed prompt can be decoded as one chain,
-expanded as a tree, reconnected as a graph, or guided by a value model. The
-useful budget is the part spent on states that survive selection.](/figures/structured-reasoning-search-1.svg){#fig-structured-reasoning-search-1}
+This chapter isolates inference-time control. The proposal model's weights need not
+change during a request, but that does not mean the whole system was obtained without
+training. A partial-state scorer, value model, or outcome model may have been trained
+separately. Keeping that boundary explicit prevents a prompted tree and a trained
+AlphaZero-like system from being treated as the same method.
 
-## The State Space Under a Thought
+![Four structures for allocating generation. A chain retains one continuation, tree
+search keeps alternative descendants, a thought graph can combine prior units, and
+value guidance changes which state is expanded next. These are controller choices, not
+a progression in model capability.](/figures/structured-reasoning-search-1.svg){#fig-structured-reasoning-search-1}
 
-Treat a reasoning trace as a path through partial states. The prompt is $x$.
-After $t$ reasoning steps, the state is $s_t = (x, z_1, \ldots, z_t)$, where each
-$z_t$ is a short thought, subgoal, program fragment, proof step, or tool result.
-The model proposes the next step with a policy $\pi_\theta(z_{t+1} \mid s_t)$, the model itself viewed as a rule for choosing the next step.
-Some scorer $v(s_t)$ estimates whether the partial state is promising, and a
-terminal verifier $V(s_T)$ says whether a finished state is correct. The search
-problem is:
+## A search problem needs an interface
+
+Calling intermediate text a “thought” does not yet define a search problem. The
+controller needs a task-specific interface:
+
+| Component | Required decision | Example |
+|---|---|---|
+| State representation | What information must be sufficient for future decisions? | Full prompt and trace, symbolic board, program plus test results |
+| Expansion function | How are legal or plausible successors proposed? | Sample $k$ thought units, enumerate tool actions, apply a rewrite rule |
+| Frontier policy | Which unexpanded node receives work next? | Breadth-first, depth-first, beam, best-first, Monte Carlo tree search |
+| Partial-state evaluator | How are unfinished states compared? | Prompted confidence, learned value, admissible heuristic, partial checker |
+| Terminal test | What makes a state finished? | Answer delimiter, completed proof, exhausted action plan |
+| Final selector | Which finished candidate is returned? | Exact checker then utility, learned score, human review, abstention |
+| Stopping rule | When must expansion end? | Verified success, node cap, token cap, wall-clock deadline |
+
+A **state** is the task information used to predict valid continuations and outcomes. A
+**search node** is bookkeeping: it can also hold a parent pointer, incoming action,
+depth, path cost, score, and visit count. Different nodes may represent the same state.
+That distinction matters once the controller tries to merge duplicate work.
+
+Let $x$ be the request, $s_0$ its initial state, $a$ a thought-sized action, and
+$T(s,a)$ the successor state. The proposal distribution
+$\pi_\theta(a\mid s)$ supplies possible actions from model parameters $\theta$; it does
+not choose which search node to expand. The frontier policy makes that choice.
+
+Suppose $\mathcal{T}_B(x)$ is the collection of terminal states actually evaluated
+before budget $B$ is exhausted. An oracle objective would be
 
 $$
-\hat{s} = \arg\max_{s_T \in \mathcal{S}_B(x)} V(s_T),
+s^\star \in \arg\max_{s\in\mathcal{T}_B(x)} q(s),
 $$
 
-where $\mathcal{S}_B(x)$ is the set of terminal states reachable under budget
-$B$. This notation is deliberately broad. In self-consistency,
-$\mathcal{S}_B(x)$ is a bag of independent chains and $V$ is often a vote. Tree
-of Thoughts builds the set by expanding and pruning nodes
-[@yao2023tree]. Under AlphaZero-like decoding, the next rollout goes where $v$ or
-a learned value model points [@feng2023alphazero].
-
-The budget accounting is simple enough to matter:
+where $q(s)$ is the unknown task quality of terminal state $s$, and $s^\star$ is a
+best evaluated state under that quality. Writing the objective does not make the oracle
+objective executable. A deployed controller instead has whatever evidence the task
+exposes. With an observable terminal checker $G(s)\in\{0,1\}$ and an optional utility
+$U(s)$, it can select
 
 $$
-C \approx N_{\text{gen}} C_{\text{decode}} + N_{\text{score}} C_{\text{score}}
-    + N_{\text{verify}} C_{\text{verify}}.
+\widehat s \in
+\arg\max_{s\in\mathcal{T}_B(x):G(s)=1} U(s).
 $$
 
-Here $N_{\text{gen}}$ counts generated states, $N_{\text{score}}$ counts partial
-state evaluations, and $N_{\text{verify}}$ counts terminal checks. The constants
-are not interchangeable. A Python unit test may be cheap, a model-written score
-may be another full decode, and a formal checker may be cheap to run but costly
-to author. This is why the verifier ladder in @sec-verifiers-process-supervision
-is not a detail of training alone. It sets the economics of search.
+Here $G(s)=1$ means that $s$ satisfies the checker's encoded acceptance condition,
+$U(s)$ ranks accepted states, and $\widehat s$ is the returned state. If no exact
+checker exists, the final selector may use a learned or prompted estimate, a vote, or
+human review. Those are weaker observations of quality, not replacements for $q$.
+Answer voting is also a property of the candidate collection, not a verifier applied to
+one terminal state.
 
-## Chains, Beams, Trees, and Graphs
+## Branching consumes the budget quickly
 
-A chain is the degenerate case. It has branching factor one and no memory of
-alternatives. Its cost is linear in the number of thoughts, and its failure mode
-is early commitment. Beam search keeps $w$ states after each step, the $w$ best partial solutions found so far. It is useful
-when a local score is meaningful, but brittle when the score cannot see a delayed
-payoff. Tree search opens the design further: expand $b$ children, score them,
-keep a frontier, and allow backtracking. Tree of Thoughts made this pattern
-concrete by letting the model propose and self-evaluate intermediate thoughts,
-then running breadth-first or depth-first search over them [@yao2023tree].
+If every nonterminal state produces $b$ children and search reaches maximum depth $D$,
+a full tree contains
 
-Graph search removes a hidden assumption of trees. A tree says every partial
-state has exactly one parent. Many reasoning tasks do not behave that way. A
-proof can reuse a lemma. Two equivalent states in a planning problem can be
-merged into one. A data-analysis question can compute two statistics and then
-combine them. Graph
-of Thoughts models these intermediate units as vertices and lets edges represent
-dependency, aggregation, refinement, or feedback, so a later step can consume
-several earlier thoughts rather than only one parent [@besta2023graph]. The gain
-is reuse and composition. The cost is bookkeeping: the system must decide when
-two thoughts are compatible, redundant, or contradictory.
+$$
+N_{\text{full}}
+= \sum_{d=0}^{D} b^d
+=
+\begin{cases}
+D+1, & b=1,\\
+\dfrac{b^{D+1}-1}{b-1}, & b\ne 1.
+\end{cases}
+$$
 
-```python
-# A minimal verifier-guided tree search. The details vary, but the control
-# problem is stable: generate candidates, score partial states, keep a frontier,
-# and spend verification only on finished states.
-def search(prompt, budget, width, expand, score, verify):
-    frontier = [State(prompt)]
-    finished = []
-    while budget.remaining() and frontier:
-        candidates = []
-        for state in frontier:
-            for child in expand(state):
-                budget.charge_decode(child)
-                if child.is_terminal():
-                    budget.charge_verify(child)
-                    if verify(child):
-                        finished.append(child)
-                else:
-                    budget.charge_score(child)
-                    child.value = score(child)
-                    candidates.append(child)
-        frontier = sorted(candidates, key=lambda s: s.value, reverse=True)[:width]
-    return select_best(finished, frontier)
-```
+Here $b$ is the effective branching factor after proposal filtering, $D$ is the maximum
+depth, $d$ indexes a depth, and $N_{\text{full}}$ counts the root and every generated
+node. At $b=4$ and $D=8$, the total is 87,381 nodes. The relevant $b$ is not the model's
+vocabulary size. It is the number of thought units or actions the expansion function
+actually admits at each node, and the total above counts all generated nodes.
 
-This sketch also shows why search is not a free layer above prompting. If
-`score` is noisy, the frontier fills with states that look good rather than
-states that are good. Near-duplicate proposals from `expand` spend width on
-repetition. And when `verify` is unavailable, the search falls back to a learned reward
-model and inherits the over-optimization problem of @sec-rlhf.
+A beam of width $w$ limits retained states, not necessarily proposals. Under the
+simplifying assumptions that every retained state produces exactly $b$ distinct
+children and no state terminates early, the generated-node count for $D\ge 1$ is at
+most
+
+$$
+N_{\text{beam}} \le 1+b+(D-1)wb.
+$$
+
+The first expansion produces $b$ nodes; each later layer expands at most the beam width
+$w$. This linear bound is the reason beam search is practical. It does not guarantee
+that a valid path remains in the beam. A small $w$ controls work by making pruning
+irreversible.
+
+Token counts alone also miss part of the bill. A more honest total-work account is
+
+$$
+W_B
+= \sum_{(s,a)\in E_B} c_{\text{gen}}(s,a)
++ \sum_{s\in Q_B} c_{\text{score}}(s)
++ \sum_{s\in C_B} c_{\text{check}}(s).
+$$
+
+In this expression, $E_B$ is the set of generated state-action expansions, $Q_B$ is
+the set of scored states, and $C_B$ is the set of checked terminal states within budget
+$B$. The three $c$ terms are their measured costs. Generation cost depends on prefix
+length, output length, cache reuse, and batching. A prompted evaluator can cost another
+decode, while an executable check may be cheap per call but expensive to engineer.
+Parallel calls can reduce wall time when capacity exists; they do not reduce $W_B$.
 
 <figure id="fig-reasoning-search-budget">
 <div class="viz" data-viz="reasoning-search-budget" data-lang="en"></div>
-<figcaption>Search budget allocation. Increase branching and depth to spend
-more compute on generation, then raise verifier quality to see when that extra
-coverage becomes useful. The display is synthetic: it shows the shape of the
-trade-off, not measured benchmark numbers.</figcaption>
+<figcaption>Exact node growth for an idealized full tree and a layer-wise beam. The
+calculator assumes fixed branching, no duplicates, and no early termination. Its bars
+use a logarithmic scale so large trees remain visible; it models work, not accuracy.</figcaption>
 </figure>
 
-## Value Guidance and the Board-Game Temptation
+## Frontier policies make different sacrifices
 
-The analogy to board-game search is productive but easy to over-read. AlphaZero
-works because a game state is compact, legal moves are enumerable, the simulator
-is exact, and win or loss is eventually known. Language reasoning lacks all four
-properties in their clean form. The state is a text prefix, the action space is
-a vocabulary or a free-form thought, the transition is another model decode, and
-terminal correctness may be unavailable. This is why many LLM search systems
-use the AlphaZero shape without importing the full AlphaZero setting.
+“Tree search” names a data structure, not one algorithm. The frontier rule determines
+what gets explored and what can be lost.
 
-The useful import is the separation between proposal and value. The proposal
-policy says "what could come next." The value model, a learned scorer of how promising a
-partial state is, says "which partial state is worth another rollout." Self-evaluation guided beam search asks the model to
-score its own intermediate steps [@xie2023selfeval]. AlphaZero-like tree search
-learns a value function and uses it to guide decoding and later training
-[@feng2023alphazero]. Both methods spend compute on a bet: scoring a partial
-state is cheaper than fully expanding it, and accurate enough to avoid wasting
-most of the tree.
+| Policy | Next node | Main advantage | Important limitation |
+|---|---|---|---|
+| One chain | The only retained continuation | Minimum controller overhead | One early choice removes all alternatives |
+| Breadth-first | Shallowest node, usually FIFO | Finds a shallow solution when branching is finite | Frontier memory grows exponentially; cost optimality requires equal step costs |
+| Depth-first | Deepest node, usually LIFO | Small frontier and natural backtracking | Can follow a bad or cyclic branch indefinitely without limits |
+| Beam search | Top $w$ states at the current depth | Bounded layer width and easy batching | False pruning makes it incomplete and generally non-optimal |
+| Best-first | Highest-priority node across depths | Can focus work wherever a comparable heuristic points | Scores across depths must mean the same thing; a bad heuristic can starve alternatives |
+| Monte Carlo tree search | A node selected from visit counts and estimated returns | Balances repeated exploration and exploitation | Needs meaningful rollouts or leaf values and repeated backup |
 
-That bet fails in predictable regimes. When the value model cannot see the
-hidden mistake, search amplifies it. A verifier that scores only final answers
-leaves partial pruning to guesswork. Where the problem has no useful branching
-structure, a tree only repackages self-consistency with more overhead.
-Search pays when partial states differ in value before the final answer, and
-when the system can measure that difference well enough.
+Breadth-first and depth-first search do not require a learned value. Beam and
+best-first search do. Monte Carlo tree search (MCTS) repeats selection, expansion, leaf
+evaluation or simulation, and backup. A common selection form from UCT is
+[@kocsis2006uct]
 
-## What the Search Layer Belongs To
+$$
+a_{\text{UCT}}
+= \arg\max_{a\in\mathcal{A}(s)}
+\left[
+Q(s,a)
++ c\sqrt{\frac{\log N(s)}{1+N(s,a)}}
+\right].
+$$
 
-Search can be read three ways in the rest of the book.
+Here $\mathcal{A}(s)$ is the set of currently available actions, $Q(s,a)$ is the
+backed-up mean return for action $a$, $N(s)$ is the visit count of state $s$,
+$N(s,a)$ is the action visit count, and $c>0$ controls the exploration bonus. An
+implementation must also force or otherwise handle unvisited actions. AlphaZero-style
+PUCT adds a proposal-policy prior; it is not merely best-first search under another
+name.
 
-- **As elicitation.** The fixed model already contains useful solution paths, and
-  search is a way to find and select them. This is the view of
-  @sec-eliciting-reasoning and the amplification side of the RLVR debate in
-  @sec-training-to-reason.
-- **As verification infrastructure.** Search is only as strong as the scorer or
-  checker in its loop. This connects directly to
-  @sec-verifiers-process-supervision and to the model-judge cautions in
-  @sec-judging-holistic.
-- **As agent control.** Once a state includes tool results, memory, and actions,
-  this same loop becomes an agent harness. ReAct interleaves reasoning traces
-  and environment actions [@yao2022react]; @sec-the-harness later treats that
-  loop as production software rather than a prompting pattern.
+Classical guarantees depend on assumptions that language-model controllers often
+break. Breadth-first completeness assumes finite branching and a solution at finite
+depth. Optimal graph search needs correct transitions, a correct goal test, and
+appropriate cost or heuristic conditions. Sampled actions, finite budgets, learned
+scores, and beam pruning remove those guarantees. The algorithmic name alone does not
+restore them.
+
+## A pruned branch cannot recover later
+
+This runnable example uses a deliberately misleading partial-state heuristic. The
+`fast` branch looks best at both of its visible states but ends in failure. The
+`patient` branch starts with a lower score and reaches the only verified solution.
+
+:::: {.runnable}
+```python
+GRAPH = {
+    "start": [("fast", 0.90), ("patient", 0.70)],
+    "fast": [("dead_end", 0.95)],
+    "patient": [("bridge", 0.60)],
+    "bridge": [("solution", 1.00)],
+}
+VERIFIED = {"dead_end": False, "solution": True}
+
+def beam_search(width):
+    frontier = [("start", ["start"], 0.0)]
+    while frontier:
+        candidates = []
+        for state, path, _ in frontier:
+            if VERIFIED.get(state, False):
+                return path
+            for child, heuristic in GRAPH.get(state, []):
+                candidates.append((child, path + [child], heuristic))
+        frontier = sorted(
+            candidates,
+            key=lambda item: item[2],
+            reverse=True,
+        )[:width]
+    return None
+
+for width in (1, 2):
+    path = beam_search(width)
+    result = "no verified solution" if path is None else " -> ".join(path)
+    print(f"width={width}: {result}")
+```
+::::
+
+The output is `width=1: no verified solution` and
+`width=2: start -> patient -> bridge -> solution`. Width one commits to `fast` and
+cannot return to the pruned alternative. Width two
+retains both branches long enough for the terminal check to distinguish them. A wider
+beam raises candidate coverage, but it also raises work. It helps only if the expansion
+function proposes the useful branch and the partial-state evaluator keeps it alive.
+
+## Graphs mean two different things here
+
+A state-space graph and a thought workflow solve different problems.
+
+In graph search, a **transposition** occurs when different paths reach the same task
+state. A reached table can then avoid expanding that state twice. This requires a
+canonical state key that preserves everything relevant to future actions and outcomes.
+The same text can refer to a different hidden state when tool versions, files, database
+contents, permissions, or prior side effects differ. Conversely, two differently worded
+traces may encode the same symbolic state. Merging by surface text alone is therefore
+unsafe. Cyclic state spaces also require cycle detection, a closed set, or explicit
+reopening rules.
+
+Graph of Thoughts (GoT) uses “graph” in a broader dataflow sense. Its vertices are
+thought units, while edges can encode generation, aggregation, refinement, or feedback
+[@besta2023graph]. A later operation may consume two earlier results without claiming
+that they are equivalent states. The published system used human-designed operation
+graphs, task-specific prompts, parsers, and scorers. On four tasks chosen to support
+these transformations, including a sorting benchmark, set intersection, keyword
+counting, and document merging, tailored GoT schedules outperformed the adapted
+baselines reported in the paper. That evidence supports programmable composition on
+those tasks. It does not demonstrate automatic semantic merging or a general-purpose
+graph-search algorithm.
+
+## Value guidance is a bet on partial evidence
+
+For a rollout policy $\rho$, the ideal state value is
+
+$$
+v^\rho(s)=\mathbb{E}[R(s_T)\mid s,\rho],
+$$
+
+where $s$ is the current state, $s_T$ is the terminal state reached by continuing under
+$\rho$, $R(s_T)$ is its terminal return, and the expectation averages over stochastic
+proposals or environment outcomes. A prompted confidence score, a local process score,
+and an estimate of remaining path cost are not automatically estimates of this same
+quantity. Their scales can also drift with depth.
+
+Let a controller observe
+
+$$
+\widehat v(s)=v^*(s)+\varepsilon(s),
+$$
+
+where $v^*(s)$ is the true continuation value for the controller's objective,
+$\widehat v(s)$ is its observed score, and $\varepsilon(s)$ is evaluator error. Search
+selects states with the highest observed score, so it also selects unusually positive
+errors. This selection bias becomes more important as the controller compares more
+states or optimizes the same scorer more aggressively [@gao2023overoptimization]. A
+score calibrated on ordinary traces may also become out-of-distribution on prefixes
+created by deeper search. False pruning is the opposite error: one underestimated state
+is removed before its delayed payoff becomes visible.
+
+Prompted self-evaluation illustrates the dependency. Self-evaluation-guided stochastic
+beam search used the same language model under different generation and evaluation
+prompts, combining step confidence with model likelihood [@xie2023selfeval]. It improved
+the reported arithmetic settings, but matched-budget results were not uniformly better
+on commonsense tasks. The method is useful evidence that partial scoring can guide a
+beam, not evidence that the model supplies an exact verifier of its own work.
+
+## The published systems are not interchangeable
+
+Several influential systems share a generator-evaluator loop, but their controllers and
+training assumptions differ.
+
+| System | What it actually adds | Scope of the evidence |
+|---|---|---|
+| Tree of Thoughts | Task-designed thought units, proposal prompts, state evaluation, and breadth-first or depth-first traversal | Reported gains on Game of 24, Creative Writing, and Mini Crosswords; prompts and evaluator calls were part of the method [@yao2023tree] |
+| Reasoning via Planning | An LM used for proposals and simulated transitions inside MCTS with task-specific rewards | Evaluated on selected planning, arithmetic, and logical-reasoning tasks; the LM “world model” can still predict a wrong transition [@hao2023rap] |
+| TS-LLM | AlphaZero-like search with trained policy, value, and outcome-reward components; an iterative variant also updates the policy | A boundary case between inference control and additional task-specific training, not frozen-model prompting alone [@feng2023alphazero] |
+| ReAct | One trajectory interleaving reasoning, actions, and observations | Grounds later steps in external observations, but ReAct is not itself a search algorithm unless another controller retains alternatives and revisits them [@yao2022react] |
+
+Tree of Thoughts does not establish that trees dominate repeated sampling on arbitrary
+tasks. Its Game of 24 result is striking, but the task exposes compact intermediate
+equations that can be judged before completion. GoT likewise selected tasks where
+aggregation and refinement were meaningful. TS-LLM shows what trained critics can add,
+but those critics cross the training boundary established at the start of this chapter.
+
+AlphaEvolve offers a related, broader example. It performs evaluator-guided evolutionary
+search over programs, not beam search or MCTS over natural-language thoughts. Its white
+paper reports a rank-48 procedure for multiplying $4\times4$ complex matrices and a Borg
+scheduling heuristic that Google reports recovers an average 0.7 percent of fleet-wide
+compute [@novikov2025alphaevolve]. Automated evaluation made those searches actionable.
+The result is not evidence that language tree search is generally superior.
+
+## Operating a search controller
+
+A production implementation needs more than an algorithm name.
+
+1. Define the state schema, legal action schema, canonicalization rule, terminal test,
+   and final output contract. Reject unparsable states before they enter the frontier.
+2. Calibrate the evaluator on states generated by the controller that will use it. A
+   held-out set of direct answers does not measure behavior on deep, selected prefixes.
+3. Compare direct generation, repeated sampling, best-of-$n$, and structured search in a
+   matched-budget evaluation. Match total generated tokens, scorer calls, checker calls,
+   model versions, and wall-clock capacity; report latency separately.
+4. Put hard limits on nodes, depth, generated tokens, tool calls, dollars, memory, and
+   the wall-clock deadline. Stop early on verified success only when the task contract
+   permits it.
+5. Define a fallback for an empty frontier, parser failure, evaluator timeout, no
+   accepted terminal, and conflicting checkers. A service may return a direct answer,
+   abstain, or escalate, but the choice should not be implicit.
+
+Tool-using search needs one more boundary: speculative branches should not commit
+irreversible external effects. Run checks in sandboxes or transactions, separate
+read-only exploration from approved writes, and deduplicate idempotent calls.
+
+Per-request telemetry should record the prompt and model version, controller and
+evaluator version, expansion count, generated-token count, frontier size by depth,
+deduplication rate, evaluator scores, checker outcomes, selected path, stopping reason,
+fallback path, total work, and latency. Offline analysis should separate candidate
+coverage, selected-answer accuracy, false pruning, selector regret, cost per accepted
+answer, and tail latency.
 
 ::: {.callout-important}
-## What's Contested
-The field still lacks a stable answer to when structured search beats simpler
-sampling. Tree of Thoughts reports large gains on tasks with explicit branching,
-such as the Game of 24 [@yao2023tree]. Graph of Thoughts reports gains when
-intermediate results can be merged or refined [@besta2023graph]. Yet many
-benchmarks reward a cheaper recipe: draw more independent samples and let a
-verifier choose. The comparison is often confounded by verifier quality, prompt
-engineering, temperature, and task choice. Treat "search helps reasoning" as a
-claim about a task's state structure and checker, not a property of language
-models in general. The strongest evidence runs the same way: where the
-evaluator is exact and cheap, search at scale has produced new
-artifacts, among them AlphaEvolve's first improvement in 56 years over
-Strassen's 1969 scheme for $4 \times 4$ complex matrix multiplication, plus a
-scheduling heuristic that recovers 0.7% of Google's fleet-wide compute
-[@novikov2025alphaevolve].
+## Contested: when structure beats more samples
+
+There is no task-independent winner. Repeated sampling is difficult to beat when full
+solutions are cheap, diverse, and exactly checkable. Brown et al. found that oracle
+candidate coverage could keep rising while learned-score or majority selection
+flattened, making selection rather than generation the bottleneck
+[@brown2024monkeys]. Structured search becomes attractive when partial states expose
+informative feedback and early pruning saves substantial downstream work.
+
+Matched compute can reverse a leaderboard. Snell et al. found that best-of-$n$ and
+process-reward-guided search occupied different favorable regimes across problem
+difficulty and budget [@snell2024scaling]. Katz et al. showed another boundary: on
+classical planning tasks, using an LM to construct symbolic successor and goal-test code,
+then running conventional search, could be both more efficient and easier to reason
+about than calling the LM at every node [@katz2024thoughtsearch]. Claims that search is
+sound, complete, or optimal must therefore be traced to the implemented transition,
+goal test, heuristic, and pruning rule. Borrowing the name of a classical algorithm is
+not sufficient.
 :::
 
 ::: {.callout-tip}
 ## Constraint Arrow
-Search spends the same scarce resource that serving has to sell: generated
-tokens, scorer calls, verifier calls, and wall-clock latency. A search method
-that looks strong in an offline table may be unusable once @sec-serving-problem
-adds batching, cache residency, and tail latency. The constraint also runs
-upward: if @sec-verifiers-process-supervision cannot provide a reliable checker,
-wider search mostly buys more plausible candidates for a weak selector.
+
+Search consumes generated tokens, scorer calls, checker calls, memory, and wall-clock
+latency. @sec-serving-problem determines how many branches can actually run in parallel
+without damaging batching or tail latency. The constraint also runs upward. If
+@sec-verifiers-process-supervision cannot supply reliable intermediate evidence, wider
+search creates more opportunities for evaluator error. In that regime, a simpler
+candidate sampler and a strong terminal checker may be the better system.
 :::
 
-Search makes the middle layer visible. Below it are model proposals and serving
-costs. Above it are verifiers, agents, and product latency budgets. The next
-chapter changes the state itself: instead of making every reasoning step a
-natural-language thought, it asks the model to hand part of the work to a
-program, a solver, or a proof checker.
+Structured reasoning search is an allocation layer. The proposal model supplies
+possible actions; the controller chooses where to spend work; the evaluator changes
+which branches survive; and the checker determines what evidence can stop the search.
+The next chapter changes the state representation itself by moving some work from
+natural-language traces into programs, solvers, and proof checkers.
 
 ## Further reading
 

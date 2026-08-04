@@ -672,7 +672,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/02-structured-reasoning-search.qmd",
-      ["State Space", "Chains, Beams, Trees", "Value Guidance", "Search Layer"],
+      ["Search adds an outer controller", "A search problem needs an interface", "Branching consumes the budget quickly", "A pruned branch cannot recover later", "The published systems are not interchangeable", "matched-budget evaluation"],
     ],
     [
       "zh/reasoning/02-structured-reasoning-search.qmd",

@@ -108,7 +108,7 @@ def value_guided(ax, y):
             edge(ax, xs[i - 1], y, x, y, color=DATA if filled else MUTED, alpha=0.78 if filled else 0.35)
 
 
-fig, ax = plt.subplots(figsize=(7.2, 3.6))
+fig, ax = plt.subplots(figsize=(5.0, 3.5))
 ax.set_xlim(0, 1)
 ax.set_ylim(0, 1)
 ax.axis("off")

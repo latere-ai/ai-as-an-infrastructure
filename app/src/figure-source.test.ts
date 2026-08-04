@@ -119,6 +119,8 @@ test("structured reasoning search figure keeps modes in separated lanes", () => 
   const source = readFileSync(join(figuresSrc, "structured-reasoning-search-1.py"), "utf8");
   expect(source).toContain("LANES = [");
   expect(source).toContain("def lane_label");
+  expect(source).toContain("figsize=(5.0, 3.5)");
+  expect(source).not.toContain("figsize=(7.2, 3.6)");
   expect(source).not.toContain('"selected frontier"');
   expect(source).not.toContain('"dead branches"');
   expect(source).not.toContain('"compute well spent"');
