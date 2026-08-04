@@ -225,6 +225,37 @@ test("the viz runtime registers judge-kappa, outlier-quant, minhash-buckets, bla
   }
 });
 
+test("outlier quantization uses a correct signed INT4 range and explicit scale groups", () => {
+  const start = rt.indexOf("R['outlier-quant']");
+  const end = rt.indexOf("R['minhash-buckets']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("var bits = 4");
+  expect(component).toContain("var qmax = Math.pow(2, bits - 1) - 1");
+  expect(component).toContain("var qmin = -qmax");
+  expect(component).toContain("mode === 'shared'");
+  expect(component).toContain("separate scales");
+  expect(component).not.toContain("per-channel");
+  expect(component).not.toContain("L = 8");
+});
+
+test("outlier quantization localizes and exposes its changing result", () => {
+  const start = rt.indexOf("R['outlier-quant']");
+  const end = rt.indexOf("R['minhash-buckets']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  expect(component).toContain("共享尺度");
+  expect(component).toContain("分组尺度");
+  expect(component).toContain("read.setAttribute('aria-live', 'polite')");
+  expect(component).toContain("btn.setAttribute('aria-pressed'");
+  expect(component).toContain("cv.c.setAttribute('role', 'img')");
+  expect(component).toContain("cv.c.setAttribute('aria-label'");
+  expect(component).toContain("viz-pa-legend");
+  expect(component).toContain("filled dots");
+  expect(component).toContain("实心点");
+});
+
 test("the MinHash viz uses the LSH banding probability rather than hidden clusters", () => {
   expect(rt).toContain("1 - Math.pow(1 - Math.pow(s, rows), bands)");
   expect(rt).toContain("rows per band");

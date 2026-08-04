@@ -1061,34 +1061,50 @@
     watchTheme(host, draw);
   };
 
-  // The outlier and the shared scale: well-behaved bulk weights plus one
-  // draggable outlier. Per-tensor INT8 picks ONE scale to cover the largest
-  // value, so the integer grid is too coarse and the bulk collapses onto a
-  // couple of levels; per-channel gives the bulk its own scale and the error
-  // nearly vanishes. Toggle the mode, drag the outlier.
+  // A signed INT4 group quantizer with one adjustable outlier. Shared mode
+  // uses one scale for all values; separate mode assigns one scale to the bulk
+  // group and another to the outlier group. The latter is intentionally not
+  // called per-channel: these synthetic scalars do not model tensor channels.
   R['outlier-quant'] = function (host) {
-    var outlier = 7, mode = 'per-tensor', L = 8;
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
+    var L = zh ? {
+      shared: '共享尺度', separate: '分组尺度', mode: '尺度模式', error: '主体均方根误差',
+      spacing: '主体网格间距', outlier: '离群值幅度', desc: '共享尺度与分组尺度的 INT4 量化误差',
+      legend: '实心点：原值；空心圆：重建值；横线：主体组量化网格'
+    } : {
+      shared: 'shared scale', separate: 'separate scales', mode: 'scale mode', error: 'bulk RMS error',
+      spacing: 'bulk grid spacing', outlier: 'outlier magnitude', desc: 'INT4 quantization error with one shared scale versus separate scales',
+      legend: 'filled dots: original values; rings: reconstructed values; lines: bulk-group quantization grid'
+    };
+    var bits = 4;
+    var qmax = Math.pow(2, bits - 1) - 1;
+    var qmin = -qmax;
+    var outlier = 7, mode = 'shared';
     var bulk = [0.7, -0.4, 0.9, -0.8, 0.3, -0.6, 0.5, -0.2, 0.75, -0.5, 0.6];
     var bulkMax = 0.9;
     var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
+    btn.setAttribute('aria-label', L.mode); read.setAttribute('aria-live', 'polite');
     bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 250);
+    cv.c.setAttribute('role', 'img');
+    var legend = el('p', 'viz-pa-legend'); legend.textContent = L.legend; host.appendChild(legend);
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 26 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
       var vals = bulk.concat([outlier]);
       var amax = Math.max(outlier, bulkMax);
-      var tensorScale = amax / (L / 2);
+      var sharedScale = amax / qmax;
       function Y(v) { return H / 2 - (v / amax) * (H / 2 - pd); }
-      var gridScale = (mode === 'per-tensor') ? tensorScale : bulkMax / (L / 2);
+      var gridScale = (mode === 'shared') ? sharedScale : bulkMax / qmax;
       ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
-      for (var k = -L / 2; k <= L / 2; k++) { var y = Y(k * gridScale); if (y > 4 && y < H - 4) { ctx.beginPath(); ctx.moveTo(pd, y); ctx.lineTo(W - pd, y); ctx.stroke(); } }
+      for (var k = qmin; k <= qmax; k++) { var y = Y(k * gridScale); if (y > 4 && y < H - 4) { ctx.beginPath(); ctx.moveTo(pd, y); ctx.lineTo(W - pd, y); ctx.stroke(); } }
       var n = vals.length, bw = (W - 2 * pd) / n, err = 0;
       vals.forEach(function (v, i) {
         var x = pd + bw * (i + 0.5);
         var isOut = (i === n - 1);
-        var scale = (mode === 'per-tensor') ? tensorScale : ((isOut ? outlier : bulkMax) / (L / 2));
-        var q = Math.round(v / scale) * scale;
+        var scale = (mode === 'shared') ? sharedScale : ((isOut ? outlier : bulkMax) / qmax);
+        var code = Math.max(qmin, Math.min(qmax, Math.round(v / scale)));
+        var q = code * scale;
         if (!isOut) err += (v - q) * (v - q);
         ctx.fillStyle = isOut ? t.accent2 : t.accent;
         ctx.beginPath(); ctx.arc(x, Y(v), 5 * cv.dpr, 0, 7); ctx.fill();
@@ -1096,11 +1112,15 @@
         ctx.beginPath(); ctx.arc(x, Math.max(pd, Math.min(H - pd, Y(q))), 7.5 * cv.dpr, 0, 7); ctx.stroke();
       });
       var rms = Math.sqrt(err / bulk.length);
-      btn.textContent = 'mode: ' + mode;
-      read.textContent = 'bulk RMS error ' + rms.toFixed(3) + '  ·  grid spacing ' + gridScale.toFixed(2);
+      var modeLabel = mode === 'shared' ? L.shared : L.separate;
+      btn.textContent = L.mode + ': ' + modeLabel;
+      btn.setAttribute('aria-pressed', mode === 'separate' ? 'true' : 'false');
+      var summary = L.error + ' ' + rms.toFixed(3) + ' · ' + L.spacing + ' ' + gridScale.toFixed(3);
+      read.textContent = summary;
+      cv.c.setAttribute('aria-label', L.desc + '. ' + modeLabel + '. ' + summary + '. ' + L.legend);
     }
-    btn.addEventListener('click', function () { mode = (mode === 'per-tensor') ? 'per-channel' : 'per-tensor'; draw(); });
-    host.appendChild(slider('outlier magnitude', 1, 16, 0.5, outlier, function (v) { outlier = v; draw(); }).wrap);
+    btn.addEventListener('click', function () { mode = (mode === 'shared') ? 'separate' : 'shared'; draw(); });
+    host.appendChild(slider(L.outlier, 1, 16, 0.5, outlier, function (v) { outlier = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };
