@@ -1611,9 +1611,9 @@
     watchTheme(host, draw);
   };
 
-  // Evaluation power: an accuracy gap only becomes decision-grade when the
-  // confidence half-width shrinks below the gap. Slide the sample size and the
-  // target gap to see why small private evals are good tripwires but poor rankers.
+  // Accuracy precision screen: this deliberately shows only the rough Wald
+  // half-width for one iid binomial proportion. It is not a power calculation,
+  // a paired A/B interval, or a release rule.
   R['eval-power'] = function (host) {
     var n = 500, gap = 2.0, p = 0.72;
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
@@ -1638,10 +1638,10 @@
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText('held-out examples (log)', W / 2, H - 12 * cv.dpr);
       ctx.save(); ctx.translate(13 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('95% half-width, percentage points', 0, 0); ctx.restore();
-      read.textContent = 'n=' + Math.round(n) + ' · gap=' + gap.toFixed(1) + ' pp · half-width=' + half.toFixed(1) + ' pp · ' + (half < gap ? 'decision-grade' : 'investigate only');
+      read.textContent = 'rough iid screen · n=' + Math.round(n) + ' · reference effect=' + gap.toFixed(1) + ' pp · Wald half-width=' + half.toFixed(1) + ' pp · ' + (half < gap ? 'half-width below reference' : 'half-width above reference');
     }
     host.appendChild(slider('sample size n', 50, 10000, 50, n, function (v) { n = v; draw(); }).wrap);
-    host.appendChild(slider('target gap (pp)', 0.5, 8, 0.1, gap, function (v) { gap = v; draw(); }).wrap);
+    host.appendChild(slider('reference effect (pp)', 0.5, 8, 0.1, gap, function (v) { gap = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };

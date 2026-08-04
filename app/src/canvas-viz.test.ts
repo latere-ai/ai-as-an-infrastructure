@@ -424,6 +424,18 @@ test("expanded evaluation chapters use the new interactive visualizations in bot
   }
 });
 
+test("evaluation precision visual does not present a Wald half-width as a power or release rule", () => {
+  const start = rt.indexOf("R['eval-power']");
+  const end = rt.indexOf("R['eval-frontier']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("rough iid screen");
+  expect(component).toContain("Wald half-width");
+  expect(component).toContain("reference effect");
+  expect(component).not.toContain("decision-grade");
+  expect(component).not.toContain("investigate only");
+});
+
 test("the viz runtime registers expanded reasoning components", () => {
   for (const name of ["reasoning-search-budget", "rlvr-boundary", "ttc-budget"]) {
     expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));

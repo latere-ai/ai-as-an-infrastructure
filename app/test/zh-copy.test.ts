@@ -816,7 +816,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/02-statistical-reliability.qmd",
-      ["A benchmark score is an estimate, not a fact", "Compare on the Same Items", "Many Looks Create False Wins", "Bias Is Not Noise"],
+      ["A benchmark score is an estimate only when", "Name the Quantity Before Its Interval", "Compare Systems on the Same Units", "Precision Cannot Repair Bias"],
     ],
     [
       "zh/evaluation/02-statistical-reliability.qmd",
