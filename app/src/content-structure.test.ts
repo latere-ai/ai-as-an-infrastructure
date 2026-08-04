@@ -694,7 +694,7 @@ test("generative adaptation and reasoning first uses define the method locally",
     ["en/reasoning/01-eliciting-reasoning.qmd", "@gls-cot, a written chain of intermediate reasoning steps"],
     ["zh/reasoning/01-eliciting-reasoning.qmd", "@gls-cot，也就是写出来的一串中间推理步骤"],
     // The lock spans the nested gloss of "baseline" the readability pass added.
-    ["en/reasoning/05-training-to-reason.qmd", "@gls-rloo are policy-gradient variants that compute a baseline (the reference value an outcome is compared against to decide if it was better than typical) from sampled groups"],
+    ["en/reasoning/05-training-to-reason.qmd", "@gls-rloo, REINFORCE Leave-One-Out, treats each whole response as one sampled action"],
     ["zh/reasoning/05-training-to-reason.qmd", "@gls-rloo是两种策略梯度变体，它们从一组采样里计算基线（用来判断某个结果是否好于寻常的参照值）"],
   ];
 

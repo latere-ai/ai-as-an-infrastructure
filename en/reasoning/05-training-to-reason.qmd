@@ -1,482 +1,407 @@
 # Training Models to Reason {#sec-training-to-reason}
 
-Reinforcement learning changes character when the reward is a checkable ground
-truth rather than a learned human-preference proxy. Where a verifier exists, it
-beats a reward model because it removes the learned proxy gap. @gls-grpo and
-@gls-rloo are policy-gradient variants that compute a baseline (the reference
-value an outcome is compared against to decide if it was better than typical)
-from sampled groups, and they simplify @gls-ppo by dropping the critic (a
-learned predictor of expected reward used as that baseline). The o1 and R1 line
-showed that long-horizon reasoning can emerge without step-level supervision,
-and the field still disagrees about whether that training teaches new reasoning
-or mainly reweights what the base model could already sample.
+A reasoning model does not need a worked solution for every training problem.
+If a program can check the result, the model can generate its own attempts and
+learn from the attempts that pass. This is @gls-rlvr, reinforcement learning
+with verifiable rewards: sample responses, score them with an independently
+computed rule, and update the model toward responses that earn more reward.
 
-The thread that runs through every section is a single object, the verifier.
-Where it exists, this recipe applies. Lose it, and you are back to the
-learned reward model of @sec-rlhf. Once that object is fixed, each design choice
-has a visible cost.
+That description is simple, but three details determine whether it works. The
+checker must represent the task users care about. The base model must already
+solve enough training problems to produce a useful contrast between passing
+and failing samples. The policy update must preserve exploration while it
+concentrates probability on successful behavior. This chapter develops those
+three requirements in that order.
 
-## A Reward Without a Learned Proxy Gap
+## The reward contract
 
-Start with the failure that motivates everything here. A learned reward model
-is a proxy, and a policy trained against a proxy will find its argmax, not the
-true objective's. This is the over-optimization problem that haunts the RLHF of
-@sec-rlhf [@gao2022scaling]: push hard enough on a model of human
-preference and the policy learns to satisfy the model rather than the human. The
-reward model has no ground truth to anchor it, so its blind spots become the
-policy's exploits.
+For one training item, write $x$ for the prompt, $y$ for a sampled response,
+and $V(x,y)$ for the verifier. The verifier returns a scalar reward $r$. In the
+simplest case, $r=1$ means that the final answer passed and $r=0$ means that it
+did not. A training example is therefore not a reference response. It is a
+prompt paired with an executable acceptance rule.
 
-For a large and valuable class of tasks there is a way out, because the answer
-can be checked. A program either passes its unit tests or it does not. A math
-answer equals the reference or it is wrong, with nothing in between. And a
-formal proof type checks in Lean or it fails to. On these tasks you can replace the learned reward
-with a verifier and optimize the policy against a reward that has no proxy gap
-to exploit. That move, @gls-rlvr, is the training-time analogue of
-the runtime verification loop that an agent harness runs at inference.
+This distinction changes the data pipeline. Supervised fine-tuning needs a
+target response to imitate. RLVR needs prompts, a sampler, and a reward
+contract that states exactly what evidence earns credit. Unit tests can provide
+that contract for code. A numeric or symbolic equivalence check can provide it
+for some mathematics. A proof kernel can provide it for a formal proof. The
+training loop is the same in each case.
 
-## Swapping the proxy for a checker
-
-The loop end to end is short. Sample completions for a prompt, run each through
-a verifier for a scalar reward that is often just binary, and update the policy
-toward the rewarded completions. The training data is prompts with a way to
-check the answer, not prompts with reference completions. The optimizer is the
-PPO machinery of @sec-rlhf reused without change [@schulman2017proximal]: a
-policy, an advantage estimate, and a KL penalty against a frozen reference
-model. The innovation is the reward source, not the algorithm.
-
-```{dot}
-//| label: fig-training-to-reason-loop
-//| fig-cap: "The RLVR loop. Sample completions for a checkable prompt, score each with a verifier, turn rewards into a group-relative advantage, and update the policy under a KL anchor."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  P [label="Prompt with checkable answer"];
-  S [label="Sample G completions"];
-  V [label="Verifier: tests, checker, proof"];
-  R [label="Scalar reward per completion"];
-  A [label="Group-relative advantage"];
-  U [label="Policy update with KL anchor"];
-
-  P -> S;
-  S -> V;
-  V -> R;
-  R -> A;
-  A -> U;
-  U -> S;
-}
+```{mermaid}
+%%| label: fig-training-to-reason-loop
+%%| fig-cap: "The RLVR loop. A verifier turns sampled responses into rewards; the optimizer uses relative outcomes to update the policy, then samples again."
+flowchart TD
+    A[Prompt and reward contract] --> B[Sample G responses]
+    B --> C[Run the verifier]
+    C --> D[Compute relative advantages]
+    D --> E[Update the policy]
+    E --> B
+    C --> F[Held-out evaluation]
 ```
 
-Everything downstream of this loop is determined by how good the checker in the
-middle box is. The next section opens it up.
+"Verifiable" does not mean "identical to user value." It means that the score
+can be recomputed from specified evidence without asking the policy being
+trained to grade itself. Three gaps can still remain:
 
-## Three kinds of verifier
+- A **specification gap** appears when the rule omits something users care
+  about. Public unit tests may accept a brittle program; final-answer grading
+  may accept a correct answer reached through an invalid argument.
+- An **implementation gap** appears when the checker parses an answer
+  incorrectly, executes untrusted code unsafely, or handles edge cases badly.
+- A **coverage gap** appears when training prompts or tests miss regions that
+  matter after deployment.
 
-The verifier is the part you cannot buy, and it comes in three families with
-different cost and coverage. Executable unit tests for code are cheap and
-high-signal, but coverage limited, and a solution that passes the tests while
-being wrong will be rewarded all the same. Answer checkers for math reduce to
-string, numeric, or symbolic equivalence, where the hard engineering is parsing
-and deciding equivalence rather than the check itself. Formal proof checkers in
-the Lean or Isabelle style are near unspoofable, but narrow and expensive to
-author. Each family trades coverage against integrity, and that trade is the
-recurring theme here. @fig-training-to-reason-verifiers places the
-three families on that axis.
-
-```{dot}
-//| label: fig-training-to-reason-verifiers
-//| fig-cap: "The three verifier families trade coverage against integrity. Unit tests are broad but spoofable, formal proof checkers near unspoofable but narrow."
-digraph verifiers {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style=rounded, fontsize=11, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
-
-  tests   [label="Unit tests\n(code)\nbroad coverage, cheap\nspoofable: passes wrong solution"];
-  checker [label="Answer checker\n(math)\nstring / numeric / symbolic\nhard part is equivalence"];
-  proof   [label="Proof checker\n(Lean, Isabelle)\nnear unspoofable\nnarrow, expensive to author"];
-
-  coverage  [label="more coverage", shape=plaintext];
-  integrity [label="more integrity", shape=plaintext];
-
-  coverage -> tests -> checker -> proof -> integrity [style=invis];
-}
-```
+A mechanical checker removes the learned-reward-model error studied in RLHF,
+but only for the criterion it actually implements [@gao2022scaling]. The
+policy can still optimize a faulty or incomplete contract. @sec-verifiers-process-supervision
+develops the verifier itself; here the verifier is fixed so that we can study
+the learning loop around it.
 
 ::: {.callout-tip}
 ## Constraint arrow
-The shape of the RL recipe is dictated from below by whether a verifier exists.
-Where the answer is checkable, you get a reward without a learned proxy gap and
-this loop applies. Where it is not, you fall back to the learned reward model
-of @sec-rlhf and inherit its over-optimization. This is why frontier reasoning
-work concentrates on math, code, and formal proof: the availability of a ground
-truth at the data layer, not a preference at the training layer, is what
-decides which algorithm you can run. The verifier's coverage is the real budget,
-though the closing section of this chapter shows that boundary being stretched
-in 2025.
+The reward contract determines the training domain. If correctness can be
+checked cheaply and at scale, the model can generate fresh labeled experience
+through sampling. If correctness requires an expert judgment, the loop inherits
+the cost and ambiguity of that judgment. The availability of a sound checker,
+not the choice between GRPO and PPO, is the first constraint.
 :::
 
-## Dropping the critic
+## How group-relative learning gets a signal
 
-With the reward source fixed, the optimizer earns one real simplification. PPO
-carries a value network, a critic, to estimate the baseline that lowers
-advantage variance, and that network doubles model memory and adds its own
-failure mode. Group Relative Policy Optimization, introduced for DeepSeekMath
-[@shao2024deepseekmath], drops the critic and estimates the advantage from the
-group of samples drawn for one prompt: normalize each reward against the group
-mean and standard deviation. For a group of $G$ completions with rewards $r_i$,
+The policy is the model distribution being updated. For a prompt $x$, sample a
+group of $G$ responses from the policy before the update,
+$y_i \sim \pi_{\mathrm{old}}(\cdot\mid x)$, and score each response with
+$r_i=V(x,y_i)$. @gls-grpo, Group Relative Policy Optimization, assigns each
+response an advantage by comparing its reward with the rewards of the other
+responses for that prompt [@shao2024deepseekmath]:
 
 $$
-A_i = \frac{r_i - \operatorname{mean}(r_1, \dots, r_G)}{\operatorname{std}(r_1, \dots, r_G)}.
+\bar r = \frac{1}{G}\sum_{j=1}^{G} r_j,
+\qquad
+s_r = \sqrt{\frac{1}{G}\sum_{j=1}^{G}(r_j-\bar r)^2},
+\qquad
+A_i = \frac{r_i-\bar r}{s_r+\varepsilon}.
 $$
 
-Compute both baselines on the same reward vector and watch where they differ, and what a no-spread group does to each.
+Here $\bar r$ is the group mean reward, $s_r$ is its standard deviation,
+and the small constant $\varepsilon$ prevents division by zero. A positive
+$A_i$ tells the optimizer to make response $y_i$ more likely; a negative value
+tells it to make that response less likely. All tokens in an outcome-scored
+response share this one advantage.
+
+GRPO then compares the updated policy with the policy that generated the
+response. At token position $t$, the importance ratio is
+
+$$
+\rho_{i,t}(\theta)=
+\frac{\pi_\theta(y_{i,t}\mid x,y_{i,<t})}
+     {\pi_{\mathrm{old}}(y_{i,t}\mid x,y_{i,<t})}.
+$$
+
+The numerator is the new probability of that sampled token and the denominator
+is its probability during rollout. The original objective averages a clipped
+term over the tokens in each response:
+
+$$
+J_{\mathrm{GRPO}}(\theta)=
+\mathbb{E}\!\left[
+\frac{1}{G}\sum_{i=1}^{G}\frac{1}{|y_i|}\sum_{t=1}^{|y_i|}
+\min\!\left(
+\rho_{i,t}A_i,
+\operatorname{clip}(\rho_{i,t},1-\epsilon,1+\epsilon)A_i
+\right)
+-\beta D_{\mathrm{KL}}(\pi_\theta\Vert\pi_{\mathrm{ref}})
+\right].
+$$
+
+Here $|y_i|$ is the response length, $\epsilon$ is the clipping range,
+$\pi_{\mathrm{ref}}$ is a fixed reference policy, $D_{\mathrm{KL}}$ measures
+divergence from it, and $\beta$ controls that penalty. The clipping term limits
+one update relative to $\pi_{\mathrm{old}}$; the KL term limits accumulated
+drift from $\pi_{\mathrm{ref}}$. Implementations differ in how they estimate
+and aggregate the KL term, so the equation shows the structure rather than one
+library's exact tensor reduction.
+
+The group provides no relative signal when every response receives the same
+reward. With a binary verifier, suppose one sample passes with probability $p$.
+Under independent sampling, the probability that a group contains both a pass
+and a failure is
+
+$$
+P(\text{mixed group}) = 1-p^G-(1-p)^G.
+$$
+
+In words, this formula explains an important data constraint. Problems that are
+almost always solved or almost never solved waste most group-relative rollouts.
+Larger groups make mixed outcomes more likely, but generation cost grows with $G$.
+The useful training set sits near the current policy's capability boundary and
+moves as the policy improves.
+
+The following small experiment makes both effects visible. It computes GRPO
+and leave-one-out advantages for one mixed group, then reports how often a
+binary-reward group should contain a learning signal.
 
 :::: {.runnable}
 ```python
 import numpy as np
 
-def grpo_adv(r):
-    s = r.std()
-    if s == 0:            # all pass or all fail: no spread, no signal
-        return np.zeros_like(r)
-    return (r - r.mean()) / s
+def grpo_advantages(rewards):
+    rewards = np.asarray(rewards, dtype=float)
+    spread = rewards.std()
+    return np.zeros_like(rewards) if spread == 0 else (rewards - rewards.mean()) / spread
 
-def rloo_adv(r):          # baseline = mean of the other G-1 samples
-    G = len(r)
-    return r - (r.sum() - r) / (G - 1)
+def rloo_advantages(rewards):
+    rewards = np.asarray(rewards, dtype=float)
+    group_size = len(rewards)
+    return rewards - (rewards.sum() - rewards) / (group_size - 1)
 
-for name, r in [("mixed   ", np.array([1., 0., 1., 0.])),
-                ("all pass", np.array([1., 1., 1., 1.]))]:
-    print(f"{name} rewards={r.tolist()}")
-    print(f"   GRPO advantage = {np.round(grpo_adv(r), 3).tolist()}")
-    print(f"   RLOO advantage = {np.round(rloo_adv(r), 3).tolist()}")
+def mixed_group_probability(pass_rate, group_size):
+    return 1 - pass_rate ** group_size - (1 - pass_rate) ** group_size
+
+rewards = [1, 0, 1, 0]
+print("GRPO:", np.round(grpo_advantages(rewards), 2).tolist())
+print("RLOO:", np.round(rloo_advantages(rewards), 2).tolist())
+print("all equal:", grpo_advantages([1, 1, 1, 1]).tolist())
+for pass_rate in (0.01, 0.10, 0.50):
+    probability = mixed_group_probability(pass_rate, group_size=8)
+    print(f"p={pass_rate:.2f}, mixed group={probability:.3f}")
 ```
 ::::
 
 <figure id="fig-training-to-reason-grpo-advantage">
 <div class="viz" data-viz="grpo-advantage"></div>
-<figcaption>GRPO advantages for one group of completions. The solid bar is a completion's reward minus the group mean, divided by the group standard deviation, so no value critic is needed; the faint bar is the raw reward minus the mean. Drag the reward spread: the raw gaps grow and shrink with it, but the normalized advantages hold steady, because dividing by the standard deviation cancels the scale. Pull the spread to zero and every reward is equal, the standard deviation vanishes, and both collapse to nothing: a group that all passes or all fails gives no gradient. Illustrative.</figcaption>
+<figcaption>Group normalization removes reward scale from the advantage. Drag
+the reward spread toward zero. Once every response has the same reward, all
+relative advantages vanish. This is an illustration, not measured training
+data.</figcaption>
 </figure>
 
-This is cheaper than PPO with a critic and fits RLVR exactly, because sampling
-many completions per prompt is natural when each one is cheap to verify. The KL
-term against the reference is kept. RLOO, REINFORCE Leave-One-Out, makes the
-same bet with a different baseline [@ahmadian2024back]: each sample's baseline
-is the mean reward of the other samples in the group. GRPO and RLOO differ in
-their bias and variance trade-offs, but they agree on the structural claim that
-the critic was often unnecessary overhead. @fig-training-to-reason-baselines
-shows where the three methods get the baseline that turns a reward into an
-advantage.
+GRPO is one way to avoid a learned value model, usually called a critic. Common
+@gls-ppo implementations use a critic to estimate expected future reward and
+subtract that estimate as a variance-reducing baseline [@schulman2017proximal].
+GRPO uses the prompt's sampled group instead. @gls-rloo, REINFORCE
+Leave-One-Out, treats each whole response as one sampled action and subtracts
+the mean reward of the other $G-1$ responses [@ahmadian2024back]. It is a
+REINFORCE estimator, not PPO with a different group normalization, and does not
+use PPO's clipped token ratios. These methods are not interchangeable names for
+RLVR. RLVR describes where the reward comes from; PPO, GRPO, and RLOO describe
+how the policy update is estimated and constrained.
 
-```{dot}
-//| label: fig-training-to-reason-baselines
-//| fig-cap: "PPO learns a separate critic network to estimate the baseline. GRPO and RLOO compute it from the group of samples drawn for one prompt, so no critic is carried."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+The critic-free methods save the memory and synchronization required by a
+separate value model, but the group estimate can have high variance. It is also
+relative: a mediocre response can receive positive advantage if its peers are
+worse. The verifier reward remains absolute; the advantage used for the update
+does not.
 
-  subgraph cluster_PPO {
-    label="PPO"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    p1 [label="Reward per sample"];
-    p2 [label="Critic network estimates baseline"];
-    p3 [label="Advantage = reward minus critic"];
-    p1 -> p2;
-    p2 -> p3;
-  }
-  subgraph cluster_GRPO {
-    label="GRPO"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    g1 [label="Rewards for group of G"];
-    g2 [label="Baseline = group mean, scaled by group std"];
-    g3 [label="Advantage normalized within group"];
-    g1 -> g2;
-    g2 -> g3;
-  }
-  subgraph cluster_RLOO {
-    label="RLOO"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    r1 [label="Rewards for group of G"];
-    r2 [label="Baseline = mean of the other G minus 1"];
-    r3 [label="Advantage = reward minus leave-one-out mean"];
-    r1 -> r2;
-    r2 -> r3;
-  }
-  p1 -> g1 [style=dashed, label="drops the critic"];
-}
-```
+## What the first reasoning models established
 
-::: {.callout-note}
-## Where this came from
-The reward-prediction error that reinforcement learning optimizes, the gap
-between the reward expected and the reward received, is the same quantity midbrain
-dopamine neurons were later found to fire in proportion to, one of the few cases
-where an algorithm predated the neuroscience it turned out to describe.
-@sec-borrowed-ideas traces that lineage and where the analogy stops.
-:::
+OpenAI reported that o1 improved as both reinforcement-learning compute and
+test-time thinking increased, but did not publish enough of the training recipe
+to isolate the cause [@openai2024learning]. DeepSeek-R1 supplied the clearer
+experiment because it described two related models and released their weights
+[@guo2025deepseek].
 
-## What the loop produced: o1 and R1
+DeepSeek-R1-Zero started from DeepSeek-V3 Base and applied GRPO without a
+supervised fine-tuning stage first. Its rule-based reward combined answer
+accuracy with an output-format check. During training, benchmark accuracy and
+response length increased, and sampled traces showed more reflection and
+backtracking. This demonstrated that final-answer and format rewards, without
+step-level labels, can strongly change the frequency and shape of long-form
+reasoning behavior. It did not demonstrate that every displayed reasoning step
+was correct or causally necessary.
 
-The result that changed the field was that this loop, run on math and code with
-long chains of thought allowed, produces emergent long-horizon reasoning
-without any step-level supervision. Self-checking, backtracking, and longer
-deliberation appear from an outcome-only reward. OpenAI's o1 announced the
-capability [@openai2024learning]. DeepSeek-R1 is the open data point that showed
-the recipe [@guo2025deepseek].
+The released DeepSeek-R1 used a larger pipeline:
 
-R1 is clearest as two variants because the contrast carries the claim
-[@guo2025deepseek]. R1-Zero applies RL directly to a base model with no
-supervised cold start, and reasoning behavior still emerges, which is the strong
-claim. R1 adds a short SFT cold start before the RL, drawing on the supervised
-fine-tuning of @sec-sft-peft, not to teach reasoning but to fix readability and
-stability: the zero variant reasons in a way that is correct but hard to read
-and prone to language mixing. The cold start is a cosmetic and stabilizing
-prefix, and the reasoning gains come from the RL.
-@fig-training-to-reason-r1 contrasts the two pipelines.
+1. Thousands of cold-start examples established a readable, conversational,
+   human-aligned reasoning pattern before RL.
+2. A first RL stage improved reasoning and language consistency.
+3. Rejection sampling produced new reasoning data, using rule checks where
+   possible and model judgments for some non-verifiable items. The filtered
+   data was mixed with general data for another supervised fine-tuning stage.
+4. A second RL stage combined rule-based reasoning rewards with learned
+   preference rewards for helpfulness and harmlessness.
 
-```{dot}
-//| label: fig-training-to-reason-r1
-//| fig-cap: "R1-Zero applies RLVR directly to the base model. R1 inserts a short SFT cold start for readability and stability before the same RL, where the reasoning gains still come from."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  B [label="Base model"];
-  RL1 [label="RLVR on math and code"];
-  Z [label="R1-Zero: reasoning emerges, hard to read, language mixing"];
-  CS [label="Short SFT cold start: readability and stability"];
-  RL2 [label="RLVR on math and code"];
-  R [label="R1: same reasoning gains, readable output"];
-
-  B -> RL1;
-  RL1 -> Z;
-  B -> CS;
-  CS -> RL2;
-  RL2 -> R;
-}
-```
-
-The shipped R1 is more than a cold start bolted onto RL. Read in full it is a
-four-stage pipeline: a small cold-start SFT set to fix readability, a first
-reasoning-oriented RL stage, a rejection-sampling pass that keeps only
-verified-correct traces and folds in general SFT data, then a final RL stage run
-across both reasoning and general preferences [@guo2025deepseek]. The reward in
-the zero variant is rule-based and composite, an accuracy reward that checks the
-answer plus a format reward that requires the chain of thought to sit between
-`<think>` and `</think>` tags; R1 adds a language-consistency reward, the
-fraction of the chain written in the target language, to stop the zero variant's
-language mixing at a small measured cost to raw accuracy [@guo2025deepseek].
+The cold start was therefore more than cosmetic, and the final model was not
+the result of pure RLVR. It combined supervised data, verified outcomes,
+rejection sampling, and preference alignment. R1-Zero is the cleaner evidence
+that RL can work without a preceding SFT stage or step-level labels; R1 is the
+stronger product recipe.
 
 <figure id="fig-training-to-reason-stepper">
 <div class="viz" data-viz="stepper">
-<div data-chip="R1-Zero" data-title="0 · Contrast">RL runs straight on the base model with no cold start, and reasoning still emerges, but the chains are hard to read and mix languages.</div>
-<div data-chip="SFT" data-title="1 · Cold start">A small supervised set enters first, not to teach reasoning but to give the base model a readable, stable format before any RL begins.</div>
-<div data-chip="RL" data-title="2 · Reason RL">RLVR runs on math and code under a composite reward, where an accuracy check and a format reward grow the reasoning that R1-Zero showed is learnable.</div>
-<div data-chip="Reject" data-title="3 · Filter and refit">Sampling keeps only verified-correct traces and folds in general SFT data, so the model relearns from filtered reasoning alongside broad behavior.</div>
-<div data-chip="Final RL" data-title="4 · Align all">A last RL stage runs across reasoning and general preferences together, adding a language-consistency reward that ends the mixing R1-Zero left behind.</div>
+<div data-chip="R1-Zero" data-title="Contrast">Apply GRPO directly to the base model with rule-based accuracy and format rewards. The result improves on reasoning benchmarks but has readability and language-mixing problems.</div>
+<div data-chip="Cold start" data-title="Stage 1">Thousands of supervised examples establish a readable, conversational reasoning pattern before RL.</div>
+<div data-chip="Reasoning RL" data-title="Stage 2">Rule-based accuracy rewards train mathematics, code, and other checkable tasks; a language-consistency reward reduces mixing.</div>
+<div data-chip="Refit" data-title="Stage 3">Rejection sampling builds reasoning data with rule checks where possible and model judgments for some other items, then mixes it with general data for supervised fine-tuning.</div>
+<div data-chip="Alignment RL" data-title="Stage 4">A final RL stage combines reasoning rewards with preference rewards for broader behavior.</div>
 </div>
-<figcaption>R1-Zero is RL straight on the base model; the shipped R1 wraps that same RL in four stages that buy readability and alignment. Step through each stage, or let it play.</figcaption>
+<figcaption>R1-Zero isolates direct RL on a base model. The released R1 is a
+four-stage post-training system, so its final behavior cannot be attributed to
+one stage alone.</figcaption>
 </figure>
 
-Two of R1's reported dead ends teach as much as its successes
-[@guo2025deepseek]. A @gls-prm was tried and dropped: defining a
-fine-grained correct step in open reasoning is hard, judging each step is itself
-error-prone, and the learned PRM invited the reward hacking of @sec-rlhf for a
-gain that did not justify the overhead. @gls-mcts over the token
-stream was tried and dropped too, because token generation opens an
-exponentially larger search space than a board game and the step-value model it
-needs is hard to train. The signal that won was the plain outcome reward, not
-the denser, cleverer one. The other lesson is about who gets the reward:
-distilling R1's traces into a smaller dense model beat running the same RL on
-that small model directly, DeepSeek-R1-Distill-Qwen-32B reported above
-DeepSeek-R1-Zero-Qwen-32B, so the cheapest way to put reasoning into a small
-model is to let a large one find it and copy the result, a thread that
-@sec-synthetic-data picks up.
+DeepSeek also reported that process reward models and Monte Carlo tree search
+did not justify their complexity in this pipeline [@guo2025deepseek]. That is a
+result about one training system, not a general proof that process feedback or
+search is useless. Process feedback changes credit assignment and requires
+step labels or a learned process reward model [@uesato2022solving;
+@lightman2023lets]. @sec-verifiers-process-supervision covers that trade-off in
+detail. The narrower R1 result is that final-answer and format rewards produced
+large benchmark and behavioral changes without step-level labels.
+
+## What remains contested
 
 ::: {.callout-important}
-## What's contested
-Whether RLVR instills new reasoning or only amplifies what the base model
-already knows is unsettled. The amplification position holds that RL with
-verifiable rewards sharpens a distribution the base model already places mass
-on: it raises pass@1 (the fraction of problems solved on the first try) by
-concentrating probability on reasoning paths the base model could already
-sample, and studies report that pass@k (the fraction solved within $k$ attempts)
-at large $k$ for the
-base model can match or exceed the RL-trained model, which would mean RL is
-eliciting and reweighting rather than teaching. The instillation position
-points to R1-Zero, where behaviors like backtracking and self-correction grow
-in frequency and length over training in a way that looks like acquisition, not
-just reweighting [@guo2025deepseek]. The disagreement is partly about
-measurement, since pass@k, sampling temperature, and the strength of the base
-model all move the verdict, and it stays live because both sides can point to
-real runs. Treat a claim that RLVR teaches reasoning as base-model and metric
-dependent, not settled. Yue et al. sharpen the amplification case with large
-pass@k comparisons, arguing that the base model's broad sampling distribution
-already contains the paths the RL model concentrates [@yue2025rlvr].
-Spurious-reward experiments push that case further: on Qwen2.5-Math-7B, RLVR with
-random or even incorrect rewards recovers most of the ground-truth gain, +21.4
-of +29.1 points on MATH-500, while the same spurious rewards fail on Llama and
-OLMo base models [@shao2025spurious]. A reward that carries no information
-cannot teach; it can only amplify what pretraining already put there. ProRL
-argues the opposite under prolonged RL with KL control and reference policy
-resetting, reporting tasks where the RL model solves problems the base model
-does not solve even under extensive sampling [@prorl2025]. Wen et al. add a
-measurement critique: ordinary Pass@K credits a correct final answer even when
-the chain is wrong, so they propose CoT-Pass@K, which requires both the reasoning
-path and the final answer to be correct [@wen2025cotpass]. @fig-training-to-reason-1
-sketches the crossover the amplification position rests on.
+## Did RL teach new reasoning or make existing reasoning easier to sample?
 
-![Schematic illustration of the amplification hypothesis: an RL-trained model raises pass@1 but saturates early, while the base model's pass@k keeps climbing and can overtake it at large $k$. Idealized, not measured data.](/figures/training-to-reason-1.svg){#fig-training-to-reason-1}
+There are two useful meanings of "new capability": a policy has better
+single-sample performance when it assigns more probability to successful paths.
+It has broader empirical coverage when it solves more distinct problems under
+a fixed sampling protocol. RLVR clearly improves the first in many reported
+runs [@guo2025deepseek; @yue2025rlvr; @prorl2025]. Evidence for the second is
+mixed. Neither finite sampling nor a benchmark can establish a model's
+mathematical support.
+
+For an idealized task with independent per-sample success probability $p$,
+$\operatorname{pass@}k=1-(1-p)^k$. Yue et al. compared models at large $k$ and
+found cases where the base model caught or exceeded its RL-trained descendant,
+supporting the view that RL concentrated probability on paths already in the
+base distribution [@yue2025rlvr]. ProRL reported the opposing result under
+longer training, diverse tasks, KL control, and periodic reference resets: its
+trained models solved some problems that the base model did not solve under the
+tested sampling budget [@prorl2025]. Neither finite experiment proves what has
+zero probability under a model.
+
+Spurious-reward experiments make the base checkpoint impossible to ignore. On
+Qwen2.5-Math-7B, random, format-only, and even incorrect-label rewards recovered
+large parts of the gain from correct rewards, while the same recipes often
+failed on Llama and OLMo models [@shao2025spurious]. The result does not show
+that correct rewards are unnecessary. It shows that a strong pretrained prior
+and the behavior of a finite optimization run can produce benchmark gains even
+when the reward does not encode correctness.
+
+Measurement choices can also reverse the conclusion. Large-$k$ results depend
+on the prompt template, temperature, token budget, answer extractor, and base
+checkpoint. Ordinary pass@$k$ checks only the final answer. CoT-pass@$k$ also
+requires the sampled reasoning path to be judged correct, although that adds a
+second verifier whose own errors must be measured [@wen2025cotpass]. Claims
+that RLVR "creates" or "only elicits" reasoning should therefore name the model
+family, training recipe, benchmark, sampling policy, and definition of success.
 
 <figure id="fig-rlvr-boundary">
 <div class="viz" data-viz="rlvr-boundary" data-lang="en"></div>
-<figcaption>RLVR boundary debate, illustrated. Raise base coverage to make the
-amplification story stronger; raise RL expansion to make the instillation story
-stronger; raise CoT strictness to see why Pass@K can overstate reasoning when
-correct answers arrive through flawed traces. Synthetic, not measured.</figcaption>
+<figcaption>Two effects can produce better pass@$k$: concentrating probability
+on existing successful paths and expanding the set of reachable paths. The
+controls show why finite sampling and stricter path grading can change the
+apparent boundary. All curves are synthetic.</figcaption>
 </figure>
 :::
 
-## How much credit, and how often
+## Optimization details that change the result
 
-The supervision question has its own lineage, and it is a second axis cutting
-across the verifier families. Outcome rewards score only the final answer, which
-is cheap and is the RLVR default, but assigns credit coarsely over a long chain.
-Process rewards score each step through a process reward model, a PRM, which
-Lightman et al. trained for "Let's Verify Step by Step" [@lightman2023lets] and
-Uesato et al. compared against outcome feedback earlier [@uesato2022solving]. A
-PRM gives denser credit and helps long-horizon learning, but it reintroduces
-exactly what the verifier removed: a learned, hackable reward. The surprise of
-the R1 era is how far an outcome-only signal got without any process model at
-all.
+The simple advantage equation hides consequential choices about normalization,
+clipping, aggregation, and reference control. These choices affect which
+responses receive the largest update, not merely how fast the same objective
+is optimized.
 
-## Refining the group baseline
+The original GRPO loss averaged token losses within each response and divided
+advantages by the group's reward standard deviation. Dr. GRPO argued that the
+first choice creates a length bias and the second changes the relative weight
+of prompts with different reward spreads. Its proposed objective removes the
+reward-standard-deviation term and replaces response-dependent length averaging
+with a fixed normalization shared across the batch. In its experiments, this
+stopped incorrect responses from growing longer while preserving benchmark
+performance [@liu2025drgrpo]. The broader lesson is to inspect the effective
+weight per token, response, and prompt. "Longer reasoning" can be an
+optimization artifact rather than a capability gain.
 
-GRPO shipped the reasoning models, and the year after R1 was spent finding where
-its group baseline lies and correcting it. The sharpest reading came from
-@liu2025drgrpo, which names two biases in the update. A length bias, because the
-per-token $1/|o_i|$ normalization gives a correct short answer a larger gradient
-than a correct long one and penalizes a wrong long answer less than a wrong
-short one, so the policy drifts toward longer wrong outputs. And a difficulty
-bias, because dividing the advantage by the group's standard deviation
-up-weights questions that are almost all-pass or all-fail, where the spread is
-smallest. Dropping the $1/|o_i|$ and standard-deviation terms removes both and
-recovers the unbiased PPO objective, reaching the same reasoning at fewer
-tokens, which is why the authors call it GRPO done right.
+DAPO addressed a different set of failures in long-response training
+[@yu2025dapo]. It raised the upper clipping range separately so low-probability
+tokens had more room to grow, resampled until batches contained prompts with
+mixed outcomes, aggregated the policy-gradient loss across tokens rather than
+giving every response equal weight, and softened penalties near the maximum
+response length. Together these changes improved sample use and training
+stability in its reported Qwen2.5-32B run. GSPO later replaced token ratios with
+a length-normalized sequence ratio, the geometric mean of a response's token
+ratios, then clipped and optimized the response as one unit. It reported more
+stable mixture-of-experts training [@zheng2025gspo]. These are empirical recipes
+with different objectives and systems costs, not a settled progression toward
+one universal optimizer.
 
-Two further fixes target a different failure, the policy collapsing onto a few
-high-reward modes as its entropy craters (its outputs lose diversity and
-converge to a few repeated patterns). DAPO [@yu2025dapo] decouples the clip
-range so the upper bound can rise on its own, its clip-higher rule, which leaves
-room for low-probability exploratory tokens to grow rather than be clipped away,
-and it adds dynamic sampling, discarding prompts whose group is all-correct or
-all-wrong because a group with no spread produces no advantage and no gradient,
-the dead case the runnable above made visible. GSPO [@zheng2025gspo], from the
-Qwen team, moves the importance ratio from the token to the sequence: it scores,
-clips, and optimizes on whole-sequence likelihood rather than per-token ratios,
-which it argues are ill-matched to a reward defined over the whole sequence, and
-the change stabilizes the otherwise brittle RL of mixture-of-experts models
-(the sparse, routed architecture of @sec-moe-ssm-hybrids).
-The KL term also loses the necessity it had in @sec-rlhf: with a verifier there
-is no learned proxy to drift into, and DAPO drops the KL penalty that RLHF kept
-as a constraint, relying on clip-higher to keep entropy from collapsing instead.
+Reference control needs the same precision. DeepSeekMath's GRPO includes a KL
+penalty against a reference policy. DAPO omits that penalty in its reported
+setup, controls each update with clipping, and monitors entropy separately.
+Those mechanisms do different jobs. A verifiable reward makes a learned
+preference proxy unnecessary for the checkable criterion, but it does not make
+unconstrained optimization safe. The policy can still overfit training prompts,
+exploit checker gaps, lose useful general behavior, or collapse to a narrow set
+of outputs. Whether to use a reference penalty is a measured design choice, not
+a property implied by the acronym RLVR.
 
-Kimi k1.5 is the other important public data point because it lands on a similar
-practical lesson from a different route. Its report emphasizes long-context RL
-and improved policy optimization, and explicitly avoids MCTS, value functions,
-and process reward models while reaching strong math, code, and multimodal
-reasoning results [@kimi2025k15]. It also introduces long2short methods, using
-long-CoT training to improve short-CoT models. That belongs to
-@sec-reasoning-data-distillation, but it matters here because it shows the
-training loop and the data loop are no longer separable: a long reasoning policy
-can become a teacher for a cheaper short reasoning policy.
+## Building a defensible training run
 
-## Failure Modes and Payoff
+A reliable run begins with an evaluation contract, not an optimizer. Record the
+prompt source, verifier version, parser, execution environment, model
+checkpoint, chat template, tokenizer, sampling parameters, and maximum response
+length. Otherwise a change in formatting or checking can look like a learning
+gain.
 
-The recipe is a set of balances, each with a knee. Read these as the dials you
-turn once the verifier is fixed.
+Then separate three datasets. The training prompt pool drives rollouts. A
+held-out task set chooses checkpoints and stopping time. An adversarial verifier
+set targets malformed answers, test leakage, hard-coded outputs, parser exploits,
+and correct but unusual solutions. Hidden tests matter for code because a model
+can overfit visible examples without learning the requested behavior.
 
-- **Verifiable reward versus learned reward.** A verifier is hard to exploit in
-  the proxy sense but only exists where ground truth is checkable, and its
-  coverage is the new attack surface. The learned reward model of @sec-rlhf
-  works on open-ended tasks but is an over-optimizable proxy. Real recipes mix
-  both by domain [@lambert2024tulu].
-- **Outcome versus process supervision.** Outcome rewards are cheap, robust,
-  and sparse. Process rewards through a PRM are dense and better for
-  long-horizon credit, but the PRM is a learned, exploitable reward and expensive
-  to label [@uesato2022solving]. This is signal density against reward
-  integrity.
-- **Critic versus critic-free.** A value network lowers advantage variance but
-  doubles model memory and adds a failure mode of its own. GRPO and RLOO trade
-  that variance for simplicity and fit the many-samples shape of RLVR
-  [@shao2024deepseekmath].
-- **Exploration versus KL collapse.** Too little KL, or too aggressive
-  optimization, collapses the policy onto a few high-reward modes and stops
-  exploration, so reward rises while held-out quality falls. Too much KL and the
-  policy never moves off the reference. The KL coefficient and clip range are
-  the central RLVR knob. @fig-training-to-reason-2 sketches the knee where
-  training reward keeps rising while held-out quality turns down.
+Track the complete distribution, not just mean training reward:
 
-![Schematic illustration of the exploration versus KL-collapse trade-off: as the policy moves further from the reference, training reward keeps climbing while held-out quality peaks and then falls into reward hacking and mode collapse. Idealized, not measured data.](/figures/training-to-reason-2.svg){#fig-training-to-reason-2}
-- **Verifier coverage versus exploitability.** A stricter, broader verifier
-  resists exploitation but costs more and may reject correct-but-unusual answers,
-  false negatives that starve learning. A loose verifier is cheap but leaks
-  reward to wrong answers.
+- the fraction of all-pass, all-fail, and mixed groups;
+- held-out accuracy, pass@$k$, and response length by difficulty and domain;
+- policy entropy, KL from the starting policy, clipping fraction, and token
+  likelihood ratios;
+- verifier false accepts and false rejects on audited samples;
+- rollout tokens, verifier latency, discarded samples, and useful updates per
+  accelerator-hour;
+- regressions in instruction following, safety, writing, and non-reasoning
+  tasks.
 
-Most failures here are the optimizer finding what you measured rather than what
-you meant. The central one is reward hacking through verifier gaps: the policy
-discovers inputs the verifier scores correct that are not, tests passing on
-degenerate solutions, checkers fooled by formatting, hard-coded outputs for
-known cases. The reward to the optimizer is real and the answer to you is wrong.
-Next comes KL or mode collapse, where the policy concentrates on a few high-reward
-outputs, entropy craters, and held-out quality degrades while training reward
-climbs. Subtlest is reasoning that exploits the checker rather than the problem:
-the visible chain of thought steers toward whatever the verifier rewards, or does
-not faithfully drive the answer at all.
+Stop and investigate when training reward rises without held-out improvement,
+when response length grows without accuracy, when mixed groups disappear, or
+when entropy collapses. DAPO reports that training reward can correlate poorly
+with validation accuracy, which makes training reward unsuitable as the sole
+stopping signal [@yu2025dapo].
 
-Two boundaries keep the method in check. RLVR is strongest where ground truth is
-checkable and does not transfer for free to open-ended tasks, so
-over-indexing on it skews the model and leaves a gap that only a learned reward
-or human judgment fills. The 2025 attempt to stretch the recipe past that
-boundary replaces the checker with an explicit rubric, scoring an open-ended
-answer against a written list of criteria rather than one ground truth, which
-recovers a denser-than-preference signal where no verifier exists
-[@gunjal2025rubrics]. It buys reach at the cost of the property that made the
-verifier safe, since a rubric is itself a written proxy that can be exploited.
-Over-squeezing the reward also regresses the instruction-following, safety, and
-breadth installed in post-training, a catastrophic forgetting that the KL anchor
-here only partly prevents and that @sec-benchmarks must catch.
+Finally, compare against cheaper uses of the same compute. Supervised
+fine-tuning on verified traces, rejection-sampling fine-tuning, and best-of-$N$
+at inference may deliver the desired pass rate without online RL. Tülu 3 is one
+example of a broader post-training pipeline that combines supervised training,
+preference optimization, and RLVR rather than treating them as substitutes
+[@lambert2024tulu]. The comparison should match total generated tokens,
+verification cost, and inference budget.
 
-The boundary also moved from the frontier side. In July 2025, Gemini Deep
-Think, graded officially by IMO coordinators, and an experimental OpenAI model
-reached gold-medal standard at the International Mathematical Olympiad, 35 of
-42 points, writing end-to-end natural-language proofs with no formal verifier
-and no per-problem checker at inference [@deepmind2025imogold]. The reported
-ingredients are RL on hard-to-verify reasoning tasks plus parallel test-time
-compute. Read that as the verifiable-reward boundary being stretched, not
-erased: the reward can be softer than a mechanical check, but the training
-still leans on mathematics, where correctness is at least gradeable.
+## Payoff and boundary
 
-The self-improvement loop is the payoff when a verifier is sound. Generate
-candidate training data with the model, filter by the verifier to keep only
-verified-correct traces, and feed those into another SFT or RL round, then
-iterate. This is distinct from the distillation of @sec-synthetic-data because
-the filter is a checker, not a stronger teacher, so the model can bootstrap past
-its current self. The hard limit is that it needs a verifiable signal to close
-the loop: a sound verifier gives a genuine bootstrap, an unsound one amplifies
-its own blind spots. Running the sampling and rollout fleet that feeds all of
-this at scale belongs to @sec-training-at-scale, and the inference-time analogue
-of spending more compute to reason better is @sec-inference-time-scaling.
+RLVR turns a checker into a source of fresh training data. Its capability
+payoff is strongest on tasks with many hard prompts and reliable acceptance
+rules. Its efficiency payoff comes from learning without a hand-written target
+response for every prompt; critic-free variants can also avoid a separate value
+model. Its trust payoff is conditional: an independently executable rule is
+auditable, but only within the specification, implementation, and coverage
+boundaries of that rule.
 
-Extending the same loop from rewarding an answer to rewarding a whole
-trajectory, training a model to act and not only to reason, is @sec-training-agents.
+Open-ended tasks do not suddenly become verifiable because a detailed rubric
+exists. Rubric rewards can extend online RL beyond exact-answer domains, but
+they replace a mechanical acceptance rule with a structured judgment and
+reintroduce judge error and proxy optimization [@gunjal2025rubrics]. A practical
+post-training system therefore mixes signals: exact checks where they are
+sound, process or preference feedback where they are not, and held-out human
+evaluation for the behavior that neither captures.
+
+Once a verifier is trustworthy, the same loop can bootstrap data: sample
+solutions, keep verified successes, train again, and repeat. @sec-reasoning-data-distillation
+continues with the data produced by that loop. @sec-inference-time-scaling
+spends extra samples after training instead, and @sec-training-agents extends
+the reward from one response to a trajectory of actions.
 
 ## Further reading
 

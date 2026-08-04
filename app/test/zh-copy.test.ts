@@ -696,7 +696,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/05-training-to-reason.qmd",
-      ["checkable ground", "truth rather than a learned human-preference proxy", "removes the learned proxy gap", "dropping the critic", "long-horizon reasoning can emerge", "reweights what the base model could already sample"],
+      ["The reward contract", "independently computed rule", "How group-relative learning gets a signal", "without step-level labels", "empirical coverage", "Building a defensible training run"],
     ],
     [
       "zh/reasoning/05-training-to-reason.qmd",
