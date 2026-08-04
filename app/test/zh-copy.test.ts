@@ -872,7 +872,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/02-scalable-oversight-control.qmd",
-      ["human judgment has an expiry date", "weaker teacher", "strong model", "bounding the damage", "capability gap"],
+      ["Scalable oversight asks whether", "Measure the gap you actually have", "Three jobs, three kinds of evidence", "assume intentional subversion", "An operating contract for oversight evidence"],
     ],
     [
       "zh/safety/02-scalable-oversight-control.qmd",
