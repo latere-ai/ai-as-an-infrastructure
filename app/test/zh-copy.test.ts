@@ -888,7 +888,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/04-runtime-safety.qmd",
-      ["aligned model's own refusal is necessary but not sufficient", "input and output have to be screened separately", "policy-conditioned classifiers", "indirect @gls-prompt-injection", "streaming decision reaches up"],
+      ["Runtime safety is the request-time contract", "the model may propose; only trusted code may authorize and commit", "A score is not a decision", "Successful injection is not yet a successful exploit", "Buffer executable outputs even when prose streams"],
     ],
     [
       "zh/safety/04-runtime-safety.qmd",

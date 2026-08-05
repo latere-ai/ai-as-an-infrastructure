@@ -1,306 +1,333 @@
 # Runtime Safety: Guardrails and Moderation {#sec-runtime-safety}
 
-Alignment in @sec-rlhf taught the model to refuse a harmful request most of
-the time. But "most of the time" is not a guarantee, and a deployed system
-cannot rely on it. A served system
-answers untrusted input on every request, the policy it must enforce changes
-faster than the model can be retrained, and the next chapter shows the refusal
-itself can be jailbroken, coaxed into answering anyway (@sec-adversarial-robustness). So production systems
-add a second safety layer that runs at inference time and does not depend on
-the model behaving. That layer exists because an aligned model's own refusal
-is necessary but not sufficient: input and output have to be screened
-separately, moderation has evolved from blocklists into policy-conditioned
-classifiers, tool-using agents reopen the problem in its hardest form through
-indirect @gls-prompt-injection, and the serving layer's streaming decision
-reaches up to dictate how the guardrail is built.
+Training can make harmful behavior less likely, but deployment needs a stronger
+statement than "the model usually refuses." An aligned model's own refusal is
+necessary but not sufficient. Every request brings new input, product policy
+changes without a model retrain, and adversaries deliberately search for cases
+the training did not cover. Input and output have to be screened separately,
+but screening is only one part of the answer. Policy-conditioned classifiers
+can detect evidence of harm; they cannot authorize a payment, isolate a process,
+or prove what an external API did.
 
-![Schematic of the guardrail threshold trade-off. Stricter runtime safety reduces missed harms but raises false positives, so production systems tune a frontier rather than a single magic setting. Idealized curves, not measured data.](/figures/runtime-safety-1.svg){#fig-runtime-safety-1}
+**Runtime safety is the request-time contract that detects evidence, lets policy
+decide, makes an enforcement point apply that decision, contains what still goes
+wrong, and records what happened.** For a tool-using system, its central rule is
+simple: **the model may propose; only trusted code may authorize and commit.**
+That rule connects the external control discussed in @sec-oversight-control to
+the prompt-injection and streaming problems in this chapter. Indirect
+@gls-prompt-injection makes provenance part of every decision, and the serving
+layer's streaming decision reaches up into the safety design.
 
-## Why the aligned model is not enough
+## Five jobs, not one guard model
 
-The oversight chapter drew a line between teaching a model the right behavior
-and bounding its behavior from outside (@sec-oversight-control). Runtime safety
-is that same line drawn one layer down, at serving time. The reason a built-in
-refusal is not enough is structural, not a matter of insufficient training.
-The model's compliance is probabilistic: it refuses with high probability, not
-certainty, and a system serving billions of requests meets the tail. And the
-policy keeps shifting underneath it. A platform's content rules, a regulator's new
-prohibition, a customer's domain restriction all change on a timescale of days,
-while retraining the model to encode them costs weeks and risks regressing
-everything else. On top of all that, the model's safety can be actively
-attacked, which the next chapter takes up in full.
+The word *guardrail* often hides several different mechanisms. Keeping their
+jobs separate prevents a detector's uncertain prediction from being mistaken
+for a system guarantee.
 
-The standard response is the one control theory and security both reach for: a
-control that is external to the thing it controls. A guardrail is a separate,
-usually smaller, classifier placed in the request path, cheap enough to run on
-every call, and updated independently of the model it guards.
+1. A **detector** extracts signals: moderation scores, malware findings, secret
+   matches, suspicious destinations, or anomalous tool arguments.
+2. A **policy decision** combines those signals with authenticated subject,
+   action, resource, tenant, data classification, and policy revision.
+3. A **policy enforcement point** allows, blocks, rewrites, challenges, or
+   delays the exact operation.
+4. **Containment** limits the damage if detection and policy both miss: narrow
+   credentials, a sandbox, quotas, and network egress controls.
+5. **Evidence** links the request, decision, attempted effect, and observed
+   result so an operator can test and investigate the system.
 
-## The shape of a guardrail
-
-The guardrail screens twice, because the two screens catch different failures.
-
-```{dot}
-//| label: fig-runtime-guard-path
-//| fig-cap: "A guardrail screens the request path twice. The input classifier catches a disallowed request before the expensive model runs; the output classifier catches a disallowed generation before it reaches the user. Both are separate models, updated independently of the served model, and both fail closed."
-digraph guard {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280", fontsize=9];
-
-  u   [label="user input"];
-  gi  [label="input guard\n(classifier)", color="#3b82f6", fontcolor="#3b82f6"];
-  m   [label="served model"];
-  go  [label="output guard\n(classifier)", color="#3b82f6", fontcolor="#3b82f6"];
-  o   [label="response"];
-  ref [label="refuse / replace"];
-
-  u -> gi -> m -> go -> o;
-  gi -> ref [label="blocked"];
-  go -> ref [label="blocked"];
-}
-```
-
-Input screening catches a disallowed request before the model spends a single
-token on it, which is both a safety win and a cost win: the cheapest harmful
-generation is the one never produced. Output screening catches what input
-screening cannot, because a benign-looking prompt can still elicit a
-disallowed completion, and because the model can be steered by content it
-retrieved or a tool returned mid-generation. The two screens are independent
-classifiers, and the practical default is to fail closed: if the guard errors
-or times out, the request is refused rather than passed through.
-
-## Evolution: from blocklists to policy as input
-
-The lineage runs from crude to programmable. The earliest filters were keyword
-blocklists, trivially bypassed by spelling and trivially wrong on benign text.
-Learned toxicity classifiers replaced them with a model of the category, the
-line whose modern form is Jigsaw's Perspective API, which dropped per-language
-token vocabularies for a single character-level transformer robust to spelling,
-code-switching, and obfuscation [@lees2022perspective]. The next step put a
-language model in the moderator's seat: OpenAI's moderation endpoint is a
-classifier trained over a designed taxonomy of harm with an active-learning
-pipeline to keep catching the rare violations production traffic surfaces, more
-robust to paraphrase than a keyword list and maintained rather than fixed
-[@markov2023moderation].
-
-The decisive shift was making the policy an *input* rather than a baked-in
-category. Llama Guard is fine-tuned to take a safety taxonomy in its prompt and
-classify a conversation against *that* taxonomy, with separate prompt and
-response modes, so the same guard model serves many policies and a policy change
-is a prompt change, not a retraining [@inan2023llamaguard]. Its later versions
-align to the MLCommons hazard taxonomy, a shared vocabulary of harm categories
-that lets guards and benchmarks agree on what they are measuring
-[@vidgen2024mlcommons], and the line now spans modalities: Llama Guard 4
-(2025) classifies text and images against that taxonomy with a single model
-[@metallamaguard4]. Variations on the guard model fill out the design space:
-ShieldGemma ships a range of sizes with calibrated probabilities so an operator
-can pick a threshold [@zeng2024shieldgemma], and WildGuard folds three jobs into
-one model, scoring prompt harm, response harm, and whether the model refused,
-the last because over-refusal is itself a failure worth measuring
-[@han2024wildguard]. A parallel line added control above the single
-classification: programmable rails that constrain the dialogue itself, routing
-or rephrasing or refusing according to declared flows rather than a single
-yes-or-no [@rebedea2023nemoguardrails]. The arc is from a fixed filter toward a
-configurable policy engine that sits beside the model.
-
-## The injected agent: runtime safety's hardest case
-
-The guardrail above assumes the dangerous content arrives in the user's turn.
-A tool-using agent breaks that assumption. The model of @sec-training-agents is
-trained to emit tool calls, and the harness of @sec-the-harness executes them and
-feeds the results back into the context, so the agent reads web pages, documents,
-emails, and tool output *as data*, and a transformer conditions on its whole
-context without a reliable way to tell which spans are trusted instructions and
-which are untrusted data. That is the structural root of *prompt injection*, named
-by analogy to SQL injection [@willison2022promptinjection]. Direct injection is
-the user typing "ignore the above"; the dangerous case for agents is *indirect*
-injection, where the malicious instruction is hidden in content the agent
-retrieves, demonstrated against real applications by Greshake et al., who showed a
-planted payload in a web page could hijack an LLM-integrated assistant
-[@greshake2023indirect]. The precondition for catastrophe is a @gls-lethal-trifecta:
-an agent that at once has access to private data, exposure to untrusted content,
-and a channel to communicate outward can be made to route the private data to an
-attacker, and removing any one leg breaks the exfiltration path
-[@willison2025lethaltrifecta].
+A score is not a decision. A decision is not enforcement. A blocked request is
+not proof that no side effect occurred. Those distinctions already mattered for
+authorization in @sec-security-authorization; runtime safety applies them to
+model text, retrieved data, generated code, and tool calls.
 
 ```{dot}
-//| label: fig-lethal-trifecta
-//| fig-cap: "The lethal trifecta. Indirect prompt injection becomes data exfiltration only when an agent simultaneously holds all three capabilities: access to private data, exposure to untrusted content that can carry an injected instruction, and an outward channel to send data through. Removing any one leg breaks the path, which is why least-privilege tool scoping and outbound-egress screening, at the connection or the content level, are load-bearing defenses. After Willison (2025)."
-digraph {
-  bgcolor="transparent";
+//| label: fig-runtime-control-path
+//| fig-cap: "The runtime control path. Learned detectors provide evidence to a versioned policy decision. Trusted code enforces the decision before display or execution, while containment limits failures and receipts record outcomes."
+digraph runtime {
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  bgcolor="transparent";
+  nodesep=0.18;
+  ranksep=0.24;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, margin="0.06,0.04", color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontsize=8];
 
-  inj    [label="untrusted content\n(retrieved page, email, tool output)"];
-  agent  [label="tool-using agent\nreads it as data"];
-  priv   [label="private data access"];
-  act    [label="injected instruction\ntriggers a privileged tool call"];
-  exfil  [label="external channel\n(URL, email, request)"];
-  leak   [label="data exfiltrated"];
-  broken [label="path broken"];
+  request [label="request + provenance"];
+  detect [label="detectors\n(scores and findings)", color="#3b82f6", fontcolor="#3b82f6"];
+  decide [label="versioned policy\nallow / review / block"];
+  model [label="model proposes\ntext or tool call"];
+  enforce [label="trusted enforcement\nvalidate / authorize / commit", color="#3b82f6", fontcolor="#3b82f6"];
+  result [label="display or effect"];
+  contain [label="containment\nsandbox / quota / egress"];
+  receipt [label="decision + effect receipt"];
 
-  inj -> agent;
-  priv -> agent;
-  agent -> act;
-  act -> exfil;
-  exfil -> leak;
-  priv -> broken [style=dashed, label="remove a leg"];
-  inj -> broken [style=dashed, label="remove a leg"];
-  exfil -> broken [style=dashed, label="remove a leg"];
+  request -> detect -> decide;
+  decide -> model [label="allow"];
+  model -> enforce -> result;
+  contain -> enforce [style=dashed];
+  enforce -> receipt [style=dashed];
 }
 ```
 
-The defenses are real but each is partial. The @gls-instruction-hierarchy trains the
-model to rank its sources, system above user above tool output, and obey a
-lower-privilege instruction only when it aligns with a higher one
-[@wallace2024instructionhierarchy]; spotlighting marks untrusted spans so the
-model treats them as inert [@hines2024spotlighting]. Both raise the bar but
-remain learned priors a clever framing can defeat. The one approach that offers a
-guarantee rather than a prior is structural: the dual-LLM pattern, generalized by
-CaMeL, runs a privileged model that plans and calls tools but never sees raw
-untrusted content, and a quarantined model that processes untrusted content but
-holds no tools, with a capability layer that fixes the control and data flow from
-the trusted query alone so injected data cannot redirect it
-[@debenedetti2025camel]. It buys provable security at a utility cost, on the
-AgentDojo benchmark solving 77 percent of tasks against 84 percent undefended
-[@debenedetti2024agentdojo; @zhan2024injecagent]. CaMeL is one member of a
-pattern language the field has since written down: Beurer-Kellner et al.
-distill six structural patterns for agents under injection, among them
-plan-then-execute, the dual LLM, and code-then-execute, each buying a bounded
-blast radius by giving up some of the agent's generality
-[@beurerkellner2025patterns]. The operational lessons compose
-into defense in depth: scope each tool to least privilege so a hijack inherits a
-small blast radius, require human confirmation for irreversible actions, and
-screen *outbound* tool arguments and URLs, not just prose, because an injected
-agent exfiltrates through a crafted request, the data-flow form of the output
-guard. This content-level screening pairs with a cheaper connection-level
-destination allowlist, and for a static credential the leak itself can be made
-inert by egress substitution (@sec-security-authorization).
+Input moderation can stop a disallowed request before generation. Output
+moderation covers cases that are visible only after generation, including a
+benign request followed by a harmful answer. Neither screen sees every relevant
+fact. A retrieved document can alter the model after input screening, and a tool
+can turn an apparently harmless string into an irreversible effect after output
+screening. The placement and scope of each check therefore matter as much as
+the classifier.
 
-## Jailbreak-robust classifiers
+## From a detector score to a policy decision
 
-A guard is itself a model with an input channel, so it can be jailbroken like the
-model it guards, and the frontier of the field is making the guard hard to break.
-Constitutional Classifiers train input and output classifiers on synthetic data
-generated from a written constitution, a fixed set of rules spelling out
-permitted and forbidden content that the classifiers are trained against,
-augmented with translations and known @gls-jailbreak transformations; the output
-classifier is *streaming*, a value head (a small scoring head added on top of the
-model) predicting harmfulness token by token so
-generation can be halted mid-stream [@sharma2025constitutional]. Anthropic reports
-the classifiers cut a jailbreak success rate from 86 percent on the unguarded
-model to 4.4 percent, at a 23.7 percent inference overhead and only a 0.38 percent
-rise in production refusals, and that thousands of hours of red-teaming in a
-prototype phase found no universal jailbreak, a result that held only for that
-phase, since a later public demo did surface one. A complementary line, rapid response,
-observes a handful of real jailbreaks, automatically proliferates variants, and
-fine-tunes the input guard on them, cutting attack success by more than an order
-of magnitude from a few examples [@peng2024rapidresponse]. The guard is becoming a
-trained, adversarially-hardened component in its own right rather than a simple
-classifier.
+Modern moderation systems learn categories rather than matching only keywords.
+Production examples combine a documented taxonomy, carefully reviewed labels,
+active learning, and synthetic or adversarial data [@markov2023moderation].
+Models such as Llama Guard accept a taxonomy with the conversation and support
+separate prompt and response classification [@inan2023llamaguard]. This is useful
+configuration, not arbitrary programmability. Policy text does not make an
+unsupported category reliable, and a renamed category does not create the data
+needed to evaluate it.
 
-## Trade-offs
+Treat the policy as a versioned policy bundle with a declared schema, supported
+categories, thresholds, and failure behavior. Require schema validation,
+offline evaluation before rollout, a staged release, and rollback. A policy
+prompt is untrusted configuration until validated: malformed or injected text
+must not silently change which policy is active.
 
-The first trade-off is precision against recall, and it is unforgiving in both
-directions. A guard tuned to catch everything blocks benign requests, and
-over-refusal is a real cost: it is the failure users feel, and it pushes them
-to systems with weaker safety. It is now measured directly, by contrast suites
-that pair safe prompts a calibrated model should answer with unsafe ones it
-should refuse [@rottger2024xstest], and at scale by automatically generated
-over-refusal benchmarks [@cui2024orbench]. A guard tuned to preserve utility lets
-harm through. There is no setting that escapes the curve; there is only the choice
-of operating point, and the right point differs by domain.
+The decision also needs more than one threshold. It must be able to allow,
+review, or block. Let $x$ be the content being evaluated; let $k$ identify a
+harm category; let $s_k(x)$ be the detector's score for that category; and let
+$v$ identify the policy revision. For each category, policy $v$ sets a lower
+threshold $\tau_{\mathrm{allow},k}$ and an upper threshold
+$\tau_{\mathrm{block},k}$, with the lower threshold no greater than the upper
+one. Read the three branches separately:
 
-The second trade-off is safety against latency, and it is sharpened by the
-serving layer. Output screening wants the whole generation, but the serving
-stack streams tokens to the user as they are produced (@sec-faster-decoding).
-A system cannot both stream a token and wait to screen the complete output. It
-must either buffer the generation and screen it whole, paying latency and
-giving up the streaming experience, or screen incrementally in chunks, risking
-that a disallowed prefix reaches the user before the chunk that condemns it,
-which is exactly why a streaming-aware classifier that scores token by token
-became worth building.
+$$
+\begin{aligned}
+D_v(x,k) &= \mathrm{allow}, \\
+s_k(x) &\le \tau_{\mathrm{allow},k}, \\
+D_v(x,k) &= \mathrm{review}, \\
+\tau_{\mathrm{allow},k} &< s_k(x), \\
+s_k(x) &< \tau_{\mathrm{block},k}, \\
+D_v(x,k) &= \mathrm{block}, \\
+s_k(x) &\ge \tau_{\mathrm{block},k}.
+\end{aligned}
+$$
+
+Here $D_v(x,k)$ is the decision under revision $v$. The middle region is an
+explicit **abstain** path: request a human decision, route to a safer model, ask
+for clarification, or disable tools. It is not an instruction to hide uncertain
+cases inside "allow." Selective classification makes this coverage-versus-risk
+choice explicit [@geifman2017selective].
+
+An estimated score is not automatically a probability. If the product presents
+or reasons about it as one, it must be calibrated on traffic that represents the
+deployment [@guo2017calibration]. A false negative allows a violating item; a
+false positive blocks a compliant one. Recall is the fraction of violating
+items caught, while precision is the fraction of flagged items that truly
+violate the policy. Precision depends on the base rate. If violations are rare,
+false positives can dominate the review queue even when recall and the
+false-positive rate look good on a balanced benchmark.
+
+Calibration, false-positive rate, false-negative rate, and review rate should be
+reported per category, per language, and for important user groups, not only as
+a global average. Distribution shift, obfuscation, and adaptive attacks can
+invalidate an operating point, so release evaluation needs ordinary traffic,
+contrast cases for over-refusal [@rottger2024xstest], and a private adversarial
+test set. Threshold changes are policy changes and deserve the same review and
+rollback discipline as code.
+
+The failure mode depends on the effect. A timeout while labeling low-risk prose
+may produce a bounded refusal or a degraded response. Before a privileged tool
+effect, the rule is to fail closed for privileged effects: commit no external
+action until every required check returns a valid decision.
+
+## Prompt injection changes the threat model
+
+In an ordinary chat request, direct prompt injection puts the conflicting text
+in the user's message. In an agent, indirect prompt injection puts it in a web
+page, email, document, database row, image, or tool result that the system later
+retrieves. The model receives trusted instructions and untrusted data in one
+context, and untrusted data can influence a privileged decision. Real systems
+have been compromised in exactly this way [@greshake2023indirect], while
+AgentDojo and InjecAgent provide reproducible tasks for measuring attack and
+defense behavior [@debenedetti2024agentdojo; @zhan2024injecagent].
+
+Successful injection is not yet a successful exploit. The injected text must
+change a model proposal, that proposal must request a harmful operation, and the
+operation must be accepted by the enforcement point. This decomposition gives
+the defender several independent places to break the chain.
+
+Learned defenses help at the first step. One approach is an instruction
+hierarchy (@gls-instruction-hierarchy), which trains a model to prefer system
+instructions over user or tool content
+[@wallace2024instructionhierarchy]. Spotlighting marks the provenance of
+untrusted spans [@hines2024spotlighting]. Moderation and jailbreak classifiers
+can detect known attack shapes, including transformed examples
+[@sharma2025constitutional]. These learned defenses reduce measured attack
+success on their evaluation distributions; they do not establish a security
+boundary. An adaptive input can still be misclassified, and the same model may
+both interpret the data and decide what it means.
+
+Structural controls address a different question: even if the model is
+influenced, which control flow and data flow can it change? Plan-then-execute,
+action selection from a fixed set, context minimization, and dual-model designs
+separate trusted planning from processing untrusted content
+[@beurerkellner2025patterns]. CaMeL makes this separation explicit with a
+capability and data-flow layer, and states its security result under a defined
+threat model rather than for every agent architecture [@debenedetti2025camel].
+The practical design is defense in depth: keep untrusted data out of privileged
+planning where possible, grant every tool least privilege, and require human
+confirmation bound to the exact parameters of an irreversible action.
+
+## Put a deterministic gate in front of every effect
+
+The harness in @sec-the-harness turns generated tokens into API calls, file
+writes, queries, and code execution. That conversion is the point where runtime
+safety can become enforceable. A safe effect path performs these checks in
+trusted code outside the model:
+
+1. Parse the proposal against a versioned, typed tool schema. Reject unknown
+   fields, invalid encodings, ambiguous numbers, and out-of-range values.
+2. Normalize the action, resource, and canonical parameters once. Use the same
+   representation for authorization, approval, execution, and audit.
+3. Obtain authorization for that exact subject, action, resource, tenant, and
+   context. The model never supplies trusted identity or policy facts.
+4. Apply destination policy to every outbound connection. Resolve and validate
+   the DNS answer, connect only to permitted address ranges, and validate every
+   redirect target. A hostname allowlist alone does not stop redirects, DNS
+   rebinding, or a permitted service from exposing an unsafe endpoint.
+5. Keep credentials in a secret broker. The model sees an opaque handle, not the
+   secret; the broker injects it only for the authorized destination and action.
+6. Before an irreversible operation, persist a write-ahead intent with an
+   idempotency key. Afterward, store the provider's effect receipt or a precise
+   failure. A retry reuses the same key instead of duplicating the effect.
+
+Content moderation can contribute a signal at steps one and four, but it cannot
+replace any of them. "This URL looks safe" is not network enforcement, just as
+"this transfer sounds reasonable" is not authorization.
+
+Generated code needs a separate containment boundary. On Linux, namespaces can
+separate views of processes, mounts, users, and networks; cgroups impose resource
+limits; and seccomp restricts the system calls a process may attempt. The Linux
+documentation is careful that seccomp filtering is not itself a sandbox
+[@linuxseccomp]. Container guidance likewise treats isolation as a collection of
+configured controls, not a property conferred by an image format
+[@souppaya2017containers]. A container is not a virtual machine, and workloads
+with a stronger attacker or confidentiality requirement may need a dedicated VM
+or another hardware-backed boundary.
+
+Run generated code without host secrets, without a writable host mount, with
+resource limits, and with network egress disabled unless a narrow task requires
+it. If egress is allowed, route it through the same destination and credential
+broker used for tools. A sandbox limits consequences; it does not decide whether
+an action is appropriate. It also does not repair a kernel escape, a mounted
+credential, an overbroad network policy, or a confused downstream service.
+NIST's generative-AI profile therefore treats monitoring, access controls,
+incident handling, and testing as complementary risk treatments rather than one
+universal filter [@autio2024genai].
+
+## Streaming creates two release boundaries
+
+The serving stack in @sec-serving-problem emits tokens to reduce perceived
+latency. Incremental moderation can stop a continuation, but text already sent
+to the client is already disclosed. A later block cannot retract a secret, a
+slur, or instructions that the client has received. Chunk size therefore trades
+latency against the maximum unchecked prefix; it does not remove the trade-off.
+
+The important distinction is between **display text** and **executable output**.
+Streaming text may be acceptable after incremental moderation when the product
+can tolerate a bounded prefix. A tool call, URL fetch, code execution request,
+or transaction must remain a proposal until its complete structured value has
+been buffered, parsed, authorized, and committed by trusted code. Buffer
+executable outputs even when prose streams. Otherwise a partial stream can
+become a committed side effect before the system has seen the fields needed to
+reject it.
 
 ::: {.callout-tip}
-## Constraint arrow
+## Lower-layer constraint
 
-The serving layer's streaming decision reaches up and dictates the guardrail's
-architecture. Because @sec-serving-problem streams tokens to cut perceived
-latency, the output guard cannot assume it has the complete response to
-classify. The safety layer is forced to choose incremental screening, with its
-prefix-leak risk, or whole-response buffering, which discards the very
-streaming the serving layer was built to provide. The risk is sharpest for an
-exfiltration URL: a streamed token that *is* the leak reaches its destination
-before a chunked guard can condemn it, which is an argument for buffering
-tool-call and URL outputs specifically even when prose streams, or for stopping
-the leak a layer earlier with a connection-level egress allowlist that refuses
-the off-allowlist destination outright regardless of streaming timing. A latency
-optimization three layers down decides whether the safety layer can stream, and
-that is why a guardrail cannot be designed without knowing how the model is served.
+Serving determines what the safety layer can know before release. A whole-output
+classifier requires buffering; incremental moderation permits streaming but can
+only judge the prefix observed so far. This is why @sec-faster-decoding cannot
+treat token delivery as a presentation detail. The runtime contract needs two
+explicit commit points: one for bytes disclosed to a user and one for effects
+committed to the world. The second must always wait for the complete, canonical
+operation and all deterministic gates.
 :::
 
-## Implementation
+## An operating contract for runtime safety
 
-The control flow is small, and its smallness is the point: a guardrail must be
-cheap enough to run on every request.
+The implementation should produce one linked record for each request. At a
+minimum, record these schema-versioned fields without storing raw credentials or
+unnecessarily retaining sensitive content:
 
-```python
-def guarded_generate(request, policy):
-    verdict = input_guard.classify(request, policy)   # separate small model
-    if verdict.blocked:
-        return refusal(verdict.category)
-    output = model.generate(request)                  # the served model
-    verdict = output_guard.classify(output, policy)   # policy passed as input
-    if verdict.blocked:
-        return replacement(verdict.category)
-    return output
-```
+- `request_id`, `policy_revision`, and authenticated subject and tenant;
+- `input_provenance` for user, retrieved, system, and tool-provided content;
+- `detector_revision_and_scores`, `decision_and_thresholds`, and review outcome;
+- model, prompt, retrieval, and `tool_schema_revision` identifiers;
+- `authorization_decision_id` and `canonical_action_and_parameters`;
+- `sandbox_profile`, resource limits, and `egress_decision` including resolved
+  destination;
+- `approval_binding`, expiry, and one-time challenge when approval is required;
+- `effect_idempotency_key`, write-ahead intent, and provider `effect_receipt`;
+- timing, `failure_mode`, and the enforcement point's final result.
 
-Two details carry the design. The policy is passed as an argument, not compiled
-into the classifier, which is what lets one guard model serve many products and
-absorb a rule change without retraining [@inan2023llamaguard]. And the guard is
-a different model from the one it guards, often much smaller, so that screening
-every request is affordable and so that a single jailbreak does not compromise
-both the generator and its monitor at once.
+The record makes failures reproducible, but the tests must exercise the actual
+boundaries. A release suite should include, at least:
+
+- detector error and guard timeout paths for prose and privileged effects;
+- policy rollback and mixed-version requests during rollout;
+- obfuscation, split encoding, multilingual paraphrase, and benign contrast cases;
+- an unknown tool field, duplicate key, non-canonical URL, and oversized argument;
+- a redirect to a blocked host, DNS rebinding, private-address resolution, and a
+  permitted host with a forbidden path;
+- expired approval, approval replay, changed parameters after approval, and
+  duplicate delivery of the same effect;
+- cross-tenant resource references, unavailable authorization, and revoked
+  credentials;
+- sandbox escape probes, resource exhaustion, secret-file access, and denied
+  network egress;
+- a partial stream that becomes harmful only after several chunks, plus an
+  incomplete tool call that must never execute.
+
+Measure false positives, false negatives, review coverage, policy-decision
+latency, enforcement failures, effect duplication, and the time from a policy or
+detector update to complete fleet convergence. Red-team results complement these
+contracts; they do not replace them. The next chapter develops that adversarial
+evaluation discipline in detail (@sec-adversarial-robustness).
 
 ::: {.callout-important}
 ## What's contested
 
-- **Do guardrails add safety or only move the attack surface?** A guard is
-  itself a model with an input channel, so it can be attacked like any other
-  (@sec-adversarial-robustness). Skeptics argue a separate classifier mostly
-  relocates the jailbreak target; defenders argue defense in depth still
-  raises the cost of an attack, but only if the layers are genuinely
-  independent, so that an attack beating the guard does not automatically beat
-  the capability layer.
-- **Is prompt injection solvable at all for agents?** Learned defenses are
-  partial by construction, and the only provable approach constrains the data
-  flow at a utility cost most products have not paid; whether indirect injection
-  has a deployable general solution, or stays a managed risk bounded by least
-  privilege, is open [@debenedetti2025camel].
-- **Is policy-as-input classification robust enough?** Passing the taxonomy in
-  the prompt is flexible, but it inherits the brittleness of in-context
-  instructions. Whether a configurable guard matches a purpose-trained
-  classifier on a fixed policy is an open empirical question.
+- **How much should a learned guard decide?** A classifier can adapt to language
+  and context that deterministic rules miss. It also inherits calibration drift,
+  adversarial examples, and opaque errors. Products disagree about which cases
+  can be blocked automatically and which require review or deterministic proof.
+- **Can general-purpose agents resist indirect injection without losing useful
+  autonomy?** Structural designs can state stronger properties because they
+  constrain control and data flow. Those constraints also reject tasks that
+  require untrusted data to shape a privileged plan. The deployable frontier is
+  a product-specific trade rather than a solved general problem.
+- **Should safety failure always fail closed?** For money movement, secret access,
+  and external writes, committing without a valid decision is usually
+  indefensible. For low-risk conversation, universal refusal during a detector
+  outage can create its own availability and accessibility harms. The failure
+  mode belongs in the versioned policy and threat model, not in a slogan.
 :::
 
 ## Runtime safety as external control
 
-Capability, at this layer, is mostly something the guardrail spends rather than
-adds: every block is a refused request, so the discipline is to subtract as
-little utility as possible while removing the harm, which is the precision
-against recall curve made concrete. Efficiency explains why the guard is a small,
-separate model: screening every request is only viable if the screen is cheap,
-and input screening pays for itself by killing harmful generations before the
-expensive model runs. Trust is the whole purpose. A built-in refusal asks the
-user to trust that the model will behave; an external guard that fails closed
-and is auditable independently of the model is what lets an operator make a
-claim about the system's behavior that does not rest on the model's good
-intentions. The guardrail is the runtime instrument of the same control
-agenda that @sec-oversight-control argued for at training time.
+Runtime safety does not require believing that one guard model is unbreakable.
+It requires knowing which claim each component can support. Detectors estimate;
+policy decides; enforcement mediates every effect; containment bounds a miss;
+and receipts make the result testable. Small moderation models remain valuable
+because they can run on every request and change independently of the generator.
+Their value is strongest when an uncertain classification feeds an explicit
+decision and weakest when it is treated as a security boundary by itself.
+
+This is the serving-time form of external control. Training shapes what the
+model tends to propose. Runtime architecture determines what those proposals are
+allowed to disclose or do.
 
 ## Further reading
 
