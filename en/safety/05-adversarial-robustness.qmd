@@ -1,260 +1,429 @@
 # Adversarial Robustness and Red-Teaming {#sec-adversarial-robustness}
 
-Alignment is a trained disposition, not a guarantee. A model that refuses a
-harmful request in the average case still holds, somewhere in its weights, the
-capability the refusal is meant to suppress, and an adversary with access to the
-input can search for the phrasing that recovers it. That search, and the effort
-to defeat it, now has a stable shape: four families of @gls-jailbreak attacks,
-prompts designed to bypass refusal, each exploit a different surface.
-@gls-red-teaming is a measurement discipline rather than a one-time
-audit. And because every known defense is partial,
-@gls-adversarial-robustness is a property of the system rather than of the model alone.
+Adversarial robustness asks how a deployed system behaves when someone deliberately
+searches for a failure. A jailbreak attempts to elicit policy-violating model output.
+Prompt injection attempts to make untrusted text control an application. A harmful side
+effect additionally requires the application to authorize and execute the model's
+proposal. These failures are related, but they are not interchangeable.
 
-![Schematic of attack success as adversarial pressure rises. Hardening bends the curve down, but stronger attacks still find surface area unless defenses keep adapting. Idealized curves, not measured data.](/figures/adversarial-robustness-1.svg){#fig-adversarial-robustness-1}
+This is the task of @gls-red-teaming. Red teaming searches for them under a stated threat
+model. It does not certify their absence. The result is evidence about one system
+revision, policy, attacker, budget, and evaluator, not a timeless property of a model
+family. @gls-adversarial-robustness
+therefore belongs to the whole deployed system: the model, prompts, tools, guards,
+authorization rules, and release process all affect the outcome.
 
-The boundary with the two neighboring chapters matters. @sec-runtime-safety adds
-a filter around the model that inspects inputs and outputs; @sec-security-authorization
-bounds what a compromised agent can reach by scoping its authority. The problem
-sits between them, on the manipulation itself: how an attacker turns a refusal
-into compliance, how a defender measures the rate at which that succeeds, and
-whether the rate can be driven to zero at all.
+## Begin with the failure, not the prompt
 
-## The problem: a refusal is a soft boundary
+A refusal string is observable, but it is not the safety objective. An answer can avoid
+the word “no” and still provide no harmful help. It can also begin with a warning and then
+provide prohibited operational detail. For an agent, unsafe text is still different from
+an external effect. The system may generate a bad proposal that a deterministic gate
+rejects before anything changes.
 
-Post-training installs refusal by example (@sec-rlhf): the model is shown
-harmful requests paired with declines and learns to reproduce the pattern. The
-result is a decision boundary in a space the operator cannot enumerate. Refusal
-holds densely over the prompts seen in training and thins out in the corners no
-one wrote down. An attack is a procedure for finding those corners, and the
-unsettling discovery of the period is that the corners are not rare accidents
-but a reliably reachable surface, often by automated search.
+| Outcome | What must be shown | What does not prove it |
+|---|---|---|
+| Jailbreak success | The response supplies policy-prohibited, useful content | Absence of a refusal phrase |
+| Prompt-injection success | Attacker-controlled text changes control-relevant behavior | The model merely quotes the injected text |
+| Unauthorized effect | The proposal crosses authorization and the effect occurs | A tool call appears in model output |
+| Secret disclosure | Protected information reaches an unauthorized destination | The model mentions a public or synthetic value |
 
-Four families of attack have stabilized, and they differ in what part of the
-model they exploit.
+This separation determines where a defense belongs. @sec-safety-tuning changes the
+model's default behavior. @sec-runtime-safety detects and gates request-time events.
+@sec-security-authorization decides which effects are permitted. A model-level evaluation
+can measure the first outcome, but it cannot establish the last three without running the
+relevant application path.
+
+## Write the threat model before running attacks
+
+An attack success rate is uninterpretable until the evaluator fixes the attacker's powers
+[@carlini2019evaluating].
+JailbreakBench makes this explicit by versioning behaviors, prompts, chat templates,
+scoring functions, and the threat model [@chao2024jailbreakbench]. A useful evaluation
+record answers each of these questions:
+
+| Threat-model field | Question to answer |
+|---|---|
+| Target system | Which model, system prompt, tools, guards, and deployment configuration are under test? |
+| Policy revision | Which written rule defines prohibited behavior? |
+| Attacker's goal | Is success harmful text, instruction takeover, data disclosure, or an external effect? |
+| Attacker knowledge | Is the system white-box, gray-box, or black-box to the attacker? |
+| Attacker access | Can the attacker send one prompt, hold a conversation, plant retrieved content, or observe tool results? |
+| Attack budget | How many queries, tokens, restarts, accounts, and how much wall-clock time are allowed? |
+| Allowed transformations | May the attack use encodings, images, long context, external tools, or model-generated variants? |
+| Success criterion | Which policy-aware judge and human-review rule decide success? |
+| Defender knowledge | Was the defense tuned on this prompt, method, behavior, or attack family? |
+| Adaptation | Is the attacker static, or adaptive to the disclosed defense and previous responses? |
+
+Comparisons require the same contract. Results from different policies, budgets, sampling
+settings, or judges should not be placed in one ranking without qualification. Even within
+one contract, a vendor API may change underneath an evaluation; record the observed model
+revision and date rather than relying on a product name alone.
+
+## Attack methods expose different surfaces
+
+The modern literature made attack discovery reproducible rather than eliminating the role
+of human testing. Perez et al. used one language model to generate test cases for another
+in 2022 [@perez2022redteaming]. Zou et al. introduced Greedy Coordinate Gradient (GCG) in
+2023, showing that optimized adversarial suffixes could transfer from open-weight models
+to several black-box systems evaluated at the time [@zou2023gcg]. Greshake et al. separately
+showed that instructions planted in retrieved data could influence LLM-integrated
+applications [@greshake2023injection]. These works address different goals and access
+models.
+
+The following mechanisms are useful axes, not an exhaustive taxonomy. They include
+@gls-jailbreak attacks, prompts designed to bypass refusal or other learned policy
+behavior, as well as prompt injections. An attacker can combine them in one campaign.
 
 ```{dot}
-//| label: fig-adv-taxonomy
-//| fig-cap: "Four jailbreak families, grouped by what each exploits. Optimization attacks search token space directly; many-shot attacks exploit the long-context window; multi-turn attacks exploit conversational state; indirect injection exploits the open input channel of a tool-using agent. Defenses below address different families, and none covers all four."
+//| label: fig-adv-attack-surfaces
+//| fig-cap: "Representative adversarial surfaces. The mechanisms can be combined, and prompt injection has a different objective from a jailbreak: it tries to make untrusted data control the application."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  nodesep=0.18; ranksep=0.26;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9.5, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=8.5, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  M [label="aligned model\nrefusal boundary"];
-  O [label="optimization\nadversarial suffix (GCG)"];
-  MS [label="many-shot\nfake dialogue in context"];
-  MT [label="multi-turn\npersona, crescendo"];
-  I [label="indirect injection\nuntrusted tool content"];
-  H [label="harmful completion"];
+  attacker [label="Attacker"];
+  methods [label="Attack method\nmanual · optimized\nmany-shot · multi-turn\nindirect injection"];
+  target [label="Versioned\ntarget system"];
+  evidence [label="Policy-aware\noutcome evidence"];
 
-  O -> M;
-  MS -> M;
-  MT -> M;
-  I -> M;
-  M -> H;
+  attacker -> methods;
+  methods -> target;
+  target -> evidence;
 }
 ```
 
-The first family is optimization-based. The @gls-gcg attack
-treats jailbreaking as a search problem: append a suffix of tokens to a harmful
-request and optimize the suffix by gradient, the signal that says which token
-change pushes the model toward the target answer, over a white-box model whose
-weights are fully visible, to maximize
-the probability that the model begins its answer with an affirmative phrase
-[@zou2023gcg]. The suffixes look like noise, they are found by machine rather
-than by a person, and the central result is that they transfer: a suffix tuned
-against open weights often jailbreaks closed models it never saw. Optimization
-turned jailbreaking from craft into a reproducible pipeline.
+**Manual and semantic attacks** use role-play, reframing, translation, indirection, or
+other meaning-preserving changes. They can be found by people or generated by another
+model. The important variable is not whether a prompt looks clever; it is whether the
+method produces policy-violating, useful output within the stated budget.
 
-The second family exploits scale in the context window rather than the token
-search. Many-shot jailbreaking fills the prompt with a long fabricated dialogue
-in which an assistant answers a sequence of escalating harmful questions, then
-asks the real one [@anil2024manyshot]. The model, completing a pattern, extends
-the fabricated assistant's compliance to the final question. The attack's
-effectiveness grows with the number of shots in a roughly power-law fashion, so
-the same long-context capability that makes a model useful (@sec-structured-long-context)
-widens the surface this attack runs on.
+**Optimization-based attacks** search for tokens that raise the likelihood of a target
+continuation. GCG uses gradients from a white-box source model to propose suffix-token
+changes [@zou2023gcg]. Its reported transfer to named black-box models established that
+some optimized prompts cross model boundaries, not that every suffix transfers to every
+model. Black-box methods instead use target queries, response scores, or a separate attack
+model; their query budget is part of the result.
+
+**Many-shot attacks** fill a long context with fabricated demonstrations in which the
+assistant complies, then append the behavior under test. Anthropic reported that attack
+effectiveness increased approximately as a power law with the number of demonstrations in
+the evaluated models and tasks [@anil2024manyshot]. That empirical shape is not a universal
+law, but it shows why a longer context window changes the attack budget.
 
 <figure id="fig-adversarial-robustness-curve">
-<div class="viz" data-viz="curve" data-family="power-grow" data-xlabel="harmful demonstrations in the prompt" data-ylabel="attack success (relative)" data-plabel="power-law exponent" data-pmin="0.3" data-pmax="1.2" data-p="0.7"></div>
-<figcaption>Many-shot jailbreaking: as the fabricated dialogue fills the context with more compliant answers, attack success climbs roughly as a power law in the number of shots. The same long context that makes a model useful widens this surface. Illustrative.</figcaption>
+<div class="viz" data-viz="curve" data-family="power-grow" data-xlabel="demonstrations in the evaluated prompt" data-ylabel="relative attack success" data-plabel="illustrative exponent" data-pmin="0.3" data-pmax="1.2" data-p="0.7"></div>
+<figcaption>An illustration of power-law growth, not a reproduction of measured values. The many-shot study reported approximate power-law scaling for its evaluated systems; a deployment must measure its own model, policy, context limit, and judge.</figcaption>
 </figure>
 
-The third family is conversational. Rather than break the boundary in one shot,
-a multi-turn attack walks the model across it. A persona attack asks the model
-to role-play a character not bound by the policy; a crescendo attack opens with
-a benign request and escalates over several turns, each step a small increment
-from an answer the model already gave, so no single turn looks like a violation
-[@russinovich2024crescendo]. These attacks exploit that the model conditions on
-its own prior outputs, and that a request is judged against the visible turn
-rather than the trajectory.
+**Multi-turn attacks** use conversation state. Crescendo begins with a benign topic and
+incrementally moves toward a prohibited request while reusing the model's earlier answers
+[@russinovich2024crescendo]. The paper reports success against its evaluated systems. The
+general lesson is narrower: a guard that assesses only the latest message can miss intent
+that becomes clear across the trajectory.
 
-The fourth family does not come through the user at all. Indirect @gls-prompt-injection
-plants instructions in content the agent will read as data: a web
-page, a document, a tool's output [@greshake2023injection]. When the agent
-ingests that content, it cannot reliably tell the planted instruction from the
-operator's. This is the family that breaks agents specifically, because an
-agent's reason for existing is to read untrusted external content and act on it.
-It is the hinge between adversarial robustness and @sec-security-authorization, and the
-constraint arrow below names why no model-level fix closes it.
+**Indirect prompt injection** places instructions in a web page, document, email, or tool
+result that an application later treats as data [@greshake2023injection]. It is not merely
+another way to obtain a harmful completion. Its goal is to redirect an application's
+control flow, data flow, or tool use. A behavioral defense may reduce measured injection
+success, but only an external enforcement point can decide whether the resulting effect is
+authorized.
 
-## Red-teaming as measurement, not audit
+## Measure attempts, not anecdotes
 
-If attacks are a reliably reachable surface, then a one-time security review is
-the wrong instrument. What a deployer needs is a continuous estimate of how
-often an adversary succeeds, recomputed as both the model and the attacks
-change. Red-teaming is that estimate, and treating it as a measurement
-discipline, with a metric, a dataset, and a reproducible harness, is what
-separates it from anecdote.
+Attack success rate (ASR) is a useful summary if its unit of analysis is explicit. Let $b$
+be a behavior under test, $a$ an attack procedure, $r$ a generation seed or trial index,
+and $y_{b,a,r}$ the target system's response. Let $J_v$ be the policy-aware judge at
+revision $v$. Define the binary outcome
 
-The metric is attack success rate: over a fixed set of harmful behaviors and a
-fixed attack method, the fraction of attempts that elicit a genuinely harmful
-completion. Whether the number can be trusted lives in the judge that decides what
-counts as harmful, which is itself a model or a rubric and carries the same
-construct-validity worries as any judge (@sec-judging-holistic). A standardized
-harness fixes the behaviors, the attacks, and the judge so that two models or
-two defenses can be compared on the same footing; HarmBench is one such
-framework, pairing a behavior set with a battery of attacks and an automated
-classifier [@mazeika2024harmbench]. The harmful-behaviors dataset that the GCG
-work introduced, often called AdvBench, became a common substrate underneath
-many of these evaluations [@zou2023gcg].
+$$
+Y_{b,a,r}
+= \mathbf{1}[J_v(b,y_{b,a,r})=\mathrm{success}],
+$$
 
-Generating the attacks is itself automatable, and this is where red-teaming
-scales past a human team. A language model can be pointed at a target and asked
-to generate prompts that make it misbehave, then trained on which of its prompts
-succeeded, turning attack discovery into its own optimization loop
-[@perez2022redteaming]. Automated red-teaming widens coverage far beyond what a
-human team can hand-write, at the cost that it finds the attacks its generator
-is shaped to find and can miss whole families the generator never models. Human
-red teams remain the source of genuinely novel attack classes; the automation
-amortizes them across every model release.
+where $Y_{b,a,r}=1$ means that response $y_{b,a,r}$ satisfies the documented success
+criterion for behavior $b$; otherwise $Y_{b,a,r}=0$. The indicator
+$\mathbf{1}[\cdot]$ maps a true statement to one and a false statement to zero.
 
-::: {.callout-tip}
-## Constraint arrow
+For an evaluation set $\mathcal{T}$ of behavior, attack, and trial triples, define
+$N=|\mathcal{T}|$ and
 
-The harness in @sec-the-harness reads untrusted content by construction: an
-agent that cannot ingest a web page or a tool result cannot do its job. That
-open input channel dictates that indirect injection cannot be closed at the
-prompt layer, because the model has no reliable channel-level signal separating
-the operator's instruction from one planted in the data it was asked to read.
-The defense therefore cannot live in the model. It moves down to authority
-scoping (@sec-security-authorization), which bounds what a manipulated agent can
-reach, and out to runtime filtering (@sec-runtime-safety), which inspects the
-crossing. Robustness is a property of the system that wraps the model, not of
-the weights. A more aligned model raises the cost of the first family and barely
-touches the fourth.
-:::
+$$
+\widehat{\operatorname{ASR}}
+= \frac{1}{N}
+\sum_{(b,a,r)\in\mathcal{T}}Y_{b,a,r}.
+$$
 
-## Defenses, and why each is partial
+Here $\widehat{\operatorname{ASR}}$ is the observed attack success rate, $N$ is the number
+of evaluated triples, and the sum counts successful attempts. This point estimate is not a
+probability that the system is safe. It describes the sampled behaviors, attacks, seeds,
+judge, and system revision.
 
-Defenses divide by where they intervene, and reading them as a defense-in-depth
-stack rather than a search for the one fix is the realistic posture.
+Report the aggregation rule. “Per-attempt ASR” gives every trial equal weight. “Any-success
+ASR” marks a behavior as broken if any restart succeeds. These answer different questions
+and diverge as the restart budget grows. Also report results per risk category, along with
+the severity and actionability of successful outputs; one average can hide a rare but
+consequential failure.
+
+### Validate the judge
+
+Bypassing a refusal is not sufficient. StrongREJECT found that common evaluators could
+overstate jailbreak effectiveness when a model stopped refusing but produced an empty or
+incoherent answer [@souly2024strongreject]. A useful judge scores harmful usefulness: did
+the answer actually provide the prohibited capability with enough specificity to matter?
+
+Automated judging makes large sweeps affordable, but @sec-judging-holistic still applies.
+Draw a stratified human-review sample from successes, failures, high-severity categories,
+and borderline scores. Report judge agreement and estimate the false positive and false
+negative rates against policy-trained reviewers. Keep the judge revision fixed
+within a comparison. If the judge changes, rescore both candidates or treat the runs as
+different experiments.
+
+### Report uncertainty and dependence
+
+Stochastic decoding means the same behavior and attack can yield different answers, so run
+repeated samples when deployment uses sampling. Publish the sample size and a confidence
+interval, not only a percentage. Multiple attacks and restarts against one behavior are not
+independent evidence. When estimating uncertainty over behavior coverage, resample by
+behavior rather than treating every correlated retry as a new independent case.
+
+The interval method should match the design: a binomial interval may fit one independent
+outcome per behavior, while a cluster bootstrap can preserve repeated attempts within each
+behavior. State the method and grouping. Zero observed successes does not prove zero risk;
+it only places a sample-dependent upper bound under the evaluation assumptions.
+
+### Preserve utility and cost
+
+A lower attack success rate is not enough if the defense refuses most benign requests,
+damages ordinary task quality, or makes the service impractical. Pair harmful behaviors
+with benign contrasts that share vocabulary and context. XSTest is one such contrast set
+for exaggerated safety behavior [@rottger2024xstest]. Report benign refusal, ordinary task
+quality, and safe-completion usefulness alongside ASR.
+
+Attack cost also changes the meaning of a result. Record queries, tokens, wall-clock time,
+restarts, and any external compute used by the attacker. Record defense overhead in
+latency, token use, accelerator time, and monetary cost. A defense that converts a
+one-query attack into a thousand-query attack may be useful even if it does not make ASR
+exactly zero, but that claim requires a rate-limit and identity model that makes the budget
+real.
+
+## Build a red-team program, not one benchmark run
+
+HarmBench standardizes behaviors, attacks, target models, and an automated classifier so
+methods can be compared on common ground [@mazeika2024harmbench]. JailbreakBench adds an
+artifact repository and explicit threat-model components [@chao2024jailbreakbench]. These
+benchmarks make results more reproducible; neither covers every deployment policy,
+language, modality, tool, or attacker.
+
+A durable program separates four sources of evidence:
+
+1. A **development suite** gives engineers rapid feedback on known failures.
+2. A **held-out suite** contains unseen prompts and an attack-family holdout. Do not tune on
+   the release suite.
+3. An **adaptive suite** gives a defense-aware attacker the deployed prompt, guard behavior,
+   or enough queries to infer them. Simple adaptive changes have broken defenses that
+   looked strong under static evaluation [@andriushchenko2025adaptive].
+4. A **human red team** explores product-specific workflows, social context, novel
+   combinations, and harms not represented by the automated generators.
+
+Keep part of the held-out suite private and rotate it to reduce direct overfitting. Track
+lineage so training data, attack-generator prompts, benchmark items, and release cases do
+not silently overlap. Contamination does not make a case useless as a regression, but it
+does weaken a claim about generalization. Replay every confirmed failure in the
+development suite, and reserve new behaviors or whole mechanisms for later held-out runs.
+
+NIST's Generative AI Profile recommends adversarial role-playing, GAI red-teaming, or
+chaos testing to identify unforeseen failure modes [@autio2024genai]. In practice, that
+means running this loop before release, after changes to the model or surrounding system,
+and after incidents reveal a new path:
 
 ```{dot}
-//| label: fig-adv-defense-layers
-//| fig-cap: "Defense in depth against jailbreaks and injection. Each layer catches a different family and leaks others: training-time hardening generalizes poorly to optimized suffixes, classifiers add latency and miss novel phrasings, representation defenses can be re-broken, and only authority scoping bounds the damage when the upstream layers fail."
-digraph defenses {
-  rankdir=TB;
+//| label: fig-adv-red-team-loop
+//| fig-cap: "A red-team program turns a stated threat model into versioned evidence, fixes, regression cases, and a fresh adaptive evaluation. Release is a decision under uncertainty, not a certificate of permanent robustness."
+digraph {
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+  rankdir=TB;
+  nodesep=0.18; ranksep=0.25;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9.5, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=8.5, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  atk [label="attack", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  adv [label="training-time\nadversarial training, refusal tuning"];
-  cls [label="inference-time\ninput/output classifiers"];
-  rep [label="representation-level\ncircuit breakers"];
-  aut [label="authority scoping\nbound the blast radius"];
-  safe [label="contained", color="#3b82f6", fontcolor="#3b82f6"];
+  threat [label="Threat model"];
+  attack [label="Generate and run\nversioned attacks"];
+  judge [label="Judge, sample,\nand validate"];
+  decide [label="Release gate"];
+  fix [label="Fix and add\nregression case"];
+  fresh [label="Fresh held-out and\nadaptive suite"];
 
-  atk -> adv -> cls -> rep -> aut -> safe;
-  adv -> safe [label="leaks optimized suffixes", style=dashed, constraint=false];
-  cls -> safe [label="leaks novel phrasings", style=dashed, constraint=false];
-  rep -> safe [label="can be re-broken", style=dashed, constraint=false];
+  threat -> attack -> judge -> decide;
+  decide -> fix [label="fail"];
+  fix -> fresh -> attack;
 }
 ```
+
+## Match the defense to the failure stage
+
+No single defense covers every row in the opening table. Separate learned model defenses,
+learned runtime detectors, and deterministic effect controls. For each intervention, state
+both the measured improvement and the stronger claim that the evidence does not establish.
+
+**Safety tuning and adversarial training** add known failure cases and policy contrasts to
+post-training. They can improve both direct refusal and safe completion, but their
+generalization depends on the training distribution, policy, model, and attack budget. An
+adaptive attacker should be evaluated after the weights and defense are fixed.
+
+**Instruction hierarchy** trains the model to prioritize privileged instructions and
+treat lower-authority or untrusted content appropriately. It is a learned defense, as are
+prompt transformations that mark data provenance. Both can lower measured prompt-injection
+success, but neither is an authorization decision. The training objectives and empirical
+limits are developed in @sec-safety-tuning.
+
+**Input and output classifiers** can catch failures that the target model misses. A
+separate service is operationally distinct, not automatically statistically independent:
+the target and guard may share training data, policy ambiguities, architecture, or blind
+spots. Measure their residual-error correlation. Input filters can block or transform a
+request; output filters can gate release or tool proposals, but cannot undo text already
+streamed or a side effect already committed (@sec-runtime-safety).
+
+**Representation rerouting**, presented as circuit breakers, trains internal
+representations associated with harmful continuations away from their normal trajectory.
+Zou et al. reported lower ASR across the attacks and model types they evaluated while
+largely preserving measured utility [@zou2024circuitbreakers]. That is empirical
+generalization to a reported suite, not proof of a unique harmful circuit or a guarantee
+against an adaptive attacker. Defense-aware evaluations have subsequently shown why the
+threat model must be restated for every robustness claim [@andriushchenko2025adaptive].
+
+**Deterministic effect controls** enforce typed tool schemas, authorization, recipient and
+destination rules, least privilege, approval binding, secret custody, and sandbox or egress
+constraints. These controls do not make model output safe. They create a security boundary
+for the narrow properties that trusted code checks, so a successful jailbreak or injection
+does not automatically become an external compromise (@sec-security-authorization).
 
 <figure id="fig-adversarial-robustness-stepper">
 <div class="viz" data-viz="stepper">
-<div data-chip="ATTACK" data-title="1 · An attack arrives">A crafted prompt aims to pull a harmful completion past the model's guardrails. It meets not one defense but a stack of them, each catching some attacks and missing others.</div>
-<div data-chip="TRAINING" data-title="2 · Training-time hardening">Adversarial training and refusal tuning raise the floor against known attack styles, but leak the optimized suffixes found after the weights froze.</div>
-<div data-chip="CLASSIFIERS" data-title="3 · Inference-time classifiers">Input and output classifiers catch known phrasings, but leak the novel ones they were never trained on.</div>
-<div data-chip="CIRCUIT BREAKERS" data-title="4 · Representation-level circuit breakers">Interventions on the internal representation cut a harmful continuation short, but can be re-broken by a fresh attack.</div>
-<div data-chip="AUTHORITY" data-title="5 · Authority scoping">Whatever slips through still meets a bounded blast radius: scope the model's authority so a successful jailbreak reaches little. No layer is whole, so the stack is the defense.</div>
+<div data-chip="ATTACK" data-title="1 · An adversarial input arrives">The attack runs under a documented access model and budget. Its goal may be prohibited content, instruction takeover, disclosure, or an external effect.</div>
+<div data-chip="TRAINING" data-title="2 · Learned model defenses">Safety tuning, adversarial training, and instruction hierarchy reduce failures on evaluated distributions. They remain empirical defenses.</div>
+<div data-chip="CLASSIFIERS" data-title="3 · Runtime detection">Input and output guards add another measured error surface. Their failures can correlate with the target model, so version and test them separately.</div>
+<div data-chip="CIRCUIT BREAKERS" data-title="4 · Representation-level intervention">Representation rerouting may interrupt harmful continuations on tested attacks. A fresh adaptive evaluation must probe the defended model.</div>
+<div data-chip="EFFECT GATE" data-title="5 · Deterministic enforcement">Authorization and data-flow checks decide whether a proposed effect is permitted. Their guarantee is only as broad as the enforced rule and threat model.</div>
 </div>
-<figcaption>The same defense-in-depth stack as the diagram above, fired through one attack at a time. Each layer is partial and leaks something, which is why the realistic posture reads them as a stack rather than a search for the one fix.</figcaption>
+<figcaption>Defense in depth by failure stage. Learned defenses and detectors reduce measured failures; deterministic effect controls enforce narrow system invariants when upstream layers fail.</figcaption>
 </figure>
 
-Training-time hardening adds adversarial examples to the post-training mix so
-the refusal boundary covers more corners. It raises the floor against known
-attack styles and generalizes poorly to optimized suffixes found after the model
-froze, because the attacker optimizes against the deployed boundary while the
-defender trained against last quarter's.
+## Turn results into a release rule
 
-Inference-time classifiers, the subject of @sec-runtime-safety, place a separate
-model on the input and the output to catch attacks the target itself missed.
-They are independent of the target's alignment, which is their strength, and
-they add a latency and cost tax on every call while missing phrasings their own
-training never covered.
+A release gate should be written before the run. For each risk category $c$, one possible
+rule is
 
-Representation-level defenses intervene inside the model rather than around it.
-Circuit breakers reach into the residual stream, the running vector of
-activations that carries information through the model's layers, and reroute the
-internal representations that precede a harmful completion, so that when an attack steers
-the model toward producing harm, the rerouted representation derails the
-generation into incoherence rather than compliance [@zou2024circuitbreakers].
-The appeal is that the defense attaches to the harmful internal state rather than
-to surface phrasing, which is what optimized and many-shot attacks vary. Whether
-it generalizes durably or is re-broken by attacks that find new internal routes
-is exactly the open question the next box names, and it ties this work to the
-interpretability program in @sec-interpretability, which supplies the picture of
-internal features the defense acts on.
+$$
+\operatorname{UCB}_{1-\alpha}(\operatorname{ASR}_c)
+\le \tau_c,
+$$
 
-System-prompt hardening, instructing the model to distrust embedded
-instructions and to treat tool content as data, is the cheapest layer and the
-weakest in isolation: it is itself just text in the context window, subject to
-the same override the attacks demonstrate.
+where $\operatorname{ASR}_c$ is the attack success rate for category $c$,
+$\operatorname{UCB}_{1-\alpha}$ is its upper confidence bound at confidence level
+$1-\alpha$, $\alpha$ is the chosen error probability, and $\tau_c$ is the documented
+release threshold for that category. A severe category may receive a tighter threshold
+and a larger sample than a lower-impact one.
+
+Safety alone is not the whole gate. Require
+
+$$
+\operatorname{LCB}_{1-\alpha}(U_{\mathrm{benign}})
+\ge u_{\min},
+$$
+
+where $U_{\mathrm{benign}}$ is the chosen benign-utility measure,
+$\operatorname{LCB}_{1-\alpha}$ is its lower confidence bound, and $u_{\min}$ is the
+benign-utility floor. Thus a lower ASR obtained by refusing everything still fails the
+release gate. Thresholds are product and risk decisions, not constants supplied by the
+benchmark.
+
+If evidence misses a threshold, fix the system, narrow its deployment, add an independent
+control, or document an authorized exception with an owner and expiry. Do not discard
+unfavorable runs or change the judge after seeing the result. @sec-operational-evaluation
+explains how to keep release evidence separate from development feedback.
+
+## Keep a reproducible evaluation record
+
+Store one record that connects the system, threat model, attempts, judgments, utility
+results, and release decision:
+
+```text
+evaluation_id
+system_revision
+policy_revision
+defense_revision
+behavior_set_revision
+attack_revision
+threat_model_and_budget
+generation_parameters_and_seeds
+judge_revision
+human_validation_sample
+per_behavior_outcomes
+benign_utility_outcomes
+query_token_latency_costs
+confidence_interval_method
+release_decision_and_exception
+regression_case_ids
+```
+
+Retain attack artifacts under access controls appropriate to their misuse risk. A summary
+can publish methods and aggregate results without publishing every high-risk prompt. The
+internal record still needs enough detail for an authorized evaluator to reproduce the
+claim.
+
+Regression coverage should include more than the latest successful string:
+
+| Scenario | Required evidence |
+|---|---|
+| Refusal-string trap | A non-refusal but empty answer is not counted as success |
+| Held-out attack family | A mechanism absent from development still receives a result |
+| Multi-turn carryover | The complete trajectory, not only the last turn, reaches the guard and judge |
+| Indirect injection | Untrusted retrieved text cannot silently authorize a privileged effect |
+| Adaptive re-attack | A defense-aware method runs after the mitigation is fixed |
+| Benign contrast | Similar permitted requests expose over-refusal |
+| Judge disagreement | Borderline and severe cases reach human review |
+| Model revision | The full release suite reruns after weights or serving behavior change |
+| Policy revision | Old and new judgments are not mixed under one metric |
+| Defense timeout | The documented failure mode is exercised rather than assumed |
 
 ::: {.callout-important}
 ## What's contested
 
-- **Is jailbreak robustness achievable, or perpetual whack-a-mole?** One camp
-  holds that robustness is a reachable engineering target, with circuit breakers
-  and adversarial training driving attack success rate down release over
-  release. The other holds that an unbounded input space against a fixed model
-  guarantees a residual attack surface, so the realistic goal is raising
-  attacker cost and bounding blast radius, not closing the boundary. The
-  transfer result of optimized suffixes [@zou2023gcg] is read by the first camp
-  as a bug to patch and by the second as evidence the surface is intrinsic.
-- **Do representation-level defenses generalize?** Circuit breakers
-  [@zou2024circuitbreakers] act on internal state rather than surface form, which
-  should generalize across phrasings. Skeptics expect adaptive attacks that find
-  new internal routes to re-break them, the same pattern that defeated earlier
-  defenses, and note that published breaks tend to follow published defenses.
-- **Is automated red-teaming a safety signal or an arms race?** Automated attack
-  generation [@perez2022redteaming] widens coverage cheaply, but it measures
-  robustness against the attacks its generator models, so a falling attack
-  success rate may mean a safer model or only a generator that stopped finding
-  what a human still can.
+- **Can jailbreak robustness ever be complete?** Finite testing can show failures and place
+  conditional bounds on a measured rate. It cannot enumerate natural language or prove
+  that no allowed input succeeds. Whether stronger training can make residual risk
+  operationally negligible remains an empirical question.
+- **How much should benchmarks standardize?** A common behavior set and judge improve
+  comparability, but they also concentrate optimization on one definition of harm. A
+  product-specific suite is more relevant and less comparable. Mature programs need both.
+- **Do representation-level defenses generalize better than surface defenses?** Published
+  results show gains on evaluated unseen attacks [@zou2024circuitbreakers], while adaptive
+  results show that a changed threat model can reverse the conclusion
+  [@andriushchenko2025adaptive]. The answer must name the attack family and budget.
+- **How much attack detail should be disclosed?** Reproducibility favors artifacts;
+  misuse risk favors controlled access. The right disclosure level depends on capability,
+  availability, and whether defenders already have practical mitigations.
 :::
 
-## What robustness costs
+::: {.callout-tip}
+## Lower-layer constraint
 
-Every defense here changes more than one operating axis. The capability cost is
-over-refusal: a model hardened against attacks declines benign requests that
-resemble them, and the same boundary that blocks a jailbreak blocks a security
-researcher's legitimate question, so robustness and helpfulness are tuned
-against each other rather than independently maximized. The efficiency cost is
-the classifier tax of @sec-runtime-safety and the training cost of adversarial
-and representation-level methods, paid on every request or every release. Trust
-is the point of the whole exercise, and the credible form of it is a published
-attack success rate against a named harness rather than a claim of safety:
-robustness that cannot be measured the way HarmBench measures it
-[@mazeika2024harmbench] is an assertion, not a property. The discipline's
-contribution to @sec-oversight-control is precisely this, a number that says how
-far the deployed boundary can be pushed and by whom, recomputed every time the
-model or the attack changes.
+Model behavior constrains what red teams must search, but infrastructure constrains what a
+successful attack can do. Prompt defenses, classifiers, and representation interventions
+can reduce measured success. They do not replace authority scoping, secret isolation,
+typed tool gates, recipient checks, sandboxing, or egress policy. For consequential
+actions, the model may propose; trusted code must decide and enforce.
+:::
+
+Adversarial robustness is not one score attached to one model. It is a repeatable process:
+define the failure, state the attacker's powers, run representative and adaptive attacks,
+validate the judge, quantify uncertainty and utility, enforce a release rule, and preserve
+every confirmed failure as regression evidence. The result is not a certificate. It is a
+versioned, auditable claim about how one deployed system resisted one documented adversary.
 
 ## Further reading
 

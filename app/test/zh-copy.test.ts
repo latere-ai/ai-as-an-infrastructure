@@ -896,7 +896,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/05-adversarial-robustness.qmd",
-      ["four families of @gls-jailbreak", "@gls-red-teaming is a measurement discipline", "every known defense is partial", "@gls-adversarial-robustness is a property of the system rather than of the model alone"],
+      ["Adversarial robustness asks how a deployed system behaves when someone deliberately searches for a failure", "A jailbreak attempts to elicit policy-violating model output", "These failures are related, but they are not interchangeable", "Red teaming searches for them under a stated threat model"],
     ],
     [
       "zh/safety/05-adversarial-robustness.qmd",
