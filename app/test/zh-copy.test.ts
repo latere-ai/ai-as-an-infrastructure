@@ -904,7 +904,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/06-privacy-provenance-unlearning.qmd",
-      ["lossy compression of its training set", "leaks at serving time what it absorbed at training time", "upstream or in a retraining run rather than at the output", "@gls-machine-unlearning, approximate removal of a learned fact from trained weights, can promise some things and not others", "Memorization is not a bug layered on top of learning"],
+      ["Privacy, unlearning, and provenance answer three different questions", "Training-data privacy asks", "Machine unlearning asks", "Provenance asks", "None of these promises follows from the others"],
     ],
     [
       "zh/safety/06-privacy-provenance-unlearning.qmd",

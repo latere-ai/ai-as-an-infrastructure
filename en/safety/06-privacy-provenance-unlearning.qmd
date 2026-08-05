@@ -1,265 +1,445 @@
 # Privacy, Provenance, and Unlearning {#sec-privacy-provenance}
 
-A model is a lossy compression of its training set, and some of what it
-compresses is a person. That is why a model leaks at serving time what it
-absorbed at training time, and why the only sound place to fix the leak is
-upstream or in a retraining run rather than at the output. When the law demands
-a fact be removed, @gls-machine-unlearning, approximate removal of a learned
-fact from trained weights, can promise some things and not others. Provenance
-for generated content is a separate problem from privacy, even though the same
-controls often touch both. Memorization is not a
-bug layered on top of learning but the same mechanism seen from the privacy
-side, so the controls
-that work are the ones applied before the weights set, and everything attempted
-after is mitigation against a fact already encoded.
+Privacy, unlearning, and provenance answer three different questions.
+Training-data privacy asks what an observer can learn about the people and
+records used to train a system. Machine unlearning asks whether the influence
+of specified training data can be removed after training. Provenance asks what
+evidence accompanies an output about its origin and edit history. None of
+these promises follows from the others. A model can protect training records
+without attaching provenance, and a signed output can still disclose private
+information.
 
-![Schematic of residual exposure across the data lifecycle. Without lineage, privacy risk accumulates; with provenance and deletion hooks, exposure can fall after removal. Idealized curves, not measured data.](/figures/privacy-provenance-unlearning-1.svg){#fig-privacy-provenance-unlearning-1}
+That separation matters because each promise needs a different test. Privacy
+needs a protected unit and an attacker model. Unlearning needs a retained-data
+retraining reference. Provenance needs a named mechanism, signer or key, and a
+verification policy. A refusal, an edited answer, or a badge may be useful, but
+none establishes all three.
 
-## What the weights remember
+## Four events, not one leak
 
-The first thing to establish is that the leak is real and not hypothetical. A
-large language model trained on web text will, under the right prompt, emit
-sequences from its training data verbatim: names, phone numbers, addresses,
-fragments of private correspondence that happened to be scraped. The founding
-demonstration extracted hundreds of verbatim training examples from a deployed
-model, including personally identifiable information, using only query access
-[@carlini2021extracting]. This is not the model reasoning about a person. It is
-the model returning a stored string.
+The word *memorization* often stands in for several different events:
 
-How much a model memorizes is not random, and the follow-up work made the
-dependence precise. Verbatim memorization grows with model scale, with the
-number of times a sequence is duplicated in the training set, and with the
-length of context used to prompt for it [@carlini2022quantifying]. All three
-knobs point upstream. A bigger model from @sec-scaling-laws memorizes more. A
-corpus that escaped the deduplication of @sec-data-curation holds its duplicated
-spans most stubbornly of all, and at inference a longer prompt draws more of
-them back out. The privacy exposure of the
-deployed system is set by decisions made before serving existed.
+- **Memorization** is a measured dependence between a trained model and a
+  training example. Its meaning depends on the metric, such as exposure or
+  likelihood relative to a reference model.
+- **Extractability** means that an attacker can recover an unknown training
+  sequence under a stated prompt, decoding strategy, access level, and query
+  budget. A memorized sequence is not necessarily extractable.
+- **Disclosure** means that released output reveals sensitive information
+  about a person. An extracted sequence is not necessarily personal data, and
+  disclosure can also come from a prompt, retrieval result, public source, or
+  inference rather than memorization.
+- **Membership inference** asks whether a supplied candidate belonged to a
+  training dataset. Nothing must be reproduced; dataset membership can itself
+  be sensitive.
 
-A weaker but more general attack does not need the model to regurgitate
-anything. @gls-membership-inference asks only whether a given record was in the
-training set, by exploiting the fact that a model is more confident, lower loss
-(its prediction-error score), on data it trained on than on data it did not
-[@shokri2017membership]. That is
-enough to violate privacy on its own: confirming that a particular patient's
-record was in a medical training set leaks the diagnosis category before a
-single token is regurgitated. Membership inference is the cheapest privacy
-attack and the hardest to fully close, because the signal it uses, the
-generalization gap (the difference in the model's confidence on training data
-versus unseen data), is a property of learning itself.
+These are different events. Carlini et al. recovered verbatim examples,
+including personally identifying information, from GPT-2 through black-box
+queries [@carlini2021extracting]. Later measurements found that extraction and
+memorization varied with repetition, capacity, and available context in the
+models studied [@carlini2022quantifying]. Those results demonstrate attacks,
+not an assurance that every model or record can be extracted. Membership
+inference is similarly conditional: the original shadow-model attack showed
+that black-box outputs can reveal membership [@shokri2017membership], while
+later work found that distribution shift can make pretraining attacks appear
+more effective than they are [@duan2024membership].
+
+### Write the privacy threat model first
+
+A privacy result is uninterpretable until its scope is recorded:
+
+1. **Privacy unit.** Is the protected unit one token, example, document,
+   account, or person? Record-level protection and user-level protection are
+   different when one user contributes many records.
+2. **Adjacency.** Which adjacent datasets count as one person's presence or
+   absence? State whether one unit is added, removed, or replaced.
+3. **Attacker access.** Record model version, prompts, output text, scores or
+   log probabilities, auxiliary information, adaptive queries, and query
+   budget.
+4. **Success criterion.** Define exact or approximate recovery, membership
+   classification, false-positive constraints, and the harm to the affected
+   person.
+
+The same model can pass one threat model and fail another. Restricting log
+probabilities may frustrate one membership attack but leave text extraction
+possible. A low average attack score can also conceal a small group of highly
+exposed examples. Report tail behavior and results by relevant language and
+record type, not only a global mean.
 
 ```{dot}
-//| label: fig-privacy-lifecycle
-//| fig-cap: "The lifecycle of a private fact through the stack, and the three places one can intervene. Upstream controls (dedup, differential privacy) act before the weights set; retraining or unlearning acts on the frozen artifact at high cost; a downstream output filter is the tempting and weakest option, because it cannot remove what the weights already encoded."
+//| label: fig-privacy-controls
+//| fig-cap: "Privacy controls act at different points and support different claims. Data controls reduce what enters training; private training bounds influence for a declared unit; serving controls reduce what is released; deletion changes or retires affected artifacts."
 digraph privacy {
-  rankdir=LR;
+  rankdir=TB;
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+  graph [nodesep=0.16, ranksep=0.20];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#374151", fillcolor="#f1ece1",
+        margin="0.08,0.05", width=1.55];
+  edge [color="#6b7280", fontcolor="#6b7280", fontsize=8, arrowsize=0.6];
 
-  fact  [label="private fact\nin source data"];
-  train [label="training\nmemorizes it", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  weights [label="frozen weights\nfact encoded"];
-  serve [label="serving\nextraction / inference"];
+  data [label="Data controls\nminimize · trace"];
+  train [label="Private training\nbound influence"];
+  serve [label="Serving controls\nlimit release"];
+  delete [label="Deletion\nupdate artifacts"];
 
-  fact -> train -> weights -> serve;
-
-  up   [label="upstream:\ndedup, DP\n(sound)"];
-  re   [label="retrain / unlearn\n(costly)"];
-  down [label="output filter\n(leaky)"];
-
-  up -> train [style=dashed, label="before weights set"];
-  re -> weights [style=dashed, label="on the artifact"];
-  down -> serve [style=dashed, label="after the fact"];
+  data -> train -> serve -> delete;
 }
 ```
 
 <figure id="fig-privacy-provenance-unlearning-stepper">
 <div class="viz" data-viz="stepper">
-<div data-chip="Source" data-title="1 · A private fact enters the corpus">A name, an address, a fragment of correspondence gets scraped into the training data, indistinguishable from any other span of web text.</div>
-<div data-chip="Train" data-title="2 · Training memorizes it">Filter the data here and the fact never enters the weights, which is the cheap and sound intervention: dedup and differential privacy act before anything is encoded.</div>
-<div data-chip="Weights" data-title="3 · The frozen artifact has encoded it">Once training ends the fact lives in the weights, and removing it now means retraining from scratch or unlearning, which is the costly intervention on the artifact.</div>
-<div data-chip="Serve" data-title="4 · Inference can extract it">A reader who never saw the source can pull the stored string back out, because extraction needs only query access, not the original record.</div>
-<div data-chip="Filter" data-title="5 · The output filter leaks">Blocking the exact phrasing downstream is tempting, yet the filter sees only the tokens it is shown and not the oblique prompts that reach the same memorized string, so it cannot remove what the weights already encoded.</div>
+<div data-chip="Scope" data-title="1 · Define the protected unit">Choose a record, document, account, or person. That choice determines adjacency, deletion scope, and which duplicates belong to the same request.</div>
+<div data-chip="Data" data-title="2 · Minimize and trace inputs">Record sources and transformations, remove data outside the stated purpose, and measure deduplication and PII-filter errors.</div>
+<div data-chip="Train" data-title="3 · Bound influence when required">A correctly accounted differentially private training run can bound the influence of the declared unit. Deduplication and filtering reduce measured risk but do not provide that guarantee.</div>
+<div data-chip="Serve" data-title="4 · Limit what leaves the system">Access control, rate limits, monitoring, and buffered output checks can reduce disclosure and attack scale, even though they do not alter the trained artifact.</div>
+<div data-chip="Delete" data-title="5 · Follow the complete lineage">A request must reach source data, derived datasets, model states, adapters, indexes, and future jobs. Evaluate the result against retained-data retraining.</div>
+<div data-chip="Prove" data-title="6 · Preserve evidence">Keep privacy accounting, deletion results, and provenance verification separate so an operator can say exactly which claim each artifact supports.</div>
 </div>
-<figcaption>Step through one fact from source to serving, and watch where each intervention catches it: cheaply upstream, expensively at the artifact, or leakily at the output.</figcaption>
+<figcaption>Turn a broad privacy promise into six reviewable decisions, from the protected unit to the evidence kept after release.</figcaption>
 </figure>
 
-## Privacy you can buy before the weights set
+## Reduce risk before and after training
 
-If exposure is set upstream, the cheapest control is also upstream, and it is
-the one already motivated for a different reason. Deduplication, introduced in
-@sec-data-curation to stop the model wasting capacity on repeated text, is also
-the single most effective memorization control, because the sequences a model
-regurgitates are overwhelmingly the duplicated ones [@carlini2022quantifying].
-Privacy here is a free rider on an efficiency decision, which is the cleanest
-kind of control: it costs nothing extra and the constraint arrow runs the right
-way.
+Start with data minimization and purpose limitation: do not collect or retain a
+record merely because it might be useful later. The lineage practices in
+@sec-data-curation should cover source data, derived datasets, tokenized copies,
+and fine-tuning data. They should also distinguish deletion from
+pseudonymization; replacing a name with a reversible identifier does not remove
+the underlying person's data.
 
-The principled control is stronger and more expensive. @gls-differential-privacy
-bounds how much any single training record can change the trained model, by
-adding calibrated noise so that the output distribution is nearly identical
-whether or not that record was present. Applied to deep learning as DP-SGD, the
-recipe clips per-example gradients and adds Gaussian noise at each step (cap
-each example's influence, then add noise, the core of differential-privacy
-training), with a privacy budget that accounts across the whole run
-[@abadi2016dpsgd]. The
-guarantee is real and quantified, and it is the only training-time control that
-provably bounds memorization rather than merely reducing it. The cost is the
-problem. At frontier scale the noise and clipping degrade utility enough that no
-flagship general model is trained end to end under a tight DP budget, and DP is
-reserved for fine-tuning on a sensitive corpus or for models where the privacy
-guarantee is the product. Whether DP belongs in the pretraining loop at all,
-given the utility hit, is one of the open questions below.
+Exact, near-duplicate, and repeated-span detection address different forms of
+duplication. In one set of language-model experiments, deduplication reduced
+measured memorization and improved evaluation hygiene [@lee2022deduplicating].
+Related work measured substantially lower extraction risk after deduplicating
+the studied corpora [@kandpal2022deduplicating]. Deduplication reduced measured
+memorization in those settings; it does not provide differential privacy, catch
+every paraphrase, or remove a fact repeated across independent sources.
 
-PII handling and data residency are usually filed under deployment, the choice
-of which region a request runs in, and that framing undersells them. Read as
-privacy controls they are upstream interventions wearing operational clothing.
-Stripping or tokenizing personal identifiers before a record ever reaches the
-training set removes the string that could later be extracted; keeping a
-sensitive corpus inside a jurisdiction and out of the pretraining mix is a
-decision about what the weights are allowed to encode, not merely where a server
-sits. The same residency knob that @sec-security-authorization treats as a
-regulatory boundary is, from the privacy side, a choice about which facts the
-model is permitted to memorize.
+PII detection has false positives and false negatives. Measure precision and
+recall by identifier type, format, language, and document source. Names are not
+the only risk: combinations of occupation, location, and dates can identify a
+person. Filtering also has to reach derived datasets, tokenized copies, and
+fine-tuning data rather than only the first raw-data snapshot.
 
-## Removing what was already learned
+Serving-time controls still matter. Access control, rate limits, query and
+output-length limits, restricted score access, output filtering, and monitoring
+can reduce exposure or raise the cost of an extraction campaign. Buffer a
+high-risk output until a privacy gate has decided whether to release it, as in
+@sec-runtime-safety. These controls do not remove training influence, cannot
+recall information already disclosed, and should not be described as
+unlearning. Protecting prompts, retrieved context, and request logs is a
+separate confidential-inference problem covered by
+@sec-confidential-inference.
 
-The hard case is when the fact is already in the weights and someone with a
-legal right asks for it to be gone. The baseline is brutal: the only way
-to guarantee a training record's influence is removed is to retrain the model
-from scratch on the corpus minus that record. For a frontier model that costs millions of dollars and weeks per deletion request, so in practice it is not a usable option.
-@gls-machine-unlearning is the field that tries to approximate that guarantee for
-less.
+## The formal promise of differential privacy
 
-The one approach that retains an exact guarantee buys it with architecture
-rather than cleverness. Sharded, isolated training, the SISA scheme, partitions
-the data into shards, trains a separate model per shard, and aggregates their
-predictions; deleting a record then requires retraining only the one shard it
-sat in, not the whole model [@bourtoule2019unlearning]. The guarantee is exact
-because the deleted record provably never touched the other shards. The price is
-paid up front and permanently: sharding caps how much each sub-model sees, which
-costs capability, and the aggregate of small models is weaker than one model
-trained on everything. SISA is the clearest statement of the unlearning
-trade-off, that an exact deletion guarantee is something you architect for in
-advance, not something you bolt on after.
+In this formula, $\mathcal{M}$ denotes a randomized training mechanism. For
+adjacent datasets $D$ and $D'$ and every measurable set of possible outputs
+$S$, let $p$ represent the first output probability:
 
-Everything cheaper is approximate, and approximate unlearning runs into a
-measurement problem before it runs into anything else. Suppose a method
-fine-tunes the model to raise its loss on the target record, or to match the
-behavior of a model that never saw it. How do you verify the fact is actually
-gone rather than merely suppressed on the prompts you tested? A model that
-refuses to recite a memorized address when asked directly may still complete it
-from an oblique prompt, or retain the influence in a way membership inference
-can still detect. Evaluating unlearning is close to evaluating a negative, and
-the field has no agreed test that a capability has been removed rather than
-hidden, which is the contested point below.
+$$
+p=\Pr[\mathcal{M}(D)\in S].
+$$
 
-@gls-knowledge-editing attacks a narrower target: not deleting a record but changing
-a specific fact the model will state, for instance updating who holds an office.
-Locating the factual association to a small set of mid-layer feed-forward weights
-and editing them directly, the ROME method, showed that a single fact can be
-rewritten with a rank-one update (a minimal, single-direction tweak to the
-weights) [@meng2022rome], and the follow-up scaled it to
-thousands of edits at once [@meng2022memit]. The technique is precise and cheap,
-and that is also its limit. Edits are brittle: they hold for the exact phrasing
-targeted and can fail to propagate to paraphrases or logical consequences, so
-the model asserts the new fact in one form and the old one in another. Editing
-moves the surface a probe touches without guaranteeing the underlying
-representation moved with it, which connects directly to the open question in
-@sec-interpretability of whether we can even locate a fact precisely enough to
-say it was changed.
+Likewise, let $p'$ represent the probability for the adjacent dataset:
 
-## Provenance is a different promise
+$$
+p'=\Pr[\mathcal{M}(D')\in S].
+$$
 
-Privacy asks what the model should not reveal. Provenance asks the opposite
-question about output: given a piece of text or media, can anyone tell that a
-model produced it, and trust that answer. The two belong in the same discussion because
-both are claims about the relationship between a model and a specific string,
-but they pull in opposite directions, and conflating them is a common error.
+The mechanism is $(\varepsilon,\delta)$-differentially private when the
+privacy-loss bound is
 
-For text, the dominant idea is statistical @gls-watermarking: at generation time,
-bias the sampling toward a pseudo-randomly chosen "green" subset of the
-vocabulary at each step, so that text from the model carries a detectable
-statistical signature that ordinary text does not, recoverable without access to
-the model [@kirchenbauer2023watermark]. The scheme is elegant and adds little
-cost. Its weakness is robustness: paraphrasing the output, translating it and
-back, or having a second model rewrite it degrades the signal, and a determined
-evader can usually launder a watermark out. So a text watermark is a useful
-signal at population scale and a weak one against an adversary, which is exactly
-the wrong way round for the high-stakes attribution cases people most want it
-for. The population-scale reading is no longer hypothetical: Google DeepMind's
-SynthID-Text hardened the same sampling-bias idea for production and has
-served watermarked Gemini output since 2024, with the scheme published,
-open-sourced, and paired with a public detector [@dathathri2024synthid].
+$$
+p\le e^{\varepsilon}p'+\delta.
+$$
 
-For images, audio, and video, the more durable approach is not to watermark the
-pixels but to sign the provenance metadata. Content Credentials, standardized as
-C2PA, attach a cryptographically signed manifest recording how an asset was made
-and edited, so a viewer can verify the chain rather than guess from the content
-[@c2pa2024]. This inverts the watermarking bet: instead of hiding a signal in
-the content and hoping it survives, it binds a signature to the content and
-makes tampering detectable. The limit is adoption and stripping. A signed
-manifest only helps where the capture device, the editing tool, and the platform
-all participate, and an unsigned asset is not proof of anything, only the absence
-of a credential. Standards and law are now forcing that coordination rather
-than waiting for it:
-the specification is in the final stage of ISO standardization as ISO/DIS 22144
-[@iso2025cc], and the EU AI Act's synthetic-media transparency duty applies
-from August 2026 (@sec-law-policy), turning participation from voluntary to
-legally required in one major market. Stripping and the unsigned default remain
-the live limits, so provenance for the generated media of @sec-beyond-text is
-still a coordination problem as much as a cryptographic one.
+Here the privacy unit determines what adjacency means. The parameter
+$\varepsilon$ is the multiplicative privacy-loss bound, so smaller
+$\varepsilon$ is stronger when the rest of the mechanism is fixed.
+$\delta$ permits a bounded probability of exceeding that multiplicative
+guarantee. The definition compares distributions of possible trained artifacts;
+it does not say that two training runs produce identical weights or that the
+model can never output personal information [@dwork2014differential].
 
-::: {.callout-tip}
-## Constraint arrow
-The privacy exposure of a deployed model is fixed before serving begins.
-Training-time memorization, set by model scale in @sec-scaling-laws and by the
-deduplication and filtering choices in @sec-data-curation, dictates what can be
-extracted at inference time. The arrow runs strictly upward and forward: you
-cannot filter out at the output what the weights already encoded, because an
-output filter sees only the tokens it is shown and not the thousand oblique
-prompts that reach the same memorized string. The only controls that bound the
-exposure rather than chase it are the upstream ones (dedup, differential
-privacy, PII stripping) and the expensive downstream one (retraining or
-unlearning the artifact). A serving-time guardrail, the subject of the runtime
-safety chapter, is the weakest link in the chain precisely because it acts last.
-:::
+DP-SGD applies the definition to iterative optimization
+[@abadi2016dpsgd]. For a sampled batch of size $B$, let $g_{t,i}$ be the
+per-example gradient at step $t$. Clip each gradient to clipping norm $C$:
+
+$$
+\bar g_{t,i}=g_{t,i}\min\left(1,\frac{C}{\lVert g_{t,i}\rVert_2}\right).
+$$
+
+Then average the clipped gradients with Gaussian noise:
+
+$$
+\begin{aligned}
+\widetilde{g}_t
+&=\frac{1}{B}\left(
+\sum_{i=1}^{B}\bar g_{t,i}\right. \\
+&\qquad\left.+\mathcal{N}(0,\sigma^2 C^2 I)
+\right).
+\end{aligned}
+$$
+
+Here, $\sigma$ is the noise multiplier and $I$ is the identity covariance
+shape. With learning rate $\eta$, the optimizer makes the update
+
+$$
+\theta_{t+1}=\theta_t-\eta\widetilde{g}_t.
+$$
+
+The batch size, sampling rate, number of steps, clipping norm, and noise
+multiplier all affect privacy and learning. Repeated access to private data
+causes composition: privacy loss accumulates across steps and other releases.
+A privacy accountant converts the sampling and noise schedule into the reported
+$(\varepsilon,\delta)$ bound under stated assumptions. Every tuning run or
+private-data-dependent release must be included in that accounting.
+
+Differential privacy bounds one unit's influence on the mechanism's output
+distribution. It does not remove information repeated across many privacy
+units, protect private inference prompts, or guarantee useful accuracy. Utility
+must be measured for the deployment population and rare cases, not inferred
+from the privacy budget alone.
+
+## Define unlearning against retraining
+
+@gls-machine-unlearning, a process that aims to remove the influence of
+specified training data from a trained model, needs a counterfactual target.
+Here $\mathcal{A}$ denotes a randomized training algorithm, $D$ the original
+training dataset, $D_f$ the forget set, and $D_r=D\setminus D_f$ the retained
+dataset. The symbol $\mathcal{U}$ denotes an unlearning algorithm applied to an
+artifact produced by $\mathcal{A}(D)$. The retraining reference is
+
+$$
+\begin{aligned}
+&\mathcal{U}(\mathcal{A}(D),D_f) \\
+&\text{compared with} \\
+&\mathcal{A}(D\setminus D_f).
+\end{aligned}
+$$
+
+Exact unlearning makes the distribution of artifacts on the left match the
+distribution produced by retained-data training on the right. Approximate
+unlearning bounds a stated distance or distinguishability between those
+distributions [@guo2020certified]. The target is a distribution because training
+and unlearning can both contain randomness. Matching one checkpoint or one
+answer is not the definition.
+
+Full retained-data retraining is the general reference, not the only possible
+exact method. Some restricted learners support efficient exact or certified
+removal under their mathematical assumptions. Those results do not transfer
+automatically to a different architecture, optimizer, or training pipeline.
+Even exact unlearning removes the specified records' influence under the
+declared training algorithm; it need not erase a semantic fact also present in
+retained duplicates, correlated examples, or earlier pretraining.
+
+### SISA: deletion designed into training
+
+SISA partitions the training data into disjoint shards, divides each shard into
+cumulative slices, trains isolated component models, and saves intermediate
+states. A deletion can retrain only affected components from a checkpoint before
+the relevant slice, then repeats the declared aggregation
+[@bourtoule2019unlearning]. The training procedure must be designed in advance,
+and exactness is relative to that procedure.
+
+The assumptions are operational as well as mathematical. Shard and slice
+assignments, randomness, checkpoints, and aggregation must be reproducible.
+Multiple affected shards require multiple retrains, and a learned aggregator
+may itself need deletion. The original evidence concerned supervised
+classification; it does not make arbitrary post-hoc editing exact or establish
+the same trade-off for a frontier language model.
+
+### Evaluate forgetting, retention, and recovery
+
+An empirical evaluation should compare several unlearned artifacts with several
+retained-only retraining references. At minimum, report:
+
+- **Forget-set behavior:** likelihood, exposure, extraction attempts,
+  membership inference, direct prompts, paraphrases, and adaptive prompts.
+- **Retain-set utility:** task performance, calibration, and behavior on
+  neighboring knowledge. Measure collateral damage rather than hiding it in an
+  average.
+- **Recovery:** white-box probes where available, short fine-tuning or
+  relearning attacks, and access to pre-deletion outputs or artifacts.
+- **Operations:** deletion size, sequential requests, storage, latency, cost,
+  and the complete affected-artifact inventory.
+
+One refusal is not evidence of unlearning. A method may suppress the tested
+answer while retaining membership or enabling rapid relearning. Conversely, a
+retained-data retrain may still state the same fact because retained sources
+support it. TOFU provides synthetic author profiles, forget sets, retained
+references, and multiple metrics; its tested baselines did not jointly achieve
+effective forgetting and retention [@maini2024tofu]. It is a useful benchmark,
+not a universal certificate.
+
+### Deletion is a lineage operation
+
+A deletion request should resolve from the data subject or record scope to every
+affected artifact:
+
+- the source record, dataset snapshots, deduplicated copies, transformed and
+  tokenized data, and queued future training runs;
+- checkpoints, optimizer state, adapters, merged models, ensembles, and model
+  registry copies;
+- embeddings, retrieval indexes, evaluation fixtures, caches, logs, and
+  backups governed by the same request; and
+- a deletion tombstone that prevents accidental re-ingestion while preserving
+  the minimum evidence needed for audit.
+
+A checkpoint and adapter copy left outside the inventory can restore the old
+behavior after the primary model is replaced. The tombstone needs a stable
+scope identifier and expiry or review policy, without retaining the deleted
+content itself.
+
+### Editing is a different operation
+
+Knowledge editing is not machine unlearning. It changes selected model behavior,
+often a subject-relation answer, and is commonly evaluated for direct efficacy,
+paraphrase generalization, and locality [@meng2022rome; @meng2022memit]. It does
+not establish that a training record's influence is gone. A successful edit
+may fail on a paraphrase or logical consequence, cause collateral changes, or
+leave membership evidence intact. Use editing when the product promise is to
+change an answer; do not report it as record deletion without a corresponding
+unlearning argument and evaluation. This distinction also limits what
+mechanistic findings from @sec-interpretability can establish.
+
+## Provenance provides evidence, not truth
+
+A statistical watermark, a signed manifest, attribution to an author, and the
+truth of the content are four separate claims. A participating generator can
+embed a detectable signal without identifying the person who requested the
+output. A signer can attest to an edit history without proving that the depicted
+event happened.
+
+### Statistical watermarks
+
+One family of text watermarks changes generation so tokens correlate with a
+secret keyed pattern. A detector computes a score and compares it with a
+detector threshold [@kirchenbauer2023watermark]. The operational report needs
+the false-positive rate, false-negative rate, abstention policy, text length,
+language, sampling configuration, model version, and measured quality. It also
+needs the evaluation base rate: even a small false-positive rate can dominate
+when watermarked text is rare.
+
+Robustness is transformation-specific. Test truncation, ordinary edits,
+watermark paraphrase, translation, model rewriting, and mixed human/model text.
+A detector may retain confidence after one edit and lose it after another.
+Absence of a detectable watermark is not proof of human authorship; the text
+may come from a nonparticipating generator, be too short, or have been changed.
+
+SynthID-Text is a production example with a different sampling construction
+from the original green-list scheme. Its large-scale evaluation covered about
+twenty million Gemini responses and measured detection and quality in that
+deployment [@dathathri2024synthid]. This evidence supports the tested mechanism
+and configuration, not a universal AI-text detector.
+
+### Signed Content Credentials
+
+C2PA represents provenance claims in a signed manifest. The manifest contains
+assertions, an asset hash or other content binding, a claim, a claim signature,
+and information needed to evaluate the signing credential [@c2pa2024]. A valid
+signature and binding provide tamper evidence: they show that the signed claim
+was bound to this asset and has not been modified undetected since signing.
+Linked manifests can record an edit history when participating tools preserve
+or extend the chain.
+
+Verification still requires policy. The verifier decides which trust anchors,
+credential status, algorithms, and assertion types it accepts. An unknown signer
+is not automatically malicious, but its claims may be outside the verifier's
+trust policy. A valid credential does not prove that the depicted event happened,
+that every edit was recorded, or that the assertions were honest.
+
+Manifests can be embedded or stored externally, and soft bindings can help
+recover provenance after a permitted transformation. Complete removal remains
+possible. A stripped manifest produces missing evidence, not a successful
+verification; an unsigned asset is not evidence that the asset is synthetic.
+Watermarks and credentials can therefore complement one another, but neither
+turns absence into proof. C2PA's manifest architecture is also the subject of an
+ISO work item [@iso2025cc]. Current standards and disclosure duties are tracked
+in @sec-law-policy because their status and scope change independently of these
+engineering guarantees.
+
+## Keep an operating record
+
+The audit record should be machine-readable and versioned. A compact schema can
+use these fields:
+
+```yaml
+data_subject_or_record_scope:
+source_and_legal_basis:
+dataset_and_transform_revisions:
+privacy_unit_and_adjacency:
+dp_mechanism_and_accountant:
+training_job_and_artifact_revisions:
+deletion_request_and_tombstone:
+affected_artifact_inventory:
+unlearning_method_and_retraining_reference:
+forget_retain_and_privacy_results:
+provenance_mechanism_and_signer:
+detector_threshold_and_error_rates:
+verification_and_exception_owner:
+```
+
+Do not let the schema become a claim generator. Empty fields, exceptions, and
+failed verification must remain visible. Access to the record should be
+restricted because lineage and deletion evidence may themselves identify a
+person.
+
+### Regression scenarios
+
+Automate cases that exercise the assumptions, not only the happy path:
+
+- a duplicated canary, one user across many records, a PII detector miss, and
+  membership distribution shift;
+- a checkpoint and adapter copy, a forget-set paraphrase, a relearning attack,
+  and a retained-utility regression;
+- a watermark paraphrase, a human-text false positive, a stripped C2PA
+  manifest, and a tampered asset.
+
+Each failure should name the affected person or content claim, the responsible
+owner, and whether the remedy changes data, training, serving, deletion, or
+verification.
 
 ::: {.callout-important}
 ## What's contested
-- **Does approximate unlearning remove a capability or hide it?** One camp
-  treats a model that no longer emits the target as unlearned; the other holds
-  that without an exact guarantee like sharded retraining, the influence may
-  persist below the surface and resurface under an unprobed prompt, and that the
-  field lacks a test to tell the two apart.
-- **Is text watermarking robust enough to deploy?** Proponents point to strong
-  population-level detection at low cost; skeptics note that paraphrase and
-  rewrite attacks launder the signal, so the watermark fails against exactly the
-  motivated adversary that high-stakes attribution targets.
-- **Does differential privacy belong in frontier pretraining?** The guarantee is
-  the only provable bound on memorization, but the utility cost at scale is large
-  enough that no flagship is trained under a tight budget, and whether the
-  guarantee is worth the capability it sacrifices is unsettled.
+
+- **What empirical evidence is enough for approximate unlearning?** Formal
+  definitions compare distributions, but practical language-model evaluations
+  use finite attacks and utility tests. Passing today's probes does not rule
+  out a stronger adaptive or white-box test tomorrow.
+- **Which watermark threat model is useful?** A watermark can work well for
+  aggregate measurement under known configuration while remaining vulnerable
+  to deliberate transformation. Product claims should match the tested editor,
+  text length, language, and error rate.
+- **Where is differential privacy worth its utility cost?** The answer depends
+  on the privacy unit, data regime, model, budget, and acceptable error. The
+  guarantee and the utility measurement should be reported together.
 :::
 
-## Trust bought upstream
+::: {.callout-tip}
+## Lower-layer constraint
 
-This layer is almost pure trust, bought against capability and efficiency.
-Capability is what memorization quietly adds and what differential privacy and
-unlearning take away: a model trained to forget, or trained under noise, knows
-less. The efficiency cost shows up in every real control here, from the
-deduplication that is nearly free to the full retrain that is the price of a
-guaranteed deletion, with DP and SISA in between as standing taxes on the
-training budget. Trust, in the end, is the whole point: whether a person can
-rely on the system not to leak them, and whether a viewer can rely on a
-provenance claim. The
-uncomfortable thesis is that trust at this layer is mostly
-purchased upstream and is expensive to retrofit, because a fact in the weights is
-not a record in a database that can be deleted with a query. The law that turns
-these engineering limits into obligations is @sec-law-policy, and the
-inference-time controls that try, and largely fail, to contain what the weights
-already hold are the runtime safety layer that follows.
+Training and data systems determine which privacy and deletion promises are
+available later. Complete lineage enables scoped deletion; a declared privacy
+unit and accountant enable a differential-privacy claim; reproducible shards,
+slices, randomness, and aggregation enable SISA-style retraining. Serving then
+controls what is released, while the provenance path preserves evidence about
+an output. These layers constrain one another, but none substitutes for the
+others. When the lower layer cannot identify affected data or reproduce the
+training procedure, the upper layer cannot manufacture that evidence after the
+fact.
+:::
+
+## Three promises, three kinds of evidence
+
+Privacy is supported by a threat model, measured attacks, data controls, and,
+where used, a formal privacy budget. Unlearning is supported by lineage and a
+comparison with retained-data retraining. Provenance is supported by a
+watermark detector or verified signed assertions under a trust policy. Keeping
+these claims separate makes them more useful: an operator can state what was
+protected, what was removed, what was signed, and what remains unknown.
 
 ## Further reading
 

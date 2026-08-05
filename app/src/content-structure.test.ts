@@ -814,7 +814,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["en/safety/05-adversarial-robustness.qmd", "@gls-jailbreak attacks, prompts designed to bypass refusal"],
     ["zh/safety/04-runtime-safety.qmd", "用@gls-jailbreak，也就是绕过拒绝边界的提示"],
     ["zh/safety/05-adversarial-robustness.qmd", "@gls-jailbreak攻击，也就是绕过拒绝边界的提示"],
-    ["en/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning, approximate removal of a learned fact from trained weights"],
+    ["en/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning, a process that aims to remove the influence of specified training data from a trained model"],
     ["zh/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning，也就是近似地从已训练权重里移除某个已学事实"],
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, which lets one machine move bytes into another's memory"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-rdma，也就是绕过 CPU 直接读写远端内存"],
