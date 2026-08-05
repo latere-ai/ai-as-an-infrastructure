@@ -912,7 +912,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/08-law-regulation-policy.qmd",
-      ["European Union's risk tiers", "documents a release now legally requires", "copyright is the unsettled ground", "rule written by a regulator rewrite a data-curation decision"],
+      ["Legal compliance is not a property of a model", "specific system", "intended use", "jurisdiction", "source version"],
     ],
     [
       "zh/safety/08-law-regulation-policy.qmd",
