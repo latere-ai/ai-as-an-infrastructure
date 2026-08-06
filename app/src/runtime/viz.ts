@@ -994,16 +994,15 @@
     loop();
   };
 
-  // Three tiers of bandwidth: a byte crossing HBM, then NVLink, then the
-  // inter-node network. Each step outward is about an order of magnitude slower
-  // per byte (the chapter's own framing; it gives no absolute GB/s, so neither
-  // does this). The HBM packet zips across, the inter-node one crawls.
+  // Three data-movement boundaries. Animation speeds preserve the qualitative
+  // locality hierarchy without claiming fixed ratios; sustained rates depend
+  // on the deployed device, domain, topology, direction, and traffic pattern.
   R['bandwidth-tiers'] = function (host) {
     var cv = canvas(host, 230);
     var tiers = [
-      { label: 'HBM · on-package', rate: '1×', speed: 1.0 },
-      { label: 'NVLink · intra-node', rate: '≈10× slower', speed: 0.1 },
-      { label: 'inter-node network', rate: '≈100× slower', speed: 0.01 }
+      { label: 'HBM · device memory', rate: 'measure sustained', speed: 1.0 },
+      { label: 'NVLink / scale-up', rate: 'domain-specific', speed: 0.55 },
+      { label: 'IB / Ethernet scale-out', rate: 'topology-specific', speed: 0.28 }
     ];
     var pos = [0.0, 0.0, 0.0], timer = null;
     function draw() {

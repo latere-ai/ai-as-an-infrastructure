@@ -1016,7 +1016,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/infrastructure/01-accelerators-networking.qmd",
-      ["bandwidth hierarchy", "tensor-parallel group almost never spills past the NVLink boundary", "model FLOPs utilization"],
+      ["does not predict application performance", "the bottleneck may move", "measure the complete system"],
     ],
     [
       "zh/infrastructure/01-accelerators-networking.qmd",

@@ -329,7 +329,7 @@ test("specialized practice terms get local definitions before use", () => {
 
 test("abbreviations and decoding methods are defined at first use", () => {
   const required = [
-    ["en/infrastructure/01-accelerators-networking.qmd", "the @gls-hbm sitting beside the accelerator die"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "The @gls-hbm, high-bandwidth memory packaged beside the accelerator"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "紧贴加速器裸片的@gls-hbm供给单块芯片"],
     ["en/inference/03-faster-decoding.qmd", "@gls-speculative-decoding is proposal-and-verification with a correction rule"],
     ["zh/inference/03-faster-decoding.qmd", "@gls-speculative-decoding就是这个模式的精确版本"],
@@ -816,7 +816,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["zh/safety/05-adversarial-robustness.qmd", "@gls-jailbreak攻击，也就是绕过拒绝边界的提示"],
     ["en/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning, a process that aims to remove the influence of specified training data from a trained model"],
     ["zh/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning，也就是近似地从已训练权重里移除某个已学事实"],
-    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, which lets one machine move bytes into another's memory"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, remote direct memory access, lets a network adapter transfer data"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-rdma，也就是绕过 CPU 直接读写远端内存"],
     ["en/infrastructure/05-the-compute-frontier.qmd", "@gls-cowos package: an advanced package that places compute chiplets and HBM"],
     // The zh twin introduces before use: the interposer is described, then named.
@@ -845,9 +845,9 @@ test("audited leftover first uses define the role of the term in place", () => {
     ["en/foundations/02-data-curation.qmd", "**@gls-decontamination report** that states which benchmark-overlap checks were run"],
     ["zh/foundations/02-data-curation.qmd", "**@gls-decontamination报告**，也就是说明哪些基准重叠已从训练语料中移除"],
     ["zh/foundations/03-tokenization.qmd", "@gls-bpe是这套构造的主力：它反复合并语料中最常见的相邻符号"],
-    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod is Google's accelerator cluster counterpart"],
-    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-ici, the pod's internal inter-chip interconnect"],
-    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-gpu cluster, a cluster of graphics processors used as accelerators"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod, a cluster of Google tensor processing units"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-ici, the inter-chip interconnect joining TPU chips"],
+    ["en/infrastructure/01-accelerators-networking.qmd", "@gls-gpu cluster, a cluster that uses graphics processors as accelerators"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod 是 Google 加速器集群一侧的对应物"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-ici，也就是 pod 内部的芯片间互连"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-gpu 集群，也就是用图形处理器作加速器的集群"],

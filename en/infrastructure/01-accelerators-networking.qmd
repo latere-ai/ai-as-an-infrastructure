@@ -1,233 +1,403 @@
 # Accelerators and Networking {#sec-accelerators-networking}
 
-A training run lives or dies on bandwidth, not peak FLOPs. The useful view is a bandwidth hierarchy: the @gls-hbm sitting beside the accelerator die feeds a chip; NVLink and NVSwitch connect accelerators inside a node; and InfiniBand or RoCE carry bytes between nodes. That hierarchy explains why a tensor-parallel group almost never spills past the NVLink boundary, why data and pipeline parallelism can cross the network, and how model FLOPs utilization measures whether the hardware floor is being used.
+An accelerator specification does not predict application performance. Peak
+arithmetic, memory capacity, and link rates are ceilings for particular
+operations under particular conventions. A useful performance claim must also
+name the workload, tensor shape, precision, software stack, topology, and
+measurement method. Change any of them and the bottleneck may move.
 
-## A run that the spec sheet cannot explain
+This chapter builds the hardware model needed to reason about that movement. It
+starts inside one accelerator, follows data through memory and interconnects,
+then shows how to measure the complete system. Parallel algorithms are covered
+in @sec-training-at-scale; cluster control, checkpointing, and the data plane
+belong to @sec-orchestration-data-infra.
 
-Picture a frontier run spread across thousands of accelerators for weeks. The spec sheet promises a peak arithmetic rate, and the run delivers a fraction of it. The missing factor is rarely the matrix-multiply units sitting idle for want of work. It is the bytes those units wait on: how fast a chip reaches its own memory, the rate at which two chips in a chassis can talk, and what a message costs to travel between two chassis across the hall. Those three numbers differ by more than an order of magnitude each step out, and a parallelism axis that needs more talking than its tier can afford stalls the whole collective, the coordinated cross-device communication operation it depends on.
+## What an accelerator actually accelerates
 
-So the spec sheet's peak FLOPs is the wrong place to start. The right place is the hierarchy of bandwidth tiers underneath it, because every layout decision is a question of which tier a given exchange can afford. Here the hardware floor means the accelerators, the interconnect hierarchy, and the single number, MFU, that says whether the floor is being used. The parallelism algorithms built on top belong to @sec-training-at-scale; cluster orchestration, checkpointing, and the data plane belong to @sec-orchestration-data-infra.
+An accelerator is not one large arithmetic unit. A host CPU starts the program,
+manages operating-system work, and launches device kernels. The device combines
+general-purpose parallel lanes, memory controllers, caches, and specialized
+matrix engines. On NVIDIA GPUs, groups of threads execute through the
+single-instruction, multiple-thread (SIMT) programming model. Other vendors use
+different names and execution details, so SIMT should not be treated as a
+universal accelerator instruction set [@nvidia2026cuda].
 
-## Three tiers of bandwidth
+A matrix engine performs tiled matrix multiply-accumulate operations. The tile
+shape, accepted input formats, accumulation precision, and instruction semantics
+vary by architecture. A systolic array is one possible dataflow design in which
+values move rhythmically through a grid of processing elements. Google's first
+TPU used a documented systolic matrix unit, but that fact does not establish the
+physical implementation of every GPU matrix engine or later accelerator
+[@kung1982systolic; @jouppi2017tpu].
 
-The machine is a hierarchy of bandwidth tiers, and tracing a byte from the die outward shows why each tier exists and what it can host.
+The kernel is the executable unit that turns this hardware into useful work.
+Performance depends on whether its tensor dimensions fit the available tile
+shapes, memory accesses coalesce, branches diverge, and enough independent work
+exists to occupy the device. Lower-precision inputs can reduce storage and
+traffic, and native low-precision matrix instructions can raise peak arithmetic.
+Those gains require compatible kernels and shapes. Casts, scaling, non-matrix
+operations, and numerical safeguards remain real costs [@micikevicius2022fp8].
+Likewise, a structured sparsity peak applies only when the required sparsity
+pattern and supported instruction path are actually used. Dense and sparse
+peaks are not interchangeable.
 
-The innermost tier is a chip and its memory. An accelerator pairs a large matrix-multiply throughput with @gls-hbm sitting next to the die. The forward and backward matmuls are fed from HBM, so HBM bandwidth, not raw FLOPs, often sets the achievable rate for a kernel.
+## The roofline is a bound, not a diagnosis
 
-Drag the ceiling to see why a kernel that does little work per byte fetched stays bandwidth-bound and never reaches the peak FLOPs the spec sheet promises.
+The roofline model relates arithmetic to data movement at one named memory
+boundary [@williams2009roofline], where $F$ denotes the number of floating-point
+operations performed by a kernel and $Q$ denotes the bytes transferred across
+that boundary. Their ratio is
 
-```{=html}
-<figure id="fig-accelerators-networking-curve">
-<div class="viz" data-viz="curve" data-family="roofline" data-xlabel="FLOPs per byte fetched" data-ylabel="achievable FLOPs" data-plabel="peak FLOPs ceiling" data-pmin="2" data-pmax="12" data-p="6"></div>
-<figcaption>A kernel ramps with how much arithmetic it does per byte it pulls from HBM, then flattens once it hits the hardware's peak FLOPs ceiling.</figcaption>
-</figure>
-```
+$$
+I=\frac{F}{Q}
+$$
 
-The next tier is intra-node: the few accelerators inside one chassis. On NVIDIA hardware these are wired with NVLink, a dedicated chip-to-chip fabric, and NVSwitch, which lets every accelerator in the node reach every other at full NVLink bandwidth rather than over the slower PCIe bus. This tier is where the most communication-hungry axis can live, because NVLink bandwidth is high enough to hide a collective behind compute. Whether a collective hides at all is a ratio, as @fig-accelerators-networking-2 sketches: as long as a step does more compute than communication the collective vanishes entirely under it, and the inter-node network falls short precisely because its bytes are dear enough to leave some communication exposed.
+where $I$ represents arithmetic intensity in FLOPs per byte. Here,
+$P_{\mathrm{peak}}$ denotes peak arithmetic throughput for the chosen
+instruction and precision, while $B_{\mathrm{mem}}$ denotes sustainable
+bandwidth at the same boundary. The resulting bound is
 
-![Schematic of how much of a collective hides under compute as a function of the compute-to-communication ratio, after Shoeybi et al. (2019) and Narayanan et al. (2021). The NVLink tier sits where the ratio is high and the collective vanishes entirely; the inter-node network sits where bytes are dearer, so some communication stays exposed.](/figures/accelerators-networking-2.svg){#fig-accelerators-networking-2}
+$$
+P_{\mathrm{achieved}} \le
+\min\!\left(P_{\mathrm{peak}},\;I B_{\mathrm{mem}}\right).
+$$
 
-The outermost tier is inter-node: chassis talking to chassis across a datacenter network. Here the fabric is InfiniBand or RoCE (RDMA over Converged Ethernet), wired in a topology such as a fat-tree or a rail-optimized layout, with a network interface card (NIC) per accelerator setting the per-device injection bandwidth. This tier is an order of magnitude slower per byte than NVLink, so only axes that communicate sparingly can afford to span it.
+Here, the two ceilings meet at the ridge point
 
-```{dot}
-//| label: fig-accelerators-networking-tiers
-//| fig-cap: "The three bandwidth tiers of a training cluster. Each step outward, from HBM to NVLink to the inter-node network, drops roughly an order of magnitude in bandwidth per byte."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  compound=true;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+$$
+I^*=\frac{P_{\mathrm{peak}}}{B_{\mathrm{mem}}}.
+$$
 
-  subgraph cluster_chip {
-    label="chip + HBM";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    A [label="accelerator die"];
-    M [label="high-bandwidth memory"];
-    A -> M [label="HBM bandwidth"];
-  }
-  subgraph cluster_node {
-    label="intra-node (one chassis)";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    G1 [label="GPU"];
-    G2 [label="GPU"];
-    G1 -> G2 [label="NVLink / NVSwitch", dir=none];
-  }
-  subgraph cluster_cluster {
-    label="inter-node (across the hall)";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    N1 [label="node"];
-    N2 [label="node"];
-    N1 -> N2 [label="InfiniBand / RoCE", dir=none];
-  }
-  A -> G1 [ltail=cluster_chip, lhead=cluster_node];
-  G1 -> N1 [ltail=cluster_node, lhead=cluster_cluster];
-}
-```
+Below $I^*$, data movement bounds throughput; above it, arithmetic can become
+the tighter bound. This does not make runtime equal to the bound. Launch cost,
+dependencies, occupancy, cache misses, imbalance, power limits, and unsupported
+tile shapes can all lower achieved throughput.
+
+The byte count also needs a boundary. A kernel may have high intensity when
+traffic is counted at high-bandwidth memory (HBM), but low intensity at a cache
+level. Report whether $Q$ means HBM traffic, host-device traffic, or network
+traffic, and use a measured sustainable bandwidth rather than silently
+substituting the vendor peak.
+
+## Capacity, bandwidth, latency, and traffic
+
+Inside a typical GPU, data can move among registers, software-managed shared
+memory, cache, and device memory. The @gls-hbm, high-bandwidth memory packaged
+beside the accelerator, provides the large device-memory pool. These levels do
+different jobs:
+
+- **Capacity** decides whether weights, gradients, optimizer states,
+  activations, temporary workspaces, collective buffers, and allocator headroom
+  fit at all. Serving adds the KV cache described in @sec-serving-problem.
+- **Bandwidth** limits how many bytes can cross a boundary per second under a
+  given access pattern.
+- **Latency** is the delay before a dependent access can be used. Parallelism
+  can hide some latency, but not an unmet dependency.
+- **Traffic** is the number of bytes the program actually causes to move. Kernel
+  fusion, recomputation, sharding, caching, and layout can change it without
+  changing a link's rated bandwidth.
+
+Capacity is not bandwidth, and neither is utilization. A workload can fit in
+HBM yet run slowly because it repeatedly streams data. Another can be
+compute-bound even on a machine with the same HBM. State explicitly where
+traffic is counted before comparing results.
+
+The same caution applies as data moves outward. The interactive below shows the
+conceptual hierarchy, not measured ratios. Actual systems differ in domain size,
+directionality, endpoint injection, and sustained throughput.
 
 ```{=html}
 <figure id="fig-accelerators-networking-bandwidth-tiers">
 <div class="viz" data-viz="bandwidth-tiers"></div>
-<figcaption>The same three tiers, now with a byte in flight on each lane. The HBM byte crosses on-package while the inter-node byte is still crawling, the order-of-magnitude drop per step that decides which parallelism axis can afford which tier. Relative speeds, illustrative.</figcaption>
+<figcaption>Data crosses several boundaries between a matrix engine and another accelerator. The rates are illustrative; measure each boundary on the deployed system.</figcaption>
 </figure>
 ```
 
-## Mapping parallelism onto the tiers
+## An interconnect is a stack
 
-Once the tiers are fixed, the placement of each parallelism axis follows directly, and it follows from communication volume, not from taste. Tensor parallelism (TP) shards a single matmul across devices and exchanges activations, the intermediate values passed between devices, with an all-reduce, in which every device sums its partial result with all others, twice per layer, so it is the most bandwidth-hungry axis and is pinned to the NVLink tier inside a node [@shoeybi2019megatron]. Data and pipeline parallelism communicate far less per step, a gradient reduction once per step for DP and a single activation hand-off per stage boundary for PP, so they are the axes allowed to cross the inter-node network [@narayanan2021efficient]. Expert parallelism for MoE rides its own all-to-all group, treated in @sec-moe-ssm-hybrids. The rule of thumb that follows, TP inside the node and DP/PP across nodes, is not a convention but a consequence of the bandwidth gap, as @fig-accelerators-networking-axis-map lays out.
+“The network” hides three separate design layers:
 
-```{dot}
-//| label: fig-accelerators-networking-axis-map
-//| fig-cap: "Parallelism axes ordered by per-step communication volume, each landing on the cheapest tier that can still hide its collective under compute. The bandwidth gap, not convention, assigns TP to NVLink and DP/PP to the inter-node network."
-digraph axis_map {
-  bgcolor="transparent";
-  node [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
-  rankdir=LR;
-  node [shape=box, style=rounded, fontsize=11];
-  edge [fontsize=10];
+1. **Physical topology.** Links and switches determine hop count, path
+   diversity, failure domains, endpoint injection, bisection bandwidth, and
+   oversubscription. A fast endpoint link does not make an oversubscribed fabric
+   non-blocking.
+2. **Transport.** PCIe and NVLink move data within some systems; InfiniBand or
+   Ethernet with RoCE move it across a scale-out fabric. The physical domain of
+   each transport is product-specific. Some NVSwitch systems connect a small
+   server, while newer designs can extend an NVLink domain across a rack
+   [@nvidia2026nvl72].
+3. **Collective library.** Software such as NCCL maps logical operations onto
+   available paths and algorithms. It is topology-aware, but it cannot create
+   bisection bandwidth or repair a poor rank placement [@nvidia2026nccl].
 
-  subgraph cluster_axes {
-    label="parallelism axis (heaviest to lightest communication)";
-    style=dashed;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontname="Helvetica";
-    TP [label="TP\ntwo all-reduces per layer"];
-    DP [label="DP\none gradient all-reduce per step"];
-    PP [label="PP\none activation hand-off per stage"];
-    TP -> DP -> PP [style=invis];
-  }
+@gls-rdma, remote direct memory access, lets a network adapter transfer data
+between registered memory regions without putting the host CPU on the data path.
+RoCE supplies RDMA semantics over Ethernet; InfiniBand supplies them in its own
+network stack. GPU-direct variants can expose GPU memory to a peer device, but
+memory registration, PCIe placement, drivers, and synchronization still matter
+[@nvidia2026gpudirect]. “Bypasses the CPU” describes the data path, not a system
+with no CPU setup or control work.
 
-  NVLink [label="NVLink tier\nintra-node, highest bandwidth", style="rounded,filled", fillcolor="#f1ece1", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  Network [label="inter-node network\nInfiniBand / RoCE, an order slower", style="rounded,filled", fillcolor="#f1ece1"];
+Scale-up and scale-out are therefore useful descriptions, not fixed synonyms for
+“inside a node” and “outside a node.” Record the actual endpoints and switches.
+Do not compare a bidirectional aggregate NVLink figure with a one-direction NIC
+rate, or an aggregate switch number with per-device injection.
 
-  TP -> NVLink [label="must stay inside"];
-  DP -> Network [label="can cross"];
-  PP -> Network [label="can cross"];
-}
+## Collectives have semantics and algorithms
+
+A collective describes what a group of ranks receives:
+
+- **broadcast:** copy one root's buffer to every rank;
+- **all-reduce:** combine values across ranks and return the result to every
+  rank;
+- **all-gather:** concatenate every rank's shard at every rank;
+- **reduce-scatter:** combine values and leave each rank with one result shard;
+- **all-to-all:** send a distinct shard from every rank to every other rank.
+
+These semantics do not choose the algorithm. An all-reduce may use a ring, a
+tree, a hierarchical composition, or another schedule. The library can also
+split one semantic operation into phases; reduce-scatter followed by all-gather
+is equivalent to all-reduce for matching reductions and layouts
+[@nvidia2026nccl].
+
+A simple latency-bandwidth model makes the trade-off visible. For a message of
+$n$ bytes,
+
+$$
+T_{\mathrm{msg}}(n)=\alpha+n\beta,
+$$
+
+where $\alpha$ is the per-message startup latency and $\beta$ is seconds per
+byte, the reciprocal of effective bandwidth. Under an idealized ring with $p$
+ranks, equal links, no contention, and no overlap, a large all-reduce is
+approximately
+
+$$
+T_{\mathrm{ring}}(n,p)\approx
+2(p-1)\alpha+\frac{2(p-1)}{p}n\beta.
+$$
+
+The ring is bandwidth-efficient for large messages because each rank transfers
+about $2(p-1)n/p$ bytes, but its $2(p-1)$ phases make startup expensive for
+small messages [@patarasuk2009allreduce]. A tree changes the latency term and
+traffic pattern. Real results also include protocol choice, chunking, reduction
+work, routing, congestion, and unequal links.
+
+Communication overlaps compute only when the dependency graph exposes
+independent work and the runtime schedules both successfully. Bucket size,
+kernel duration, stream priority, memory pressure, and concurrent traffic alter
+the overlap window. Here, $T_{\mathrm{comp}}$ denotes isolated compute time,
+$T_{\mathrm{comm}}$ denotes isolated communication time, and
+$T_{\mathrm{overlap}}$ denotes their overlap. The accounting identity is
+
+$$
+T_{\mathrm{step}}=T_{\mathrm{comp}}+T_{\mathrm{comm}}-T_{\mathrm{overlap}},
+\qquad
+0\le T_{\mathrm{overlap}}\le
+\min(T_{\mathrm{comp}},T_{\mathrm{comm}})
+$$
+
+makes the condition explicit. A profile may show a collective fully hidden in
+one model shape and exposed after a batch-size, placement, or software change.
+
+## Place a communication graph, not an acronym
+
+Each parallelism method creates a different communication graph. The table gives
+common patterns, not fixed operation counts.
+
+| Method | Common traffic | Placement question |
+|---|---|---|
+| Tensor parallelism | Layer-local all-reduce, reduce-scatter, all-gather, or point-to-point traffic, depending on the formulation | Can the frequent activation traffic fit the measured scale-up domain without making small-message latency dominant? |
+| Sequence parallelism | Activation shards exchanged around operations that span the sequence dimension | Does the memory saved repay the extra collectives and layout changes? |
+| Context parallelism | Attention key/value or partial-result exchange across context shards | How do sequence length, causal load balance, and ring or all-to-all traffic map to the topology? |
+| Expert parallelism | Dispatch and combine all-to-all traffic | Can placement and capacity absorb skewed expert loads and bursty bisection demand? |
+| Data parallelism | Bucketed gradient reductions, often overlapped | Is one replicated model affordable, and which buckets expose communication? |
+| Fully sharded data parallelism | Parameter all-gathers and gradient reduce-scatters, with optimizer state sharded | Does lower memory use justify repeated parameter traffic and prefetch buffers? |
+| Pipeline parallelism | Forward activations and backward gradients for every microbatch at stage boundaries | Do stage balance, boundary tensor size, and the pipeline bubble justify more stages? |
+
+The original Megatron tensor-parallel layout is an important example, not a
+universal law: its transformer formulation uses two all-reduces in the forward
+pass and corresponding reductions in backward for each layer
+[@shoeybi2019megatron]. Later compositions change the operations and overlap
+schedule. Data-parallel systems may use all-reduce, or reduce-scatter and
+all-gather under ZeRO and fully sharded designs [@rajbhandari2020zero]. Pipeline
+traffic repeats with microbatches rather than appearing as one hand-off per
+step [@narayanan2021efficient]. Expert parallelism and its all-to-all behavior
+are developed in @sec-moe-ssm-hybrids.
+
+A practical mapper measures or estimates bytes, frequency, latency sensitivity,
+memory saved, and available overlap for every edge. It then maps the heaviest or
+most latency-sensitive mesh dimensions onto the fastest adequate physical
+dimensions. “TP inside, DP outside” is often a useful starting heuristic. It is
+not a proof, especially on rack-scale fabrics, asymmetric networks, or workloads
+whose context and expert traffic dominate.
+
+## TPU v4 as one bounded case study
+
+The @gls-tpu pod, a cluster of Google tensor processing units, illustrates why
+topology claims need a generation. TPU v4 used an @gls-ici, the inter-chip
+interconnect joining TPU chips, plus optical circuit switches to configure
+three-dimensional torus slices. A twisted torus was one supported choice; the
+switches also helped reconfigure around unavailable components
+[@jouppi2023tpuv4]. This is a TPU v4 statement, not a claim that every TPU pod
+uses the same torus.
+
+GSPMD is a compiler partitioning system. It propagates user sharding annotations
+through a computation graph and targets a logical device mesh
+[@xu2021gspmd]. It does not by itself make a physical topology fast or remove
+multi-hop communication. Similarly, a @gls-gpu cluster, a cluster that uses
+graphics processors as accelerators, may expose several logical meshes over
+PCIe, NVLink, InfiniBand, or Ethernet. In both cases, the compiler and runtime
+need an accurate physical map.
+
+The lesson is generation-specific: accelerator architecture, logical sharding,
+and physical topology must be read together.
+
+## Precision and portability are separate contracts
+
+Precision changes more than one number. Input storage, multiplication,
+accumulation precision, output format, scaling policy, and reduction precision
+may all differ. FP8, for example, defines E4M3 and E5M2 interchange formats, but
+an accurate training recipe also chooses which tensors use them and where wider
+accumulation or scaling is required [@micikevicius2022fp8]. Compare peak rates
+only for the same dense or structured sparsity convention and an instruction
+path the workload actually uses. @sec-quantization-kernels covers the numerical
+and kernel consequences.
+
+Portability also has layers: source compatibility, numerical correctness,
+feature availability, and performance portability. A framework backend may run
+the same model on two accelerator families while custom kernels, collective
+algorithms, supported formats, and best tensor shapes still differ. Keep model
+and sharding intent above vendor adapters, isolate custom kernels, and repeat
+the same correctness and performance matrix on every target.
+
+## MFU is an accounting ratio
+
+Model FLOPs utilization (MFU) compares an analytical estimate of useful model
+work with a selected hardware peak [@chowdhery2023palm], where
+$F_{\mathrm{model}}$ denotes estimated useful model FLOPs per global step,
+$N_{\mathrm{device}}$ denotes the number of accelerators,
+$P_{\mathrm{peak}}$ denotes the per-device theoretical peak FLOP/s for the
+declared precision and dense or sparse path, and $t_{\mathrm{step}}$ denotes
+measured seconds per step. The ratio is
+
+$$
+\mathrm{MFU}=
+\frac{F_{\mathrm{model}}}
+{N_{\mathrm{device}}P_{\mathrm{peak}}t_{\mathrm{step}}}.
+$$
+
+Publish the FLOP-count convention, global batch and sequence shape, advertised
+precision used for the peak, accelerator count, and timing boundary. An MFU
+computed with a dense peak is not directly comparable with one computed using a
+structured-sparse peak. Sparse and mixture-of-experts models also need an
+explicit active-parameter and routed-token convention.
+
+Hardware FLOPs utilization (HFU) uses an estimate of executed arithmetic in the
+numerator, which can include rematerialization, also called activation
+recomputation. With consistent accounting, rematerialization can make HFU
+higher than MFU because the hardware repeats forward work. Neither ratio is a
+hardware counter, and MFU is not a diagnosis. Low MFU can come from memory
+traffic, exposed collectives, pipeline bubbles, small kernels, input stalls,
+thermal throttling, failures, or an inconsistent FLOP estimate. Pair it with
+tokens per second, step-time distributions, achieved memory and collective
+bandwidth, kernel timelines, power, clocks, and error telemetry.
+
+## Measure from components to the run
+
+Use a ladder of evidence. A full-model benchmark alone tells you that something
+changed; component measurements locate the changed boundary.
+
+<figure id="fig-accelerators-networking-stepper">
+<div class="viz" data-viz="stepper" data-lang="en">
+<div data-chip="HEALTH" data-title="1 · Establish health">Confirm device count, memory capacity, ECC state, link state, clocks, power limits, and topology before measuring speed.</div>
+<div data-chip="MEMORY" data-title="2 · Measure local movement">Measure sustainable HBM, cache-sensitive kernels, host-device copies, and peer-to-peer paths with representative sizes.</div>
+<div data-chip="COLLECTIVES" data-title="3 · Sweep communication">Sweep all-reduce, reduce-scatter, all-gather, and all-to-all across message sizes, group shapes, rank placements, and concurrent groups.</div>
+<div data-chip="KERNELS" data-title="4 · Profile operators">Run representative tensor dimensions and precisions; retain kernel, launch, memory, and synchronization timelines.</div>
+<div data-chip="MODEL" data-title="5 · Run end to end">Measure the real batch, sequence distribution, sharding plan, tokens per second, MFU convention, and convergence or quality boundary.</div>
+<div data-chip="SOAK" data-title="6 · Exercise operations">Run long enough to observe tails, congestion, power and temperature drift, degraded links, failure recovery, and checkpoint overhead.</div>
+</div>
+<figcaption>A performance claim becomes credible by connecting component limits to end-to-end behavior and long-running operations.</figcaption>
+</figure>
+
+For every benchmark, record hardware SKU and revision; driver and firmware;
+compiler, framework, and collective-library version; precision and sparsity
+mode; tensor dimensions; batch and sequence distribution; message size;
+physical topology and oversubscription; rank placement; algorithm and protocol;
+warm-up and measured iterations; one-way or bidirectional accounting; p50, p95,
+and p99; concurrent flows; and power and temperature. A single-node microbenchmark
+does not establish cluster scaling.
+
+The operating record should preserve enough context to reproduce and compare a
+result:
+
+```yaml
+accelerator_system:
+  hardware: {device: ..., count: ..., memory: ..., power_limit: ...}
+  software: {driver: ..., firmware: ..., compiler: ..., framework: ..., collective_library: ...}
+  workload: {model_revision: ..., batch: ..., sequence_distribution: ..., precision: ..., flop_convention: ...}
+  topology: {scale_up_domain: ..., scale_out_fabric: ..., oversubscription: ..., rank_placement: ...}
+  measurements: {window: ..., warmup: ..., repetitions: ..., throughput: ..., mfu: ..., latency_percentiles: ...}
+  health: {link_errors: ..., ecc: ..., device_errors: ..., clocks: ..., power: ..., temperature: ...}
 ```
 
-## The TPU detour: a torus instead of a switch
+Correlate those records with synchronized job, rank, node, accelerator, NIC,
+switch, rack-power, and cooling-domain identifiers. A collective timeout may be
+a software ordering bug, a failed rank, a degraded link, or congestion. One
+utilization counter cannot distinguish them. Reliability and silent failures
+are treated in @sec-machine-breaks; facility power and cooling constraints are
+treated in @sec-powering-ai.
 
-The @gls-tpu pod is Google's accelerator cluster counterpart with a different
-JAX/XLA cost model, and it makes the point that the tier hierarchy above is one
-design choice rather than a law of nature. The chips connect through the
-@gls-ici, the pod's internal inter-chip interconnect, and an optical circuit
-switch (OCS) into a torus topology rather than a switched fat-tree, so
-neighbor-to-neighbor bandwidth is plentiful and the sharding is co-designed with
-the torus shape through GSPMD-style annotations rather than mapped onto a
-fat-tree after the fact [@xu2021gspmd]. The same byte that would cross a switch
-on a @gls-gpu cluster, a cluster of graphics processors used as accelerators,
-travels to a physical neighbor on a TPU pod, which is why bandwidth there scales
-with locality.
+### Regression scenarios
 
-## MFU: what fraction of the hardware you actually used
-
-The single number that tells you whether all of this is working is model FLOPs utilization. MFU is the FLOPs the model actually needs, divided by the peak FLOPs the hardware could deliver over the same wall-clock:
-
-$$
-\mathrm{MFU} = \frac{\text{model FLOPs per step}}{\text{peak hardware FLOPs} \times \text{step time}}
-$$
-
-The numerator is the useful arithmetic the model's forward and backward pass
-requires for one step. The denominator is the machine's theoretical arithmetic
-capacity over the wall-clock time that step actually took. MFU therefore counts
-only the useful arithmetic of the model. Its sibling, @gls-hfu, also counts work
-the hardware genuinely did but the model did not strictly need, most notably the
-extra forward passes of activation recomputation, which is why HFU exceeds MFU
-whenever recomputation is on. MFU answers the question the budget cares about:
-of the arithmetic I paid for, how much moved the model.
-
-## Why the tiers look the way they do
-
-The interconnect tiers are the product of the bandwidth gap widening faster than any single fabric could close it. Early multi-GPU training leaned on PCIe, which was already too slow for sharding a matmul, so NVLink and then NVSwitch were introduced precisely to make the intra-node tier fast enough to host tensor parallelism [@shoeybi2019megatron]. The accelerator families also moved the precision floor: each generation has widened the set of formats the matmul units execute natively, with Hopper-class and newer hardware adding fp8, which lets the same silicon deliver more matmul throughput per byte moved [@micikevicius2022fp8] (the kernel-level consequences are in @sec-quantization-kernels). On the network side, InfiniBand and RoCE converged on @gls-rdma, which lets one machine move bytes into another's memory without routing through the CPU, and on rail-optimized topologies that give each accelerator a dedicated path to its peer on other nodes, so the inter-node tier could grow without every flow contending for the same switch ports. TPU pods evolved along a parallel track entirely, choosing a torus over a switched fabric so that bandwidth scales with locality.
+- **Small-message latency:** reduce message sizes until startup dominates and
+  verify that the selected collective algorithm and p99 remain acceptable.
+- **Large-message bandwidth:** sweep beyond cache and confirm sustained, not
+  peak, bandwidth without assuming linear cluster scaling.
+- **Oversubscribed uplink:** place communicating ranks across the constrained cut
+  and verify admission, routing, and performance alarms.
+- **Degraded link:** lower or remove one path and confirm topology discovery,
+  rerouting behavior, and the resulting tail latency.
+- **Rank-placement change:** permute ranks over the same hardware and detect a
+  performance regression caused by a larger communication cut.
+- **Collective timeout:** stop one rank or violate collective ordering in a test
+  job and verify bounded failure, diagnosis, and cleanup.
+- **Silent data corruption:** inject a detectable fault and verify end-to-end
+  checks, quarantine, and recovery rather than relying only on a device alarm.
+- **Thermal throttling:** run a soak or controlled power cap and verify that
+  clock, power, temperature, throughput, and scheduler evidence stay linked.
+- **Software change:** alter one driver, compiler, kernel, or collective-library
+  version and rerun the same shapes, placements, and statistical comparison.
+- **Capacity edge:** approach the memory budget, including temporary buffers and
+  allocator headroom, and verify deterministic admission or failure. This
+  connects to @sec-memory-scheduling.
 
 ::: {.callout-important}
 ## What's contested
-The intra-node versus inter-node boundary that this chapter is built on is itself moving. The scale-up domain, the set of accelerators that can reach each other at NVLink-class bandwidth, has been expanding past a single chassis toward rack-scale fabrics. As that domain grows, the maximum affordable tensor-parallel degree grows with it, and the long-standing rule that TP stays inside one small node weakens. Whether the future is ever-larger scale-up domains that let TP span a rack, or a continued reliance on the cheaper inter-node network with parallelism axes that tolerate it, is unsettled and vendor-dependent. The boundary is a property of this year's hardware, not a law.
+
+The scale-up boundary is moving. Rack-scale fabrics can enlarge the domain in
+which frequent model-parallel traffic is affordable, but they also change cost,
+power density, failure domains, and software assumptions. Scale-out fabrics are
+also improving, while parallelism methods reduce, reshape, or overlap traffic.
+There is no timeless device count at which tensor parallelism must stop. The
+answer is a measured property of a workload and a deployed system.
 :::
-
-## What each axis costs
-
-Every parallelism axis buys a different resource and pays in a different currency, and the interconnect tier sets the exchange rate.
-
-- **Tensor parallelism against bandwidth.** TP cuts per-device memory and latency but spends intra-node bandwidth on two all-reduces per layer. That spend is affordable only on NVLink, so the TP degree caps at the NVLink domain. Push it past the node and the all-reduce falls onto the inter-node network, where it cannot hide under compute and shows up as lost MFU. @fig-accelerators-networking-1 makes the cliff visible: MFU holds a plateau while TP fits inside the NVLink domain, then falls away the moment the degree spills onto the inter-node network.
-
-![Schematic of model FLOPs utilization as the tensor-parallel degree grows, after Shoeybi et al. (2019) and Narayanan et al. (2021). MFU holds a plateau while TP fits inside the NVLink domain, then falls off a cliff once the all-reduce spills onto the inter-node network an order of magnitude slower per byte.](/figures/accelerators-networking-1.svg){#fig-accelerators-networking-1}
-
-Change `nvlink_size` and `slowdown` and watch where the plateau breaks and how steep the cliff becomes.
-
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
-nvlink_size = 8       # accelerators reachable at NVLink bandwidth
-peak = 0.55           # MFU plateau when communication hides under compute
-slowdown = 10.0       # inter-node bytes are this many times dearer than NVLink
-tp = np.arange(1, 33)
-# fraction of the step lost to exposed (un-hidden) all-reduce once TP spills
-comm = np.where(tp <= nvlink_size, 0.0, (tp - nvlink_size) / tp * (1 - 1 / slowdown))
-mfu = peak * (1 - comm)
-plt.plot(tp, mfu, marker='o')
-plt.axvline(nvlink_size, ls='--', color='gray', label='NVLink boundary')
-plt.xlabel('tensor-parallel degree'); plt.ylabel('MFU')
-plt.ylim(0, 0.6); plt.legend(); plt.title('TP past the node falls off a cliff')
-print('MFU at TP=8:', round(mfu[7], 3), ' at TP=16:', round(mfu[15], 3))
-plt.show()
-```
-::::
-- **Pipeline parallelism against the bubble.** PP is bandwidth-cheap, a single activation hand-off per stage boundary, so it crosses nodes comfortably, but it pays a pipeline bubble at the fill and drain of each step.
-- **MFU against memory.** Recomputation lets a bigger model or longer sequence fit by redoing forward work in the backward pass, which raises HFU but lowers MFU. The number you optimize depends on whether memory or throughput is the binding constraint.
 
 ::: {.callout-tip}
-## Constraint arrow
-This is the clearest case in the book of a lower layer dictating an upper one. The interconnect bandwidth gap, NVLink an order of magnitude faster per byte than InfiniBand or RoCE, is what sets the maximum tensor-parallel degree that @sec-training-at-scale can choose. A parallelism layout is not picked on the whiteboard and then mapped to hardware. It is the hardware tier that decides which axis is allowed where, and TP staying inside the NVLink boundary is the direct imprint of that decision on the algorithm above it.
+## Lower-layer constraint
+
+Hardware does constrain the algorithm above it, but through a vector rather
+than one bandwidth ratio: usable memory, sustainable local traffic, collective
+latency, bisection bandwidth, topology, power, and failure domains. The mapping
+chosen in @sec-training-at-scale must fit all of them. The operating system and
+scheduler must then preserve device locality and memory headroom, as
+@sec-memory-scheduling explains. A paper parallelism plan is only a hypothesis
+until the measured communication graph fits the physical machine.
 :::
 
-## Where MFU becomes visible
-
-The collectives that move bytes across these tiers are provided by NCCL on NVIDIA hardware (RCCL on AMD), which maps each collective onto the topology, choosing a ring or a tree and routing it over NVLink or the network depending on where the ranks sit [@nvidia2024nccl]. A practitioner rarely calls it directly; the parallelism framework does. What the practitioner reads is the per-step profile, because MFU is diagnosed from a timeline, not from the loss curve. Exposed communication that did not hide under compute, an oversized pipeline bubble, too much recomputation, and unfused kernels each take a slice of the gap between achieved and peak FLOPs, and the timeline is where each slice is visible.
-
-@fig-accelerators-networking-flops-gap reads the timeline as a descent from peak FLOPs down to MFU. Idle time, where a device waited on exposed communication or sat in a pipeline bubble, is pure loss. Of the FLOPs the hardware then actually ran, recomputation did work the model did not strictly need: that work lifts HFU above MFU, but only the useful arithmetic counts toward the true figure.
-
-```{dot}
-//| label: fig-accelerators-networking-flops-gap
-//| fig-cap: "The per-step timeline descends from peak FLOPs to MFU. Exposed communication and the pipeline bubble are idle loss; recomputation and unfused kernels are work the hardware ran, which is why HFU sits above MFU."
-digraph flops_gap {
-  bgcolor="transparent";
-  node [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
-  rankdir=TB;
-  node [shape=box, fontsize=11];
-  edge [fontsize=10];
-
-  peak [label="peak hardware FLOPs", style="filled", fillcolor="#f1ece1"];
-  busy [label="busy FLOPs\n(device not idle)"];
-  hfu  [label="HFU: all FLOPs the hardware ran", style="filled", fillcolor="#f1ece1"];
-  mfu  [label="MFU: useful model FLOPs only", style="filled", fillcolor="#f1ece1", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-
-  idle    [label="idle loss\nexposed communication + pipeline bubble", shape=note];
-  recomp  [label="recomputation + unfused kernels\nran but not strictly needed", shape=note];
-
-  peak -> busy [label="minus idle"];
-  busy -> hfu;
-  hfu  -> mfu [label="minus extra work"];
-
-  peak -> idle [style=dashed, color="#6b7280", dir=none];
-  hfu  -> recomp [style=dashed, color="#6b7280", dir=none];
-}
-```
+The durable method is simple: name the boundary, define the accounting, measure
+the real shape, and preserve the context. Peak FLOPs, link rate, and MFU are
+useful only after those four steps make their meaning explicit.
 
 ## Further reading
 

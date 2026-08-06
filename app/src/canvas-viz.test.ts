@@ -155,6 +155,14 @@ test("the viz runtime registers nested-loops and bandwidth-tiers", () => {
   expect(rt).toMatch(/R\['bandwidth-tiers'\]\s*=\s*function/);
 });
 
+test("bandwidth-tiers does not present illustrative lanes as universal ratios", () => {
+  expect(rt).toContain("measure sustained");
+  expect(rt).toContain("domain-specific");
+  expect(rt).toContain("topology-specific");
+  expect(rt).not.toContain("≈10× slower");
+  expect(rt).not.toContain("≈100× slower");
+});
+
 test("the three-cadence viz does not present training as a nested runtime cost", () => {
   expect(rt).toContain("agent loop · per task step");
   expect(rt).toContain("decoding · per token");
