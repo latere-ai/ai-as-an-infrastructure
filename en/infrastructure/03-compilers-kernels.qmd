@@ -1,86 +1,583 @@
-# Compilers, Kernels, and the CUDA Moat {#sec-compilers-kernels}
+# Compilers and Kernels {#sec-compilers-kernels}
 
-The previous chapter ended with both of its arguments pointing below the framework, at the compiler. This chapter follows them down. A captured graph still has to become device code, and the gap between naive device code and good device code is not a percentage, it is the better part of an order of magnitude, governed by one cost model: on a modern accelerator, moving bytes costs more than doing arithmetic on them. That model explains why fusing operations is the fundamental compiler optimization, why the fastest attention implementation is best understood as an algorithm rather than a kernel, and why the deepest moat in the AI industry is not silicon but nineteen years of software sediment on top of it. A line of Python still has to reach the instructions a GPU executes; performance is won somewhere on that line; the line runs through one vendor's territory at a cost everyone pays; and models writing their own kernels may change the route. The quantized kernels that serve models in production have their own treatment in @sec-quantization-kernels; here the subject is the machinery that produces kernels at all.
+A framework program is still several contracts away from executable device
+code. The compiler must preserve the program's meaning for every input covered
+by its guards, while choosing layouts, fusion boundaries, tile shapes, library
+calls, and target instructions. The kernel must then honor the promised shape,
+stride, dtype, layout, aliasing, mutation, numerical, and device target
+semantics. A fast result that violates any one of those conditions is not an
+optimization; it is a different program.
 
-## Count bytes, not FLOPs
+This chapter follows the execution path introduced in
+@sec-frameworks-autodiff. It begins with the cost models that guide fusion and
+tiling, uses FlashAttention to show how an algorithm can be redesigned around a
+memory hierarchy, and then traces a graph through intermediate representations
+to target code. The final sections separate several meanings of portability and
+show why generated kernels need a stronger evaluator than ordinary application
+code. Quantized arithmetic and its specialized matrix kernels remain the focus
+of @sec-quantization-kernels.
 
-A kernel, in GPU vocabulary, is one program launched onto the device: a matrix multiply, an elementwise add, a softmax. Whether a kernel runs fast is decided almost entirely by one ratio, its arithmetic intensity: the FLOPs it performs per byte it moves to and from @gls-hbm. The roofline model turns that ratio into a picture: attainable throughput is the smaller of the hardware's peak arithmetic rate and its memory bandwidth times the kernel's intensity, so performance climbs linearly with intensity until it hits the flat compute ceiling [@williams2009roofline]. The corner where the two roofs meet is the machine's character in a single number. An H100 delivers roughly 989 dense BF16 teraFLOPs against 3.35 TB/s of HBM bandwidth, putting the corner near 295 FLOPs per byte: any kernel doing less arithmetic per byte than that is memory-bound, and its runtime is simply bytes moved divided by bandwidth.
+## A kernel implements a bounded contract
 
-Almost everything in a transformer other than the matrix multiplies lives far below the corner. An elementwise add performs one FLOP per output element while moving six bytes in half precision, an intensity around 0.17, three orders of magnitude short. Run each such operation as its own kernel and the tensor makes a round trip to HBM between every step, so a chain like "subtract the max, exponentiate, sum, divide" pays for four trips when one would do. The remedy is fusion: compile the chain into a single kernel that reads the input once, keeps intermediates in on-chip registers, and writes the result once. The arithmetic is identical; only the traffic changes; and since traffic is the price, fusion is the closest thing this layer has to a free lunch [@he2022brrr]. Measurement on real training confirms how much of the bill it addresses: a study of transformer training found the memory-bound operations, not the matmuls, dominating runtime, and reclaimed a third of it by data-movement optimization alone [@ivanov2021data]. A second, smaller tax pushes the same direction: each kernel launch costs microseconds of driver overhead, which is why runtimes record and replay whole launch sequences as CUDA graphs rather than launching kernels one by one [@gray2019cudagraphs].
+A logical operator says what a result means. A kernel is one implementation of
+that operator for a declared domain. On a GPU, a launch creates a grid of thread
+blocks; the device schedules blocks onto streaming multiprocessors, and groups
+of lanes execute together as warps or wavefronts. Threads in one block can
+cooperate through shared memory and synchronization. Registers belong to
+individual threads, while global device memory is visible across the grid
+[@nickolls2008cuda; @nvidia2026programming].
 
-The runnable makes the accounting concrete: a softmax over a large matrix, executed as four separate kernels versus one fused kernel, same FLOPs, five times the bytes, and both intensities so far below the roofline corner that predicted runtime is just traffic divided by bandwidth.
+The launch domain matters as much as the kernel body. A contiguous matrix and a
+transposed view can have the same logical shape but different strides. Two
+arguments may alias the same storage. A reduction may promise a particular
+accumulation dtype or tie-breaking rule. A random operator advances state, and
+an in-place operator changes storage visible elsewhere. A compiler may
+specialize a kernel for these facts, but it must either guard them at runtime or
+retain a correct general path.
+
+That gives five distinct responsibilities:
+
+| Layer | Input it sees | Contract it must preserve |
+|---|---|---|
+| Graph capture | Program execution plus guards | The same observable tensor and state effects while the guards hold |
+| Tensor intermediate representation (IR) | Operators, shapes, dtypes, effects | Operator semantics and valid transformations |
+| Kernel IR | Tiles, address calculations, memory spaces | Complete writes, legal accesses, ordering, and synchronization |
+| Target code | Instructions or external library calls | Compatibility with the selected device and runtime |
+| Runtime | Buffers, streams, launch order, compile cache | Lifetimes, dependencies, failures, and fallback behavior |
+
+Performance work begins only after those boundaries are explicit.
+
+## Roofline is a bound, not a stopwatch
+
+The roofline model relates arithmetic work to traffic across a chosen memory
+boundary [@williams2009roofline]. For one kernel, define
+
+$$
+I=F/Q,
+$$
+
+where:
+
+- $F$ is the chosen count of floating-point operations for the kernel;
+- $Q$ is the number of bytes transferred across the measured boundary, such as
+  high-bandwidth memory (HBM) to the chip;
+- $I$ is arithmetic intensity in floating-point operations per byte.
+
+Using a compute ceiling and a bandwidth ceiling for the same target and
+precision gives the following bound. Here the two terms represent the compute
+and traffic ceilings, respectively:
+
+$$
+P_{\text{bound}}=\min\left(P_{\max}, B_{\max}I\right),
+$$
+
+and therefore the algorithmic lower bound
+
+$$
+T\geq
+\max\left(\frac{F}{P_{\max}},\frac{Q}{B_{\max}}\right).
+$$
+
+where:
+
+- $P_{\text{bound}}$ is the roofline upper bound on throughput;
+- $P_{\max}$ is the relevant compute ceiling in floating-point operations per
+  second, using the same dtype and instruction path as $F$;
+- $B_{\max}$ is the achieved bandwidth ceiling in bytes per second for the
+  relevant access pattern, preferably measured rather than copied from a data
+  sheet;
+- $T$ is execution time in seconds.
+
+Here, the ridge intensity is $I_{\text{ridge}}=P_{\max}/B_{\max}$. Below it, reducing
+traffic can raise the bound; above it, reducing arithmetic or using a faster
+compute path can. This is a classification and an optimistic limit, not a
+runtime prediction. Launch overhead, dependency latency, insufficient
+parallelism, instruction mix, cache behavior, uncoalesced access, bank
+conflicts, synchronization, and occupancy can all produce a lower ceiling.
+Observed performance should therefore use achieved bandwidth and achieved
+compute rates from a profiler, not just nominal peaks.
+
+Transformer profiles illustrate why the distinction matters. Ivanov et al.
+found both tensor contractions and memory-bound operators to be material parts
+of BERT runtime; removing data movement accelerated the measured workload, but
+the result did not imply that every transformer or every operator was
+bandwidth-bound [@ivanov2021data].
+
+The runnable counts one deliberately simple case. Here it evaluates
+$y=\max(ax+b,0)$ over an FP32 vector. The unfused version writes two full
+intermediates; the fused version keeps the scalar intermediates inside one
+kernel. The calculation assumes scalar $a$ and $b$, a full HBM read and write
+for every materialized vector, and no useful cross-kernel cache retention. It
+counts minimum algorithmic traffic, not measured device traffic or time.
 
 :::: {.runnable}
 ```python
-N, d, B = 4096, 4096, 4  # one fp32 score matrix, bytes per element
-flops = 5 * N * d        # max, subtract, exp, sum, divide: ~one op each per element
-# unfused: four kernels, each reading and writing the N*d matrix from HBM
-unfused = (2 + 3 + 2 + 3) * N * d * B          # reads+writes per kernel, summed
-# fused: read the input once, write the output once
-fused = 2 * N * d * B
-for name, traffic in [("unfused", unfused), ("fused", fused)]:
-    print(f"{name:8s}: {traffic/1e6:6.1f} MB moved, "
-          f"intensity {flops/traffic:5.2f} FLOP/byte, "
-          f"bandwidth-bound time on H100: {traffic/3.35e12*1e6:5.0f} us")
-print("same FLOPs; the fused kernel is faster exactly by the traffic it skipped")
+elements = 16 * 1024 * 1024
+bytes_per_element = 4  # FP32
+operations_per_element = 3  # multiply, add, maximum
+
+operations = elements * operations_per_element
+unfused_bytes = 3 * 2 * elements * bytes_per_element
+fused_bytes = 2 * elements * bytes_per_element
+
+for name, traffic in [("unfused", unfused_bytes), ("fused", fused_bytes)]:
+    intensity = operations / traffic
+    print(f"{name:7s}: {traffic / 1e6:5.1f} MB minimum traffic, "
+          f"{intensity:.3f} operations/byte")
+
+print(f"same arithmetic: {operations} operations")
+print(f"traffic reduction: {unfused_bytes / fused_bytes:.1f}x")
 ```
 ::::
 
-## The canonical lesson: FlashAttention
+## Fusion is a legality and resource decision
 
-If fusion is the everyday move, @gls-flashattention is the layer's masterpiece, and it earns a section because it changed what the field believes a kernel can be. Attention's textbook form materializes an $N \times N$ score matrix, and for long sequences that matrix neither fits in fast on-chip memory nor deserves the HBM round trips it forces. FlashAttention computes exact attention, no approximation, by tiling: stream blocks of keys and values through the small on-chip SRAM, maintain a running maximum and normalizer so the softmax can be computed incrementally in one pass, a technique published years earlier as online softmax [@milakov2018online], and never write the score matrix anywhere [@dao2022flashattention]. Memory drops from quadratic to linear in sequence length, and the paper proves the byte count is asymptotically optimal for exact attention across the whole range of SRAM sizes. The control that makes the lesson stick: an earlier memory-efficient attention achieved the same memory bound without arranging the computation around the memory hierarchy, and its own tables show it running slower than the baseline [@rabe2021self]. Saving memory was never the point; choreographing bytes was.
+Fusion combines producer-consumer operations so an intermediate need not be
+materialized in global memory. It can also remove launches and expose algebraic
+simplifications. These gains are real only when the combined kernel remains
+legal and fits the target well.
 
-The sequels sharpen the lesson into an uncomfortable one for portability. FlashAttention-2 got from 25-40% of peak to as much as 73% not with a new idea but by repartitioning the same computation across the GPU's workers [@dao2023flashattention2]; FlashAttention-3 reached 85% of Hopper's BF16 peak only by embracing that chip's newest hardware, dedicated asynchronous copy engines and warp-group matrix instructions, so the fastest attention is now written against one architecture's private vocabulary [@shah2024flashattention3]. Peak performance, it turns out, is not portable. That fact shapes everything in the next two sections.
+A compiler first has to prove that fusion preserves dependencies and observable
+effects. Mutation and alias relationships can make an apparently dead
+intermediate visible. Random-number state, host callbacks, collectives, atomics,
+and exceptions constrain reordering. Reductions need special care because a new
+reduction order can change rounding, NaN propagation, and deterministic
+behavior. Even pointwise fusion can introduce fused multiply-add instructions
+or reassociation, so mathematical equivalence does not imply bitwise identity.
 
-## The lowering pipeline
+The cost decision comes next. Fusion lengthens live ranges and can increase
+register pressure or shared-memory demand. If values spill to local or global
+memory, traffic returns in a more expensive form. A larger kernel can lower
+occupancy, reduce scheduling freedom, duplicate work, or prevent a call to a
+highly tuned library. This is why over-fusion is possible. A useful compiler
+estimates bytes removed, launch count, parallelism, and resource use, then
+profiles uncertain choices rather than treating fusion as an unconditional
+rule [@ansel2024pytorch2].
 
-Between the framework's captured graph and the bytes-conscious kernel sits a compiler stack, and by 2026 its shape is settled enough to draw. PyTorch's `torch.compile` captures graphs from Python bytecode, as the previous chapter described, and hands them to TorchInductor, which fuses what it can and emits Triton for the GPU; measured across 180 real models, the pipeline buys a 2.27x inference and 1.41x training geomean speedup over eager execution, essentially by automating this chapter's cost model [@ansel2024pytorch2]. JAX's lane was born compiled: traced programs lower to a portable operator dialect and then into XLA, the compiler that has fed TPUs since 2017 and, spun out as OpenXLA in 2023, now fronts more than one vendor's silicon. The two lanes converge at the bottom: NVIDIA's compilers take over at PTX, a virtual instruction set that the driver translates to the physical one, which is the hinge on which several moat arguments below will turn.
+## Tiling maps work onto finite resources
+
+Tiling chooses a small block of a larger computation and reuses its operands
+near the processors. Here, for matrix multiplication, a thread block may load tiles
+of $A$ and $B$ from global memory into shared memory, synchronize, perform many
+multiply-accumulates into registers, and repeat along the reduction dimension.
+Adjacent lanes should make coalesced global-memory accesses so the hardware can
+serve them with few transactions.
+
+Each tile shape is a coupled choice. Larger tiles create more reuse but consume more
+registers and shared memory. More resident thread blocks can hide latency, yet
+maximum occupancy is not itself the goal: a lower-occupancy kernel can still win
+if each block does more useful work. Bank conflicts, synchronization frequency,
+tail masks, tensor-unit alignment, and the number of pipeline stages also
+change the result. When shapes or architectures vary, compilers commonly use
+heuristics to narrow the candidates and autotuning to benchmark a finite set of
+schedules [@chen2018tvm; @tillet2019triton; @triton2026guide].
+
+Autotuning results are conditional artifacts. A winning tile for one shape,
+dtype, stride pattern, device, driver, or library version may lose for another.
+The cache key must contain every fact on which the choice depends, and a kernel
+that mutates its inputs must restore them between trials.
+
+## FlashAttention changes the algorithm around IO
+
+Scaled dot-product attention for one head can be written as follows; here the
+symbols are defined immediately below:
+
+$$
+S=QK^\mathsf{T}/\sqrt{d}+C,
+\qquad
+P_{ij}=\frac{\exp(S_{ij}-m_i)}{\ell_i},
+\qquad
+O=PV,
+$$
+
+with
+
+$$
+m_i=\max_{1\leq j\leq N}S_{ij},
+\qquad
+\ell_i=\sum_{j=1}^{N}\exp(S_{ij}-m_i).
+$$
+
+where:
+
+- $Q,K\in\mathbb{R}^{N\times d}$ are the query and key matrices;
+- $V\in\mathbb{R}^{N\times d_v}$ is the value matrix;
+- $N$ is sequence length, $d$ is query/key head width, and $d_v$ is value
+  width;
+- $C\in(\mathbb{R}\cup\{-\infty\})^{N\times N}$ is an additive bias or mask,
+  where $-\infty$ disallows a key;
+- $S$ is the scaled score matrix, $m_i$ is the maximum of query row $i$, and
+  $\ell_i>0$ is its normalizer;
+- $P$ is the row-wise softmax matrix, $O$ is the attention output, and
+  $\mathsf{T}$ denotes transpose;
+- every query row is assumed to have at least one allowed key.
+
+A direct implementation may materialize the complete $N\times N$ score and
+probability matrices in HBM. FlashAttention instead processes a query row or
+query tile against a sequence of key-value blocks, retaining only tiles and
+running statistics in fast memory [@milakov2018online;
+@dao2022flashattention]. Here, for one fixed query row $i$, initialize
+$m_0=-\infty$, $\ell_0=0$, and $o_0=0\in\mathbb{R}^{d_v}$. For key-value block
+$\mathcal{B}_t$,
+
+$$
+\begin{aligned}
+b_t &= \max_{j\in\mathcal{B}_t} S_{ij},\\
+m_t &= \max(m_{t-1},b_t),\\
+\alpha_t &= \exp(m_{t-1}-m_t),\\
+\ell_t &=
+\alpha_t\ell_{t-1}
++\sum_{j\in\mathcal{B}_t}\exp(S_{ij}-m_t),\\
+o_t &=
+\alpha_t o_{t-1}
++\sum_{j\in\mathcal{B}_t}\exp(S_{ij}-m_t)v_j.
+\end{aligned}
+$$
+
+After $T$ blocks,
+
+$$
+O_i=o_T/\ell_T.
+$$
+
+where:
+
+- $\mathcal{B}_1,\ldots,\mathcal{B}_T$ partition the allowed key indices and
+  $t$ is the block index;
+- $b_t$ is the maximum score in the current key-value block;
+- $m_t$ is the running maximum and $\alpha_t$ rescales earlier contributions
+  when that maximum changes;
+- $\ell_t$ is the running normalizer;
+- $o_t\in\mathbb{R}^{d_v}$ is the running value-weighted numerator;
+- $v_j$ is row $j$ of $V$, and $O_i$ is output row $i$.
+
+In exact arithmetic, the recurrence maintains the same numerator and
+denominator as the full softmax. “Exact attention” refers to that mathematical
+function, not bitwise identity: tiling changes floating-point evaluation order.
+The algorithm still performs quadratic attention arithmetic. Its gain is that
+it does not materialize the complete quadratic intermediates in HBM, and its
+backward pass can recompute local score and probability tiles instead of saving
+them.
+
+In the two-level memory model used by the original paper, the forward algorithm
+requires
+
+$$
+H_{\text{FA}}=\Theta\left(\frac{N^2d^2}{M}\right)
+$$
+
+slow-memory word transfers for $d\leq M\leq Nd$, where $H_{\text{FA}}$ is the
+transfer count and $M$ is fast-memory capacity in scalar words. This is an IO
+statement, not a FLOP or byte count; bytes also depend on the stored dtype.
+Later work proved a matching pointwise lower bound, within constant factors,
+for $M\geq d^2$ and found a different regime below that threshold
+[@saha2024attentionio]. It is therefore incorrect to call the original
+algorithm optimal for every possible SRAM size.
+
+FlashAttention-2 improved work partitioning and reduced non-matrix operations
+on the A100 configurations reported in its paper
+[@dao2023flashattention2]. FlashAttention-3 used Hopper-specific asynchronous
+copy and matrix instructions in its reported H100 results
+[@shah2024flashattention3]. These are useful examples of a general rule:
+algorithmic IO savings can transfer across targets, while the best schedule
+often remains target-specific.
+
+## Lowering preserves meaning while adding decisions
+
+Compilers use multiple intermediate representations because no single level is
+ideal for every decision. A high-level tensor IR can still express
+broadcasting, reductions, effects, and symbolic dimensions from the captured
+graph. A lower kernel IR
+can express tiles, address calculations, memory spaces, barriers, and target
+instructions. Progressive lowering makes each new choice explicit while
+retaining the information needed to check it. Halide established the influential
+separation between an algorithm and its schedule; TVM added tensor-graph
+optimization and measurement-guided schedule search; MLIR provides reusable
+infrastructure for defining and composing such IR levels
+[@ragankelley2013halide; @chen2018tvm; @lattner2021mlir].
 
 ```{dot}
 //| label: fig-compilers-kernels-lowering
-//| fig-cap: "The lowering pipeline, two lanes converging on one vendor's floor. Guards and graph breaks live at the top, where Python semantics must survive; hardware specificity accumulates toward the bottom, where performance does."
+//| fig-cap: "A generic lowering pipeline. Portable tensor semantics narrow into target-specific schedules and artifacts; generated kernels and external library calls are both valid leaves."
 digraph lowering {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.6; ranksep=0.35;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  nodesep=0.28;
+  ranksep=0.32;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", penwidth=1.0];
 
-  py   [label="model code (Python)"];
-  dyn  [label="TorchDynamo\nbytecode capture, guards"];
-  fx   [label="FX graph"];
-  ind  [label="TorchInductor\nfusion, scheduling"];
-  tri  [label="Triton\ntile-level kernels"];
-  jaxpr [label="jaxpr (traced)"];
-  hlo  [label="StableHLO"];
-  xla  [label="XLA\nfusion, layout, collectives"];
-  ptx  [label="PTX (virtual ISA)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  sass [label="SASS (silicon ISA)\ndriver-translated"];
+  source [label="program + runtime facts"];
+  capture [label="capture / export\nguards + effects"];
+  tensor [label="tensor IR\ndecomposition + shapes"];
+  optimize [label="graph optimization\nfusion + layout + buffer planning"];
+  select [label="kernel IR or library call\ntiling + schedule + autotuning"];
+  nvidia [label="NVIDIA target\nPTX / cubin"];
+  amd [label="AMD target\nLLVM / HSACO"];
+  tpu [label="TPU target\nbackend executable"];
+  runtime [label="device runtime\nbuffers + streams + launches"];
 
-  py -> dyn -> fx -> ind -> tri -> ptx;
-  py -> jaxpr -> hlo -> xla -> ptx;
-  ptx -> sass;
+  source -> capture -> tensor -> optimize -> select;
+  select -> nvidia;
+  select -> amd;
+  select -> tpu;
+  nvidia -> runtime;
+  amd -> runtime;
+  tpu -> runtime;
 }
 ```
 
-The stack's intellectual lineage matters because it explains the division of labor. Halide, an image-processing language, contributed the founding separation: describe *what* to compute apart from *how* to schedule it onto the machine, so schedules can be searched rather than hand-derived [@ragankelley2013halide]. TVM carried that separation to deep learning and made the search automatic, a learned cost model exploring schedules no human would enumerate [@chen2018tvm]. MLIR industrialized the plumbing, a compiler framework of composable dialects that XLA, Triton's internals, and most newer entrants now share [@lattner2021mlir]. And Triton set the abstraction level the ecosystem converged on: the programmer writes one program per tile, a small matrix block, while the compiler handles memory coalescing, shared-memory staging, and scheduling within the processor, hard parts that CUDA makes the programmer own [@tillet2019triton]. Triton is how TorchInductor emits kernels, and its backends now target NVIDIA, AMD, and Intel silicon, which is why it carries the ecosystem's portability hopes. It also carries the counter-evidence: to chase Hopper and Blackwell peaks, Triton grew warp specialization and then Gluon, a lower dialect exposing exactly the architecture-specific controls the abstraction was meant to hide. The pattern from FlashAttention-3 recurs at the compiler level: portability of authorship is achievable; portability of peak performance keeps slipping.
+The diagram is deliberately generic. A compiler may preserve a high-level
+operation as a library call rather than generate a kernel. Matrix
+multiplication, convolution, and collectives often take this path because a
+vendor or framework library already contains many target-specific algorithms.
+Other regions lower to a kernel IR, where fusion, layout, and resource choices
+become explicit.
 
-## The moat
+### PyTorch's guarded path
 
-CUDA, launched in 2007, is named as if it were a language, but what the name covers is a vertical stack: the driver and runtime, the PTX contract between them, and above all the libraries, cuBLAS for linear algebra, NCCL for the collectives of @sec-accelerators-networking, and cuDNN, whose 2014 release welded the young frameworks to NVIDIA silicon at the exact moment deep learning industrialized [@chetlur2014cudnn; @nickolls2008cuda]. Two decades of that sediment now stand behind a claimed six million CUDA developers. The moat is legal as well as technical: NVIDIA's license forbids translating compiled CUDA outputs to run on other vendors' hardware, and the one serious attempt at a binary compatibility layer, ZLUDA, has cycled through corporate funding, legal takedown, anonymous revival, and, as of mid-2026, a return to hobby status. Competitors therefore attack the layer above the binary. AMD's MI355X matches NVIDIA on memory capacity, 288 GB of HBM3E against the 288 GB of HBM3E on Blackwell Ultra, with the low-precision formats treated in @sec-quantization-kernels, and AMD's ROCm stack runs upstream PyTorch and the major serving engines; yet the most careful independent benchmarking of the MI300X generation concluded that public-software training throughput trailed NVIDIA by more than 2.5x, under the title "CUDA moat still alive" [@semianalysis2024mi300x]. The one camp that verifiably escaped did so by never entering: Google's TPU line, dense systolic arithmetic fed by the XLA compiler, has trained frontier models since before the moat had its name [@jouppi2017tpu], and AWS's Trainium follows the same XLA-descended path at half-million-chip scale. Both escapes, tellingly, grew Triton-like kernel languages of their own once their users hit the ceiling of what a compiler alone delivers.
+For `torch.compile`, TorchDynamo captures guarded FX graph segments from Python
+execution. Training adds AOTAutograd, which captures and partitions forward and
+backward graphs and applies decompositions and functionalization.
+TorchInductor then schedules loop-level IR and can emit Triton GPU kernels, C++
+CPU kernels, template kernels, or calls to external operators
+[@ansel2024pytorch2; @pytorch2026compiler]. A graph break returns unsupported
+work to eager execution. A guard failure can select another compile cache entry,
+trigger recompilation, or force a more general path.
 
-::: {.callout-tip}
-## Constraint arrow
-This layer reaches all the way up into Part I's architecture choices. Hooker's "hardware lottery" names the mechanism: a research idea wins not only on merit but on how well it maps to the software and silicon that exist, so decades of ideas off the matmul path were never really auditioned [@hooker2021hardware]. The kernel and compiler layer is where the lottery is drawn. An architecture whose inner loop lacks a fused, tuned kernel measures as slow regardless of its mathematics, which is part of why @sec-moe-ssm-hybrids's state-space models needed custom kernels before their scan operation could compete with attention at all, and why monolithic optimized kernels make radically different architectures expensive even to evaluate [@barham2019rut]. What the compiler stack can lower efficiently quietly decides what the field gets to try.
-:::
+Dynamic shapes do not remove specialization. Symbolic dimensions and guards
+allow some compiled regions to cover many inputs, but values, ranks, strides,
+and target features may still require distinct code. Compile latency, guard
+failure, graph breaks, and cache growth are therefore part of the production
+cost model, not frontend trivia.
 
-## Kernels written by models
+### JAX and OpenXLA
 
-The newest force at this layer is the subject of this book pointed at its own foundations. The benchmark that frames the question, KernelBench, asks models to write correct, faster-than-PyTorch GPU kernels, and frontier models solved fewer than a fifth of its tasks one-shot in early 2025 [@ouyang2025kernelbench]. The gap between one-shot and iterating-against-a-checker, however, is this book's recurring lesson, and it holds here: with compilation and timing as the reward signal, reinforcement-trained and search-driven systems now reliably produce correct kernels and beat PyTorch's eager operators on memory-bound workloads, occasionally by multiples [@baronio2025kevin]. The cautionary tale arrived on schedule: a widely publicized "AI CUDA engineer" claiming hundred-fold speedups was found within days to have exploited its own evaluation harness, reusing a cached correct result rather than computing one, a textbook case of the reward hacking that @sec-verifiers-process-supervision anatomizes [@sakana2025cuda]. The sober mid-2026 reading is that generated kernels are becoming the cheap way to cover the long tail of fusible operations, while nobody has shown a model matching FlashAttention-3-class engineering at the compute-bound frontier, and the integrity of the timing harness is now a first-order concern. Production serving reflects the same division of labor: vLLM compiles the fusible glue between operations by default and replays it under CUDA graphs, while attention and the quantized matmuls remain hand-written kernels the compiler treats as opaque [@ansel2024pytorch2]. The compiler owns the floor; the peaks are still artisanal.
+JAX traces a specialized Python function into jaxpr. Lowering converts the
+program through StableHLO into XLA's optimization and code-generation pipeline.
+XLA performs target-dependent fusion, layout assignment, buffer planning,
+collective handling, and kernel or library selection before a target executable
+is loaded through the runtime [@frostig2018jax; @openxla2026stablehlo;
+@openxla2026emitters].
+
+StableHLO defines portable tensor semantics and a compatibility window for
+portable artifacts. It does not freeze a physical layout, schedule, numerical
+accuracy across every consumer, or performance. Those decisions belong to the
+consumer and target. JAX also specializes on facts such as shape, dtype, and
+static arguments, so its compile cache needs the same operational attention as
+any other staged system.
+
+## Layout and autotuning are part of compilation
+
+Logical shape does not determine physical layout. A compiler may choose which
+dimension is contiguous, add padding or tiling, place buffers in different
+memory spaces, or distribute tile elements across lanes and registers. Some
+transposes are metadata changes; others move the entire tensor. Library calls
+and matrix instructions impose layout constraints, and converting between two
+otherwise valid layouts can erase the gain from a fast kernel.
+
+Schedule selection has the same conditional nature. Triton raises the
+programmer's unit of work from a scalar thread to a blocked program, while its
+compiler handles tasks such as coalescing, vectorization, shared-memory
+allocation, and instruction selection [@tillet2019triton;
+@triton2026guide]. The author still chooses the grid, masks, tile sizes, number
+of warps or stages, and sometimes target-specific mechanisms. TVM-style learned
+cost models and empirical autotuning search over choices; they do not make one
+schedule universally optimal.
+
+## Portability is not one property
+
+Claims about a “portable kernel” need a named boundary:
+
+| Portability claim | What it means | What it does not guarantee |
+|---|---|---|
+| Source portability | One source language can be accepted by several backends | Equal feature coverage or identical generated code |
+| Semantic portability | Backends implement the declared operator behavior | Bitwise-identical floating-point results |
+| Artifact portability | A serialized IR or binary loads in its promised compatibility window | Portability outside that artifact ecosystem |
+| Performance portability | One implementation remains efficient across targets | Implied by source or semantic portability |
+| Operational portability | Tooling, deployment, observability, and fallback work on each target | Implied by a successful kernel launch |
+
+PTX is an NVIDIA virtual instruction set, not a universal GPU IR. CUDA device
+code may be shipped as PTX, target-specific cubin, or a fat binary containing
+several images. PTX can be assembled ahead of time or JIT-compiled by the
+driver; cubin compatibility is narrower [@nvidia2026nvcc]. An AMD backend may
+instead lower through AMD LLVM to an HSACO artifact, while a TPU backend emits
+its own executable. These branches can share high-level tensor semantics without
+sharing a final schedule or binary.
+
+The same distinction applies to Triton. Its blocked programming model can
+reduce source duplication across supported targets, but backend coverage,
+available instructions, layout choices, and tuned configurations still differ.
+A target-specific schedule is often needed for performance portability, and
+that schedule must be revalidated as hardware and compilers change.
+
+## The ecosystem is part of the target
+
+CUDA began as a programming and execution model, but applications depend on a
+larger contract: the driver and runtime; compiler and artifact formats; math and
+communication libraries; profiler and debugger behavior; framework
+integration; and the accumulated tests and operational knowledge around them
+[@nickolls2008cuda; @chetlur2014cudnn]. Alternative targets have corresponding
+stacks. Comparing only a kernel language or a peak arithmetic rate therefore
+misses much of the switching cost.
+
+Libraries are especially important. Their contracts include supported dtypes
+and layouts, workspace limits, algorithm selection, determinism, stream
+semantics, collective ordering, ABI compatibility, and target generations.
+Moving a workload means finding equivalent behavior for every relied-upon
+contract, then validating numerical results and performance on the actual shape
+distribution. Source translation can reduce labor, but it does not discharge
+that verification.
+
+This is also a research constraint. The “hardware lottery” describes how ideas
+that map well to available hardware and software receive cheaper, faster
+experiments [@hooker2021hardware]. A new architecture may look weak because it
+lacks a fused scan, sparse operation, or layout-aware compiler path, not because
+its mathematical idea is weak. Kernel availability therefore affects which
+model designs can be evaluated credibly.
+
+## Generated kernels need a hostile evaluator
+
+KernelBench made generated-kernel evaluation concrete with 250 PyTorch
+workloads and a metric that requires both correctness and speed
+[@ouyang2025kernelbench]. For task set $\mathcal{D}$, one version of that metric
+can be written
+
+$$
+\operatorname{fast}_p
+=
+\frac{1}{|\mathcal{D}|}
+\sum_{i\in\mathcal{D}}
+\mathbf{1}\!\left[
+\operatorname{correct}(k_i)
+\land
+t(k_i)<\frac{t(b_i)}{p}
+\right].
+$$
+
+where:
+
+- $\mathcal{D}$ is the benchmark task set and $|\mathcal{D}|$ its size;
+- $k_i$ is the generated kernel for task $i$ and $b_i$ is its baseline;
+- $t(\cdot)$ is synchronized execution time under the benchmark protocol;
+- $p>0$ is the required speedup threshold;
+- $\operatorname{correct}(k_i)$ is the benchmark's semantic verdict;
+- $\mathbf{1}[\cdot]$ is one when its condition holds and zero otherwise.
+
+Execution and profiling feedback can improve results, and multi-turn training
+has shown gains on fixed benchmark splits [@baronio2025kevin]. Those results do
+not establish general kernel reliability. A kernel can pass a few shapes while
+writing only part of its output, rely on narrow input distributions, mutate an
+input, call the reference path, or exploit allocator and synchronization state.
+Follow-up audits have demonstrated that broader hidden distributions and
+stricter baselines can reverse apparent wins
+[@kernelbenchverified2026]. This is the same evaluator problem examined in
+@sec-verifiers-process-supervision, now with asynchronous hardware and mutable
+memory added.
+
+```{dot}
+//| label: fig-compilers-kernels-validation
+//| fig-cap: "A generated kernel is accepted only after independent semantic, compiler, and performance gates. Failures return to the generator or a known fallback, never directly to production."
+digraph validation {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.32;
+  ranksep=0.32;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", fontname="Helvetica", fontsize=8, fontcolor="#6b7280"];
+
+  candidate [label="candidate kernel"];
+  compile [label="compiler gate\nbuild + sanitizer"];
+  semantic [label="semantic gate\nhidden randomized tests"];
+  performance [label="performance gate\nsynchronized representative trials"];
+  accept [label="versioned artifact\ncanary + rollback", color="#3b82f6",
+          fontcolor="#3b82f6", penwidth=1.4];
+  reject [label="reject or fallback"];
+
+  candidate -> compile -> semantic -> performance -> accept;
+  compile -> reject [label="fail"];
+  semantic -> reject [label="fail"];
+  performance -> reject [label="fail"];
+}
+```
+
+A production evaluator should cover at least:
+
+1. **Contract surface.** Freeze supported ranks, shapes, dtype and math mode,
+   device architecture, alignment, layout, aliasing, mutation, workspace,
+   stream, error, and determinism behavior.
+2. **Hidden semantics.** Use fresh random inputs and outputs, boundary shapes,
+   zero and odd sizes, broadcast cases, noncontiguous strides, misalignment,
+   cancellation, ties, signed zeros, NaN and infinity where supported, and
+   independent tolerances derived from dtype and reduction length.
+3. **Memory and concurrency.** Detect out-of-bounds access, uninitialized data,
+   incomplete writes, races, bad synchronization, illegal aliasing, and failures
+   under concurrent streams, graph replay, and varied allocator histories.
+4. **Harness integrity.** Isolate the candidate; prevent reference calls,
+   monkey-patching, hidden fallback, network or file access, and reuse of
+   reference allocation state. Perturb every input so the output must depend on
+   it.
+5. **Measurement.** Separate compile time, autotuning, cold-start latency,
+   kernel-only time, and end-to-end time. Use warm-up, device synchronization,
+   randomized paired order, many repetitions, and a median plus useful
+   quantiles or confidence intervals.
+6. **Representative comparison.** Match dtype, fast-math settings, layout,
+   workspace, graph mode, and hardware. Compare with a production baseline, not
+   only an eager reference, over the real workload distribution.
+
+## Operating the compiler-kernel boundary
+
+A reliable release process treats the generated artifact and its assumptions as
+one unit:
+
+1. Record the graph or operator schema, guards, effect and alias model,
+   numerical tolerance, and fallback.
+2. Pin the target architecture, driver, runtime, math libraries, compiler,
+   toolchain version, flags, and autotuning state.
+3. Build a semantic gate covering eager-versus-compiled outputs, gradients when
+   relevant, edge shapes, strides, dtypes, mutation, and concurrency.
+4. Build a compiler gate covering graph breaks, guard failures, recompilations,
+   compile cache growth, sanitizer findings, and target-code generation.
+5. Build a performance gate over the representative workload distribution,
+   measuring launch count, achieved bandwidth or compute, occupancy, registers,
+   shared memory, spills, workspace, and peak memory.
+6. Report cold-start compilation and autotuning separately from warm execution.
+7. Canary the artifact with automatic rollback to the known fallback on
+   numerical, compiler, or latency regression.
+8. Re-run the gates whenever the graph, target, driver, library, compiler, or
+   workload distribution changes.
+
+## Lower-layer constraint
+
+The compiler cannot recover information that the framework discarded, prove
+aliasing facts the program did not expose, or make an unsupported target
+instruction exist. Conversely, a kernel can be locally fast and still lose
+end-to-end because its layout forces a transpose, its workspace raises memory
+pressure, its compile cache fragments on dynamic shapes, or its launch breaks a
+larger fusion region. Compiler and kernel performance must therefore be
+measured in the graph and service that consume them, against the bandwidth,
+memory, and interconnect limits from @sec-accelerators-networking.
+
+The next chapter, @sec-orchestration-data-infra, moves one level upward in
+operational time: from producing executable work to keeping a long-running
+training system supplied, observable, and recoverable.
 
 ::: {.callout-important}
 ## What's contested
-Whether the moat is eroding depends on which claim is being made. That one Triton source file can now target four vendors' hardware is settled, and Meta serves production models through that path on its own accelerators. That the portable path matches the native one is false as of mid-2026: the cleanest measurement, an all-Triton Llama serving stack from the PyTorch team itself, reached 76-78% of the CUDA-kernel path's performance on H100. One camp reads the trajectory, compiler-first stacks, multi-vendor Triton, models generating kernels, as compounding depreciation of NVIDIA's software advantage; the other observes that each new hardware generation adds private machinery, asynchronous engines, new numeric formats, protected interconnect, faster than abstractions absorb it, so the moat refills from the bottom at least as fast as it drains from the top. Both camps cite FlashAttention-3 as their exhibit.
+
+The unsettled question is not whether compilers can generate useful kernels;
+they already do. It is how much target-specific information can remain behind a
+portable interface without sacrificing important performance. High-level IRs
+and blocked kernel languages improve source and semantic portability. New
+device instructions, layout rules, library contracts, and asynchronous
+pipelines keep creating target-specific scheduling work. Generated-kernel
+systems may reduce that labor, but their gains remain conditional on the
+evaluator, baseline, shape distribution, hardware, and search budget. The
+claim worth testing is therefore concrete: for a named workload and contract,
+does this toolchain preserve semantics and beat the best maintained fallback
+after compile and operating costs are included?
 :::
 
 ## Further reading
