@@ -928,7 +928,13 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/ecosystem/01-model-landscape.qmd",
-      ["open-to-closed spectrum", "release can disclose five things", "weight license", "almost every published training practice", "open labs rather than the largest closed"],
+      [
+        "A model name is not a deployment option",
+        "release contract",
+        "These are independent questions",
+        "classification belongs to a release, not a laboratory",
+        "changing release contracts",
+      ],
     ],
     [
       "zh/ecosystem/01-model-landscape.qmd",
