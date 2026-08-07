@@ -1207,7 +1207,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/13-operating-contracts.qmd",
-      ["what it promises, what it costs", "operating contract", "Cost Governance", "Tenant boundary", "evidence store"],
+      ["versioned operating contract", "Separate SLI, SLO, and SLA", "Control cost before execution", "Enforce tenancy one boundary at a time", "operating contract release record"],
     ],
     [
       "zh/practice/13-operating-contracts.qmd",
