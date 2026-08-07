@@ -518,76 +518,90 @@
     watchTheme(host, draw);
   };
 
-  // ROI balance: adoption value is not model capability. It is the value of
-  // saved time and quality lift minus model spend, review/integration overhead,
-  // and expected error cost. The sliders make the hidden adoption costs visible.
+  // ROI balance: a dimensionless sensitivity explorer in common normalized
+  // value units. Benefits and costs are never inferred by adding raw percentage
+  // changes; the surrounding chapter explains how to build the monetary ledger.
   R['roi-balance'] = function (host) {
     var zh = host.getAttribute('data-lang') === 'zh';
-    var time = 18, quality = 8, model = 12, review = 18, error = 10;
-    var base = 100;
+    var capacity = 28, quality = 10, model = 12, review = 18, fixed = 8, risk = 10;
     var labels = zh ? {
-      value: '产出收益',
+      capacity: '产能收益',
+      quality: '质量 / 收入收益',
       model: '模型成本',
-      review: '审查与集成',
-      error: '错误返工',
+      review: '审查与返工',
+      fixed: '固定采用成本',
+      risk: '预期事故损失',
       net: '净值',
-      time: '节省时间 (%)',
-      quality: '质量提升 (%)',
+      capacityBenefit: '产能收益',
+      qualityBenefit: '质量 / 收入收益',
       modelCost: '模型成本',
-      reviewCost: '审查 / 集成成本',
-      errorCost: '预期错误成本',
+      reviewCost: '审查 / 返工成本',
+      fixedCost: '固定采用成本',
+      riskCost: '预期事故损失',
       read: '净值 '
     } : {
-      value: 'output value',
+      capacity: 'capacity benefit',
+      quality: 'quality / revenue benefit',
       model: 'model cost',
-      review: 'review + integration',
-      error: 'error rework',
+      review: 'review + rework',
+      fixed: 'fixed adoption cost',
+      risk: 'expected incident loss',
       net: 'net value',
-      time: 'time saved (%)',
-      quality: 'quality lift (%)',
+      capacityBenefit: 'capacity benefit',
+      qualityBenefit: 'quality / revenue benefit',
       modelCost: 'model cost',
-      reviewCost: 'review / integration cost',
-      errorCost: 'expected error cost',
+      reviewCost: 'review / rework cost',
+      fixedCost: 'fixed adoption cost',
+      riskCost: 'expected incident loss',
       read: 'net value '
     };
     var bar = el('div', 'viz-pa-bar');
     var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 290);
+    var cv = canvas(host, 330);
     function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
       ctx.clearRect(0, 0, W, H);
-      var value = base * (time / 100 + quality / 100);
+      var net = capacity + quality - model - review - fixed - risk;
       var rows = [
-        { label: labels.value, v: value, color: t.accent },
+        { label: labels.capacity, v: capacity, color: t.accent },
+        { label: labels.quality, v: quality, color: t.accent },
         { label: labels.model, v: -model, color: t.accent2 },
         { label: labels.review, v: -review, color: t.accent2 },
-        { label: labels.error, v: -error, color: t.accent2 },
-        { label: labels.net, v: value - model - review - error, color: (value - model - review - error) >= 0 ? t.accent : t.accent2 }
+        { label: labels.fixed, v: -fixed, color: t.accent2 },
+        { label: labels.risk, v: -risk, color: t.accent2 },
+        { label: labels.net, v: net, color: net >= 0 ? t.accent : t.accent2 }
       ];
       var maxAbs = Math.max.apply(null, rows.map(function (r) { return Math.abs(r.v); }));
       maxAbs = Math.max(20, maxAbs * 1.2);
-      var zero = pd + (W - 2 * pd) * 0.55;
-      var scale = (W - 2 * pd) * 0.42 / maxAbs;
-      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
-      ctx.beginPath(); ctx.moveTo(zero, pd * 0.75); ctx.lineTo(zero, H - pd * 0.65); ctx.stroke();
+      var left = 8 * cv.dpr, right = W - left, zero = W / 2;
+      var scale = (W / 2 - 16 * cv.dpr) / maxAbs;
+      var rowH = 42 * cv.dpr;
       rows.forEach(function (r, i) {
-        var y = pd + i * 39 * cv.dpr;
+        var y = 7 * cv.dpr + i * rowH;
+        var barY = y + 18 * cv.dpr;
         var w = r.v * scale;
+        if (i === rows.length - 1) {
+          ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
+          ctx.beginPath(); ctx.moveTo(left, y - 5 * cv.dpr); ctx.lineTo(right, y - 5 * cv.dpr); ctx.stroke();
+        }
+        ctx.fillStyle = t.ink; ctx.font = (11.5 * cv.dpr) + 'px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(r.label, left, y + 11 * cv.dpr);
+        ctx.textAlign = 'right';
+        ctx.fillText((r.v >= 0 ? '+' : '') + r.v.toFixed(0), right, y + 11 * cv.dpr);
+        ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
+        ctx.beginPath(); ctx.moveTo(zero, barY - 2 * cv.dpr); ctx.lineTo(zero, barY + 15 * cv.dpr); ctx.stroke();
         ctx.fillStyle = r.color;
-        ctx.fillRect(w >= 0 ? zero : zero + w, y, Math.abs(w), 22 * cv.dpr);
-        ctx.fillStyle = t.ink; ctx.font = (11.5 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right';
-        ctx.fillText(r.label, zero - 8 * cv.dpr, y + 15 * cv.dpr);
-        ctx.textAlign = w >= 0 ? 'left' : 'right';
-        ctx.fillText((r.v >= 0 ? '+' : '') + r.v.toFixed(0), zero + w + (w >= 0 ? 6 : -6) * cv.dpr, y + 15 * cv.dpr);
+        ctx.fillRect(w >= 0 ? zero : zero + w, barY, Math.abs(w), 12 * cv.dpr);
       });
-      var net = rows[4].v;
       read.textContent = labels.read + (net >= 0 ? '+' : '') + net.toFixed(0) + ' / 100';
     }
-    host.appendChild(slider(labels.time, 0, 40, 1, time, function (v) { time = v; draw(); }).wrap);
-    host.appendChild(slider(labels.quality, 0, 30, 1, quality, function (v) { quality = v; draw(); }).wrap);
+    host.appendChild(slider(labels.capacityBenefit, 0, 60, 1, capacity, function (v) { capacity = v; draw(); }).wrap);
+    host.appendChild(slider(labels.qualityBenefit, 0, 40, 1, quality, function (v) { quality = v; draw(); }).wrap);
     host.appendChild(slider(labels.modelCost, 0, 60, 1, model, function (v) { model = v; draw(); }).wrap);
     host.appendChild(slider(labels.reviewCost, 0, 60, 1, review, function (v) { review = v; draw(); }).wrap);
-    host.appendChild(slider(labels.errorCost, 0, 60, 1, error, function (v) { error = v; draw(); }).wrap);
+    host.appendChild(slider(labels.fixedCost, 0, 60, 1, fixed, function (v) { fixed = v; draw(); }).wrap);
+    host.appendChild(slider(labels.riskCost, 0, 60, 1, risk, function (v) { risk = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };
