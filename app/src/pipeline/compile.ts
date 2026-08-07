@@ -45,6 +45,15 @@ function chapterWord(lang: string, num: string): string {
   return lang === "zh" ? `第 ${num} 章` : `Chapter ${num}`;
 }
 
+// Insert generated HTML with a replacement function so dollar sequences in
+// bibliography titles and URLs cannot be interpreted as replace patterns.
+export function fillSlot(html: string, id: string, body: () => string): string {
+  return html.replace(
+    new RegExp(`(<div class="rdr-block"[^>]*id="${id}"[^>]*>)([\\s\\S]*?)(</div>)`),
+    (_m, open: string, _cur: string, close: string) => open + body() + close,
+  );
+}
+
 // "Part I: Base Model Formation" → "Part I"; "第一部分 · 基座模型的形成" → "第一部分"
 function shortPart(label: string): string {
   return label.split(/[:：]/)[0].trim();
@@ -104,22 +113,20 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   // FUNCTION, not a string: the generated content can contain "$" sequences (a
   // "$1 billion" in a title, a "$&" in a URL) that String.replace would
   // otherwise interpret as backreferences and splice the wrong text in.
-  const fillSlot = (id: string, body: () => string) =>
-    html.replace(new RegExp(`(<div class="rdr-block"[^>]*id="${id}"[^>]*>)([\\s\\S]*?)(</div>)`), (_m, open: string, _cur: string, close: string) => open + body() + close);
   // References page: fill the ::: {#refs} slot with the cited-only bibliography.
   if (ch.href === "references") {
-    html = fillSlot("refs", () => renderBibliography(ctx.bib, book.lang));
+    html = fillSlot(html, "refs", () => renderBibliography(ctx.bib, book.lang));
   }
   // Glossary page: fill the ::: {#glossary} slot with every term used in the book.
   // book order ends with the back matter, so glossaryUsed is complete by here.
   if (ch.href === "glossary") {
-    html = fillSlot("glossary", () => renderGlossaryPage(ctx.glossary, ctx.glossaryUsed, ctx.glossaryFirstUses, book.lang));
+    html = fillSlot(html, "glossary", () => renderGlossaryPage(ctx.glossary, ctx.glossaryUsed, ctx.glossaryFirstUses, book.lang));
   }
   // Chapter "Further reading": fill the ::: {#further-reading} slot from
   // refs/<slug>.bib (the per-chapter literature store).
   if (html.includes('id="further-reading"')) {
     const slug = ch.href.split("/").pop()!.replace(/\.html$/, "");
-    html = fillSlot("further-reading", () => renderFurtherReading(ctx.refsDir, slug, book.lang, ctx.xref, ch.href, prefix));
+    html = fillSlot(html, "further-reading", () => renderFurtherReading(ctx.refsDir, slug, book.lang, ctx.xref, ch.href, prefix));
   }
   const { prev, next } = prevNext(book, ch.href);
   const isPartIntro = ch.role === "part";

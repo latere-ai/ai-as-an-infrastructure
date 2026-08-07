@@ -5,7 +5,7 @@
 
 import { test, expect } from "bun:test";
 import { join } from "node:path";
-import { compileChapter, compilePage, type CompileContext } from "./compile.ts";
+import { compileChapter, compilePage, fillSlot, type CompileContext } from "./compile.ts";
 import { loadBook } from "./book.ts";
 import { loadBibliographyDir } from "./citations.ts";
 import { buildCrossref } from "./crossref.ts";
@@ -60,13 +60,12 @@ test("a '$'-bearing title survives slot filling (no replacement-pattern splicing
   // Bug: the ::: {#refs} slot was filled with a string replacement, so "$6" in
   // a reference title was read as a regex
   // backreference, splicing the slot's own <div> into the title text.
-  const book = loadBook("en", repoRoot);
-  const page = compilePage(book, "references", ctxFor());
-  expect(page).not.toBeNull();
-  expect(page!.contentHtml).toContain("$60 million");
+  const html = '<div class="rdr-block" id="refs">old</div>';
+  const filled = fillSlot(html, "refs", () => "A $60 million title and a $& URL");
+  expect(filled).toContain("A $60 million title and a $& URL");
   // the slot wrapper must appear exactly once, not duplicated inside an entry
-  expect(page!.contentHtml.match(/id="refs"/g)?.length ?? 0).toBe(1);
-}, wholeBookTimeout);
+  expect(filled.match(/id="refs"/g)?.length ?? 0).toBe(1);
+});
 
 test("compilePage returns null for an unknown href", () => {
   const book = loadBook("en", repoRoot);
