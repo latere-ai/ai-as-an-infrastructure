@@ -493,6 +493,15 @@ test("the viz runtime registers the verification frontier component", () => {
   expect(rt).toContain("形式化覆盖");
 });
 
+test("verification frontier keeps its stacked-bar legend readable on mobile", () => {
+  const start = rt.indexOf("R['verification-frontier']");
+  const end = rt.indexOf("R['", start + 10);
+  const component = rt.slice(start, end < 0 ? undefined : end);
+  expect(component).toContain("compactLegend");
+  expect(component).toContain("cssWidth < 430");
+  expect(component).toContain("segmentCenter");
+});
+
 test("verification frontier chapter uses the interactive visualization in both languages", () => {
   expect(src("en/frontiers/03-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
   expect(src("zh/frontiers/03-verification-frontier.qmd")).toContain('data-viz="verification-frontier"');
