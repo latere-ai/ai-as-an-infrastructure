@@ -1,461 +1,493 @@
 # Retrieval and Document Intelligence {#sec-retrieval-practice}
 
-Retrieval is how a model talks to data it was never trained on, and document
-intelligence is the front door that decides what data even reaches it. This
-practice layer sits under the theory in @sec-rag-retrieval and
-@sec-context-engineering: those chapters explain why retrieval works and how a
-context window is assembled; here the work is choosing 2026 tools and wiring
-them together. The two halves are one pipeline. A PDF becomes structured text,
-structured text becomes embeddings in a vector store, a query pulls the right
-chunks back, and a reranker orders them before they hit the prompt. A failure
-anywhere upstream silently poisons everything downstream.
+Retrieval is not a database feature bolted onto a model. It is an evidence
+service with two jobs: publish trustworthy representations of source material,
+then return only the evidence a caller is allowed to see. The theory in
+@sec-rag-retrieval explains retrieval-augmented generation (RAG), while
+@sec-context-engineering explains how selected evidence becomes model input;
+this chapter turns both into an operable system. The result of the work is a
+**retrieval release**: a versioned corpus, a tested query path, and the evidence needed to
+deploy or roll it back [@lewis2020rag].
 
-![Schematic of a document intelligence pipeline. Parsing, chunking, embedding, retrieval, and citation each discard some evidence, so early structure matters. Idealized retained evidence, not measured data.](/figures/retrieval-and-documents-1.svg){#fig-retrieval-and-documents-1}
+Start with a contract, not a product shortlist. Record the **corpus boundary**,
+the query classes the system must answer, the **success evidence** required for
+release, and the authority under which each source may be used. Add freshness
+and deletion service levels, latency and cost budgets, and a rollback window.
+Without these facts, a fast index or an impressive benchmark score has no
+operational meaning.
 
-::: {.callout-note}
-## As of mid-2026
+| Contract field | Question the release must answer |
+|---|---|
+| Corpus boundary | Which repositories, formats, languages, dates, and source revisions are in scope? |
+| Query classes | Which lookups, paraphrases, tables, temporal questions, and no-answer cases matter? |
+| Success evidence | Which parse, retrieval, citation, answer, security, latency, and cost tests must pass? |
+| Authority | Which principal, tenant, purpose, policy, and retention rule govern each item? |
+| Change | What are the freshness SLA and deletion SLA, and where are they measured? |
+| Recovery | Which last-known-good release remains available, and how is rollback exercised? |
 
-This is a dated snapshot (2026-06). Every ranking, price, version number, and
-benchmark score below is volatile and source-attributed, and many come from
-vendor posts or version-mixed aggregators that do not agree. Treat them as
-directional, lead with the durable guidance (the categories, the trade-offs,
-how to choose, how to wire), and verify current values against the primary
-sources before you quote them.
-:::
-
-## The pipeline and why parse quality leads
-
-Read the pipeline in ingestion order. @fig-retrieval-pipeline shows the whole
-path from a raw document to an answer.
+@fig-retrieval-pipeline separates offline publication from the authorized
+online path. Evaluation observes both; it is not a final check attached only to
+the generated answer.
 
 ```{dot}
 //| label: fig-retrieval-pipeline
-//| fig-cap: "The retrieval and document-intelligence pipeline, from raw document to grounded answer. Ingestion is offline; query is online; evaluation observes both."
+//| fig-cap: "A retrieval release has an offline publication path and an authorized online evidence path."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_Ingest {
-    label="Ingestion offline"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    D [label="Documents\nPDF scan office"];
-    P [label="Parse and OCR\nVLM or pipeline"];
-    X [label="Structured extraction\nschema-valid object"];
-    C [label="Chunk and embed"];
-    VDB [label="Vector store", shape=cylinder];
-    D -> P;
-    P -> X;
-    P -> C;
-    X -> VDB;
-    C -> VDB;
-  }
-  subgraph cluster_Query {
-    label="Query online"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    Q [label="User or agent query"];
-    H [label="Hybrid retrieve", shape=diamond];
-    F [label="RRF fusion"];
-    RR [label="Rerank"];
-    CTX [label="Top-k context"];
-    LLM [label="Generator or agent"];
-    A [label="Answer"];
-    Q -> H;
-    H -> VDB;
-    VDB -> F;
-    F -> RR;
-    RR -> CTX;
-    CTX -> LLM;
-    LLM -> A;
-  }
-  EVAL [label="Eval RAGAS or LangSmith"];
-  EVAL -> H [style=dashed];
-  EVAL -> RR [style=dashed];
-  EVAL -> A [style=dashed];
+  rankdir=TB;
+  graph [nodesep=0.18, ranksep=0.28];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.0, margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  S [label="Source revisions"];
+  I [label="Authorize, parse, segment"];
+  P [label="Stage and publish generation"];
+  Q [label="Verified query and policy"];
+  R [label="Authorized retrieval and rerank"];
+  E [label="Evidence bundle"];
+  A [label="Generator and cited answer"];
+  S -> I -> P -> Q -> R -> E -> A;
 }
 ```
 
-The order matters because the largest data loss and the quietest errors happen
-at the parse step, not the search step. If a two-column page is flattened into
-interleaved lines, or a financial table is shredded into prose, no embedding
-model and no reranker downstream can recover the structure. By mid-2026 the
-vector database itself is close to a commodity: approximate nearest-neighbor
-search (HNSW, IVF, DiskANN variants) is everywhere and rarely the bottleneck.
-The differentiation has moved to the parse quality at the front, the embedding
-and reranker quality in the middle, and the cost architecture (RAM-resident
-versus object-storage) underneath. We treat the two halves in pipeline order:
-document intelligence first, then the retrieval stack.
+## Preserve evidence lineage
+
+A document is not a string. A PDF can contain a digital text layer, page
+images, annotations, fonts, form fields, tags, and hidden content; these views
+can disagree [@iso2020pdf]. Store the original **source object** and its content
+digest before deriving anything. Give every changed byte sequence a new
+**source revision**. A renderer then creates a rendition; a parser produces a
+document element; a segmenter produces a chunk ID and exact source span; an
+embedding model produces a representation in one declared space; and an index
+snapshot publishes it. This provenance chain must remain resolvable from a
+returned citation [@w3c2013prov].
+
+```{dot}
+//| label: fig-document-lineage
+//| fig-cap: "Each derived retrieval object remains bound to an immutable source revision."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  graph [nodesep=0.18, ranksep=0.25];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.0, margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  S [label="Source object\nrevision + digest"];
+  R [label="Rendition\npage + coordinates"];
+  D [label="Document element\nkind + reading order"];
+  C [label="Chunk ID\nsource span + parent"];
+  V [label="Embedding\nmodel + space"];
+  I [label="Index snapshot\ngeneration + watermark"];
+  E [label="Evidence ID\nclaim locator"];
+  S -> R -> D -> C -> V -> I -> E;
+}
+```
+
+A useful lineage record includes the source identifier, revision and digest;
+media type and acquisition time; tenant, access-control policy, rights, and
+retention state; renderer, parser, schema, normalizer, and segmenter revisions;
+page coordinates and reading order; raw and normalized text; parent element and
+heading path; and every published index generation. Keep raw evidence separate
+from normalized search text so that normalization can be changed without
+rewriting history.
+
+### Ingestion is a publication protocol
+
+Treat ingestion like a release pipeline:
+
+1. **Acquire and authorize.** Resolve the source identity, bytes, rights,
+   tenant, retention rule, and current access-control state.
+2. **Inspect.** Verify media type independently of the filename; scan for
+   malware; enforce byte, page, pixel, archive, and execution limits. Reject or
+   quarantine malformed, encrypted, active, or suspicious input.
+3. **Normalize and render.** Preserve the original, then create deterministic
+   renditions with explicit page boxes, rotation, coordinate origin, and units.
+4. **Parse.** Read the digital text layer where reliable; otherwise apply OCR,
+   layout analysis, table and equation recognition, and reading-order recovery.
+5. **Extract and validate.** Produce document elements and structured extraction
+   with evidence selectors. Retain uncertainty rather than inventing values.
+6. **Segment and embed.** Create retrieval units within authorization and
+   retention boundaries; reject silent truncation at model input limits.
+7. **Stage, reconcile, and publish.** Check counts, hashes, omissions,
+   tombstones, and coverage. Atomically publish a complete generation or keep
+   the previous one. Partial output is never quietly promoted.
+
+Retries must be idempotent. A worker crash on page 17, a duplicate delivery, or
+the same URI returning changed bytes must produce a reconciled revision, not a
+half-old, half-new index.
+
+## Measure document understanding
+
+@gls-ocr, optical character recognition, recognizes text from pixels.
+@gls-vlm, a vision-language model, reads page images and text together. Neither
+term includes every document task: detecting layout, restoring reading order,
+reconstructing a table, recognizing an equation, and mapping coordinates are
+separate operations. Born-digital text extraction is separate again. A toolkit
+such as Docling can compose several of these operations, while an end-to-end
+model may emit a structured representation directly [@auer2024docling].
+
+There is no universal parser winner. Build a held-out corpus stratified by the
+documents that can fail in materially different ways: born-digital and scanned
+pages, multiple scripts, right-to-left text, rotations, low resolution,
+multiple columns, forms, tables, equations, handwriting, redactions, hidden
+text, and malformed files. OmniDocBench is useful background, but a public
+average cannot replace this **document stratum** evaluation
+[@ouyang2025omnidocbench].
+
+For transcription, report character error rate (CER):
+
+$$
+\mathrm{CER}=\frac{S_c+D_c+I_c}{N_c},
+$$
+
+where $S_c$, $D_c$, and $I_c$ count character substitutions, deletions, and
+insertions, and $N_c$ is the number of characters in the reference. Do not use
+CER as a proxy for every other failure. Measure element detection
+precision/recall, reading-order error, table structure similarity, formula
+recognition, field-level precision/recall, and provenance-locator accuracy
+separately. Review low-confidence, high-impact cases with human review and
+record the review rate rather than hiding it in a single score.
+
+### Structured extraction has two kinds of validity
+
+JSON Schema can prove that output has the permitted shape and types. It cannot
+prove semantic correctness. A schema-valid invoice with the wrong total is
+still wrong. For each field, preserve an evidence selector and an explicit
+`unknown` state; let the extractor abstain when evidence is missing or
+ambiguous. Apply domain postconditions such as subtotal arithmetic, date
+ranges, identifier checksums, and cross-field consistency. Automatic retries
+must not turn uncertainty into fabricated certainty.
+
+### Visual retrieval is an evaluated alternative
+
+Text retrieval is not the only design. ColPali-style visual retrieval embeds a
+page image and uses late interaction to match it against a query
+[@faysse2024colpali]. It can retain layout signals lost by text conversion and
+can work well for visually rich or multilingual documents. It also changes the
+cost, storage, accessibility, explainability, and generator requirements.
+
+Compare text retrieval, visual retrieval, and a multimodal combination on the
+same labeled queries. Even a parse-light path still needs stable page identity,
+authorization, provenance, accessible text or an equivalent accommodation,
+and structured extraction when a downstream system needs fields rather than
+pixels.
+
+## Segment for retrieval and citation
+
+The **retrieval unit** is what ranking returns; the **citation unit** is the
+smallest source region a reader can verify. They need not be identical. A
+retriever may score a proposition or passage, then expand to its parent element
+or section for context. Every unit should retain a stable chunk ID, parent
+element, source revision and source span, heading path, language, page and
+coordinates, content digest, policy, and valid-time interval.
+
+Chunk size is not a universal constant. Compare structure-aware elements,
+fixed windows, sentences, propositions, and parent-child expansion using the
+same query set. Version the boundary and overlap policy. Overlap can protect
+boundary evidence, but it also increases index size and creates duplicate
+results; context assembly must detect duplicates without discarding useful
+corroboration. A chunk must never cross an authorization or retention boundary.
+
+## Authorize the online query
+
+The **query contract** contains the query, a verified principal and tenant,
+validated metadata filters, an as-of time, result and context budgets, ranking
+policy, and resolved index generation. Treat access control as eligibility, not
+as a relevance feature. The system must **authorize before candidate
+generation**, using current resource state; post-filtering a global top-k can
+leak data and underfill the authorized result.
+
+For query $q$, subject $s$, evaluation time $t$, and immutable generation $g$,
+define the authorized universe
+
+$$
+\begin{gathered}
+U(q,s,t,g)=\\
+\{c\in I_g\mid\\
+P(s,\mathrm{read},c,t)=\mathrm{allow},\\
+c.\mathrm{valid\_from}\le t<c.\mathrm{valid\_to},\\
+\neg c.\mathrm{tombstone}\}.
+\end{gathered}
+$$
+
+Here $I_g$ is index generation $g$, $c$ is a candidate, and $P$ is the policy
+decision for subject $s$ at time $t$. Retrieval returns top-k only from $U$.
+Missing or invalid policy metadata fails closed. The wrong tenant must never
+appear in candidates, reranker input, debug output, traces, or caches; this is
+the retrieval analogue of @sec-security-authorization.
+
+```{dot}
+//| label: fig-retrieval-query
+//| fig-cap: "The query path builds candidates only from the authorized universe and records every later decision."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  graph [nodesep=0.18, ranksep=0.25];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.0, margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  Q [label="Query + principal\npolicy + generation"];
+  U [label="Authorized universe"];
+  C [label="Sparse\nDense\nVisual\ncandidates"];
+  F [label="Fusion"];
+  R [label="Rerank + context budget"];
+  E [label="Evidence record + citations"];
+  Q -> U -> C -> F -> R -> E;
+}
+```
+
+## Choose representations by measured behavior
+
+Retrieval families make different trade-offs:
+
+- **Sparse retrieval** such as BM25 scores analyzed terms. It is a strong
+  lexical baseline for names, identifiers, and rare terms, but its analyzer,
+  language rules, field weights, and parameters are part of the index version.
+- **Dense retrieval** uses a dual encoder: document representations can
+  precompute offline, while the query is encoded online. Learned similarity can
+  connect paraphrases, but it can also blur decisive lexical distinctions
+  [@karpukhin2020dpr].
+- **Late interaction** keeps token-level document representations and combines
+  their matches at query time. ColBERT uses this as a first-stage retriever, not
+  merely as a reranker [@khattab2020colbert].
+- A **cross-encoder** scores each query-document pair jointly. It is often more
+  expensive and is normally applied to a bounded candidate union. It cannot
+  recover evidence that candidate generation omitted.
+
+These families exchange places across datasets. BEIR and MTEB are useful for
+method comparison and model screening, but local query strata decide a release
+[@thakur2021beir; @muennighoff2023mteb]. Begin with a lexical baseline, then
+measure each additional representation and reranker as an ablation.
+
+### Freeze the embedding compatibility contract
+
+An embedding is a model-specific representation whose similarity reflects its
+training objective. Record the model and tokenizer digest, embedding dimension,
+normalization, distance metric, query prefix, document prefix, truncation rule,
+and input limit. Cosine similarity, inner product, and Euclidean distance are
+not interchangeable unless their normalization assumptions make them so.
+
+Query and document vectors must name the same embedding-space revision. Reject
+dimension, prefix, normalization, or space mismatches. A model change normally
+requires a new generation and **re-embed** migration; never infer compatibility
+from equal dimensions or similar model names. Route query encoding and index
+selection atomically, even if models are served through the gateway described
+in @sec-serving-stack.
+
+### Fuse ranks without pretending scores agree
+
+Sparse, dense, and visual scores are usually not calibrated to one another.
+Reciprocal rank fusion (RRF) combines ranks instead [@cormack2009rrf]. For the
+set of ranked lists $\mathcal{L}$, define
+
+$$
+s_{\mathrm{rrf}}(d)=
+\sum_{L_j\in\mathcal{L}:d\in L_j}\frac{w_j}{k_0+r_j(d)},
+$$
+
+where $d$ is a candidate, $L_j$ is ranked list $j$, $r_j(d)$ is its one-based
+rank in that list, $w_j\ge0$ is the list weight, and $k_0>0$ is the fusion
+constant. A candidate not returned by a list contributes zero. RRF does not
+calibrate relevance scores or use their magnitude. Candidate depth, weights,
+the fusion constant, missing-item behavior, and deterministic tie-breaking are
+ranking-policy settings to tune on validation data and freeze before holdout
+evaluation.
+
+This small implementation makes those semantics testable:
+
+```python
+def reciprocal_rank_fusion(ranked_lists, k0, weights=None):
+    """Return (document, score) pairs in deterministic descending order."""
+    if k0 <= 0:
+        raise ValueError("k0 must be positive")
+    weights = weights or [1.0] * len(ranked_lists)
+    if len(weights) != len(ranked_lists):
+        raise ValueError("one weight is required for each ranked list")
+
+    scores = {}
+    for weight, ranked in zip(weights, ranked_lists):
+        if weight < 0:
+            raise ValueError("weights must be non-negative")
+        for rank, document_id in enumerate(dict.fromkeys(ranked), start=1):
+            scores[document_id] = scores.get(document_id, 0.0) + weight / (k0 + rank)
+    return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+```
+
+Reranking and context selection remain separate decisions. Measure candidate
+depth, rerank depth, final top-k, and the context budget independently. Enforce
+the latency budget and input limit of the reranker. Diversity controls such as
+maximum marginal relevance can reduce redundant context, but they trade
+relevance against diversity and do not guarantee deduplication.
+
+## Publish an index generation
+
+A vector index supplies exact or approximate neighbor search. A production
+store must additionally meet the **index contract** for durability, metadata,
+filters, consistency, backup, recovery, tenant isolation, and migration.
+Record:
+
+- corpus watermark and source coverage;
+- metadata schema, policy fields, and filter selectivity distribution;
+- analyzer, embedding space, distance, and ranking-policy revisions;
+- vector count, dimension, hashes, tombstones, and duplicate policy;
+- index algorithm and parameters, build hardware, duration, and recovery time;
+- exact-search baseline, ANN recall, latency percentiles, concurrency, and cost;
+- supported update, delete, backup, restore, and rollback behavior.
+
+HNSW is a graph-based approximate-neighbor design whose memory, build, recall,
+and latency trade-offs depend on the workload [@malkov2018hnsw]. DiskANN-style
+designs use SSD-aware graph search to change that resource balance
+[@subramanya2019diskann]. Neither name chooses a store for you. Compare exact
+scan, HNSW, DiskANN, IVF or compression variants under realistic filters,
+updates, concurrency, cache state, and tenant skew. Report ANN recall against
+the exact eligible top-k at each important filter selectivity.
+
+A release manifest can be small and still prevent accidental mixing:
+
+```yaml
+generation: corpus-2026-08-07-03
+source_watermark: "2026-08-07T08:00:00Z"
+parser: doc-parser@sha256:...
+segmenter: headings-v4
+embedding_space: embed-model-v7-d1024-cosine
+ranking_policy: hybrid-rrf-rerank-v5
+policy_schema: acl-v3
+deletion_watermark: "2026-08-07T08:05:00Z"
+```
+
+Build a new immutable generation as a **shadow index**. Backfill it, reconcile
+source counts, digests and tombstones, and catch up changes to an explicit
+watermark. Run shadow queries, then dual read old and new generations. Compare
+quality, authorization, freshness, latency, and cost by query class. Use an
+atomic routing change that moves both the query encoder and the index; retain
+the last-known-good generation through the rollback window. Never search an old
+index with a vector from an incompatible new embedding space.
+
+### Freshness and deletion cover every copy
+
+Define the freshness SLA from a committed source change to an eligible result,
+and the deletion SLA from revocation to absence. A deletion creates a tombstone
+that propagates to the vector index, lexical index, reranker and answer cache,
+published snapshot, replicas, and every in-flight migration generation. Logical
+suppression must happen promptly; physical erasure follows the declared
+retention process. Cache keys include tenant, policy version, generation, and
+as-of time. A stale result is explicit and never silently broadened as fallback.
+
+Test insert, update, ACL change, source deletion, interrupted backfill, duplicate
+replay, partial index failure, corrupt snapshot, and rollback. Prove that a
+deleted document cannot reappear from a cache, old snapshot, or shadow index.
+
+## Return evidence, not anonymous text
+
+The retrieval response is an evidence bundle. Each item carries an immutable
+evidence ID; source object, source revision, digest, span or page coordinates;
+index and ranking revisions; stage-specific ranks; applied policy and time;
+and truncation, underfill, timeout, stale-result, and fallback flags. Preserve
+unlike scores as unlike scores rather than presenting them as one calibrated
+probability.
+
+Bind every material answer **claim** to one or more retrieved evidence IDs.
+Measure citation precision (cited evidence supports its claim), citation recall
+(supported claims that have a citation), locator validity, entailment or
+contradiction, and answer correctness [@gao2023citations]. A generated citation
+that was not present in the evidence bundle is invalid. Reauthorize evidence
+when rendering a saved answer because a once-valid source may have been revoked.
+
+### Retrieved documents are untrusted
+
+Treat text, metadata, OCR output, image text, and annotations as **untrusted
+data**. An indirect prompt injection in a retrieved page is content, not system
+policy [@greshake2023indirect]. It cannot grant authority, become a tool
+instruction, change the tenant, disable citations, or request data exfiltration.
+Keep instructions and evidence in distinct channels, allow-list tool actions,
+validate arguments, and apply authorization again at each side effect.
+
+Also test a poisoned corpus: an attacker may insert apparently relevant chunks
+to steer answers or citations [@poisonedrag2025]. Restrict ingestion authority,
+record source trust and provenance, review unusual source or ranking changes,
+and retain a known-clean rollback generation. Content scanners help, but the
+core protection is that retrieved text has no authority of its own.
+
+## Evaluate layers and failure modes
+
+One end-to-end score cannot identify where evidence was lost. Keep an oracle
+for each layer and compare the deployed stage with that oracle.
+
+| Layer | Evidence for release |
+|---|---|
+| Parse quality | CER, element detection, reading order, table structure, formula and field-level accuracy, provenance validity |
+| Candidate retrieval | Recall@k, nDCG@k, MRR, filtered recall, exact-search comparison, underfill rate |
+| Fusion and rerank | Candidate recall before rerank, nDCG after rerank, truncation, diversity, deterministic fallback |
+| Context and answer | Answer correctness, faithfulness, citation precision/recall, contradiction, abstention calibration |
+| System | Zero unauthorized exposure, freshness/deletion SLA, p95 latency, availability, and cost per accepted answer |
+
+Use document-family splits rather than randomly placing sibling chunks in train
+and test. Include exact identifiers, paraphrases, negation, multilingual
+questions, tables, temporal questions, ambiguous entities, multi-hop evidence,
+hard negatives, and no-answer cases. Calibrate model judges against a stable
+human-reviewed sample; frameworks such as RAGAs can help automate measurement,
+but do not define the product threshold [@es2024ragas].
+
+The acceptance suite needs negative cases: wrong tenant, deleted document,
+stale revision, poisoned chunk, malformed table, empty retrieval, duplicate
+chunk, selective-filter underfill, reranker timeout, index failure, and
+no-answer behavior. Exercise fallback and rollback for each relevant failure.
+An outage may reduce ranking quality under a named policy; it may never weaken
+authorization or fabricate evidence.
+
+## Operate the release lifecycle
+
+1. **Freeze the contract.** Record corpus, query classes, policy, service levels,
+   metrics, thresholds, latency and cost budgets, and rollback criteria.
+2. **Build a labeled corpus.** Stratify documents, queries, relevance judgments,
+   citations, security cases, and expected abstentions.
+3. **Establish a lexical baseline.** It exposes corpus and judgment failures
+   before embedding and ANN complexity arrive.
+4. **Evaluate candidates.** Compare parsing, segmentation, sparse, dense,
+   visual, fusion, reranking, and context policies as controlled ablations.
+5. **Build and reconcile.** Publish only a complete immutable generation with a
+   manifest, provenance, policy, and tombstone coverage.
+6. **Shadow.** Replay production-shaped queries without serving the result.
+7. **Canary.** Route a small authorized cohort and monitor quality, leakage,
+   freshness, latency, cost, and fallbacks.
+8. **Promote or roll back.** Switch atomically; keep and exercise the
+   last-known-good generation.
+9. **Monitor drift.** Sample queries and documents by stratum, investigate
+   changes, and preserve decision traces without logging sensitive payloads by
+   default.
+10. **Requalify.** A parser, segmenter, embedding space, analyzer, index,
+    reranker, policy schema, corpus boundary, or material workload change is a
+    requalification trigger.
+
+The output is a retrieval release record: the immutable manifest, evaluation
+results, security and failure evidence, freshness and deletion measurements,
+canary decision, owner, approval, rollback target, and requalification
+triggers. That record is the handoff to the generator or agent team and the
+input to the wider evaluation practice in @sec-eval-practice.
 
 ::: {.callout-tip}
 ## Constraint arrow
 
-The retriever sets the ceiling on answer faithfulness no matter how good the
-generator is, and the parser sets the ceiling on the retriever. Spending here
-beats almost any prompt or model change above. A second arrow comes from below:
-once an agent (@sec-agents-practice) calls retrieval as a tool many times per
-task, per-query latency and cost stop being afterthoughts and become design
-constraints, which is what makes the object-storage cost curve worth caring
-about.
+The lower layer constrains every layer above it: missing evidence cannot be
+recovered by a reranker, unauthorized evidence cannot be made safe by a prompt,
+and an incompatible index cannot be repaired by gateway routing. Agents in
+@sec-agents-practice multiply retrieval calls, so quality, authorization,
+latency, and cost must hold per call and over the complete task. The full system
+wiring appears in @sec-wiring-stack.
 :::
 
-## Document intelligence: getting from a messy file to clean data
+::: {.callout-note}
+## The contested decision
 
-Document intelligence turns a PDF, scan, screenshot, or office file into
-machine-readable structure: text in reading order, tables as cells, equations
-as LaTeX, key-value pairs, and ultimately a typed object that obeys a schema.
-By 2026 the field split into three architectural camps, plus a cross-cutting
-concern.
-
-1. **Classic CV and @gls-ocr pipelines.** Here OCR means recognizing text from pixels,
-   inside a multi-stage stack: layout detection, OCR, table reconstruction,
-   reading-order assembly. Deterministic, debuggable, fast, and brittle on
-   unusual layouts. Marker, MinerU, PaddleOCR,
-   unstructured, and the cloud APIs live here.
-2. **End-to-end document VLMs.** A single image-and-text-to-text model emits
-   the whole structured document (Markdown, HTML tables, LaTeX) in one pass.
-   These dominate the open leaderboards, are usually small (sub-2B), and are
-   self-hostable on the same serving fleet as your chat models
-   (@sec-serving-stack). Simpler to run, harder to debug when they drop a
-   column.
-3. **Agentic document platforms.** A managed service wraps OCR, a @gls-vlm, a
-   model that reads page images and text together, a correction loop, and
-   structured extraction behind an API and an SLA. You
-   trade self-hosting for accuracy on hard documents and for compliance.
-
-The cross-cutting concern is **structured extraction**: going from parsed text
-to a typed object that obeys a JSON Schema. That is where constrained decoding
-and validation libraries meet the parse.
-
-The table below is a condensed view; the *Primary sources* hold the version and
-license detail.
-
-| Tool | Camp | License / deploy | Pick it when |
-| --- | --- | --- | --- |
-| **Docling** (IBM) | Pipeline toolkit | MIT toolkit, Apache-2.0 model, self-host | You want a permissive, batteries-included OSS pipeline with RAG-friendly output and swappable OCR |
-| **Granite-Docling-258M** | End-to-end VLM | Apache-2.0, self-host | Cost-efficient self-hosted conversion inside Docling; most permissive license; edge-tolerant |
-| **PaddleOCR-VL** (Baidu) | End-to-end VLM | Apache-2.0, self-host | Best-in-class open full-document accuracy when you can serve a VLM |
-| **dots.ocr**, **DeepSeek-OCR**, **MinerU**, **GLM-OCR** | End-to-end VLM | Apache-2.0 (verify weights), self-host | Self-hosted layout-aware parsing; DeepSeek-OCR for very high throughput |
-| **Mistral OCR 3** | Hosted OCR model | Commercial API, self-host on request | A flat low per-page price, an EU vendor, and a self-host escape hatch |
-| **Reducto** | Agentic platform | Commercial SaaS + on-prem | Adversarial enterprise docs (dense tables, handwriting, forms) with SOC 2 / HIPAA / zero-retention needs |
-| **LlamaParse / LlamaCloud** | Agentic platform | Hosted SaaS, credit-based | You are on LlamaIndex and want tiered parse quality (Fast to Agentic Plus) plus extraction |
-| **Lectio** (latere.ai) | Agentic platform | Author's own; hosted | The Latere stack as a worked example (@sec-tooling-ecosystem): live page-by-page parsing with per-element provenance back to the source. *Disclosed as the author's own; illustrative, not a neutral recommendation* |
-| **unstructured** | Pipeline + hosted | Apache-2.0 + hosted | The hard part is format sprawl (hundreds of source types), not the single hardest PDF |
-| **Azure / AWS / Google doc-AI** | Cloud doc-AI | Managed, per-page | You are deep in that cloud and want prebuilt extractors and a free tier with no model ops |
-| **Marker / Surya** (Datalab) | Pipeline | Code OSS, **weights OpenRAIL-M revenue-capped** | Research, personal, or small-startup use; read the weight license before commercial use |
-
-One option is missing from the table on purpose. A general frontier VLM such as
-Gemini Flash or Pro parses pages well with no pipeline at all, and it is the
-baseline in most 2026 comparisons. It costs more per page than a dedicated small
-OCR VLM and can hallucinate or silently drop content on dense tables, so treat
-"just send the page to a frontier VLM" as a real, simple option that you
-benchmark against the specialists, not as a default.
-
-A more radical design skips the parse entirely. ColPali-style visual retrieval
-embeds page *images* with a vision-language retriever, scores them with the
-same late-interaction matching the retrieval section below describes for text,
-and hands the retrieved pages to a VLM generator that reads the pixels
-[@faysse2024colpali]; Cohere Embed v4's image mode serves the same pattern with
-single-vector embeddings. By 2026 this is a standard alternative for visually
-rich corpora, and it qualifies the claim that parse quality leads: skip the
-parse and nothing upstream caps the retriever. The costs move rather than
-vanish. Page-image embeddings cost more to store and query, the generator must
-be a VLM, and structured extraction, provenance-carrying citation, and any
-text reuse of the corpus still need a parse.
-
-### Structured extraction
-
-Once a page is parsed, turning it into a typed object is an orthogonal choice
-along one axis: do you control the decoder?
-
-| Library | Mechanism | Pick it when |
-| --- | --- | --- |
-| **Outlines / XGrammar** | Constrained decoding (`guided_json`) inside the server | You self-host on vLLM/SGLang and want hard schema guarantees with zero post-hoc parsing |
-| **Instructor** | Pydantic validation + auto-retry around a provider SDK | You call a hosted model and want simple validation and retries |
-| **BAML** | Schema-Aligned Parsing of near-JSON output | The model returns malformed-but-close JSON and you want prompt discipline plus tolerant parsing |
-
-### Choosing a parser
-
-The decision is four axes: document difficulty, self-host versus API, volume and
-cost, and compliance.
-
-- **Self-hosted document VLM** (PaddleOCR-VL, dots.ocr, DeepSeek-OCR,
-  Granite-Docling, MinerU) when you can run a GPU, want no per-page bill, need
-  data to stay in your VPC, and your documents are "normal hard": academic
-  papers, reports, mixed text and tables. Serve them on vLLM/SGLang and you get
-  constrained decoding for free.
-- **Docling toolkit** as the safest pure-OSS default: a permissive pipeline with
-  RAG-friendly output and the option to drop in Granite-Docling.
-- **Mistral OCR 3** when you want a hosted API with a flat low per-page price
-  (reported around $2 per 1k pages, roughly half with batch, per Mistral, Dec
-  2025) and an EU vendor.
-- **Reducto or LlamaParse Agentic** when documents are genuinely adversarial and
-  accuracy matters more than per-page cost, and you want the correction loop,
-  SLA, and compliance without building them.
-- **unstructured** when the problem is format sprawl rather than the single
-  hardest PDF.
-- **Cloud doc-AI** (Azure, AWS, Google) when you are already in that cloud or
-  need a specific prebuilt extractor (invoice, receipt, ID, lending).
-
-A self-host parse plus schema-valid extraction is one request when constrained
-decoding lives inside the server:
-
-```python
-# vLLM / SGLang OpenAI-compatible call: schema-constrained extraction
-resp = client.chat.completions.create(
-    model="paddleocr-vl",                 # served locally on vLLM
-    messages=[{"role": "user", "content": [
-        {"type": "image_url", "image_url": {"url": page_png_data_uri}},
-        {"type": "text", "text": "Extract the invoice as JSON."}]}],
-    extra_body={"guided_json": Invoice.model_json_schema()},  # Outlines / XGrammar
-)
-```
-
-## The retrieval stack: stores, embeddings, rerankers, hybrid search
-
-An embedding (or vector) is a list of numbers that captures a text's meaning, so
-that texts with similar meaning sit near each other in that number space; the
-whole stack rests on that one idea. Around the vector store sit three other
-pieces: embedding models that turn text (and increasingly images and PDFs) into
-vectors, rerankers that re-score a candidate set for precision, and RAG
-frameworks that wire ingestion, chunking, retrieval, fusion, and prompt assembly
-together.
-
-### Vector stores
-
-The first question is almost always: do you already run Postgres? The table is
-condensed; the *Primary sources* hold the benchmark and pricing detail, all of
-it vendor-reported and version-sensitive.
-
-| Store | What it is | License | Pick it when |
-| --- | --- | --- | --- |
-| **pgvector (+ pgvectorscale)** | Postgres extension with HNSW/IVFFlat; pgvectorscale adds disk-resident StreamingDiskANN and label filtering | OSS (PostgreSQL) | You already run Postgres and your corpus is up to tens of millions of vectors. The right default for most RAG |
-| **Qdrant** | Rust vector-native DB; strong filtering, quantization, ACORN | Apache-2.0 + cloud | You are not on Postgres, want a fast self-hosted engine, and need heavy metadata filtering and data residency |
-| **Weaviate** | Vector-native with native hybrid (BM25 + vector) and built-in vectorizer modules | BSD-3 + cloud | You want hybrid search and embedding generation built in with minimal glue |
-| **Milvus / Zilliz** | Distributed, disaggregated, billion-scale; Zilliz is the managed cloud | Apache-2.0 + managed | You are genuinely at hundreds of millions to billions of vectors and have the ops capacity |
-| **Pinecone** | Managed serverless; Dedicated Read Nodes for heavy reads | Proprietary SaaS | You want fully managed, will pay for zero ops, and value predictable scaling |
-| **Turbopuffer** | Managed vector + search on object storage with caching | Proprietary SaaS | Cost at scale dominates, data is mostly cold and bursty, or you have very many tenants/namespaces |
-| **LanceDB** | Embedded/in-process on the Lance columnar format; multimodal | Apache-2.0 + cloud | Edge, desktop, notebooks, or multimodal pipelines where running a server is overhead |
-| **Chroma** | Lightweight OSS store, dev-ergonomics first | Apache-2.0 + cloud | Prototyping or small RAG where simplicity beats scale (validate limits first) |
-| **Vespa / Elasticsearch / OpenSearch** | Full search engines with vector support | Apache-2.0 / Elastic | Retrieval is really search (complex ranking, recommendation), or you already operate one |
-
-The trade-offs underneath those picks are durable even as the products churn.
-**One system versus vector-native:** Postgres-with-vectors removes an entire
-moving part (ops, backups, consistency, joins) at some cost in peak ANN
-throughput, and for most teams that trade is correct. **RAM versus object
-storage:** classic vector DBs keep the working set in RAM (fast, expensive),
-while object-storage-first designs (Turbopuffer, disk-resident DiskANN in
-pgvectorscale and Milvus) trade some latency for much lower cost on large or
-cold corpora. **Managed versus self-hosted:** managed buys zero ops and
-predictable scaling, self-hosted buys cost control, data residency, and no
-per-query markup. **Filtering at scale:** if most queries are "vector search
-but only within this tenant or date range or permission set," filtered recall
-and filtered latency matter more than raw ANN speed, and Qdrant (ACORN) and
-pgvectorscale (label filtering) are built for it.
-
-### Embeddings and rerankers
-
-The database returns what the embedding model encoded, and the reranker fixes
-the ordering. Spending here usually beats switching databases. Treat the
-embedding model as a first-class versioned dependency: changing it means
-re-embedding the whole corpus.
-
-MTEB and MMTEB scores below are not directly comparable across boards or
-versions (the English board, the multilingual board, and legacy versus current
-task sets use different task counts), so a higher number is not automatically a
-better model for your use case. The notes here are directional.
-
-| Model | Provider | Open / API | Note (as of 2026) |
-| --- | --- | --- | --- |
-| **OpenAI text-embedding-3-large / -small** | OpenAI | API | The boring-safe default; widely supported, Matryoshka dimension truncation (the embedding is trained so you can keep just the first k numbers and still retrieve well); -small is cheap and good enough for many apps |
-| **Cohere Embed v4** | Cohere | API | Multimodal (text + images), ~128K context, 100+ languages, Matryoshka dimensions; strong enterprise default |
-| **Voyage 4 family** | Voyage AI (MongoDB) | API; nano open-weighted | Jan 2026; shared embedding space across models, domain variants (code/law/finance); default on MongoDB Atlas |
-| **Gemini Embedding 2** | Google | API (preview) | Natively multimodal since March 2026: text, images, video, audio, PDF in one embedding space; succeeds gemini-embedding-001, which aggregators cited near the top of the English MTEB board. Verify board position before quoting |
-| **Qwen3-Embedding** | Alibaba | Open (Apache-2.0) | Best open default for non-English and self-hosting; long context; cited near the top of MMTEB |
-| **BGE-M3** | BAAI | Open (MIT) | Multilingual and multi-functional (dense/sparse/ColBERT in one); solid self-hosted baseline |
-| **Cohere Rerank 4** (Fast / Pro) | Cohere | API | Reranker; 32K context, multilingual, broadest production track record; on Bedrock/Azure/OCI |
-| **Voyage rerank-2.5** | Voyage AI | API | Reranker; large free tier; natural pairing on MongoDB Atlas |
-| **mxbai-rerank v2** | Mixedbread | Open (Apache-2.0) | Best open self-hosted reranker; cross-encoder on Qwen2.5 |
-
-### Hybrid search and reranking: the 2026 consensus
-
-The default retrieval strategy in 2026 is **hybrid plus rerank**.
-
-- **Hybrid search** runs BM25 (sparse, exact-term) and dense vector search in
-  parallel and fuses the two ranked lists, typically with **Reciprocal Rank
-  Fusion**: `score = sum 1 / (k + rank)`, with `k = 60` by convention. BM25
-  catches exact matches (codes, names, rare terms) that dense vectors blur;
-  dense catches paraphrase and concept that BM25 misses. Fusing by rank
-  sidesteps the incompatible-score-scale problem.
-- **Reranking** takes the top 50 to 100 fused candidates and re-scores them with
-  a cross-encoder that reads query and document together, returning the top 5 to
-  10 into the prompt. **Late-interaction** models (ColBERT-style, MaxSim) sit
-  between dense retrieval and cross-encoder reranking: token-level matching with
-  precomputable document representations, scoring a document by summing each
-  query token's best match against the document's tokens.
-- Optionally de-duplicate with MMR (Maximal Marginal Relevance, which picks each
-  next chunk for relevance minus overlap with the chunks already chosen) before
-  reranking so the context window is not spent on near-identical chunks.
-
-A minimal pgvector hybrid retrieval, with the embed and rerank calls going
-through the gateway (see *Wiring*):
-
-```sql
--- chunks(id, doc_id, content, embedding vector(1024), tsv tsvector)
-WITH dense AS (                          -- dense candidates (HNSW / DiskANN)
-  SELECT id, RANK() OVER (ORDER BY embedding <=> :query_vec) AS r
-  FROM chunks ORDER BY embedding <=> :query_vec LIMIT 100
-),
-sparse AS (                              -- sparse candidates (BM25-style)
-  SELECT id, RANK() OVER (ORDER BY ts_rank_cd(tsv, plainto_tsquery(:q)) DESC) AS r
-  FROM chunks WHERE tsv @@ plainto_tsquery(:q) LIMIT 100
-)
-SELECT c.id, c.content,                  -- reciprocal rank fusion, k = 60
-       COALESCE(1.0/(60+dense.r),0) + COALESCE(1.0/(60+sparse.r),0) AS rrf
-FROM chunks c
-LEFT JOIN dense  ON dense.id  = c.id
-LEFT JOIN sparse ON sparse.id = c.id
-WHERE dense.id IS NOT NULL OR sparse.id IS NOT NULL
-ORDER BY rrf DESC
-LIMIT 50;  -- hand these 50 to the reranker, keep the top 5-10 for the prompt
-```
-
-Try changing `k` below: a small `k` lets the top of each list dominate, a large
-`k` flattens the weighting so agreement across both lists matters more.
-
-:::: {.runnable}
-```python
-# Reciprocal Rank Fusion: score = sum 1 / (k + rank), rank starting at 1.
-bm25  = ["d3", "d1", "d7", "d2"]   # sparse, exact-term ranking
-dense = ["d2", "d3", "d5", "d1"]   # dense, semantic ranking
-k = 60
-
-def rrf(lists, k):
-    score = {}
-    for ranked in lists:
-        for rank, doc in enumerate(ranked, start=1):
-            score[doc] = score.get(doc, 0.0) + 1.0 / (k + rank)
-    return sorted(score.items(), key=lambda kv: kv[1], reverse=True)
-
-for doc, s in rrf([bm25, dense], k):
-    in_both = doc in bm25 and doc in dense
-    print(f"{doc}  rrf={s:.5f}  {'(in both lists)' if in_both else ''}")
-# d3 leads: never #1 in either list, but solidly ranked in both.
-```
-::::
-
-### Frameworks
-
-For the orchestration layer, the common 2026 pattern is **LlamaIndex** (MIT) for
-ingestion and retrieval, **LangGraph** (MIT) for orchestration and agents when
-the app is agentic, **Haystack** (Apache-2.0) when you want explicit testable
-production pipelines, and **DSPy** when you want to compile and optimize the
-retrieval-plus-prompt rather than hand-tune it. Wire in **RAGAS** or
-**LangSmith** from day one. Retrieval without evaluation is guessing, which is
-exactly the case the eval-practice chapter makes (@sec-eval-practice).
-
-::: {.callout-important}
-## What's contested
-
-The benchmarks that rank these tools are unusually unreliable. OmniDocBench, the
-main OCR benchmark, is widely described as saturated in 2026 (Jerry Liu /
-LlamaIndex), and public OCR leaderboards do not predict performance on
-financial, legal, or insurance documents. MTEB scores are not comparable across
-its English, multilingual, and legacy boards. And almost every vector-database
-latency, throughput, and cost claim is vendor-reported and not independently
-verified. The practical consequence: validate any parser or embedding choice on
-*your* documents with a small labeled set, and treat a leaderboard position as a
-shortlist signal, never as a decision.
+Teams often debate products before they have a representative corpus or an
+exact-search baseline. Reverse that order. A store, parser, embedding model, or
+reranker is acceptable only when its complete release record meets the local
+contract. There is no defensible universal chunk size, candidate depth, fusion
+constant, vector count threshold, or product default.
 :::
-
-## A sensible default (2026)
-
-For a typical team starting this stack in mid-2026 (opinionated, dated
-2026-06):
-
-- **Document intelligence: a two-tier setup.** Default tier is self-hosted OSS:
-  **Docling** as the pipeline with a small open document VLM (**PaddleOCR-VL**,
-  or **Granite-Docling** for the most permissive license) served on **vLLM**,
-  paired with **Outlines/XGrammar** `guided_json` for schema-valid extraction.
-  Escalation tier routes the pages your eval flags as low-confidence (dense
-  tables, handwriting, bad scans) to **Reducto** or **LlamaParse Agentic**, or
-  uses **Mistral OCR 3** as a cheap hosted fallback. If you cannot run a GPU at
-  all, make Mistral OCR 3 the default and skip the OSS tier.
-- **Vector store: pgvector on your existing Postgres**, adding
-  **pgvectorscale** when you cross into tens of millions of vectors. If you are
-  not on Postgres, **Qdrant** is the default vector-native alternative; if you
-  refuse to run any infra, **Pinecone** or **Turbopuffer** (the latter when cost
-  at scale or many tenants dominates).
-- **Embeddings: start with a strong API model** (text-embedding-3-large for the
-  safe path, Cohere Embed v4 for multimodal/long context, Voyage 4 on MongoDB
-  Atlas), and go open weight (Qwen3-Embedding or BGE-M3) when you need
-  self-hosting, data residency, or non-English depth.
-- **Retrieval strategy: hybrid (BM25 + dense) with RRF, then a reranker.** Add
-  the reranker (Cohere Rerank 4 managed, or mxbai-rerank v2 self-hosted) before
-  you tune anything exotic. It is usually the highest-ROI single change.
-- **Framework: LlamaIndex** for ingestion and retrieval, **LangGraph** for
-  orchestration if agentic, and **RAGAS or LangSmith** wired in from day one.
-
-The rationale is to minimize new infrastructure, put the quality budget where it
-pays (parse quality, embeddings, hybrid, rerank), and keep a clean upgrade path.
-You can swap the store later without rewriting the pipeline, but you cannot
-un-poison answers from a parser and retriever you never measured.
-
-## Wiring
-
-Retrieval sits below the agent or generator and beside the model @gls-gateway, and
-document intelligence sits one step further out at the ingestion edge. The
-unifying seam is the gateway. Embedding models, rerankers, and self-hosted
-document VLMs are all just served models (@sec-serving-stack), so ideally you
-call them **through the model gateway** alongside chat traffic. Then embedding,
-rerank, and parse calls are keyed, budgeted, and observed exactly like chat
-calls, and swapping `text-embedding-3-large` for a self-hosted `bge-m3`, or
-PaddleOCR-VL for Mistral OCR on hard pages, is a routing change rather than a
-code change. The end-to-end wiring of the whole stack is the subject of
-@sec-wiring-stack; here the point is narrower. Parse feeds extraction and
-chunking; both land in the vector store, which the retrieval step queries;
-retrieval then hands context to the generator or agent, while evaluation watches
-both the retrieval and the final answer. A bad parse poisons every layer above it, which is why parse
-quality is a retrieval and agent concern, not a preprocessing afterthought.
-
-## Primary sources
-
-Vector stores:
-
-- pgvector: <https://github.com/pgvector/pgvector>
-- pgvectorscale / StreamingDiskANN: <https://github.com/timescale/pgvectorscale>; Tiger Data benchmark (vendor-reported) <https://www.tigerdata.com/blog/pgvector-is-now-as-fast-as-pinecone-at-75-less-cost>
-- Qdrant: <https://qdrant.tech/documentation/>; hybrid search <https://qdrant.tech/articles/hybrid-search/>
-- Weaviate: <https://weaviate.io/blog/hybrid-search-explained>
-- Milvus / Zilliz: <https://milvus.io/docs>
-- Pinecone cost model: <https://docs.pinecone.io/guides/manage-cost/understanding-cost>; Dedicated Read Nodes <https://www.pinecone.io/blog/dedicated-read-nodes/>
-- Turbopuffer: <https://turbopuffer.com/blog/turbopuffer>; pricing log <https://turbopuffer.com/docs/pricing-log>
-- LanceDB: <https://lancedb.github.io/lancedb/>; Chroma: <https://docs.trychroma.com/>; Vespa: <https://docs.vespa.ai/>
-
-Embeddings and rerankers:
-
-- MTEB leaderboard: <https://huggingface.co/spaces/mteb/leaderboard> (scores differ across boards and versions; not directly comparable)
-- Voyage 4 family: <https://blog.voyageai.com/2026/01/15/voyage-4/>
-- Cohere Rerank: <https://docs.cohere.com/docs/rerank-overview>; Rerank 4 (VentureBeat) <https://venturebeat.com/ai/coheres-rerank-4-quadruples-the-context-window-to-cut-agent-errors-and-boost>
-- Cohere Embed: <https://docs.cohere.com/docs/cohere-embed>; OpenAI embeddings: <https://platform.openai.com/docs/guides/embeddings>
-- Gemini Embedding 2 (natively multimodal, March 2026): <https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-embedding-2/>
-- BGE-M3: <https://huggingface.co/BAAI/bge-m3>; Qwen3-Embedding: <https://huggingface.co/Qwen>; mxbai-rerank v2: <https://www.mixedbread.com/>
-
-Hybrid search and RAG frameworks:
-
-- Hybrid search / RRF / reranking overview: <https://www.digitalapplied.com/blog/hybrid-search-bm25-vector-reranking-reference-2026>
-- ColBERT / late interaction (survey): <https://arxiv.org/pdf/2502.14822>; Agentic RAG survey: <https://arxiv.org/pdf/2501.09136>
-- LlamaIndex: <https://docs.llamaindex.ai/>; LangGraph: <https://langchain-ai.github.io/langgraph/>; Haystack: <https://docs.haystack.deepset.ai/>; DSPy: <https://dspy.ai/>; RAGAS: <https://docs.ragas.io/>
-
-Document intelligence:
-
-- Docling / Granite-Docling: <https://www.ibm.com/new/announcements/granite-docling-end-to-end-document-conversion>, <https://huggingface.co/ibm-granite/granite-docling-258M/blob/main/README.md>
-- unstructured: <https://docs.unstructured.io/open-source/introduction/overview>
-- LlamaParse / LlamaCloud pricing: <https://www.llamaindex.ai/pricing>
-- Reducto: <https://reducto.ai/pricing>, <https://reducto.ai/blog/reducto-series-b-funding>
-- Mistral OCR 3: <https://mistral.ai/news/mistral-ocr-3/>, <https://mistral.ai/pricing/>
-- OmniDocBench: <https://github.com/opendatalab/OmniDocBench>; "OmniDocBench is saturated" (Jerry Liu): <https://www.llamaindex.ai/blog/omnidocbench-is-saturated-what-s-next-for-ocr-benchmarks>
-- PaddleOCR-VL / GLM-OCR scores: <https://huggingface.co/PaddlePaddle/PaddleOCR-VL/discussions/29>, <https://arxiv.org/html/2603.10910v1>
-- Marker / Surya (Datalab) licensing: <https://github.com/datalab-to/surya>
-- Cloud doc-AI pricing: <https://aiproductivity.ai/blog/document-ai-cost-comparison/>
-- Structured extraction (Instructor / BAML / Outlines / XGrammar): <https://techsy.io/en/blog/best-llm-structured-output-libraries>
 
 ## Further reading
 

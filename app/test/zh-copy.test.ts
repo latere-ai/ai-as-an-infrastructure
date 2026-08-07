@@ -1151,7 +1151,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/06-retrieval-and-documents.qmd",
-      ["data it was never trained on", "document intelligence", "structured text", "embeddings in a vector store", "reranker orders"],
+      ["retrieval release", "evidence service", "corpus boundary", "source revision", "rollback"],
     ],
     [
       "zh/practice/06-retrieval-and-documents.qmd",

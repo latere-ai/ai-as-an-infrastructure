@@ -314,7 +314,7 @@ test("specialized practice terms get local definitions before use", () => {
     ["en/foundations/01-scaling-laws.qmd", "the @gls-compute-optimal $N$ and $D$: the pair with the lowest predicted loss"],
     ["zh/foundations/01-scaling-laws.qmd", "@gls-compute-optimal的 $N$ 与 $D$，也就是预测损失最低的那组参数量与词元数"],
     ["zh/foundations/07-mid-training.qmd", "**相对 @gls-continued-pretraining。** 继续预训练是把已有模型继续拿下一词元目标训练"],
-    ["en/practice/06-retrieval-and-documents.qmd", "**Classic CV and @gls-ocr pipelines.** Here OCR means recognizing text from pixels"],
+    ["en/practice/06-retrieval-and-documents.qmd", "@gls-ocr, optical character recognition, recognizes text from pixels"],
     ["zh/practice/06-retrieval-and-documents.qmd", "**经典 CV 与 @gls-ocr 流水线。** 这里的 OCR 是从像素里识别文字"],
     ["en/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong generalization asks whether weak labels can elicit stronger latent capability"],
     ["zh/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong泛化问的是：弱标注能否引出强模型里已经潜伏的能力"],
@@ -831,7 +831,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["zh/ecosystem/03-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model] 这种连接模型与工具服务器的公共协议"],
     ["en/practice/01-choosing-a-model.qmd", "@gls-gateway, a routing and policy layer for model calls"],
     ["zh/practice/01-choosing-a-model.qmd", "@gls-gateway，也就是模型调用的路由与策略层"],
-    ["en/practice/06-retrieval-and-documents.qmd", "@gls-vlm, a model that reads page images and text together"],
+    ["en/practice/06-retrieval-and-documents.qmd", "@gls-vlm, a vision-language model, reads page images and text together"],
     ["zh/practice/06-retrieval-and-documents.qmd", "@gls-vlm（用图像和文本一起解析页面的模型）"],
   ];
 
