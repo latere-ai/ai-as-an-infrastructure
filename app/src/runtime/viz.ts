@@ -1515,17 +1515,31 @@
     watchTheme(host, draw);
   };
 
-  // Decision tree: a guided model-choosing flow. Answer each branch and the path
-  // walks to a recommendation; mirrors the chapter's decision diagram. Start over
-  // resets. Recommendations are the book's own, as of its 2026 snapshot.
+  // Decision tree: the English chapter uses a product-neutral selection
+  // contract. The legacy tree remains the default for the untranslated Chinese
+  // chapter until that chapter is revised.
   R['decision-tree'] = function (host) {
+    var mode = host.getAttribute('data-mode');
+    var SELECTION = { q: 'Satisfies every hard constraint?', opts: [
+      { a: 'No', r: 'Reject or use the explicit exception process' },
+      { a: 'Yes', next: { q: 'Supports the required interface and capacity?', opts: [
+        { a: 'No', r: 'Reject or complete a production-shaped capacity test' },
+        { a: 'Yes', next: { q: 'Clears the declared quality gate?', opts: [
+          { a: 'No', r: 'Reject; inspect failures and revise only on the development set' },
+          { a: 'Yes', next: { q: 'Pareto-efficient on cost, latency, availability, and risk?', opts: [
+            { a: 'No', r: 'Remove as dominated or document the exceptional value' },
+            { a: 'Yes', r: 'Shortlist for shadow and canary rollout' }
+          ] } }
+        ] } }
+      ] } }
+    ] };
     var TASK = { q: 'Task shape?', opts: [
       { a: 'Agentic coding', r: 'Claude Opus 4.8 / GPT-5.6 Sol' },
       { a: 'Heavy multimodal', r: 'Gemini 3.1 Pro' },
       { a: 'High-volume cheap', r: 'Grok 4.1 Fast, DeepSeek V3.2, Gemini Flash-Lite, Haiku 4.5' },
       { a: 'Enterprise RAG', r: 'Cohere Command A + Embed v4, frontier model on top' }
     ] };
-    var TREE = { q: 'Hard governance or sovereignty constraint?', opts: [
+    var LEGACY = { q: 'Hard governance or sovereignty constraint?', opts: [
       { a: 'Yes (EU residency, strict data)', r: 'EU regions, Mistral, or self-hosted open weights' },
       { a: 'No', next: { q: 'Rent or own?', opts: [
         { a: 'Rent (hosted API)', next: { q: 'Where are you already billed?', opts: [
@@ -1541,6 +1555,7 @@
         ] } }
       ] } }
     ] };
+    var TREE = mode === 'selection-contract' ? SELECTION : LEGACY;
     var wrap = el('div', 'viz-dt'), path = el('div', 'viz-dt-path'), qEl = el('div', 'viz-dt-q'), opts = el('div', 'viz-ce-chips');
     var resetBtn = el('button', 'viz-pa-toggle'); resetBtn.type = 'button'; resetBtn.textContent = 'start over';
     wrap.appendChild(path); wrap.appendChild(qEl); wrap.appendChild(opts); host.appendChild(wrap); host.appendChild(resetBtn);
@@ -1551,7 +1566,7 @@
         var b = el('button', 'viz-ce-chip'); b.type = 'button'; b.textContent = o.a;
         b.addEventListener('click', function () {
           crumbs.push(o.a); path.textContent = crumbs.join('  ›  ');
-          if (o.r) { qEl.textContent = 'Recommended'; opts.textContent = ''; var res = el('div', 'viz-dt-result'); res.textContent = o.r; opts.appendChild(res); }
+          if (o.r) { qEl.textContent = mode === 'selection-contract' ? 'Outcome' : 'Recommended'; opts.textContent = ''; var res = el('div', 'viz-dt-result'); res.textContent = o.r; opts.appendChild(res); }
           else show(o.next);
         });
         opts.appendChild(b);

@@ -1111,7 +1111,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/01-choosing-a-model.qmd",
-      ["closed-to-open axis", "license", "three leaderboards", "small eval", "vendor's weekly point release"],
+      ["versioned served system", "workload contract", "hard constraints", "paired", "decision record"],
     ],
     [
       "zh/practice/01-choosing-a-model.qmd",
