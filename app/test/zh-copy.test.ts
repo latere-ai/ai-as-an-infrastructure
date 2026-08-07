@@ -1127,7 +1127,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/03-edge-on-device.qmd",
-      ["architected small rather than shrunk", "over-trained", "server's int4 floor", "two bits and below", "ternary weights", "cloud-versus-edge split"],
+      ["versioned device deployment", "device support envelope", "offline path", "narrower data boundary", "quality, memory, energy, thermal", "heterogeneous fleet"],
     ],
     [
       "zh/practice/03-edge-on-device.qmd",
