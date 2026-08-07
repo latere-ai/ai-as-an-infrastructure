@@ -1191,7 +1191,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/11-human-interface-oversight.qmd",
-      ["surface is not just user experience", "calibrated reliance", "approval gate", "Correction loops", "@gls-automation-bias"],
+      ["enforceable decision boundary", "Calibrated reliance", "Bind approval to the commit", "Correction events are evidence", "@gls-automation-bias", "oversight release record"],
     ],
     [
       "zh/practice/11-human-interface-oversight.qmd",

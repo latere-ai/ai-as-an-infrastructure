@@ -300,7 +300,7 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
     ["zh/safety/01-mechanistic-interpretability.qmd", "这个假说叫@gls-superposition：模型之所以能表示多于自身维度的特征"],
     ["en/safety/02-scalable-oversight-control.qmd", "The answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training"],
     ["zh/safety/02-scalable-oversight-control.qmd", "答案是@gls-deceptive-alignment：模型可能在训练与评测下表现得像是对齐"],
-    ["en/practice/11-human-interface-oversight.qmd", "It may have created @gls-automation-bias: people over-accepting automated advice"],
+    ["en/practice/11-human-interface-oversight.qmd", "@gls-automation-bias is the tendency to over-accept automated advice"],
     ["zh/practice/11-human-interface-oversight.qmd", "它也可能制造 @gls-automation-bias：人会过度接受自动化建议"],
   ];
 
