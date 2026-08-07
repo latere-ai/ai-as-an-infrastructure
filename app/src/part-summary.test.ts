@@ -95,7 +95,8 @@ test("every non-final part summary hands off to the next structural question", (
 
 test("final part summary closes the book instead of handing off", () => {
   const enSummary = src("en/practice/summary.qmd");
-  expect(enSummary).toContain("The final takeaway");
+  expect(enSummary).toContain("Practice begins with a user promise");
+  expect(enSummary).toContain("dependable infrastructure");
   expect(enSummary).not.toContain("Part XIII");
 
   const zhSummary = src("zh/practice/summary.qmd");
