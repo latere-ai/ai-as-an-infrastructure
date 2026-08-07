@@ -1,115 +1,517 @@
 # The Model as an Artifact: Formats, Distribution, and the Supply Chain {#sec-model-artifacts}
 
-The previous chapter treated a model as a capability delivered on one of two axes, weights or an API. This one treats it as a file: a multi-gigabyte object that has to be serialized, uploaded, versioned, downloaded, verified, and loaded into a process before any of that capability exists. That object is a link in a software supply chain, and the chain has the same failure modes every software supply chain has, plus one that is unique to learned artifacts. A checkpoint can carry code that runs when you load it. A registry can be a single point of policy for the whole open ecosystem. And a model whose every byte is clean and whose signature checks can still be backdoored in a way no scanner will ever catch, because the malice lives in the weights, not the file. The formats, the distribution layer, the attacks, and the provenance tooling that answers some of them decide what "download the model" actually trusts, and where trusting the bytes stops being enough.
+A deployable model is a versioned bundle, not a filename. @sec-model-landscape
+defined the release contract that determines whether a team may and can use a
+model. This chapter follows the downloadable path after that decision. A loader
+may need weight shards, a shard index, architecture configuration, a tokenizer,
+a chat template, generation defaults, adapters, native libraries, and sometimes
+custom code. If any one of those inputs drifts, the deployed behavior can drift
+even when the main weight file keeps the same name.
 
-## A checkpoint that runs code
+The artifact therefore needs two kinds of control. Software supply-chain
+controls establish which bytes were selected, how they arrived, and how they
+were transformed. Model evaluation addresses what the resulting system does.
+A digest cannot find a learned backdoor, and an evaluation cannot detect a
+changed file that was never tested. The deployment record needs both.
 
-Start with the format, because the default one is dangerous in a way most engineers find surprising. PyTorch's `torch.save` serializes with Python's `pickle`, and pickle is not a data format; it is a small program format. The Python documentation says so at the top of the page: the module "is not secure," and "it is possible to construct malicious pickle data which will execute arbitrary code during unpickling" [@python2024pickle]. The mechanism is a serialization hook: an object can define what its own reconstruction does, returning a callable and its arguments that the *unpickler invokes* on load. Deserializing an untrusted checkpoint is therefore executing untrusted code, and the runnable shows the whole attack in a dozen lines with no machine learning in sight.
+```{dot}
+//| label: fig-artifact-bundle
+//| fig-cap: "A model release resolves to a bundle. The exact revision selects a manifest, the manifest names every required blob, and the loader consumes only that verified set. A weight filename alone does not identify the deployed model."
+digraph artifact_bundle {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.16;
+  ranksep=0.28;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  R [label="Exact release revision"];
+  M [label="Bundle manifest"];
+  B [label="Verified blobs\nweights + config + tokenizer"];
+  L [label="Pinned loader input"];
+  R -> M -> B -> L;
+}
+```
+
+## A model arrives as a bundle
+
+The required files depend on the runtime, but their roles are predictable:
+
+- weight files, possibly split into shards, plus the shard index that maps
+  tensor names to files;
+- architecture configuration, tensor naming conventions, and numerical type
+  information;
+- tokenizer vocabulary, normalization rules, special-token assignments, and
+  any preprocessor configuration;
+- chat template and generation defaults that turn an application message into
+  model input and control decoding;
+- adapters, quantization metadata, projection sidecars, or other components
+  applied to the base weights;
+- loader or modeling code, including any custom code imported from the release
+  repository;
+- documentation and policy artifacts such as the license, model card,
+  signature, provenance attestation, and bill of materials.
+
+Not every release contains every role. The manifest should say which roles this
+runtime requires and identify each supplied file. Here, a bundle under review is
+represented as
+
+$$
+B = \left(v, M, F\right), \qquad
+M = \{d_i\}_{i=1}^{n}, \qquad
+d_i = (p_i, r_i, m_i, s_i, h_i), \qquad
+h_i = \operatorname{SHA256}(b_i).
+$$
+
+An integrity gate can then be written as
+
+$$
+\operatorname{accept}(B) =
+\operatorname{pinned}(v)
+\;\land\;
+\operatorname{paths}(F)=\{p_i\}_{i=1}^{n}
+\;\land\;
+\bigwedge_{i=1}^{n}
+\left[
+  \operatorname{safe}(p_i)
+  \land |b_i|=s_i
+  \land \operatorname{SHA256}(b_i)=h_i
+\right].
+$$
+
+In this formula, every descriptor binds one path and role to the bytes the
+reviewer expects:
+
+```text
+where:
+  B          : the bundle under review
+  v          : the exact release revision
+  M          : the canonical manifest for the bundle
+  F          : the set of downloaded files
+  n          : the number of descriptors in M
+  i          : one descriptor index from 1 through n
+  d_i        : the descriptor for file i
+  p_i        : its normalized relative path
+  r_i        : its artifact role, such as weights, tokenizer, or config
+  m_i        : its media type or serialization format
+  s_i        : its expected size in bytes
+  h_i        : its expected cryptographic digest
+  b_i        : the downloaded bytes at path p_i
+  SHA256     : the SHA-256 cryptographic hash function
+  pinned(v)  : true only when v is immutable and fully resolved
+  paths(F)   : the set of paths present in the downloaded bundle
+  safe(p_i)  : true only for a normalized relative path with no traversal
+  |b_i|      : the byte length of b_i
+  land       : logical AND; every condition must hold
+  bigwedge   : logical AND across all n descriptors
+```
+
+The exact path-set check is intentional. A digest for the weights does not
+authorize an unlisted `modeling_custom.py`, and a partial snapshot is not a
+complete bundle. A production manifest also records its schema version and is
+serialized canonically before its root digest is computed or its signature is
+created. This gate proves only that the selected files match the canonical
+manifest. Authentication and behavioral acceptance come later.
+
+## Loading is a security boundary
+
+Python pickle is a binary serialization format, but it is not a data-only
+format. During unpickling, instructions can import globals and invoke callables.
+Python therefore warns never to unpickle data from an untrusted source
+[@python2024pickle]. PyTorch checkpoints need a more precise description than
+“pickle files.” Since PyTorch 1.6, `torch.save` normally writes an uncompressed
+ZIP64 archive whose `data.pkl` describes the object graph while tensor storages
+occupy separate files [@pytorch2026serialization]. Unrestricted
+`torch.load(..., weights_only=False)` can still follow attacker-selected pickle
+reconstruction instructions.
+
+The current default is safer than the historical one. Starting with PyTorch
+2.6, `torch.load` uses `weights_only=True` when the caller does not provide a
+custom pickle module. The restricted unpickler supports plain tensor state
+dictionaries and a limited set of primitive types without dynamic imports. It
+narrows the code-execution surface, but the PyTorch documentation still warns
+against untrusted input: `weights_only=True` does not prevent denial of service,
+and the documentation notes possible memory-corruption paths in the loader or
+downstream tensor handling [@pytorch2026serialization]. Setting
+`weights_only=False` or adding custom globals widens the boundary again.
+
+Safetensors changes the payload semantics. Its file begins with an eight-byte
+header length, followed by a JSON header containing tensor names, dtypes,
+shapes, and byte offsets, then the raw tensor bytes. It carries tensor metadata
+and bytes, not executable reconstruction instructions
+[@safetensors2026format]. A 2023 external audit found no critical arbitrary-code
+execution path in the reviewed implementation after reported validation and
+parser issues were fixed, while stressing that the time-bounded review was not
+proof of absence [@huggingface2023safetensors]. The format removes intentional
+callable dispatch; implementation defects and surrounding loaders remain
+separate trust boundaries.
+
+That boundary matters during conversion. Converting an untrusted pickle to
+safetensors first requires reading the pickle, so the conversion step can
+execute the payload it is meant to remove. Run such conversions in a disposable
+sandbox with no credentials or network, read-only source files, a fresh output
+directory, and resource limits. A safetensors weight file also does not make the
+rest of a repository safe. In Transformers, `trust_remote_code=True` explicitly
+loads custom modeling code; the official guidance recommends reviewing that
+code and pinning a full commit hash [@huggingface2026customcode].
+
+Other formats make different tradeoffs. GGUF is designed for fast loading by
+GGML-based executors and stores extensible metadata, tensor descriptors, and
+aligned tensor bytes. Per-tensor types support quantized encodings. Although
+self-contained deployment is a design goal, current GGUF releases may be
+sharded or accompanied by sidecars, so the manifest still matters
+[@ggml2023gguf]. ONNX represents a versioned computation graph, operators,
+types, functions, and tensor initializers rather than weights alone; large
+tensors can live in external data files [@onnx2026ir]. A graph conformance check
+is not a security verdict, and a parser or native operator runtime is still
+code exposed to attacker-controlled sizes, shapes, and metadata.
+
+The useful distinction is not one safe-or-unsafe ranking. Ask whether a format
+contains unrestricted object reconstruction, restricted reconstruction,
+tensor-only data, or an executable graph. Then review the exact parser,
+operator libraries, companion files, and resource limits used in production.
+
+Security reports illustrate why the distinction must stay specific. In 2024,
+JFrog reported around one hundred PyTorch or Keras artifacts whose payloads its
+scanner classified as genuinely harmful; one investigated pickle checkpoint
+contained a reverse shell [@jfrog2024malicious]. The report did not establish
+how many were downloaded or executed. ReversingLabs later found two malformed,
+7z-wrapped pickle artifacts that the hub had not flagged. Default `torch.load`
+could not load those repositories, but a benign reproduction showed that an
+extracted pickle stream can execute an earlier opcode before failing on later
+corruption [@reversinglabs2025nullifai]. These reports demonstrate coverage
+gaps in particular scanners, not the prevalence of compromise.
+
+## Pin the release, then verify every blob
+
+A repository name is a discovery handle. A branch or tag is mutable, and a
+human-readable filename can be replaced. A full repository commit names a
+specific snapshot. Hugging Face's download client accepts a branch, tag, pull
+request, or commit as `revision`, and its documentation requires the full
+commit hash when a commit is supplied [@huggingface2026downloads]. Pin the
+repository commit because configuration, tokenizer files, templates, and code
+can change independently of the weights.
+
+A commit pin and a file digest answer different questions. The commit selects
+repository state while it remains available. It does not authenticate the
+publisher: Git author fields are not identity proof, and commit signing is a
+separate mechanism. A file digest checks the response bytes obtained through a
+cache, mirror, object store, or registry. The consumer should retain both the
+repository commit and the digest of every required blob.
+
+Content-addressed distribution makes this relationship explicit. The OCI
+Distribution Specification is content-type agnostic: a manifest references
+blobs through descriptors containing media type, size, and digest. A tag is a
+human-readable pointer, while a manifest digest identifies exact manifest
+bytes [@oci2025distribution]. A model does not have to be distributed through
+OCI to use the same design. Pin a root manifest digest, verify the response
+bytes for every descriptor, and store signatures or attestations as linked
+records. The digest does not guarantee that the registry will retain the
+content, so an approved release also needs an independent cache or mirror for
+rollback and disaster recovery.
+
+Shards introduce failure cases that a single checksum does not expose. Verify
+that every shard named by the shard index is present, that no tensor name maps
+to two shards, and that the index itself is in the manifest. A partial download
+or resumed transfer belongs in quarantine until its final size and file digest
+match. Only then should the downloader atomically move it into a shared cache.
+Never let an interrupted file occupy the path of a verified blob.
+
+The following dependency-free example models an exact manifest check. It builds
+the trusted manifest separately, verifies every size and digest, and rejects
+any unexpected file. In production, the trusted manifest must come from an
+authenticated release process or a separately approved digest. Computing a new
+manifest from whatever arrived would prove nothing.
 
 :::: {.runnable}
 ```python
-import pickle
+from hashlib import sha256
 
-class Benign:                      # looks like an innocent object
-    def __reduce__(self):          # but this hook says how to "reconstruct" it
-        return (print, ("code ran during load: no torch needed",))
+trusted_files = {
+    "config.json": b'{"model_type":"demo"}\n',
+    "model.safetensors": b"tensor-bytes-v1",
+    "tokenizer.json": b'{"version":"1.0"}\n',
+}
 
-blob = pickle.dumps(Benign())      # "saving a checkpoint"
-print("bytes written, nothing executed yet:", len(blob))
-pickle.loads(blob)                 # "loading the checkpoint" -> print() fires
-# swap print for os.system or a socket, and loading a model opens a reverse shell
+manifest = {
+    path: {"size": len(blob), "sha256": sha256(blob).hexdigest()}
+    for path, blob in trusted_files.items()
+}
+
+def verify(label, files):
+    expected = set(manifest)
+    actual = set(files)
+
+    unexpected = sorted(actual - expected)
+    if unexpected:
+        return f"{label}: rejected (unexpected file: {unexpected[0]})"
+
+    missing = sorted(expected - actual)
+    if missing:
+        return f"{label}: rejected (missing file: {missing[0]})"
+
+    for path in sorted(expected):
+        blob = files[path]
+        descriptor = manifest[path]
+        if len(blob) != descriptor["size"]:
+            return f"{label}: rejected (size mismatch: {path})"
+        if sha256(blob).hexdigest() != descriptor["sha256"]:
+            return f"{label}: rejected (digest mismatch: {path})"
+
+    return f"{label}: verified ({len(files)} files)"
+
+tampered = dict(trusted_files)
+tampered["tokenizer.json"] = b'{"version":"1.1"}\n'
+
+extra = dict(trusted_files)
+extra["modeling_custom.py"] = b"raise RuntimeError('unexpected code')\n"
+
+print(verify("release-a", trusted_files))
+print(verify("release-a-tampered", tampered))
+print(verify("release-a-extra", extra))
 ```
 ::::
 
-This is not theoretical. A 2024 scan of the largest model hub found roughly a hundred models carrying genuine malicious payloads, including one whose reconstruction hook opened a reverse shell to an attacker's server on load [@jfrog2024malicious], and the scanners meant to catch these are defeatable: a 2025 finding evaded the hub's pickle scanner by compressing the payload in a format the scanner did not parse and placing it before a deliberately broken instruction, so the shell ran before deserialization even failed [@reversinglabs2025nullifai]. Scanning a program format for malice is a cat-and-mouse game, not a guarantee.
+Expected output:
 
-The answer was to change the format so that loading cannot execute anything. Safetensors is a deliberately boring binary layout: a JSON header of tensor names, types, shapes, and byte offsets, followed by the raw tensor bytes, with no code path and no reconstruction hook, so a load is a bounds-checked parse and a memory-map, nothing more. The security claim is structural rather than reliant on a scanner, and it was checked: an external audit commissioned in 2023 found no arbitrary-code-execution path [@huggingface2023safetensors]. The ecosystem converted over the following year, the major library making safetensors the default save format and a bot opening pull requests to add safetensors weights to legacy pickle repositories. The local-inference world settled on its own single-file format, GGUF, which packs tensors, tokenizer, and metadata into one memory-mappable, quantization-aware file [@ggml2023gguf]. The lesson worth carrying up the stack is that format safety is a property of the format, not of the scanner watching it: safetensors closed the load-time code-execution vector by construction, which is the only kind of closing that holds.
+```text
+release-a: verified (3 files)
+release-a-tampered: rejected (digest mismatch: tokenizer.json)
+release-a-extra: rejected (unexpected file: modeling_custom.py)
+```
+
+## Every transformation creates a derived artifact
+
+The downloaded bundle is often not what a server loads. A deployment pipeline
+may convert tensor names, cast dtypes, change sharding, quantize weights, merge
+an adapter, add a projection sidecar, or compile a graph for one accelerator.
+Each operation creates a derived artifact. It must receive a new manifest and a
+new digest rather than inheriting the identity or signature of its parent.
+
+Quantization makes this rule easy to see. GGUF is a container with per-tensor
+encoding types; it is not itself a quantization algorithm. Two tools can start
+from the same source digest and produce different bytes because they choose
+different schemes, calibration data, kernels, rounding behavior, or metadata.
+Even when two outputs behave similarly, they are not the same artifact.
 
 ```{dot}
-//| label: fig-model-artifacts-loadpaths
-//| fig-cap: "Two load paths. The pickle path reconstructs objects by invoking callables the file names, so loading is code execution and safety depends on a scanner. The safetensors path parses a bounds-checked header and maps raw bytes, so there is no code path to exploit."
-digraph loadpaths {
+//| label: fig-artifact-lineage
+//| fig-cap: "A conversion, quantization, or adapter merge creates a child release. Lineage binds the parent digest, pinned tool, and transformation parameters to a new manifest and new evaluation results."
+digraph artifact_lineage {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.4;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  subgraph cluster_pickle {
-    label="pickle (torch.save default)";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    pf [label="file"];
-    pu [label="unpickler"];
-    pr [label="__reduce__ invokes\ncallable(args)", color="#b45454", fontcolor="#b45454", penwidth=1.4];
-    po [label="object"];
-    pf -> pu -> pr -> po;
-  }
-  subgraph cluster_st {
-    label="safetensors";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    sf [label="file"];
-    sh [label="parse + bounds-check\nJSON header"];
-    sm [label="mmap raw tensor bytes\n(no code path)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-    st [label="tensors"];
-    sf -> sh -> sm -> st;
-  }
+  nodesep=0.16;
+  ranksep=0.28;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  P [label="Parent manifest digest"];
+  T [label="Pinned tool + parameters"];
+  D [label="Derived manifest + digest"];
+  E [label="Delta and acceptance tests"];
+  P -> T -> D -> E;
 }
 ```
 
-## The hub is the registry
+The lineage record for a conversion, quantization, or adapter merge should
+include:
 
-Once a checkpoint is a safe file, it needs somewhere to live, and in practice that somewhere is one place. The dominant model hub hosts on the order of two million public models as of early 2026, roughly doubling year over year, and the concentration inside that number is the striking part: a vanishing fraction of models account for about half of all downloads, while half of all models are downloaded fewer than two hundred times [@huggingface2026stateofopen]. It functions as the field's de facto package registry, and it inherited a documentation convention older than itself: the model card, proposed in 2019 as a short standard document reporting a model's intended use, evaluation across conditions, and limitations, operationalized on the hub as a metadata-headed README [@mitchell2019modelcards]. The registry's integrity primitive is the same as any git host's: a download can pin a revision, and pinning a full commit hash rather than a branch or tag is what makes the artifact immutable, because a tag can be moved and a hash cannot.
+- source repository revision and every source digest;
+- transformation tool version and source revision plus binary, package, or
+  container digest;
+- command, transformation parameters, calibration inputs, runtime versions,
+  and actor;
+- output tensor schema, new manifest, and new digest;
+- evaluation results compared with the parent and the deployment threshold;
+- inherited license obligations and the internal reviewer who approved the
+  derived release.
 
-That centralization is the chapter's first systemic question. One registry is one point of policy, outage, and takedown for a large share of the open ecosystem, and the download concentration means a small number of repositories are load-bearing for the whole field. The counterweight is that the registry is, underneath, git plus HTTP plus a mirrorable protocol: the client libraries honor an endpoint override, alternative hubs exist (Alibaba's ModelScope launched in 2022 as a regional counterpart), and community mirrors serve the same content where the primary host is slow or blocked. The disagreement is whether an open, mirrorable protocol offsets a centralized default; pinning by hash at least makes any mirror verifiable, which is the technical fact that keeps the concentration from being fully load-bearing.
+If the transformation is nondeterministic, record the source of nondeterminism
+instead of pretending the output can be rebuilt bit for bit. The lineage can
+still explain which inputs and procedure produced the child. A new evaluation
+is mandatory because conversion can preserve file validity while changing
+numerical behavior, tokenizer compatibility, memory use, or kernel support.
 
-## When the bytes are clean and the model is not
+## Integrity, provenance, inventory, and behavior are different claims
 
-Here the supply chain of a learned artifact departs from every other software supply chain, and it is the reason format safety and signing are necessary but not sufficient. A model can be a valid safetensors file, correctly signed, hash-pinned, and still be backdoored, because the malicious behavior is trained into the weights and nothing in the bytes reveals it. The clearest demonstration trained a model to write exploitable code when the prompt indicated one year and safe code otherwise, then showed the backdoor *survived* the full safety pipeline: supervised fine-tuning, reinforcement learning, and adversarial training did not remove it, and adversarial training sometimes taught the model to hide the trigger better [@hubinger2024sleeper]. The threat does not even require controlling the model producer, because the training data is an attack surface too. Poisoning web-scale corpora is cheap: a study showed that for about sixty dollars an attacker could have controlled a small fraction of a major image-text dataset by buying expired domains the crawler still trusted [@carlini2023poisoning], and a 2025 result sharpened the alarm by showing the number of poisoned documents needed to install a backdoor is roughly constant, around two hundred and fifty, independent of model and dataset size, which means poisoning gets *relatively easier* as models scale [@souly2025poisoning]. Attacks also ride the distribution layer directly: a 2023 demonstration edited specific facts into a model's weights and uploaded it under a name one letter off from a well-known lab, combining a weight edit with namespace typosquatting so the artifact looked authentic and behaved normally except on the poisoned facts [@mithril2023poisongpt].
+Supply-chain evidence is useful only when its claim stays narrow.
+
+| Claim | Evidence that can support it | What the evidence does not prove |
+|---|---|---|
+| Integrity | Recomputed cryptographic digest and expected size | Who chose the expected digest, or whether the bytes are good |
+| Authenticity under a trust policy | Signature plus a trusted key, certificate, or workload identity | That the signer is competent, authorized for this release, or truthful |
+| Provenance | Authenticated attestation bound to output and input digests | Completeness of undeclared inputs, safe behavior, or reproducibility |
+| Inventory | ML-BOM, manifest, and model card | That every declared item is accurate, available, licensed, or actually used |
+| Behavior | Evaluation of the exact bundle and runtime under stated conditions | Untested inputs, unknown triggers, or future deployment drift |
+
+OpenSSF Model Signing (OMS) signs a detached manifest of file paths and digests.
+It can use keys, certificate chains, or Sigstore keyless signing. Verification
+checks the signature under the consumer's trust policy and recomputes the model
+files' hashes [@openssf2025modelsigning]. When Sigstore is used, a verifier can
+also check transparency-log inclusion and a signer can monitor unexpected use
+of its identity. Log inclusion makes a signing event discoverable; it does not
+make credential misuse or a false claim impossible.
+
+An in-toto statement binds a typed predicate to subject artifact digests. SLSA
+1.2 build provenance is one such predicate: it can record the builder platform,
+build type, parameters, resolved dependencies, and run details
+[@slsa2026provenance]. Applying it to model training or conversion requires a
+training-specific build type that intentionally records code, data, base-model
+digests, and hyperparameters. An authenticated attestation remains a claim. The
+verifier must compare the builder identity, source, build type, and parameters
+with preconfigured expectations. If provenance references hardware evidence,
+the verifier must separately validate the attestation chain and measurement
+policy described in @sec-confidential-inference.
+
+CycloneDX introduced ML-BOM support in version 1.5. It can encode a
+producer-declared inventory of models, datasets, dependencies, parameters, and
+lineage [@owasp2024mlbom]. A signature can authenticate and integrity-protect
+that bill of materials, but it cannot make an omitted or incorrect entry true.
+A model card serves another purpose: intended uses, evaluated conditions,
+limitations, and relevant groups [@mitchell2019modelcards]. Keep inventory,
+provenance, and deployment evidence linked rather than treating any one
+document as a certificate.
+
+## Learned behavior is also a supply-chain risk
+
+Valid bytes can still implement unwanted conditional behavior. The strongest
+evidence is experimental and must retain its scope. *Sleeper Agents* deliberately
+trained proof-of-concept models with conditional backdoors, including a year
+trigger that produced secure code in a stated 2023 context and vulnerable code
+in 2024. The behaviors persisted under the evaluated supervised fine-tuning,
+reinforcement learning, and adversarial training interventions
+[@hubinger2024sleeper]. Those interventions were not one universal safety
+pipeline, and the paper did not estimate how likely such a threat is in a real
+release.
+
+Training data is another boundary. The archival IEEE Symposium on Security and
+Privacy version of *Poisoning Web-Scale Training Datasets is Practical* showed
+two ways to change content later fetched through mutable URLs. For about sixty
+dollars, the researchers estimated that they could have controlled the content
+returned by 0.01 percent of the URLs in LAION-400M or COYO-700M
+[@carlini2023poisoning]. They did not use that experiment to train a poisoned
+model or demonstrate a resulting behavioral backdoor.
+
+A 2025 preprint tested an experiment-specific denial-of-service backdoor in
+models from 600M to 13B parameters trained on 6B to 260B tokens. In that setup,
+250 poisoned documents made the `<SUDO>` trigger produce gibberish with similar
+success across the tested scales, while results still varied with training
+conditions [@souly2025poisoning]. The result suggests that, for this attack
+class, adding more clean data alone may not increase the required poison count.
+It does not establish a universal constant for other triggers, objectives,
+architectures, or training procedures.
+
+Distribution identity can fail before any of those checks. PoisonGPT was an
+educational 2023 demonstration that edited one association in GPT-J-6B and
+published it under `EleuterAI`, one letter away from `EleutherAI`. The report
+showed similar performance on its limited ToxiGen comparison while changing the
+targeted fact; it reported no victims or downstream propagation
+[@mithril2023poisongpt]. Namespace similarity is therefore a selection risk,
+not proof that a model hub propagated a compromised artifact.
+
+These studies justify threat-model-driven evaluation, not a claim that one
+scanner can certify weights as clean. Test known and plausible triggers, compare
+the exact release with trusted baselines, inspect data and transformation
+provenance, and monitor deployed behavior. Behavioral evaluation can reveal a
+tested failure, but it cannot certify the absence of an unknown trigger.
+
+## Quarantine, verify, promote
+
+Downloading directly into a production cache collapses acquisition and
+approval into one step. Use a promotion pipeline instead:
+
+1. Resolve the approved source, exact release revision, required artifact
+   roles, license record, canonical manifest, expected signer, and trust policy.
+2. Download into a no-execute quarantine. Mount source blobs read-only, deny
+   runtime access, and keep partial downloads under temporary names.
+3. Enforce the path allowlist. Reject an absolute path, traversal, link escape,
+   unexpected file, missing shard, duplicate tensor mapping, excessive
+   compressed or expanded size, and an unsupported media type.
+4. Verify every size and digest, then verify signatures, transparency evidence,
+   and provenance against explicit identities and builder expectations. A valid
+   signature from an unapproved signer still fails.
+5. Select the narrowest loader. Refuse remote code by default. If an unsafe
+   source format or custom conversion is unavoidable, use a disposable sandbox
+   with no secrets or network, read-only input, a fresh output directory, and
+   CPU, memory, disk, and time resource limits.
+6. Inspect tensor names, shapes, dtypes, shard coverage, tokenizer assignments,
+   and template compatibility before allocation. Then run an offline smoke test
+   using the pinned runtime.
+7. Run behavioral evaluation on the exact bundle and runtime. For a derived
+   artifact, compare quality, safety, numerical drift, latency, and memory with
+   the approved parent.
+8. Write the internal manifest, lineage, ML-BOM, evaluation record, reviewer,
+   and expiry triggers. Sign the internal release and promote it atomically to
+   an immutable internal registry.
 
 ```{dot}
-//| label: fig-model-artifacts-attacksurface
-//| fig-cap: "The attack surface along the artifact's lifecycle, with defenses on the second track. Format safety, hashes, and signatures are byte-and-provenance guarantees at the file and registry stages; they do nothing for the poisoning and backdoor attacks at the data and training stages, where only behavioral evaluation applies."
-digraph attacksurface {
+//| label: fig-artifact-promotion
+//| fig-cap: "Acquisition and deployment are separate states. Untrusted downloads remain quarantined until identity, bytes, loader behavior, and model behavior pass their own gates; only the resulting internal digest is eligible for serving."
+digraph artifact_promotion {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.35; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=8, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  data [label="web data"];
-  train [label="training"];
-  ckpt [label="checkpoint\n(file)"];
-  repo [label="hub repo"];
-  load [label="load"];
-  data -> train -> ckpt -> repo -> load;
-
-  a1 [label="poisoning\n(~250 docs, $60)", shape=note, fontcolor="#b45454", color="#b45454"];
-  a2 [label="trained backdoor\n(survives safety training)", shape=note, fontcolor="#b45454", color="#b45454"];
-  a3 [label="typosquat repo", shape=note, fontcolor="#b45454", color="#b45454"];
-  a4 [label="pickle payload", shape=note, fontcolor="#b45454", color="#b45454"];
-  a1 -> data [dir=none, style=dashed]; a2 -> train [dir=none, style=dashed];
-  a3 -> repo [dir=none, style=dashed]; a4 -> load [dir=none, style=dashed];
-
-  d1 [label="behavioral evals\n(the only scanner for weights)", shape=note, fontcolor="#3b82f6", color="#3b82f6"];
-  d2 [label="safetensors + hash + signature", shape=note, fontcolor="#3b82f6", color="#3b82f6"];
-  d1 -> train [dir=none, style=dotted]; d2 -> repo [dir=none, style=dotted];
+  rankdir=TB;
+  nodesep=0.16;
+  ranksep=0.25;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  Q [label="Quarantine download"];
+  R [label="Resolve + pin"];
+  V [label="Verify bytes + claims"];
+  I [label="Isolated load or transform"];
+  E [label="Behavioral evaluation"];
+  P [label="Signed internal promotion"];
+  Q -> R -> V -> I -> E -> P;
 }
 ```
 
-## Provenance answers a different question
-
-The tooling that grew up to secure the artifact answers "did this come, unmodified, from who I think, built how they say," which is a provenance question, not a safety one. Model signing, standardized by an open-source security group in 2025, signs a model of any format and size and verifies it against a signer identity, with a transparency log so a signature cannot be quietly forged [@openssf2025modelsigning]. A machine-readable bill of materials, the ML extension of an existing software-BOM standard, lets a model ship an inventory of its components, datasets, and lineage [@owasp2024mlbom]. And build-provenance attestations can record who trained a model, with what code and parameters, which is exactly where this layer meets the attested hardware of @sec-confidential-inference: a trusted execution environment can attest that a specific training run happened in a measured enclave, and a signed provenance record can reference that attestation. What none of this does is tell you the model is safe. A signature proves origin; the origin is only as trustworthy as the pipeline behind it; and a signed, hash-pinned, safetensors model trained on a poisoned corpus is a perfectly authentic backdoor.
+Promotion is not permanent. Subscribe to security advisories, preserve the
+source and derived manifests, monitor signer and builder revocation, and define
+which cache entries and deployments must be withdrawn when evidence changes.
+An upstream deletion should not erase the approved rollback copy, while a
+revoked artifact must not remain usable merely because a cache still has it.
 
 ::: {.callout-tip}
 ## Constraint arrow
 
-The format the artifact ships in reaches up and rewrites what the layers above are allowed to assume. When pickle was the default, every model load was an execution of untrusted code, so a serving platform or an agent runtime could not treat a downloaded checkpoint as data, and the safe move was heavy sandboxing of the load itself. Safetensors removed the load-time code path, which lets @sec-serving-problem's serving stack and the agent harness of @sec-computer-use treat weight loading as the inert parse it should always have been, and moves the residual trust from the file to the training pipeline behind it. A serialization choice made for speed and safety at the bottom silently sets whether the layers above must defend against their own model files.
+The serving plane should receive an internal manifest digest, not a public
+repository name. @sec-serving-problem can then start workers without fetching
+mutable network content or executing repository code during startup. The
+rollout and rollback records in @sec-deployment-lifecycle must bind model,
+tokenizer, template, runtime, and adapters to that same promoted digest. If any
+component changes, the deployment is a new candidate and returns through the
+promotion gate.
 :::
 
 ::: {.callout-important}
 ## What's contested
-Two questions stay open. Whether hub centralization is a systemic risk turns on whether an open, mirrorable protocol offsets a centralized default: one camp reads a single registry, through which a small fraction of repositories serve half of all downloads, as one policy decision or outage away from an ecosystem-wide incident; the other answers that content pinned by hash is verifiable from any mirror, and the endpoint is an environment variable away from being swapped, so the lock-in is softer than it looks. And whether scanning weights can ever be meaningful turns on the gap between bytes and behavior: since a byte-clean, signed model can be backdoored in ways no static analysis reveals, one position holds that the only real scanner is behavioral evaluation, itself incomplete because a secret trigger need never fire during testing, while the other holds that format safety and signing still raise the attacker's cost and answer the provenance question even if they leave the safety question open. The synthesis most of the field has reached is that signatures scan origin, evaluations scan behavior, and neither substitutes for the other, which is why a serious deployment does both and still cannot promise the weights are clean.
+
+No generally accepted procedure certifies that arbitrary model weights contain
+no hidden trigger. Static and representation-based detectors can find some
+backdoor classes under stated assumptions; behavioral tests can expose triggers
+they exercise. Neither result covers an unknown trigger chosen to avoid the
+test distribution. The defensible statement is therefore scoped: record which
+detectors and evaluations ran, their threat model, and what remained untested.
+
+Registry concentration is also best treated as a recoverability question rather
+than a label. If the primary host disappears or a mutable reference moves, can
+the organization reconstruct the exact bundle from independent storage, verify
+it from the canonical manifest, authenticate its signing and provenance
+records, recover the governing terms, and reproduce its acceptance evidence?
+A mirror without these records improves availability but not auditability. A
+signed manifest without retained blobs improves identity but not recovery.
 :::
+
+## From artifact to service
+
+The artifact boundary turns “download this model” into a reviewable operation.
+Pin the whole release, verify an exact manifest, isolate unsafe parsing and
+conversion, give every derived artifact new lineage, keep signatures and
+provenance within their claims, and evaluate the behavior that byte checks
+cannot see. A promoted artifact is a deployment input, not a safety certificate.
 
 ## Further reading
 
