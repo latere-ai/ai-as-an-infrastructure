@@ -294,7 +294,7 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
     ["en/foundations/04-transformer-architecture.qmd", "The first pass is **@gls-prefill**: it reads the entire prompt"],
     ["zh/foundations/04-transformer-architecture.qmd", "第一遍就是 **@gls-prefill** 阶段：它一次读完整个提示词"],
     ["zh/foundations/06-training-at-scale.qmd", "*@gls-tp*先切开单层内部的矩阵乘法"],
-    ["en/ecosystem/04-economics.qmd", "Training is a @gls-capex: a capital-style, one-time spend"],
+    ["en/ecosystem/04-economics.qmd", "@gls-capex is cash committed to long-lived assets"],
     ["zh/ecosystem/04-economics.qmd", "训练是一笔@gls-capex：像资本开支一样一次性付出"],
     ["en/safety/01-mechanistic-interpretability.qmd", "The hypothesis is @gls-superposition: a model represents more features than it has dimensions"],
     ["zh/safety/01-mechanistic-interpretability.qmd", "这个假说叫@gls-superposition：模型之所以能表示多于自身维度的特征"],
