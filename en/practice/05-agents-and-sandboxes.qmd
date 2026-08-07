@@ -1,500 +1,701 @@
 # Agents, Frameworks, and Sandboxes {#sec-agents-practice}
 
-The agent architecture of @sec-agent-architectures, the harness of
-@sec-the-harness, and the authorization model of @sec-security-authorization
-meet in one engineering decision: how to buy and wire the runtime for an agent
-shipping in 2026. The useful choice is not a library ranking. It is a choice of
-loop archetype, tool protocol, sandbox boundary, and a default that is hard to
-regret.
+An agent is not a model with a more ambitious system prompt. It is a software
+system that repeatedly asks a model what to do, interprets the proposal, decides
+whether the proposal is allowed, performs any approved effect, records the
+result, and decides whether to continue. The model is one component inside that
+system. It is not the scheduler, authorization service, durable store, or
+security boundary.
 
-![Schematic of sandbox choices by task freedom and containment. The dangerous corner is high freedom with weak containment, not merely high capability. Idealized placement, not measured data.](/figures/agents-and-sandboxes-1.svg){#fig-agents-and-sandboxes-1}
+The ReAct work introduced a widely used pattern for interleaving model reasoning
+with actions in an external environment [@yao2023react]. That pattern explains
+how a trajectory can be generated. A production runtime must add the controls
+that the prompting method does not provide: typed actions, complete mediation,
+bounded execution, durable state, recovery, approval, isolation, and evidence.
 
-An agent runtime is three parts, and most of the 2026 confusion comes from
-conflating them:
-
-1. **The framework / SDK** is the loop. The model only emits tokens. To make it
-   call a tool, read the result, decide the next step, remember earlier turns,
-   hand work to another agent, pause for a human, and recover after a crash, you
-   need a control loop and the plumbing around it.
-2. **@gls-mcp** is the wire protocol for tools. It gives tool integration the
-   single common interface that model calls never converged on (those remain
-   split across provider dialects, @sec-wiring-stack): one tool server, written
-   once, is reused by every framework.
-3. **The @gls-sandbox** is the execution substrate. The moment an agent runs code, the
-   safety story stops being about the model and becomes about the runtime. The
-   sandbox is the isolated computer the code runs in.
-
-The throughline is that the framework, the tools, and the box all keep secrets
-and model access *outside*, reaching in only through governed seams: a
-@gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped
-substitute for a provider key, a mint-on-demand token for a credential the
-provider will issue, egress substitution for a
-static secret it will not (the box holds a placeholder, a proxy swaps in the
-real value toward allowed hosts), and a default-deny network for egress. Get that
-discipline right and the specific products become reversible choices.
-
-::: {.callout-note}
-## As of mid-2026
-Everything below is a dated snapshot (June 2026). Version numbers, prices, and
-"best for" verdicts move fast in this category. Treat rankings and specific
-figures as source-attributed and verifiable, not as timeless fact, and confirm
-current values on each project's own docs before you commit. The durable content
-is the *categories and trade-offs*, not the version strings.
-:::
-
-## Frameworks: the landscape
-
-Feature checklists hide the real decision. The axis that matters is **how the
-framework structures the agent loop**, because that dictates what you can express,
-how much boilerplate you write, and where control lives. Five archetypes cover the
-field, and they map directly onto the loop structures of @sec-agent-architectures:
-
-1. **Graph / state-machine** (LangGraph, Google ADK, Pydantic AI's
-   `pydantic-graph`). You declare nodes and edges; the runtime walks the graph,
-   persists a typed `State`, and supports loops, parallel branches, conditional
-   routing, and crash-resume from a checkpoint. Most expressive, most control,
-   most boilerplate. The only archetype that natively handles "Agent A then B then
-   back to A" and "B and C in parallel."
-2. **Linear handoff chain** (OpenAI Agents SDK). A small set of primitives; agents
-   delegate by *handing off* the conversation, and the receiver sees the full
-   transcript. Cyclic or parallel topologies must be modeled by hand. Fastest to a
-   working agent.
-3. **Harness / CLI engine** (Claude Agent SDK). The loop is the Claude Code engine
-   of @sec-the-harness: a real filesystem, bash, web search, and automatic context
-   compaction (summarizing or dropping older turns to fit the context window) are
-   built in, and you extend it with hooks, in-process MCP tools, and
-   subagents. Unmatched for "a model working in a repo."
-4. **Role / crew orchestration** (CrewAI). You define specialist roles and goals;
-   the crew collaborates. Natural when work decomposes into roles, less
-   fine-grained than a graph.
-5. **Model-first autonomous loop** (AWS Strands). A system prompt plus tools, and
-   the model drives. Least scaffolding, least deterministic control.
-
-Tool and memory handling is the second axis, and MCP has flattened most of it.
-Tools are either native function tools (a decorated function whose signature
-becomes the schema) or MCP servers (external over stdio/HTTP, or in-process).
-Memory ranges from "the framework replays the message list each turn" (OpenAI
-Sessions, simplest) to "a durable, checkpointed `State` you can rewind" (LangGraph,
-Pydantic AI durable execution). The deciding question is whether you must survive
-a restart mid-task. If yes, you want a checkpointer, not a message list.
-
-### A comparison of the players
-
-Versions and license claims below are as of June 2026 and attributed in *Further
-reading*. Where a "best for" verdict is the field's loose consensus rather than a
-vendor fact, read it as directional.
-
-| Name | Loop archetype | License / backer | Pick it when | Note |
-| --- | --- | --- | --- | --- |
-| **LangGraph** | Graph / state-machine | MIT, LangChain Inc.; paid Platform for hosting | The workflow is genuinely a graph: loops, parallel branches, approval gates, long-running, must survive crashes | 1.0 GA reached; most control, most boilerplate. "Time travel" rewinds `State` to a prior checkpoint |
-| **OpenAI Agents SDK** | Linear handoff chain | MIT, OpenAI | You want the shortest path to a production agent of moderate complexity and a tiny primitive set over maximal control | Provider-agnostic despite the name: 100+ models via Chat Completions / LiteLLM. Cyclic/parallel routing is hand-built |
-| **Claude Agent SDK** | Harness / CLI engine | MIT, Anthropic; model usage billed via Claude API | The agent is fundamentally Claude working over a filesystem/CLI: coding agents, repo automation, ops | Renamed from Claude Code SDK in late 2025. Strongest MCP-native and lifecycle-hook story; in-process tools avoid subprocess overhead |
-| **CrewAI** | Role / crew | MIT, CrewAI Inc.; paid enterprise tier | The problem decomposes cleanly into specialist roles and you want a multi-agent prototype fast | Independent of LangChain. Fast to start, less fine-grained than a graph |
-| **Pydantic AI** | Graph / state-machine | MIT, Pydantic Services Inc. | You are a type-disciplined Python shop wanting validated structured outputs and durable execution | Validation and structured output are first-class. Durable execution preserves progress across restarts |
-| **LlamaIndex** | Data / RAG + agent layer | MIT, LlamaIndex Inc.; paid LlamaCloud | The hard part is retrieval and document parsing, not orchestration | The differentiator is the retrieval stack (see @sec-retrieval-practice); often paired with another framework for orchestration |
-| **Mastra** | Deterministic TS workflows | MIT/Apache (verify per package), Mastra (YC W25) | Your team lives in TypeScript and wants a batteries-included stack without crossing into Python | Launched early 2026, rapid traction. Workflows are explicit deterministic pipelines |
-| **Google ADK** | Graph / state-machine | Apache-2.0, Google; multi-language | You are on Google Cloud/Gemini, or want a native graph engine for cyclic and parallel routing | Optimized for Gemini but model- and deployment-agnostic |
-| **AWS Strands** | Model-first loop | Apache-2.0, AWS | You are AWS-centric and want a minimal, model-driven loop without hand-coding orchestration | Trades orchestration control for simplicity; leans on the model to drive |
-| **Microsoft Agent Framework** | Graph workflow on SK | MIT, Microsoft | You are a .NET/Azure enterprise wanting Microsoft's supported, telemetry-rich stack | Shipped 1.0 in 2026 as the convergence of Semantic Kernel + AutoGen. **Both predecessors are now maintenance-only** |
-| **AG2** (ex-AutoGen) | Conversation-driven multi-agent | Apache-2.0, `ag2ai/ag2`; volunteer | You specifically want the AutoGen conversation lineage and human-in-the-loop dialogue patterns | The community fork that kept the AutoGen PyPI packages after the creators left Microsoft; innovation has slowed |
-
-<figure id="fig-agents-and-sandboxes-comparison-explorer">
-<div class="viz" data-viz="comparison-explorer" data-set="agent-frameworks"></div>
-<figcaption>The same frameworks, grouped by loop archetype. Filter by an archetype to see which players fit it, or search by name. What the comparison settles is archetype fit, not a ranking. Versions and licenses as of June 2026.</figcaption>
-</figure>
-
-::: {.callout-important}
-## What's contested
-Several 2026 comparison blogs publish ordered "production rankings" of these
-frameworks (for example LangGraph first, Claude Agent SDK second, CrewAI third).
-These are individual authors' opinions from small samples, not measured
-benchmarks, and they are not independently verified. Use them as directional
-sentiment, never as evidence. The defensible claim is about *loop archetype fit*,
-not a leaderboard position.
-:::
-
-### How to choose, concretely
-
-- *Pick **LangGraph*** when the workflow is a graph: loops, parallel branches,
-  approval gates, long-running, must survive crashes. Accept the boilerplate for
-  the control.
-- *Pick the **OpenAI Agents SDK*** when you want the shortest path to a production
-  agent of moderate complexity and value a small, learnable primitive set.
-- *Pick the **Claude Agent SDK*** when the agent is Claude working over a
-  filesystem or CLI. Nothing else matches its coding-agent ergonomics.
-- *Pick **CrewAI*** when the problem splits cleanly into specialist roles and you
-  want a multi-agent prototype fast.
-- *Pick **Pydantic AI*** when you want type safety, validated structured outputs,
-  and durable execution in Python.
-- *Pick **LlamaIndex*** when the value is in retrieval and document parsing; use it
-  for the data layer and keep orchestration thin.
-- *Pick **Mastra*** when your team is TypeScript-first.
-- *Pick **Google ADK** or **AWS Strands*** when you are committed to that cloud and
-  want the first-party toolkit.
-- *Pick **Microsoft Agent Framework*** when you are a .NET/Azure enterprise; it is
-  the supported successor to AutoGen and Semantic Kernel, both now maintenance-only.
-
-**A sensible default.** For a product team building its first serious agent,
-follow the loop archetype, not brand loyalty. If the agent is a coding, ops, or
-filesystem agent, start with the **Claude Agent SDK**: it hands you a working loop
-with real tools, context compaction, and MCP, and you extend it with hooks and
-subagents. For a general task/tool agent of moderate complexity, start with the
-**OpenAI Agents SDK**: the primitive set is learnable in an afternoon, it is
-provider-agnostic, and tracing is built in. **Graduate to LangGraph** when the
-workflow outgrows a linear chain and you need loops, parallel branches, approval
-gates, or durable crash-resume. That migration is a sign of growth, not a failure.
-
-The framework library is not the whole picture. Above it sit two control points
-the comparison table does not cover: orchestration, the plan that turns an idea
-into scoped tasks a human can steer, and governance, the record that makes every
-agent action attributable and every delegated permission able only to narrow.
-@sec-tooling-ecosystem treats both as first-class layers and works them through
-the author's own Wallfacer (orchestration) and Topos (governance), disclosed as
-the author's own and standing there as one illustration of the pattern, not a
-neutral pick. The practical point is that the framework you choose should leave
-room for them: a plan artifact a person can review, and a gateway and sandbox
-whose logs a governance layer can later consume.
-
-::: {.callout-tip}
-## Constraint arrow
-The framework cannot be more reliable than the gateway and serving layers beneath
-it (@sec-serving-stack, @sec-wiring-stack). This is why "durable execution" and
-"checkpointing" became the headline 2026 features: they are the framework's attempt
-to survive failures in the layers below.
-:::
-
-## MCP: the tool layer underneath everything
-
-MCP is half this story. It is the protocol that lets a tool server, written once,
-be consumed by every framework above, which is why "what tools does framework X
-support" became a non-question: the answer is "any MCP server." By 2026 it is the
-default tool layer underneath almost all of the frameworks in the table.
-
-State of the spec, as of mid-2026:
-
-- **Stable: `2025-11-25`.** Stateful, with an `initialize`/`initialized` handshake
-  plus per-session state. Transports are stdio (local subprocess) and Streamable
-  HTTP (remote service).
-- **Release candidate `2026-07-28`** (published 21 May 2026), described by the
-  maintainers as the largest revision since launch. The headline is a **stateless
-  core**: it removes the init handshake and session state, carries protocol
-  metadata in `_meta`, and adds routing headers (`Mcp-Method`, `Mcp-Name`) so load
-  balancers can route without inspecting the body. The point is horizontal scaling
-  on ordinary HTTP infrastructure: any server instance can serve any request. It
-  also formalizes independently versioned **extensions** (shipping MCP Apps for
-  server-rendered UI and Tasks for async work), a 12-month deprecation policy, and
-  a conformance suite. These are breaking changes versus `2025-11-25`. Confirm the
-  final ship date and your client/server support before depending on stateless
-  behavior.
-- **Registry and discovery.** An official MCP Registry with namespace verification
-  exists, and MCP Server Cards (a `.well-known` metadata format) let registries and
-  crawlers discover servers without a live connection. The often-cited "500+ public
-  servers" is a moving, secondary-sourced figure.
-
-In production you do not let each agent dial arbitrary MCP servers directly. You
-route MCP traffic through a governed proxy (an "MCP gateway", agentgateway and
-similar) that applies auth, allowlists, and audit, the same way a model gateway
-governs token traffic. The framework speaks MCP either way; whether a tool is a
-local subprocess, a remote HTTP service, or an in-process function changes almost
-nothing in the agent code. That portability is the whole point of MCP being a wire
-protocol rather than a library API.
-
-A minimal sketch of the in-process MCP-tool pattern, in the Claude Agent SDK shape.
-Check the SDK docs for the exact current API.
-
-```python
-from claude_agent_sdk import tool, create_sdk_mcp_server, query, ClaudeAgentOptions
-
-@tool("lookup_order", "Look up an order by id", {"order_id": str})
-async def lookup_order(args):
-    row = await db.fetch_order(args["order_id"])
-    return {"content": [{"type": "text", "text": row.summary()}]}
-
-server = create_sdk_mcp_server(name="ops-tools", version="1.0.0", tools=[lookup_order])
-
-async for msg in query(
-    prompt="Refund the late order for customer 4471 and explain why.",
-    options=ClaudeAgentOptions(
-        mcp_servers={"ops": server},
-        allowed_tools=["lookup_order", "Read"],
-        # model access resolves through the gateway base_url + virtual key,
-        # not a raw provider credential
-    ),
-):
-    print(msg)
-```
-
-The same agent could instead point at an *external* MCP server over HTTP behind
-the MCP gateway. The framework code barely changes.
-
-## Sandboxes: the execution substrate
-
-A sandbox is a disposable, isolated computer handed to an agent to run untrusted
-code in. The model writes a Python snippet, a shell command, a `git` operation, or
-a whole dev loop, and that code executes somewhere that is *not* your laptop, *not*
-your production cluster, and *not* sharing a kernel with another tenant's secrets.
-
-The safety argument is blunt: once an agent can execute
-code, a jailbreak filter on the gateway does nothing against `rm -rf`, a crypto
-miner, or an exfiltration `curl` the model was induced into emitting. The 2026
-security consensus (Firecrawl and others) is that the only robust defense is to
-isolate the physical environment the code runs in, not to ask the model nicely in
-a system prompt. This is the practical face of @sec-security-authorization: the
-runtime, not the prompt, is the enforcement boundary.
-
-Two isolation models dominate, and the choice between them is most of the game:
-
-- **MicroVM isolation** (Firecracker, Cloud Hypervisor, Kata). Each sandbox is a
-  real, minimal virtual machine with its own guest kernel, separated from the host
-  by hardware virtualization (KVM). This is the strongest commonly-deployed
-  boundary for untrusted code, the same lineage AWS Lambda uses. Firecracker
-  reports booting user code in as little as roughly 125 ms and creating up to
-  roughly 150 microVMs per second per host (project docs, as of 2026).
-- **Userspace-kernel / gVisor isolation.** A userspace kernel intercepts syscalls
-  so the guest never talks to the host kernel directly. Production-grade (it is
-  what Google Cloud Run uses), trading a sliver of the microVM's hardware
-  separation for faster starts on custom images. Modal uses this model.
-
-A third, weaker tier, plain containers with a shared host kernel, is common but
-should be treated as a soft boundary for untrusted code unless hardened with gVisor
-or a microVM underneath. A fourth, V8 isolates (Cloudflare Dynamic Workers), is
-faster still but only runs sandboxed JS/WASM, not an arbitrary OS. Between a
-plain container and nothing sits OS-level sandboxing: Anthropic's open-source
-sandbox-runtime, the containment under Claude Code, confines a process with
-bubblewrap and seccomp on Linux and `sandbox-exec` on macOS, with network
-denied by default behind a proxy. That tier fits a developer's own machine
-running a semi-trusted agent, not multi-tenant untrusted code.
-
-### A comparison of the players
-
-All latency and price claims below are as of mid-2026, vendor-reported or
-third-party-reported, and not independently verified. Treat the table as a starting
-map, not a price sheet, and confirm current rates on each vendor's pricing page.
-
-| Name | Isolation | Pricing model (2026) | Pick it when | Note |
-| --- | --- | --- | --- | --- |
-| **E2B** | Firecracker microVM | Open-source SDK; hosted free Hobby + credit, Pro tier, usage per second | You want a popular, agent-native, microVM-isolated code box with an open SDK and a self-host path, running short-lived Python/JS tool calls | Site claims start "under 200ms"; a circulating "p50 ~78ms" figure is from comparison blogs, **not** E2B's own page |
-| **Modal** | gVisor (userspace kernel) | Hosted; Sandbox CPU billed above the Function rate; optional GPUs | The agent must run untrusted code *and* reach a GPU in the same isolated box (inference, fine-tune steps) | Same isolation model as Google Cloud Run; faster custom-image starts, slightly thinner boundary than a full microVM |
-| **Fly.io (Machines / Sprites)** | Firecracker microVM | Hosted; per-second CPU+RAM, no charge while idle | You want raw microVM control, or snapshot/restore for clean reproducible eval runs with zero idle billing | Sprites "start in under a second" (vendor). Sub-10ms restore and "28ms boot" numbers are third-party, treat as unverified |
-| **Vercel Sandbox** | Firecracker microVM | Hosted; active-CPU billing, memory billed provisioned for the full run | Your app is in the Vercel ecosystem and you run agent-generated code with up to ~45-min lifetimes | Bills active CPU but memory is provisioned-billed, watch idle memory cost |
-| **Cloudflare Sandbox SDK** | Container + V8 isolate tier | Hosted; active-CPU pricing, requires Workers Paid | You are on Cloudflare/Workers and want edge-distributed execution with live preview URLs | GA in April 2026. Two tiers: V8 isolates (JS/WASM) and full container sandboxes. Verify cost incl. Durable Objects |
-| **Daytona** | Container base | Hosted; usage-based, free credit | You want very fast sandbox creation for short-lived agent code runs | Claims "sub-90ms" creation, but a **container** base, so verify the isolation model against your threat model |
-| **Runloop** | Two-layer (VM + container) | Hosted; free + usage, Pro tier, enterprise | You build a *coding* agent and want suspend/resume devboxes plus built-in SWE-style benchmarks | The differentiator is the eval/benchmark + suspend/resume tooling, not just isolation |
-| **Northflank** | microVM (Kata/gVisor by infra) | Self-serve + enterprise; lower headline vCPU/GB rate | You want one platform for both app deployment and agent code execution at a lower compute rate | Isolation varies by underlying infra; positions on cost + bring-your-own-cloud |
-| **Browserbase (+ Anthropic Managed Agents)** | Isolated headless Chromium | Hosted; per-session / per-browser-minute | The agent's job is in a *browser* (web automation, computer-use), not a shell | Powers Anthropic's Managed Agents (beta, 2026): Anthropic runs the loop, Browserbase supplies the isolated browser |
-| **Firecracker (project)** | The microVM VMM itself | Open source (Apache 2.0), AWS-originated | Sandboxing is your core business and you want to operate your own microVM fleet | Not a product you use directly; it is the isolation primitive under E2B, Fly, Vercel, Lambda |
-| **Cella** (latere.ai) | Author's own runtime | Latere product family; limited public docs | The Latere stack, and as a worked example in this book (@sec-tooling-ecosystem) | **Disclosed as the author's own infrastructure; illustrative, not a neutral recommendation.** One API call spins up a named ephemeral or persistent sandbox |
-
-::: {.callout-important}
-## What's contested
-The microVM-versus-gVisor line is a genuine trade-off, not a solved question.
-MicroVMs (Firecracker) give the strongest hardware boundary but historically cost
-more in cold start and image-build flexibility; gVisor buys faster custom-image
-starts at a slightly thinner boundary; plain containers buy speed and density at a
-real isolation cost. As the gVisor-versus-microVM cost-and-latency curve moves
-through 2026, the "right" tier for a given threat model moves with it. The one
-durable claim: for genuinely adversarial, model-generated code, a shared-kernel
-container is a soft boundary, and hardware or userspace-kernel isolation is the
-provable line.
-:::
-
-### How to choose, concretely
-
-The decision is dominated by three axes: isolation strength versus start latency,
-ephemeral versus persistent, and what the agent needs to touch (shell, GPU, or a
-browser).
-
-- **Pick E2B** when you want the popular, agent-native, microVM-isolated code box
-  with a real open-source SDK and an optional self-host path, running short-lived
-  Python/JS tool calls.
-- **Pick Modal** when the agent needs to run untrusted code *and* hit a GPU in the
-  same isolated environment.
-- **Pick Fly Machines / Sprites** when you want microVM control, snapshot-restore
-  for reproducible eval runs, and zero charge while idle.
-- **Pick Vercel or Cloudflare Sandbox** when your app already lives in that platform.
-  Weigh Cloudflare's edge distribution and V8 fast path against Vercel's Firecracker
-  boxes and provisioned-memory billing.
-- **Pick Runloop** when you build a coding agent and want suspend/resume devboxes
-  plus built-in SWE-style benchmarks.
-- **Pick Browserbase (or Anthropic Managed Agents)** when the agent acts in a
-  browser, not a shell.
-- **Self-host on Firecracker** only when sandboxing is your core business.
-
-Pricing comparisons are treacherous. "Active CPU only" providers can still bill
-provisioned memory for the full lifetime (Vercel), and platform minimums or
-Durable-Object charges (Cloudflare) hide under the headline vCPU rate. Always model
-*your* run shape (lifetime, idle fraction, concurrency), not the per-hour sticker.
-
-Change the idle fraction and watch the gap open up between a pure active-CPU bill
-and one that also charges provisioned memory for the whole lifetime.
-
-:::: {.runnable}
-```python
-# A bursty agent: short CPU spikes between long idle waits on the model.
-lifetime_s = 600          # 10-min box, alive the whole task
-cpu_price = 0.000040      # $ per active vCPU-second
-mem_price = 0.0000060     # $ per provisioned GB-second (billed even while idle)
-mem_gb = 2.0
-for idle in [0.0, 0.5, 0.8, 0.95]:
-    active_s = lifetime_s * (1 - idle)
-    cpu_cost = active_s * cpu_price
-    mem_cost = lifetime_s * mem_gb * mem_price   # full lifetime, not active only
-    total = cpu_cost + mem_cost
-    mem_share = 100 * mem_cost / total
-    print(f"idle={idle:>4.0%}  active-CPU=${cpu_cost:.4f}  "
-          f"provisioned-mem=${mem_cost:.4f}  total=${total:.4f}  "
-          f"mem={mem_share:.0f}% of bill")
-```
-::::
-
-The higher the idle fraction (the more the agent waits on the model),
-the more a provisioned-memory line dominates the bill, even on an "active-CPU"
-provider.
-
-**A sensible default.** For a team building a code-running agent in 2026, default
-to **E2B** for hosted, microVM-isolated execution: agent-native, a real open-source
-SDK, a self-host escape hatch, strong (Firecracker) isolation, and per-second
-billing that suits bursty tool calls. If the agent needs a **GPU** in the box,
-default to **Modal** instead. If you specifically want **snapshot-restore for
-reproducible evals** (@sec-eval-practice) and zero-idle billing, default to **Fly
-Machines / Sprites**. For the Latere stack, the in-house analogue is **Cella**,
-disclosed as the author's own infrastructure and therefore not a neutral pick.
-
-## Wiring it together safely
-
-The agent framework is a consumer, not a hub. It calls models through the gateway,
-pulls grounding from retrieval, reaches tools over MCP, runs code in a sandbox, and
-emits traces the eval and observability layers read. @fig-agent-runtime shows the
-shape that holds up in production.
+The practical unit is therefore an **agent release**: an agent execution
+contract, a versioned controller, a governed set of tools, an isolation policy,
+an evaluation report, and a reversible deployment. @sec-agent-architectures
+develops the behavioral patterns; @sec-the-harness develops the durable runtime.
+This chapter connects them to tool protocols and sandbox enforcement.
 
 ```{dot}
-//| label: fig-agent-runtime
-//| fig-cap: "The production agent runtime. The framework holds no provider key and no raw credentials; model access, tool access, and compute access each reach in through a governed seam."
-digraph {
+//| label: fig-agent-control-loop
+//| fig-cap: "A production agent loop. The model proposes; trusted runtime code validates, authorizes, executes, records, and decides whether the run may continue."
+digraph agent_loop {
+  rankdir=TB;
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, margin="0.12,0.08", color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280"];
 
-  user [label="User / app"];
-  agent [label="Agent framework\nloop + memory + handoffs"];
-  gw [label="Model gateway"];
-  serve [label="Inference serving /\nhosted APIs"];
-  mcpgw [label="MCP gateway"];
-  tools [label="MCP tool servers:\ndb, browser, GitHub, files", shape=cylinder];
-  sb [label="Sandbox\nmicroVM / gVisor"];
-  net [label="Internet /\napproved APIs", shape=cylinder];
-  snap [label="Clean baseline\nfor eval re-runs", shape=cylinder];
-  rag [label="Retrieval /\nvector store", shape=cylinder];
-  ckpt [label="Postgres / SQLite", shape=cylinder];
-  obs [label="Eval + OTel + cost", shape=cylinder];
-  human [label="Human approves\npayments, prod writes", shape=diamond];
+  state [label="Durable state\ncontract • budget • history"];
+  context [label="Bounded context"];
+  propose [label="Model proposal\nanswer or action"];
+  gate [label="Validate + authorize\nallow • deny • approve"];
+  execute [label="Execute through broker"];
+  record [label="Record observation\nreceipt • usage • checkpoint"];
+  stop [label="Terminal state\nsuccess • failure\ncancellation"];
 
-  user -> agent;
-  agent -> gw [label="model calls\nvirtual key"];
-  gw -> serve;
-  agent -> mcpgw [label="MCP stdio / HTTP /\nin-process"];
-  mcpgw -> tools;
-  agent -> sb [label="run untrusted code"];
-  sb -> net [style=dashed, label="default-deny egress\n+ allowlist"];
-  sb -> snap [label="snapshot / restore"];
-  agent -> rag [label="retrieve"];
-  agent -> ckpt [label="checkpoint State"];
-  agent -> obs [label="traces"];
-  agent -> human [label="sensitive action?"];
+  state -> context -> propose -> gate;
+  gate -> execute [label="allowed"];
+  execute -> record;
+  record -> context [label="continue"];
+  gate -> stop [label="denied /\nstop"];
+  record -> stop [label="complete /\nbudget"];
 }
 ```
 
-Three things make this hold up:
+## Freeze the agent execution contract
 
-1. **The framework never holds a provider key or a raw credential.** It holds a
-   gateway virtual key scoped to a model allowlist and a budget, and MCP traffic
-   goes through a gateway that owns tool credentials and the allowlist. Swapping one
-   model for another, or capping a runaway loop, is a server-side change.
-2. **State lives in a checkpointer, not in process memory.** A durable `State`
-   (LangGraph's checkpointer, Pydantic AI's durable execution) is what lets a
-   long-running agent survive a restart and lets a human pause, inspect, and resume.
-3. **The sandbox keeps secrets, model access, and the network outside the box.**
-   They reach in only through narrow, auditable channels: a gateway virtual key
-   for models, short-lived scoped tokens for the credentials a provider will mint
-   and egress substitution for the static secrets it will not
-   (@sec-security-authorization), default-deny egress for the network.
+Framework selection comes after the **agent execution contract**. The contract
+states what one run may accomplish, which external effects are permitted, what
+evidence proves success, and how the system stops safely. Without it, a demo
+that reaches a plausible answer can be mistaken for a dependable application.
 
-A minimal safe-usage config sketch. The shape matters more than the exact keys;
-adapt it to your sandbox provider.
+| Contract field | Evidence to record |
+|---|---|
+| Task boundary | Accepted requests, excluded uses, supported environments, and the unit of work |
+| Success evidence | Final answer checks, external end-state checks, required artifacts, and uncertainty handling |
+| Permitted effects | Read, create, update, delete, communicate, spend, deploy, or execute, each with resource limits |
+| Authority | User or workload principal, tenant, delegated actor, allowed tools, scopes, and expiry |
+| Data boundary | Inputs the model and tools may read, data that may leave, retention, and redaction |
+| Budget | Step, token, cost, wall-clock, concurrency, storage, and network ceilings |
+| Human control | Actions requiring preview, approval, dual control, or prohibition |
+| Termination | Success, refusal, cancellation, timeout, budget exhaustion, repeated failure, and no-progress rules |
+| Recovery | Checkpoint boundary, retry policy, idempotency, compensation, and resume target |
+| Rollback | Last-known-good controller, tool catalog, policy, sandbox image, and deployment route |
+
+“Resolve customer issues” is not a task boundary. A usable contract identifies
+the system of record, the set of customers, the allowed read and write actions,
+the fields that may be disclosed, the evidence that a case is closed, and the
+conditions that require escalation. It also distinguishes a draft from an
+effect. Composing a refund request and issuing the refund are different
+capabilities.
+
+The contract is versioned with the complete served system: model revision,
+prompt and context builder, tool schemas, policy, controller, memory rules,
+sandbox image, and decoder settings. A change to any of them can change the
+trajectory even when the framework package stays fixed.
+
+## Make the control loop explicit
+
+The trusted controller turns a stochastic model proposal into a governed state
+transition. One compact formulation is
+
+$$
+\begin{aligned}
+u_t &\sim \pi_{\theta}(\mathord{\cdot}\mid C(s_t)), \\
+a_t &= V(u_t), \\
+d_t &= A(p_t,a_t,r_t), \\
+o_t &=
+  \begin{cases}
+    X(a_t), & d_t=\mathrm{allow}, \\
+    \bot, & d_t\in\{\mathrm{deny},\mathrm{approve}\},
+  \end{cases} \\
+s_{t+1} &= \delta(s_t,a_t,d_t,o_t).
+\end{aligned}
+$$
+
+where:
+
+- $t$ is the step index, and $s_t$ is the current durable run state;
+- $C$ is the context projection that selects and serializes the bounded view of
+  state sent to the model;
+- $\pi_{\theta}$ is the model distribution with parameters $\theta$, and
+  $u_t$ is one sampled model proposal;
+- $V$ is schema validation and normalization, and $a_t$ is the validated
+  proposed action or final answer;
+- $A$ is the external authorization function, $p_t$ is the verified principal
+  and policy context, $r_t$ is the current resource snapshot, and $d_t$ is the
+  authorization decision `allow`, `deny`, or `approve`;
+- $X$ is the credentialed tool executor, $o_t$ is the tool observation, and
+  $\bot$ means that no tool was executed; and
+- $\delta$ is the deterministic transition function that appends the recorded
+  event and produces the next durable state $s_{t+1}$.
+
+The stochastic part ends at the proposal. Schema validation can reject malformed
+arguments, but it cannot decide whether a syntactically valid transfer is
+authorized. The policy decision uses verified identity and current resource
+state outside the model. Human approval is a separate decision when policy
+requires it. Tool execution occurs only after authorization, and the observation
+is recorded as untrusted data rather than silently promoted to an instruction.
+
+### Keep distinct kinds of state distinct
+
+“Memory” is too vague for recovery design. An agent run usually contains at
+least five kinds of state:
+
+| State class | Typical contents | Required treatment |
+|---|---|---|
+| Conversation history | User messages, model messages, and tool results | Bounded context projection; redaction; not the source of external truth |
+| Working state | Plan, selected records, intermediate artifacts, and open questions | Typed schema; versioned updates; may be compacted only with declared loss |
+| Durable execution state | Current node, attempts, timers, waits, leases, and cancellation | Persisted before resumption; compatible with controller upgrades |
+| External state | Database rows, tickets, payments, deployments, and files outside the run | Re-read before mutation; stable identity; effect receipt or compensation |
+| Long-term memory | Cross-run preferences, facts, and summaries | Separate provenance, authorization, retention, and deletion policy |
+
+A message session is not a workflow checkpoint. A checkpoint is not proof that
+an external side effect did or did not happen. A trace is not automatically a
+replay log. Treating these objects as one “memory” produces duplicate writes,
+stale approvals, and recovery that begins from the wrong world state.
+
+### Stop for declared reasons
+
+Every run has a **step budget**, **token budget**, **cost budget**, and
+**wall-clock deadline**. It also stops after a declared consecutive failure
+limit or a **no-progress** detector, such as repeated identical actions or no
+change in the task state. Tool calls have their own deadline and output limit.
+
+Terminal reasons are part of the API: `succeeded`, `failed`, `refused`,
+`cancelled`, `timed_out`, `budget_exhausted`, and `needs_human`. A run that
+**timed out**, was **cancelled**, or ended with its **budget exhausted** is not
+reported as a model failure. A run in a terminal state cannot resume execution
+under the same identity; a retry creates a linked attempt with a new lease and
+an explicit recovery decision.
+
+## Choose control semantics before a framework
+
+Framework names overlap in capability and change faster than the underlying
+control patterns. Choose the pattern that makes required transitions visible,
+then test whether a candidate library implements those semantics.
+
+| Control pattern | Useful when | Main design obligation |
+|---|---|---|
+| Linear loop | One controller selects a tool or finishes, with little branching | Bound the loop and make every effect pass the same gate |
+| State graph | Branches, cycles, joins, waits, and escalation must be explicit | Version nodes and edges; define state migrations and join semantics |
+| Durable workflow | Work survives long waits, worker loss, callbacks, and retries | Separate deterministic control from external activities and duplicate-safe effects |
+| Filesystem harness | The task is editing, testing, browsing a repository, or operating a CLI | Govern workspace, commands, processes, network, artifacts, and context compaction |
+| Supervisor and worker | Independent subtasks can run concurrently under one owner | Give each worker a typed envelope, narrower authority, budget, and return contract |
+
+A handoff transfers responsibility for the next interaction. A bounded subagent
+call does not: the parent remains responsible and receives a result. Fan-out and
+join require a rule for partial failure, cancellation, ordering, and conflicting
+answers. “Multi-agent” does not supply those semantics by itself.
+
+Use a **capability matrix** rather than a product leaderboard:
+
+| Capability | Question for the candidate runtime |
+|---|---|
+| Topology | Are linear flow, cycles, fan-out, joins, and handoffs explicit or hidden in host code? |
+| State | What is authoritative, when is it committed, and what are the checkpoint semantics? |
+| Recovery | How do retry, resume, cancellation, timeout, and in-flight work behave after a crash? |
+| Concurrency | Which updates may race, how are conflicts resolved, and can descendants be cancelled? |
+| Approval | Can execution pause with an exact proposed effect and resume only after fresh authorization? |
+| Tool boundary | Are schemas, policy hooks, idempotency keys, result validation, and error classes available? |
+| Provider portability | Which model and tool features actually work across providers, transports, and revisions? |
+| Evidence | Can traces, event history, policy decisions, effect receipts, usage, and terminal reasons be exported? |
+| Evolution | Can a pending run survive controller, schema, and state migrations? |
+| Operations | What must the team host, patch, back up, meter, and support? |
+
+Current libraries expose different combinations of these features. LangGraph
+documents checkpointed graph state and interrupts; Pydantic AI delegates durable
+execution to workflow integrations; the OpenAI Agents SDK documents both
+manager-style orchestration and handoffs [@langgraph2026persistence;
+@pydantic2026durable; @openai2026orchestration]. Those facts are inputs to a
+local test, not universal product recommendations.
+
+Run the same proof workflow against each candidate: two reads, one
+approval-gated write, a fan-out and join, and a final state check. Crash the
+worker after the external write succeeds but before its response is stored.
+Deliver the same callback twice. Cancel an in-flight tool, upgrade the controller
+while approval is pending, then resume. Measure duplicate effects, lost work,
+state divergence, latency, cost, and operational effort. That evidence is more
+durable than a feature table.
+
+## Make recovery safe for effects
+
+Durable execution preserves control state. It does not create exactly-once
+effects across an external system. A worker can complete a write and fail before
+recording the reply, so the controller may see an ambiguous outcome. Many task
+queues also provide **at-least-once** delivery, which means a handler may receive
+the same logical request more than once.
+
+Every logical side effect therefore has:
+
+- a stable **idempotency key** derived from the run and logical action, not the
+  network attempt;
+- an intent record written before dispatch;
+- an **effect receipt** containing the external operation identity, observed
+  resource version, outcome, and time;
+- a reconciliation operation that can query an ambiguous result; and
+- compensation or escalation when the external API cannot deduplicate safely.
+
+Retries preserve the idempotency key. A retry policy distinguishes transport
+failure, retryable tool failure, business rejection, policy denial, and unknown
+outcome. An at-most-once attempt avoids automatic repetition but may lose work;
+an at-least-once attempt needs duplicate handling. Neither label proves exactly
+one real-world effect. Durable workflow documentation makes the same distinction
+between replayable control and external activities [@temporal2026workflows;
+@aws2026idempotency].
+
+Resume, replay, and reevaluation answer different questions:
+
+- **Resume** continues a pending run from a durable boundary.
+- **Workflow replay** rebuilds control state from recorded events without
+  repeating recorded effects.
+- **Recorded-output test replay** feeds saved model and tool outputs through new
+  deterministic controller code.
+- **Live reevaluation** calls the model and tools again and may produce a
+  different trajectory.
+
+Version pending runs explicitly. If a controller or tool contract changes, the
+runtime either migrates the saved state, continues with the pinned old version,
+or terminates safely. It must not reinterpret an old approval or effect receipt
+under new semantics.
+
+### Delegate with a typed envelope
+
+A child agent receives less than the parent, not a copy of all parent authority.
+The delegation envelope records:
+
+```yaml
+delegation:
+  parent_run_id: run_85a
+  child_run_id: run_85a_research_2
+  objective: "Compare the two named incident records"
+  input_refs: [incident_104, incident_119]
+  permitted_tools: [read_incident, search_runbook]
+  authority_scope: {tenant: acme, access: read_only}
+  budget: {steps: 12, tokens: 18000, wall_clock: 5m}
+  deadline: 2026-08-07T18:30:00Z
+  result_schema: incident_comparison_v2
+  completion: "return evidence for every difference"
+  return_owner: run_85a
+```
+
+The parent validates the result and remains accountable for any later effect.
+The child cannot widen its tool set, extend its deadline, or delegate broader
+authority than it received. Cancellation propagates down the ownership tree;
+results arriving after cancellation are recorded but cannot trigger a new
+effect.
+
+## Treat every tool as an effect contract
+
+A tool name and JSON Schema are not enough. The controller needs to know what
+the tool reads or changes, what authority it needs, how it fails, and whether it
+is safe to repeat.
+
+```{dot}
+//| label: fig-agent-tool-boundary
+//| fig-cap: "The tool execution boundary. Model output and tool output are both untrusted data; trusted code validates shape, policy, approval, credentials, and receipts around the effect."
+digraph tool_boundary {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
+
+  proposal [label="Model proposal\nuntrusted"];
+  validate [label="Schema validation\nnormalize • reject unknowns"];
+  policy [label="Policy decision\nsubject • action • resource"];
+  approval [label="Exact-effect approval\nwhen required"];
+  executor [label="Credentialed executor\nidempotency • timeout"];
+  system [label="External system"];
+  result [label="Validate result\nreceipt • taint • provenance"];
+
+  proposal -> validate -> policy -> approval -> executor -> system -> result;
+}
+```
+
+A versioned tool contract includes:
+
+| Field | Meaning |
+|---|---|
+| Identity | Namespace, tool version, implementation or package digest, and owner |
+| Input schema | Strict types, bounds, enums, required fields, and rejection of unexpected properties |
+| Output schema | Typed result, effect receipt, provenance, redaction, and maximum size |
+| Preconditions | Required resource state, caller identity, tenant, and policy version |
+| Postcondition | Observable state that proves success rather than a reassuring message |
+| Side-effect class | Read-only, reversible write, irreversible write, communication, spend, or code execution |
+| Idempotency | Business key, duplicate behavior, reconciliation, and compensation |
+| Runtime | Timeout, cancellation, retry classes, rate and concurrency limit, and error taxonomy |
+| Data and authority | Data classification, allowed destinations, credential scope, and approval rule |
+
+The executor validates arguments again at the execution boundary. It checks the
+principal, tenant, resource, current version, and policy even if the controller
+already checked them. This is complete mediation and least privilege in the
+sense described by Saltzer and Schroeder [@saltzer1975protection]. A tool server
+must not trust a model-provided resource handle as proof of ownership.
+
+Tool results are also untrusted. A web page, email, document, issue, or database
+field can contain an indirect prompt injection. InjecAgent and AgentDojo show
+that poisoned external content can induce harmful calls or data disclosure in
+tool-using agents [@zhan2024injecagent; @debenedetti2024agentdojo]. Returned prose
+cannot grant authority, alter policy, approve a pending action, or widen the tool
+catalog. Treat it as tainted data with source provenance.
+
+### Bind approval to what will execute
+
+A human approves the **exact effect**, not the model's summary. The approval view
+shows the tool, normalized arguments, target resource, current resource version,
+principal, tenant, data leaving the boundary, expected postcondition, and
+rollback or irreversibility. The approval record includes a digest of that
+payload, the approver, the policy version, and an expiry.
+
+Immediately before execution, trusted code rechecks authority and resource
+state. If the arguments, resource, principal, policy version, or relevant state
+has changed, the approval expires and the runtime must **re-authorize** or ask
+again. Approval is not a reusable bearer capability and never enters model
+context as a secret token.
+
+## Use MCP as a wire protocol, not a trust mark
+
+The Model Context Protocol (MCP) standardizes tool discovery and invocation,
+schemas, transports, protocol metadata, and optional HTTP authorization. The
+final `2026-07-28` revision uses a stateless protocol core: request metadata
+carries the protocol revision and capabilities, while stateful tools expose
+explicit application handles [@mcp2026release; @mcp2026tools].
+
+That interoperability has limits. A client and server still need compatible
+revisions, transports, content types, authorization flows, and extensions. Test
+**version negotiation** and **capability negotiation** for the exact pair being
+deployed. Conformance to the wire format does not grant trust, business
+authorization, safe retry semantics, data rights, or permission to expose a
+newly discovered tool.
+
+In particular:
+
+- `inputSchema` and `outputSchema` validate data shape; they do not establish a
+  precondition, postcondition, side-effect class, or authority.
+- A JSON-RPC request ID correlates protocol messages; it is not a business
+  idempotency key.
+- A state handle is a name, not a capability. Recheck its owner and tenant on
+  every call.
+- Tool discovery is inventory, not endorsement. Pin server identity, package
+  digest, schema digest, and reviewed catalog. Quarantine unexpected catalog
+  changes.
+- A gateway can centralize routing, metering, and policy, but it does not replace
+  authorization at the MCP server and external resource.
+
+HTTP authorization is optional in MCP. Where it is used, the client and server
+must validate issuer, signature, expiry, token audience, and intended resource.
+The authorization specification prohibits **token passthrough**: a server cannot
+accept a token meant for another service and relay it downstream
+[@mcp2026authorization]. Separate the client-to-MCP credential from any
+server-to-downstream credential. A proxy with ambient authority can otherwise
+become a **confused deputy**; per-client consent, audience binding, minimal
+scopes, and independent resource authorization are required
+[@mcp2026security].
+
+Local stdio servers are subprocesses with the host authority they inherit. Run
+only pinned and reviewed binaries, under an unprivileged identity, with explicit
+filesystem, environment, process, and network restrictions. Calling the
+subprocess through MCP does not sandbox it.
+
+## Specify the sandbox from a threat model
+
+A @gls-sandbox is an execution boundary for code and processes whose behavior
+cannot be trusted. It reduces the consequences of a compromised model, poisoned
+tool output, malicious dependency, or ordinary bug. It does not decide whether
+an action is authorized, and it does not make data safe to disclose.
+
+Start with a **threat model**. Name the attacker and the protected assets:
+
+- host escape or access to another tenant;
+- cross-tenant or cross-run data disclosure;
+- data exfiltration through network, logs, artifacts, or allowed services;
+- denial of service through CPU, memory, process, disk, output, or network use;
+- supply chain execution from packages, images, extensions, and build scripts;
+- unwanted persistence in overlays, snapshots, caches, logs, or external APIs;
+- theft or replay of credentials; and
+- abuse by a trusted operator or compromised control plane.
+
+Isolation is a conjunction of guarantees rather than a product label:
+
+$$
+G = K \land P \land F \land N \land I \land R \land T \land C,
+$$
+
+where $G$ is the claimed sandbox guarantee; $K$ is the kernel or system-call
+boundary; $P$ is process, user, IPC, and tenant isolation; $F$ is filesystem,
+mount, device, and artifact isolation; $N$ is ingress and network egress policy;
+$I$ is workload identity and credential authority; $R$ is resource control;
+$T$ is workspace lifetime, persistence, cleanup, and data-remanence control; and
+$C$ is control-plane integrity, patching, audit, and configuration. If any term
+needed by the threat model is absent, the overall claim does not hold.
+
+### Compare mechanisms by call path
+
+| Mechanism | Boundary introduced | Important limits |
+|---|---|---|
+| Hardened container | Linux namespaces, cgroups, capabilities, seccomp, and an LSM constrain a process on a shared host kernel | Correct configuration and host patching remain critical; application syscalls reach the shared kernel implementation |
+| Userspace kernel | A Sentry-like layer reimplements much of the guest ABI and makes a restricted set of host calls | The userspace kernel, file broker, host kernel, and control plane remain trusted; compatibility and cost are workload-specific |
+| MicroVM | A guest kernel and virtual device model run across a VMM and hardware virtualization boundary | The VMM, KVM, host kernel, jailer, storage, networking, snapshot path, and control plane remain trusted |
+| Language isolate | V8, WebAssembly, or another runtime exposes a deliberately small host API | Appropriate only when the task fits that API; host bindings and runtime implementation are the boundary |
+| Browser process | Renderer sandbox and site isolation separate hostile web content from privileged browser components | Browser control still reaches accounts, cookies, downloads, local endpoints, and real external effects |
+
+Firecracker demonstrates how a small virtual machine monitor can combine a
+separate guest kernel with a reduced device model for serverless workloads
+[@agache2020firecracker]. gVisor inserts a userspace application kernel rather
+than passing application syscalls directly to the host, but its Sentry and host
+interfaces are still part of the trusted surface [@gvisor2026security]. NIST's
+container guidance likewise treats images, registries, orchestrators, runtimes,
+hosts, and data as separate risk areas [@nist2017containers].
+
+There is no universal winner. A microVM, userspace kernel, hardened container,
+language isolate, or browser executor may be appropriate under a particular
+threat model. Use **defense in depth** and test the configured system. Startup
+time, density, compatibility, accelerators, snapshot support, and cost are
+workload measurements, not isolation proofs.
+
+### Define the complete sandbox envelope
+
+An isolation label leaves most operational authority unspecified. A deployable
+envelope pins the enforcement points:
 
 ```yaml
 sandbox:
-  isolation: microvm          # firecracker/gvisor; not a bare container for untrusted code
-  lifetime: ephemeral         # destroy after the run: nothing persists, nothing leaks
-  timeouts:
-    per_tool_call: 30s
-    per_task: 10m
-    max_lifetime: 30m
-  network:
-    egress: deny              # default-deny
-    allow: ["pypi.org", "api.internal.example.com"]
-  secrets:
-    inject: none              # no raw provider keys or static secrets in the box
-    model_access_via: gateway # short-lived scoped virtual key only
-    credentials_via: egress-substitution  # proxy swaps a placeholder for the real secret toward allowed hosts
-  audit:
-    log: [commands, network_requests, file_writes]   # immutable trail
-  approval:
-    require_human_for: [payments, production_writes]
+  image_digest: sha256:<immutable-image>
+  runtime_revision: <runtime-and-host-policy-version>
+  identity: {tenant: acme, run_id: run_85a, uid: 10000}
+  filesystem:
+    root: read_only
+    inputs: [{digest: sha256:<input>, mode: read_only}]
+    workspace: {mode: fresh_overlay, max_bytes: 2147483648}
+    devices: []
+  network_egress:
+    default: deny
+    allowed_destinations: [artifact-mirror.internal]
+    methods: [GET]
+    max_bytes: 104857600
+  resources:
+    cpu: 2
+    memory_bytes: 4294967296
+    process_count: 128
+    disk_bytes: 2147483648
+    open_files: 512
+    output_bytes: 16777216
+    wall_clock: 10m
+  workspace_lifetime: one_run
+  artifacts: {allow: [result.json], scan: true, hash: true}
+  cleanup: {lease: 15m, revoke_credentials: true, verify_process_tree: true}
 ```
 
-Three operational notes recur once these boxes run at any scale. Agent CLIs
-carry state in their config directory, and that state changes behavior from run
-to run, so give each run a fresh config directory when reproducibility matters.
-Agents routinely `git init` inside the workspaces they produce, so strip nested
-`.git` directories before committing results into an outer repository. And
-container-per-run agent workloads are memory-spiky: cap concurrency explicitly,
-or the kernel's OOM killer ends runs with exit code 137.
+The runtime enforces the filesystem mounts, read-only inputs, network egress,
+CPU, memory, process count, disk, file descriptor, output, and wall-clock limits
+outside the workload. Limits cover descendants, not only the first process.
+Allowed network destinations are resolved and revalidated through trusted DNS;
+IPv4, IPv6, redirects, alternate protocols, and metadata endpoints receive the
+same policy.
 
-The safety practices that recur across 2026 sources, and that close this chapter on
-the **capability, efficiency, trust** lens: least-privilege, short-lived
-credentials; treat every tool or browser output as untrusted input, separating
-"thinking" from "acting"; default-deny egress with an explicit allowlist; hard
-timeouts at tool, task, and sandbox-lifetime granularity; immutable audit logs;
-ephemeral-by-default so state and credentials do not accumulate; and
-human-in-the-loop gates for irreversible actions.
+### Keep credentials outside the workload
+
+The invariant is not that no trusted component ever holds a credential. It is
+that untrusted execution receives no reusable ambient authority. Prefer a
+semantic action broker outside the sandbox. If direct access is necessary, use
+a @gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped
+substitute for a provider key. No raw provider key enters the sandbox.
+
+For other services, mint a **short-lived token** bound to workload identity,
+tenant, audience, resource, action, and expiry. Where a service cannot issue one,
+**egress substitution** may exchange a placeholder at a trusted proxy, but the
+proxy must bind the request to the exact allowed destination, method, path,
+quota, and operation. Otherwise the proxy becomes a credentialed confused
+deputy. Credentials stay out of images, workspace snapshots, exported artifacts,
+crash dumps, model context, and logs, and are revoked when the lease ends.
+
+Default-deny network policy is necessary but incomplete. Test DNS rebinding,
+redirects, raw IP addresses, IPv6, WebSockets, uploads to an allowed host, and
+cloud metadata endpoints. An allowed hostname is not an allowed action.
+
+### Treat workspace state as a governed artifact
+
+Create every ephemeral run from a **clean baseline** with an immutable image
+digest and explicit read-only inputs. Record the **input digest**, dependency
+locks, tool versions, runtime and kernel revisions, locale, clock and randomness
+policy, resource limits, and network fixtures. A **workspace snapshot** is
+mutable state, not a clean baseline; it can retain processes, credentials,
+randomness state, caches, and malicious files.
+
+Export only declared paths. Scan outputs for malware, secrets, unexpected
+repositories, links, device files, archives, and executable content. Record each
+**output digest** and artifact provenance before the controller consumes or
+publishes it. Failed or suspicious outputs enter quarantine. A reset proves that
+a fresh run cannot read a canary written by the prior run, including through
+snapshots, caches, backing volumes, logs, or exported images.
+
+Persistent workspaces are a separate feature with a separate retention and
+authorization policy. Suspending a process does not make its state safe or
+reproducible. Deleting an overlay also does not erase external API effects,
+backups, or retained logs.
+
+### Give browser agents two boundaries
+
+A browser agent needs both web-content isolation and tenant isolation. A fresh
+browser profile separates cookies and storage for the run. The renderer sandbox
+and site isolation constrain hostile pages. An outer microVM, userspace kernel,
+or hardened container protects the broker and other tenants. A separate action
+policy governs navigation, downloads, uploads, clipboard, file URLs, local and
+metadata addresses, authenticated writes, and payments.
+
+WebDriver is a privileged remote-control interface, not an untrusted tool
+endpoint [@w3c2026webdriver]. Do not expose it to the sandbox network or reuse a
+personal browser profile. A browser sandbox can contain renderer code while the
+automated browser still misuses a legitimate account.
+
+## Wire the runtime through governed seams
+
+The controller consumes services; it does not become the trust hub. Model,
+tool, state, and compute access cross separate enforcement points.
+
+```{dot}
+//| label: fig-agent-runtime
+//| fig-cap: "A governed agent runtime. Durable control state stays separate from model serving, tool authorization, and sandbox supervision; each external effect crosses an independently enforced seam."
+digraph runtime {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
+
+  app [label="User / application"];
+  control [label="Trusted controller\ncontract • policy • budget"];
+  seams [shape=record, label="{Model gateway\nscoped access • usage|Tool policy + broker\nauth • approval • credentials|Sandbox supervisor\nimage • limits • cleanup|Durable event log\ncheckpoint • receipts}"];
+  evidence [label="External evidence\ntraces • artifacts • outcomes"];
+
+  app -> control;
+  control -> seams [label="separate\nenforcement"];
+  seams -> evidence [label="decisions +\nreceipts"];
+}
+```
+
+The model gateway in @sec-serving-stack and @sec-wiring-stack controls model
+identity, routing, budget, and usage. The tool broker authenticates the caller,
+authorizes the exact effect, and obtains narrowly scoped credentials. The
+sandbox supervisor allocates the boundary, applies resource and egress policy,
+and reconciles cleanup. Durable state records decisions and receipts. No single
+gateway log is sufficient evidence for all four paths.
+
+## Record evidence that supports recovery and audit
+
+An observability trace helps diagnose a run; an audit record supports an
+accountability claim; an event log supports recovery. They may share identifiers
+without becoming the same object.
+
+At minimum, record:
+
+- **run ID**, attempt ID, **trace ID**, parent span, timestamps, and controller
+  revision;
+- user or workload principal, tenant, delegated actor, and authority expiry;
+- model revision, prompt and context-builder versions, token use, and latency;
+- tool version and schema digest, normalized argument digest, resource identity,
+  policy decision, policy version, and denial reason;
+- approval identity, exact approved payload digest, expiry, and revalidation;
+- idempotency key, retry number, effect receipt, external state version, and
+  compensation;
+- sandbox image digest, runtime policy, resource usage, network destinations,
+  artifact digests, and cleanup evidence; and
+- terminal reason, success evidence, unresolved ambiguity, and last-known-good
+  release.
+
+W3C Trace Context standardizes how a trace ID and parent span propagate across
+services; it does not define agent semantics or guarantee that every relevant
+event was sampled and retained [@w3c2021trace]. Keep tokens, reusable credentials,
+and sensitive payloads out of logs by default. Protect the event sink outside
+the sandbox, apply retention and access policy, and test that crashes and denied
+actions still leave a complete record.
+
+## Verify failure behavior before granting authority
+
+Evaluation covers the final answer, external end state, policy compliance,
+trajectory, latency, cost, and repeated-run reliability. @sec-eval-practice
+provides the statistical harness. Agent-specific acceptance tests also exercise
+the control plane:
+
+| Scenario | Required evidence |
+|---|---|
+| Indirect prompt injection or malicious tool output | No authority gain, no policy rewrite, taint and provenance retained |
+| Malformed or drifting tool schema | Call rejected or catalog quarantined before model exposure |
+| Wrong tenant, expired token, wrong audience, or token passthrough | Denied independently at broker and resource; no downstream effect |
+| Stale approval or changed arguments | Approval invalidated; fresh exact-effect decision required |
+| Duplicate delivery or retry after ambiguous write | One logical effect or explicit reconciliation and escalation |
+| Worker crash before and after the external effect | Resume from event log without silent loss or repetition |
+| Timeout or cancellation during a tool | Descendants stopped, late result quarantined, terminal reason recorded |
+| Fork bomb, memory pressure, disk fill, or output flood | CPU, memory, process, disk, and output limits contain the run |
+| Filesystem escape or peer-canary read | Access denied; host and cross-tenant canaries remain unreadable |
+| Egress attempt by raw IP, redirect, IPv6, or allowed-host upload | External default-deny policy blocks the undeclared action |
+| Browser navigation to local services or destructive authenticated action | Origin and action policy blocks or requests fresh approval |
+| Cleanup-controller failure | Lease reconciliation removes processes, storage, credentials, and billable resources |
+
+Run these tests through the deployed model gateway, tool server, policy engine,
+sandbox image, and controller rather than mocking away the boundary under test.
+For a high-impact write, use shadow execution or a simulator first, then a canary
+tenant with a narrow failure budget. Preserve the **last-known-good** route until
+the canary satisfies both task and containment gates.
+
+## Operate the agent lifecycle
+
+A practical sequence is:
+
+1. **Freeze the contract.** Define task boundary, success evidence, permitted
+   effects, authority, data, budgets, terminal reasons, recovery, and rollback.
+2. **Build the smallest explicit loop.** Keep deterministic work in code and use
+   the model only where the contract requires uncertain interpretation or choice.
+3. **Specify every tool.** Pin schemas and implementation digests; add policy,
+   idempotency, errors, data, credentials, and postconditions.
+4. **Choose control semantics.** Select linear loop, state graph, durable
+   workflow, filesystem harness, or supervisor and worker from the transitions
+   the task needs.
+5. **Choose and test isolation.** Start from the threat model, define the full
+   sandbox envelope, and run escape, exfiltration, resource, remanence, and
+   cleanup tests.
+6. **Rehearse recovery.** Use failure injection for worker crashes, duplicate
+   callbacks, timeouts, cancellation, stale approval, and ambiguous external
+   outcomes.
+7. **Seal the release.** Bind model, prompt, controller, tool catalog, policy,
+   sandbox image, state schema, and evaluation plan to digests.
+8. **Evaluate and shadow.** Measure success, external state, policy compliance,
+   repeated-run reliability, cost, latency, and failure containment.
+9. **Canary with narrow authority.** Use limited tenants, tools, credentials,
+   egress, concurrency, and spend while the last-known-good route remains live.
+10. **Monitor and requalify.** Review failures, reconcile leases and ambiguous
+    effects, rotate credentials, patch boundaries, and rerun affected gates.
+
+A **requalification trigger** includes a model revision, prompt or context change,
+controller or state migration, tool schema or implementation change, policy
+change, authorization flow, sandbox image or runtime change, new host or device,
+browser revision, network policy, artifact pipeline, tenant boundary, or material
+traffic shift. Each trigger creates a new release identity and reruns the tests
+for the affected enforcement boundaries.
+
+The output is an agent release record linking the agent execution contract,
+controller and state schema, model revision, tool and policy digests, sandbox
+envelope, approval and effect evidence, evaluation report, canary result, and
+rollback outcome. That record, not the framework name, is what makes an agent an
+operable part of the infrastructure.
+
+## Lower-layer constraint
+
+The controller cannot recover an effect that the external API cannot identify,
+contain code outside the boundary enforced by the host, or reconstruct evidence
+that the gateways and event store never recorded. Model serving limits shape
+latency and cost; tool and identity systems shape authority; storage shapes
+recovery; compute and network policy shape containment. The agent contract must
+fit those lower-layer guarantees.
+
+Conversely, a microVM or durable workflow cannot rescue an overbroad business
+permission. Isolation limits where code runs. Authorization limits what the
+verified principal may do. Both must hold at the execution boundary described in
+@sec-security-authorization.
+
+::: {.callout-important}
+## What's contested
+
+There is no settled best framework, orchestration pattern, or isolation
+mechanism for every agent. More model autonomy can reduce controller code while
+making trajectories harder to bound. More explicit workflow structure can
+improve recovery while increasing state and migration work. A separate guest
+kernel, a userspace kernel, a hardened shared kernel, and a language runtime
+present different trusted surfaces rather than one permanent ranking.
+
+The reversible decision is to grant the smallest measured authority, expose the
+smallest tool set, preserve a deterministic policy boundary, and require the
+candidate to pass both task and containment tests. Product choice can then
+change without changing the execution contract.
+:::
 
 ## Further reading
 
-Frameworks and MCP, primary sources:
+The primary papers establish the action pattern and observed attack surface;
+the standards and systems sources define tool, authorization, tracing, durable
+execution, and isolation boundaries.
 
-- OpenAI Agents SDK (docs): <https://openai.github.io/openai-agents-python/>; GitHub: <https://github.com/openai/openai-agents-python>
-- OpenAI, "A practical guide to building agents": <https://openai.com/business/guides-and-resources/a-practical-guide-to-building-ai-agents/>
-- Claude Agent SDK (Python, GitHub): <https://github.com/anthropics/claude-agent-sdk-python>; docs: <https://platform.claude.com/docs/en/agent-sdk/python>
-- LangGraph (GitHub): <https://github.com/langchain-ai/langgraph>; 1.0 announcement: <https://www.langchain.com/blog/langchain-langgraph-1dot0>
-- CrewAI: <https://www.crewai.com/>; docs: <https://docs.crewai.com/>
-- Pydantic AI (docs): <https://ai.pydantic.dev/>; durable execution: <https://pydantic.dev/docs/ai/integrations/durable_execution/overview/>
-- LlamaIndex: <https://docs.llamaindex.ai/>
-- Mastra: <https://mastra.ai/>
-- Google ADK: <https://adk.dev/>; <https://github.com/google/adk-python>
-- AWS Strands Agents: <https://strandsagents.com/>
-- Microsoft Agent Framework (Microsoft Learn): <https://learn.microsoft.com/en-us/agent-framework/overview/>; AutoGen maintenance-mode status: <https://github.com/microsoft/autogen/discussions/7210>
-- AG2 (GitHub): <https://github.com/ag2ai/ag2>
-- MCP specification: <https://modelcontextprotocol.io/>; 2026 roadmap: <https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/>; `2026-07-28` release candidate: <https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/>
-
-Sandboxes, primary sources:
-
-- E2B pricing and overview: <https://e2b.dev/pricing>; <https://e2b.dev/>
-- Modal sandboxes (gVisor, GPU pricing): <https://modal.com/resources/best-code-execution-sandboxes-ai-agents>
-- Fly.io agent sandbox / Sprites: <https://fly.io/learn/agent-sandbox/>; architecture: <https://fly.io/docs/reference/architecture/>
-- Firecracker project: <https://firecracker-microvm.github.io/>
-- Cloudflare Containers & Sandboxes GA (Apr 13 2026): <https://developers.cloudflare.com/changelog/post/2026-04-13-containers-sandbox-ga/>; Dynamic Workers: <https://blog.cloudflare.com/dynamic-workers/>
-- Vercel Sandbox vs E2B (official KB): <https://vercel.com/kb/guide/vercel-sandbox-vs-e2b>
-- Daytona pricing: <https://www.daytona.io/pricing>
-- Runloop pricing: <https://runloop.ai/pricing>
-- Northflank AI sandbox pricing comparison (2026): <https://northflank.com/blog/ai-sandbox-pricing>
-- Browserbase + Anthropic Managed Agents: <https://docs.browserbase.com/integrations/anthropic/managed-agents/introduction>
-- Firecrawl, "AI Agent Sandbox: How to Safely Run Autonomous Agents in 2026": <https://www.firecrawl.dev/blog/ai-agent-sandbox>
-- Cella (latere.ai, author's own product): <https://cella.latere.ai/>
-
-Secondary comparisons (used for corroboration only; rankings and opinions in these
-are not independently verified): QubitTool 2026 framework showdown; TURION.AI
-LangGraph vs OpenAI vs Claude Agent SDK; WorkOS "Everything your team needs to know
-about MCP in 2026"; Northflank best sandbox runners (2026).
+::: {#further-reading}
+:::

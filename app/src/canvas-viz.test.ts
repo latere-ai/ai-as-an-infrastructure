@@ -145,8 +145,8 @@ test("the viz runtime registers the comparison-explorer component with both data
   expect(rt).toContain("'agent-frameworks-zh':");
 });
 
-test("ch41 agents-and-sandboxes uses comparison-explorer, localized per language", () => {
-  expect(src("en/practice/05-agents-and-sandboxes.qmd")).toContain('data-set="agent-frameworks"');
+test("the Chinese chapter retains its localized comparison explorer", () => {
+  expect(src("en/practice/05-agents-and-sandboxes.qmd")).not.toContain('data-set="agent-frameworks"');
   expect(src("zh/practice/05-agents-and-sandboxes.qmd")).toContain('data-set="agent-frameworks-zh"');
 });
 

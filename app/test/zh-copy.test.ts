@@ -1143,7 +1143,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/05-agents-and-sandboxes.qmd",
-      ["loop archetype", "tool protocol", "sandbox boundary", "secrets and model access", "governed seams"],
+      ["agent release", "agent execution contract", "trusted controller", "permitted effects", "reversible deployment"],
     ],
     [
       "zh/practice/05-agents-and-sandboxes.qmd",
