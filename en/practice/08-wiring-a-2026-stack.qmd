@@ -1,512 +1,472 @@
-# Wiring a 2026 Stack {#sec-wiring-stack}
+# Wiring the Stack {#sec-wiring-stack}
 
-The book opened by promising that a capability has a lifecycle, from compute up
-to a governed behavior, and that the layers connect in a specific order
-(@sec-whole-stack). The capstone is a concrete, end-to-end reference
-architecture that wires the pieces from the practical chapters into one running
-system. Its test is whether the seams can be named and the glue can be written:
-model calls, tools, telemetry, budgets, and virtual-key custody all have to meet
-at explicit contracts.
+A collection of compatible products is not yet a system. It becomes one only
+when every boundary has a contract, every behavior-bearing component has an
+identity, and a failed release has a tested way back. The deliverable of this
+chapter is therefore an **integration release**: a versioned statement of what
+is connected, what each connection means, who owns it, and what evidence makes
+the assembled behavior safe to release.
 
-![Schematic of stack assembly. Adding components increases capability coverage at first, but integration risk grows faster once too many boundaries sit on the critical path. Idealized curves, not measured data.](/figures/wiring-a-2026-stack-1.svg){#fig-wiring-a-2026-stack-1}
+Start with the release decision, not a shopping list. Name the capability being
+released, its users and tenants, its permitted data classes and effects, its
+quality and operational thresholds, and its rollback trigger. Then freeze a
+**system fingerprint** containing the model revision, prompt revision, retrieval
+snapshot, tool schema, policy revision, router configuration, telemetry schema,
+and executable artifact digests. A model name alone cannot identify the system
+that produced an answer.
 
-The trap to avoid is treating this as a seventh landscape survey. The six chapters
-before it already surveyed models (@sec-choosing-model), serving and compute
-(@sec-serving-stack), training and fine-tuning (@sec-training-practice), agents
-and sandboxes (@sec-agents-practice), retrieval (@sec-retrieval-practice), and
-evaluation (@sec-eval-practice). This chapter does not re-list their players. It
-answers a different question: given those choices, how do the parts compose into
-something you can run, observe, and pay for?
+This contract-first view has deep roots. Fielding described networked systems in
+terms of constrained interfaces rather than particular products
+[@fielding2000rest]. Sculley and colleagues later showed how glue code,
+configuration, and undeclared consumers accumulate technical debt around
+machine-learning systems [@sculley2015debt]. Breck and colleagues turned that
+lesson into production-readiness tests [@breck2017mltest]. The practical chapters
+in this part supplied the components; this chapter makes their composition
+testable (@sec-whole-stack).
 
-::: {.callout-note}
-## As of mid-2026
-This is a dated snapshot (July 2026). Specific products, prices, versions, and
-"best for" claims move fast, and 2026 has been a year of heavy churn (Promptfoo
-to OpenAI, Langfuse to ClickHouse, the MCP spec mid-revision). Treat every named
-product and dollar figure below as indicative and source-attributed, not
-timeless, and re-verify before you commit. Lead with the durable parts: the
-contracts, the seams, and the archetypes. Those outlast any version string.
-:::
+## Freeze the integration release
 
-## The thesis: three contracts and one discipline
+An integration release owns two records. The **system manifest** identifies the
+assembled system. The **boundary contract** defines each edge between a producer
+and a consumer. Neither record may contain mutable aliases such as `latest`.
 
-A 2026 stack composes not because the tools agree on features, they do not, but
-because they agree on three wire-format contracts. Each contract is a narrow,
-stable interface that lets you swap what is behind it without rewriting what is
-in front of it. The whole architecture is legible once you see that everything
-meets at these three seams.
-
-1. **Model calls speak a small set of HTTP dialects, and the gateway translates
-   among them.** Three matter in mid-2026: OpenAI Chat Completions
-   (`/v1/chat/completions`), the shape the open-weights runtimes speak (vLLM,
-   Ollama, OpenRouter-served models; @sec-serving-stack); OpenAI Responses
-   (`/v1/responses`), which OpenAI's reasoning tiers require the moment
-   function tools or `reasoning_effort` are attached, since Chat Completions
-   rejects that combination; and Anthropic Messages, the native shape of Claude
-   and its harness. Harnesses are locked to their home dialect, Claude Code
-   emits Messages and Codex emits Responses, so driving one against a foreign
-   model runs through the gateway's translation, and a good gateway reports
-   what a translation dropped (a loss-report header, for example) rather than
-   approximating silently. This translating seam is what makes a self-hosted
-   vLLM model and a hosted Claude endpoint interchangeable behind one name.
-2. **Tool and agent traffic speaks MCP.** Tool integration converged where
-   model calls did not: the Model Context Protocol is the single common
-   interface that lets one tool server be reused by every agent framework
-   (@sec-agents-practice).
-   By 2026 it is the default tool layer under almost every framework, and the
-   stable spec is `2025-11-25` with a stateless revision in its validation window.
-3. **Telemetry speaks OpenTelemetry GenAI spans.** The `gen_ai.*` semantic
-   conventions are the vendor-neutral format for LLM, retrieval, and agent spans
-   (@sec-eval-practice). Instrument once and you can point at Langfuse, Phoenix,
-   Datadog, or Grafana without re-instrumenting, though the conventions are
-   still marked in development as of mid-2026, so pin the schema version you
-   emit.
-
-The one discipline that ties the contracts together is **virtual-key custody**.
-No application, agent, eval harness, or sandbox ever holds a raw provider
-credential. They hold a short-lived *virtual key* minted by the gateway, scoped to
-a model allowlist, a budget, and a rate limit. Rotating a provider secret or
-capping a runaway agent becomes a server-side operation with no client redeploy.
-The same idea extends to compute: secrets live outside the sandbox and reach the
-agent as short-lived scoped tokens where a provider mints them per call, or as an
-opaque placeholder a TLS-terminating egress proxy swaps for a static secret it
-will not, never baked into the box (@sec-security-authorization).
-
-The component that all three contracts converge on is the **model @gls-gateway**, and
-this chapter is its home. There is no separate gateway chapter in this book, the
-gateway is where the layers join, so its landscape and the one comparison table
-this chapter owns live here.
-
-::: {.callout-tip}
-## Constraint arrow
-The gateway is where a lower layer's economics reach up and shape the whole
-application. Because every model call routes through one address, the per-token
-price of a frontier model (@sec-economics) and the per-token cost of your
-self-hosted serving (@sec-serving-problem) become a routing rule, not a code
-change. The decision to escalate a hard step to an expensive model, or to fall
-back to a cheap one under load, is made once at the seam and inherited by every
-caller above it.
-:::
-
-## The gateway: the one table this chapter owns
-
-A *model gateway* (also "LLM gateway" or "AI gateway") is the control plane between
-your application code and the many providers it talks to. The thin description is
-a reverse proxy that speaks one API and fans out to many. The real job is to
-centralize five concerns nobody wants scattered through application code: a
-**unified API**, **key custody**, **cost tracking**, **fallback and routing**, and
-**budgets and policy**. The newest gateways extend that role from plain token
-traffic to agent-native protocols (MCP for tools, A2A for agent-to-agent), making
-the gateway the single policy point for the whole stack's traffic.
-
-All claims below are as of mid-2026 and attributed in *Further reading*. Vendor
-performance numbers are not independently verified here.
-
-| Name | What it is | License / model | Best for |
-| --- | --- | --- | --- |
-| **LiteLLM** | Python SDK + self-hostable proxy translating 100+ providers to OpenAI format; virtual keys, budgets, spend logs, UI | Open source (MIT-style core) + paid Enterprise | Teams wanting the broadest provider coverage, self-hosted, in a Python stack, at low-to-moderate traffic. Long the de facto OSS default; a Python proxy, so throughput is its ceiling under load (see below) |
-| **OpenRouter** | Managed SaaS aggregator: one endpoint, prepaid credits, 300+ models, BYOK | Hosted SaaS; ~5.5% fee on credit purchase | Solo devs and small teams wanting zero-setup access to a huge catalog |
-| **Portkey** | AI gateway with guardrails, virtual keys, fallbacks, caching, prompt management, observability | OSS core + managed SaaS; self-host on enterprise | Enterprises needing governance: PII redaction, jailbreak detection, audit, compliance |
-| **agentgateway** | Rust data plane for HTTP/gRPC *and* AI-native protocols: LLM + MCP + A2A gateway in one | Apache 2.0; Linux Foundation (Agentic AI Foundation) | Platform teams wanting one proxy for LLM, tool (MCP), and agent (A2A) traffic |
-| **Envoy AI Gateway** | Kubernetes-native gateway on Envoy + Gateway API; LLM routing, token rate limiting, cost tracking, InferencePool | Open source (Envoy/CNCF ecosystem) | Platform teams already on Envoy/Istio/Gateway API wanting in-cluster control |
-| **Cloudflare AI Gateway** | Platform-native gateway: observability, caching, rate limiting, cost tracking; Unified Billing | Hosted SaaS; core features free | Teams already on Cloudflare/Workers wanting no infra to run |
-| **Bifrost** (Maxim AI) | Go LLM gateway: adaptive load balancing, cluster mode, guardrails, 1000+ models | Open source + commercial | Teams wanting a high-throughput, low-overhead self-hosted LiteLLM alternative |
-| **Lux** (latere.ai) | The author's own gateway (Go, compiled): one address to OpenAI, Anthropic, Gemini, OpenRouter, Ollama; sealed credentials, virtual keys, spend caps, hooks, audit | Latere product family | The Latere stack, and the worked example this book wires (@sec-tooling-ecosystem). *Disclosed as the author's own infrastructure; illustrative, not a neutral recommendation* |
-
-How to choose splits on two axes that matter more than feature checklists:
-**managed vs self-hosted**, then **plain-LLM vs agent-native**.
-
-- Pick a **managed** gateway (OpenRouter, Cloudflare, Portkey managed) for zero
-  infrastructure and fast access to a broad catalog, when you are comfortable that
-  provider keys and request metadata transit a third party. Best for prototypes
-  and small teams.
-- Pick a **self-hosted** gateway (LiteLLM, agentgateway, Envoy, Bifrost) when
-  provider secrets must stay in your environment, or you need data residency and
-  per-request audit you own. Best for regulated industries and platform teams.
-- Reach for an **agent-native** gateway (agentgateway) when your roadmap needs MCP
-  tool calls and agent-to-agent traffic under the same policy point as token
-  traffic, instead of bolting agent governance onto a chat-only proxy later.
-
-On performance, vendors publish dramatic latency numbers ("50x faster",
-"sub-millisecond overhead"), measured under inconsistent conditions and not
-verified here. For almost all workloads, provider and model latency dominate
-gateway overhead by orders of magnitude, so per-request overhead rarely breaks a
-tie. What breaks a tie under agent load is the throughput ceiling, and there the
-implementation language shows. A controlled benchmark by the author, comparing
-the gateways in a stateless passthrough configuration at an equal CPU budget,
-found the Python proxy (LiteLLM) saturating between roughly 100 and 500 requests
-per second and falling over near 1000, while the compiled gateways (agentgateway
-in Rust, Lux in Go) stayed flat through 1000 RPS, with added first-byte latency at
-low load in the low single-digit milliseconds. The two compiled gateways were
-statistically
-indistinguishable from each other: the gap that mattered was Python versus
-compiled, not one product against the field. That is the bare-forwarding tier,
-not a feature-parity test, since a production gateway also authenticates, meters,
-and applies policy, so benchmark your own configuration before you let it decide.
-
-The sensible default for a team that wants control of its keys and costs is
-therefore a **performant compiled gateway paired with an observability layer**.
-Two lead the benchmark above: agentgateway (Rust, Apache-2.0, Linux Foundation),
-the neutral choice, and Lux (Go), the author's own gateway and the stack the rest
-of this book wires (@sec-tooling-ecosystem). LiteLLM keeps a real place for the
-broadest provider coverage and for low-traffic or prototype work, where its
-ecosystem reach outweighs its throughput ceiling. (Lux appears throughout as a
-worked example because the author built it, not as a neutral pick over
-agentgateway, with which the benchmark ties it.)
-
-## The reference architecture
-
-@fig-reference-arch merges the per-layer wiring diagrams from the practical
-chapters into one picture. Read it top to bottom as a request flow and
-side to side as the contracts. The gateway is the hub; everything that needs a
-model, an embedding, a reranker, or a judge call goes through it. The sandbox is
-the agent's compute seam, the counterpart to the gateway's model seam. Retrieval
-sits beside the agent. Eval and observability tap the gateway and the spans. The
-compute and orchestration layer is the floor everything stands on.
+| Record | Required fields | Release question |
+| --- | --- | --- |
+| System manifest | application, model, prompt, retrieval, tool, policy, router, telemetry, and artifact revisions | Can this exact behavior be identified again? |
+| Topology | every producer, consumer, protocol version, transport, and owner | Does every live edge have an accountable owner? |
+| Capability profile | native, adapter-emulated, lossy, or unsupported behavior | What meaning changes at an adapter? |
+| Trust contract | principal, workload, tenant, authority, audience, scope, and data class | May this caller send this data or cause this effect? |
+| Failure contract | deadline, cancellation, retry owner, idempotency scope, error mapping, and backpressure | Where does failure stop, and who may retry? |
+| Evidence contract | telemetry, conformance result, migration state, acceptance evidence, and rollback revision | What proves the release and restores the last good one? |
 
 ```{dot}
-//| label: fig-reference-arch
-//| fig-cap: "A 2026 end-to-end reference architecture. Everything that needs a model call routes through the gateway (one address; the gateway translates among the model-API dialects); tool calls route through the MCP gateway; every component emits OpenTelemetry GenAI spans. Apps, agents, evals, and sandboxes hold scoped virtual keys, never raw provider credentials. The compute and orchestration layer is the floor the whole stack runs on."
+//| label: fig-integration-contract
+//| fig-cap: "An integration release binds intent, immutable identity, boundary semantics, acceptance evidence, and rollback. A product inventory covers only a small part of this contract."
 digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  user [label="User / client / CI"];
-  app [label="App + Agent runtime\nloop, memory, handoffs"];
-  rag [label="Retrieval\nhybrid search + rerank"];
-  vdb [label="Vector DB\npgvector / Qdrant", shape=cylinder];
-  mcpgw [label="MCP gateway\nauth + allowlist + audit"];
-  tools [label="Tool servers:\ndb, browser, GitHub", shape=cylinder];
-  sbx [label="Sandbox\nmicroVM / gVisor\ndefault-deny egress"];
-  gw [label="Model gateway\nrouting, budgets, fallback, keys"];
-  hosted [label="Hosted frontier APIs\nClaude / GPT-5 / Gemini"];
-  serve [label="Self-hosted serving\nvLLM / SGLang"];
-  hw [label="GPUs\nscheduled by K8s / Slurm / Ray"];
-  obs [label="Observability\nLangfuse / Phoenix"];
-  eval [label="Eval / Judge\nPromptfoo / DeepEval"];
-  ds [label="Regression dataset", shape=cylinder];
-
-  user -> app;
-  app -> rag [label="retrieve"];
-  rag -> vdb;
-  app -> mcpgw [label="MCP stdio / HTTP"];
-  mcpgw -> tools;
-  app -> sbx [label="create sandbox"];
-
-  app -> gw [label="model calls\nvirtual key"];
-  rag -> gw [label="embed / rerank via gateway"];
-  sbx -> gw [label="scoped token"];
-
-  gw -> hosted;
-  gw -> serve;
-  serve -> hw;
-
-  app -> obs [style=dashed, label="OTel GenAI spans"];
-  gw -> obs [style=dashed, label="spend + traces"];
-  obs -> eval [style=dashed, label="sampled traces"];
-  eval -> gw [style=dashed, label="judge call"];
-  eval -> ds [style=dashed, label="promote failing trace"];
+  bgcolor="transparent"; rankdir=TB; nodesep=0.18; ranksep=0.25;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1"];
+  edge [color="#6b7280", arrowsize=0.7];
+  intent [label="Release intent"];
+  identity [label="System fingerprint"];
+  edges [label="Boundary contracts"];
+  evidence [label="Acceptance evidence"];
+  release [label="Release record"];
+  rollback [label="Rollback revision"];
+  intent -> identity -> edges -> evidence -> release -> rollback;
 }
 ```
 
-Three things make this diagram hold up in production, and each is one of the
-contracts from the thesis:
+The manifest itself should be signed or otherwise integrity-protected. Record a
+**software bill of materials**, build **provenance**, container and binary
+**digest** values, schema revisions, policy bundles, and the exact route table.
+in-toto supplies a model for verifiable supply-chain steps
+[@torresarias2019intoto], while SLSA defines progressively stronger provenance
+requirements [@slsa2026spec]. These controls do not make the release correct;
+they make the thing that was tested distinguishable from a later substitution.
 
-- **One base URL, dialects translated behind it.** The app, the retriever (for embed and rerank),
-  the eval harness, and the judge all point at the same gateway address. Swapping a
-  model or adding a fallback is configuration, not code. A self-hosted `bge-m3`
-  embedder and a hosted Cohere reranker are addressable by name through the same
-  seam (@sec-retrieval-practice).
-- **One tool protocol, MCP.** Agents do not dial arbitrary tool servers. MCP
-  traffic flows through a gateway that owns the credentials and the allowlist, the
-  same way the model gateway owns token traffic (@sec-agents-practice).
-- **One telemetry format, OTel.** Every component emits `gen_ai.*` spans pinned
-  to one schema version, so the eval loop can read any trace (@sec-eval-practice).
+## Separate the planes
 
-## The three arcs
+The stack has three planes with different permissions and failure modes.
 
-The book built the stack along three arcs. The reference architecture is where
-they meet. Walking each arc is the fastest way to see how the whole thing flows.
+- The **data plane** carries model requests, typed stream events, retrieval
+  evidence, tool proposals, and tool results.
+- The **control plane** admits requests and applies routing, budgets, capability
+  constraints, authorization policy, and overload rules.
+- The **management plane** changes route tables, credentials, policy bundles,
+  schemas, and integration releases.
 
-### From chatbot to agent
+A model @gls-gateway may enforce useful data- and control-plane policy, but it is
+**not a universal hub**. Retrieval authorization belongs at the retrieval
+service. A tool executor must authorize its own resources. Management-plane
+changes require a narrower administrative path than ordinary inference. A
+single proxy process may implement several roles, but the contracts and
+privileges must remain separate.
 
-A chatbot is a single model call: prompt in, completion out. An agent is a *loop*
-around that call: the model emits a tool request, the runtime executes it, feeds
-the result back, and the model decides what to do next, possibly for many turns
-(@sec-agent-architectures, @sec-the-harness). Three additions turn the first into
-the second, and all three appear on the right and top of @fig-reference-arch.
+## Make compatibility explicit
 
-- **Grounding via retrieval.** Instead of trusting the model's weights, the agent
-  retrieves current, private, or authoritative context and injects it
-  (@sec-rag-retrieval, @sec-retrieval-practice). The 2026 consensus pipeline is
-  hybrid search (BM25 plus dense vectors, fused with reciprocal rank fusion) then
-  a reranker, with the embedding and reranker models called *through the gateway*
-  so they are keyed and budgeted like any other model call. Prefer retrieval over
-  stuffing a million-token context window: long context is expensive, and the
-  price cliffs above 200K tokens (@sec-economics) usually make retrieval both
-  cheaper and more faithful.
-- **Tools via MCP and a sandbox.** Reading a result is the easy half. Acting,
-  running code, hitting an API, writing a file, is where safety stops being about
-  the model and becomes about the *runtime* (@sec-agents-practice). A jailbreak
-  filter on the gateway does nothing against `rm -rf` the model was induced into
-  emitting. The enforcement layer is the @gls-sandbox: a microVM (Firecracker, used by
-  E2B, Fly, Vercel) or userspace kernel (gVisor, used by Modal) that bounds the
-  blast radius, with default-deny egress, hard timeouts, and human-in-the-loop
-  gates for irreversible actions (@sec-security-authorization).
-- **Memory via a checkpointer.** A long-running agent must survive a restart, so
-  its state lives in a durable, checkpointed store (LangGraph's checkpointer,
-  Pydantic AI's durable execution), not in process memory (@sec-memory-systems).
-  This is what lets a human pause, inspect, and resume a task mid-flight.
+Similar JSON shapes do not imply the same semantics. HTTP defines transport
+semantics [@rfc9110http]; server-sent events define stream framing
+[@whatwg2026sse]. Neither defines a provider's tool-call lifecycle, refusal
+state, structured-output subset, usage counters, retention behavior, or safety
+policy. An adapter must therefore publish a versioned **capability profile**.
 
-The constraint arrow runs downward through this arc: the agent cannot be more
-reliable than the gateway, serving, and sandbox layers beneath it, which is
-exactly why "durable execution" and "checkpointing" became the headline 2026
-framework features. They are the framework's attempt to survive the failures of
-the layers below.
+For every requested capability, record one of four states:
 
-### From inference to training
+- **native**: the provider implements the declared meaning;
+- **adapter-emulated**: the adapter preserves the declared postcondition;
+- **lossy**: the adapter changes meaning, and the caller has explicitly accepted
+  that downgrade;
+- **unsupported**: admission rejects the request before upstream work begins.
 
-Most of a 2026 stack is *inference*: serving a fixed model behind the OpenAI seam.
-But the same gateway address that fronts a hosted Claude endpoint can front a model
-you serve yourself, and the same address can front a model you *trained* yourself
-(@sec-serving-stack, @sec-training-practice). The arc from inference to training is
-the arc from renting capability to owning it, and the gateway is what makes the two
-interchangeable.
+The profile should declare modalities, endpoint and state model, tool and
+parallel-call semantics, the supported JSON Schema dialect and subset, typed
+stream events, context and output limits, usage fields, region, retention, and
+policy restrictions. JSON Schema is a language family with identifiable
+dialects, not a promise that every provider implements every keyword
+[@jsonschema2020core]. Translation has only three defensible outcomes: preserve,
+perform an explicitly accepted downgrade, or reject. Silently dropping a tool,
+truncating an identifier, or coercing an unknown field is not compatibility.
 
-The economics decide where on the arc you sit. With a closed API you do not run the
-inference server: the lab owns batching, KV-cache, speculative decoding, and the
-accelerators (@sec-serving-problem), and you consume them as knobs (cached-input
-pricing, priority tiers). When volume and control justify it, you cross to
-self-hosted serving (vLLM by default, SGLang for prefix-heavy agent and RAG
-traffic), and the per-token cost moves from a vendor invoice to a GPU bill you
-schedule yourself. Further along the arc, you fine-tune (@sec-sft-peft) or
-post-train a model and serve the result behind the same seam. The training run
-itself lands on the compute floor, gang-scheduled by Slurm or by Kubernetes with a
-gang-scheduling add-on (@sec-orchestration-data-infra, @sec-accelerators-networking).
+Routing follows the same discipline. First filter by hard constraint: capability,
+tenant policy, data residency, retention, region, and authority. Only then rank
+eligible candidates by measured quality, latency, availability, or cost. Resolve
+an immutable provider, model revision, adapter revision, capability-manifest
+revision, and route-policy revision for every accepted operation. Use sticky
+assignment for experiments and canaries so repeated work does not wander between
+systems.
 
-The deciding variable is **sustained utilization**. Below roughly half a GPU's
-worth of steady load, a serverless or managed-inference platform (Modal, Baseten,
-Fireworks, Together) is cheaper than paying for idle reserved hardware. Above it,
-reserved clusters on a neocloud or hyperscaler win. The constraint arrow here is
-the one from @sec-scaling-laws: the serving cost of a token, paid forever, is what
-justifies over-training a smaller model once, which is why a model's size is set by
-how many tokens it will decode over its lifetime, not by its training budget alone.
+## A reference architecture
 
-Change the two price knobs below and watch where the build-vs-rent crossover
-lands: serverless wins below it, a flat reserved bill wins above it.
+@fig-reference-arch shows the smallest useful architecture. The application is
+the caller. Policy admits work. An adapter converts the caller contract into a
+provider contract. Tool effects take a separate path through authorization and
+an executor. Retrieval returns identified evidence. Telemetry observes every
+decision but grants no permission.
+
+```{dot}
+//| label: fig-reference-arch
+//| fig-cap: "A vendor-neutral integration architecture. Model calls pass from Caller through Policy and Adapter to Provider. Tool proposals take a separately authorized path to an executor and effect ledger. Retrieval and telemetry remain distinct services."
+digraph {
+  bgcolor="transparent"; rankdir=TB; nodesep=0.16; ranksep=0.25; size="3.0,10";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1"];
+  edge [fontname="Helvetica", fontsize=8, color="#6b7280", arrowsize=0.65];
+  caller [label="Caller"];
+  policy [label="Policy"];
+  adapter [label="Adapter"];
+  provider [label="Provider"];
+  retrieval [label="Retrieval"];
+  executor [label="Tool executor"];
+  ledger [label="Effect ledger"];
+  telemetry [label="Telemetry"];
+  caller -> policy -> adapter -> provider;
+  policy -> retrieval [label="evidence"];
+  policy -> executor [label="authorized"];
+  executor -> ledger;
+  policy -> telemetry [style=dashed];
+  adapter -> telemetry [style=dashed];
+  executor -> telemetry [style=dashed];
+}
+```
+
+This picture deliberately avoids a universal product center. The model boundary,
+tool boundary, retrieval boundary, and evidence boundary solve different
+problems covered in @sec-serving-stack, @sec-agents-practice,
+@sec-retrieval-practice, and @sec-eval-practice.
+
+## Define the model-operation state machine
+
+Treat a request as a logical operation containing a verified tenant,
+`operation_id`, payload digest, remaining deadline, requirements, and policy
+revision. Admission either rejects it or records the immutable route decision.
+Each upstream call is a **physical attempt** beneath that logical operation.
+
+The state machine is explicit:
+
+1. Receive and authenticate the operation.
+2. Validate its schema and capability requirements.
+3. Admit it under tenant, budget, region, and policy constraints.
+4. Resolve and record an immutable route.
+5. Open an upstream attempt and normalize its frames into a versioned
+   **typed event stream** with operation, attempt, and sequence identifiers.
+6. Accumulate streamed tool fragments without executing them.
+7. On a terminal tool block, parse the complete arguments, validate them against
+   the pinned schema, authorize the exact effect, and execute once.
+8. Preserve refusal, incomplete output, cancellation, partial output, error, and
+   normal completion as distinct terminal outcomes.
+
+Stream chunks are not a **complete document**. Unknown event types are retained
+or surfaced for forward compatibility; they are not reinterpreted as text.
+Partial tool arguments must never execute. A structured result receives **final
+validation** against the declared JSON Schema profile only after assembly.
+Refusal, truncation, transport failure, and schema violation each produce a
+separate invalid outcome rather than a plausible-looking object.
+
+After caller-visible output, an automatic retry can duplicate or contradict the
+stream. Do not replay transparently after visible output. Propagate cancellation
+and the remaining deadline downstream; stop reading and cancel upstream when a
+caller disconnects. Every admitted operation must reach a terminal state through
+finite attempts, a finite deadline, and bounded resources.
+
+## Normalize errors without hiding causes
+
+Use a stable machine-readable envelope based on RFC 9457
+[@rfc9457problem]. Its media type is `application/problem+json`. Define a stable
+problem type and include the safe upstream category, HTTP status, provider code,
+upstream request ID, operation ID, attempt number, whether output was partial,
+whether the operation is retryable, and any `Retry-After` value. Preserve the
+original cause in protected diagnostics.
+
+The human-readable detail field is for people. Never parse human-readable detail
+to decide whether to retry. Authentication, authorization, invalid input,
+unsupported capability, policy refusal, and exhausted quota are normally not
+retryable. Overload and transient transport failures may be retryable only under
+the operation's budget and deadline.
+
+## Bound retries and overload
+
+Nested client, gateway, adapter, and provider retries create **retry
+amplification**. Here $\ell$ denotes a retrying layer and $r_\ell$ its maximum
+retry count. The maximum number of physical attempts generated by one logical
+operation is
+
+$$
+A_{\max}=\prod_{\ell=1}^{L}(1+r_\ell),
+$$
+
+where $L$ is the number of independently retrying layers. Two retries at each of
+three layers can create $3^3=27$ attempts. Assign **one retry owner**. That owner
+obeys a total attempt
+limit and remaining deadline, honors `Retry-After`, and uses bounded exponential
+backoff with jitter. Record all physical attempts even when the logical operation
+succeeds. Tail latency makes these controls especially important
+[@dean2013tail].
+
+An idempotency key is an application contract, not magic HTTP exactly-once
+delivery. Bind it to tenant, route class, operation key, canonical payload
+digest, and time to live. Reusing a key with a different payload is an error.
+Where the provider or target cannot deduplicate, state that exactly-once is not
+guaranteed. A side-effecting tool needs its own effect-level key and receipt; a
+model-request key cannot make the tool idempotent.
+
+Overload controls must also be bounded: per-tenant concurrency, queue length,
+stream buffer, input and output tokens, and tool fan-out. A bounded queue exposes
+backpressure instead of turning latency into hidden memory growth. Shed work with
+an appropriate `429` or `503` and `Retry-After`; use circuit breakers and retry
+budgets to prevent recovery traffic from becoming a retry storm.
+
+Fallback changes the system identity. A fallback candidate must be prequalified
+inside a declared compatibility class and must satisfy the same hard policy and
+data constraints. Record the new route decision. Never silently switch after
+visible output or after a side effect whose result is ambiguous.
+
+## Keep identity, credentials, and effects separate
+
+A gateway credential, a workload identity, a delegated user token, and a
+downstream provider secret answer different questions. Prefer short-lived
+workload identity and OAuth token exchange [@rfc8693tokenexchange]. Bind a token
+to an audience, scope, verified tenant, subject or actor, and time to live. Every
+resource server validates its own audience. Never pass a token issued for one
+resource through to another.
+
+A **virtual key** is one implementation of model-budget and routing policy; it is
+not universal tool authorization. Where a provider supports only a static secret,
+keep that static secret in a broker and substitute it only at an allowed egress
+boundary. The application and sandbox should not receive the raw provider
+secret. Zero-trust guidance similarly treats network location as insufficient
+authority [@nist2020zerotrust].
+
+### Tools and MCP
+
+@gls-mcp standardizes host, client, and server messages over JSON-RPC and supports
+capability negotiation, discovery, and tool schemas
+[@mcp2026spec44]. Discovery does not grant authority. A tool annotation is
+untrusted metadata, not proof that a call is safe. Pin the MCP protocol revision,
+transport, and negotiated capabilities, then perform authorization per
+invocation under the controls in @sec-security-authorization.
+
+The trusted runtime should perform this sequence:
+
+1. Authenticate user and workload; derive the tenant from verified identity.
+2. Validate the selected tool name against an allowlist and canonicalize the
+   complete arguments against pinned input and output schemas.
+3. Classify the effect as read, reversible write, or irreversible/external.
+4. Authorize the principal, workload, tenant, tool revision, resource, audience,
+   canonical arguments, effect class, and policy revision; bind expiring consent
+   or approval where required.
+5. Append an intent record, broker a least-privilege credential, and execute with
+   an effect-level idempotency key.
+6. Persist an effect receipt before advancing the workflow checkpoint; validate
+   and redact the result before returning it.
+
+On an ambiguous timeout, query the receipt or target state. Do not blindly retry
+a non-idempotent effect. Cancellation is not rollback. Parallel calls require
+independent call IDs and receipts. A tool result must retain its originating call
+ID so the runtime cannot attach it to the wrong proposal.
+
+An @gls-sandbox reduces blast radius; a sandbox is not authorization. Its threat
+model should bound filesystem access, syscalls, processes, CPU, memory, disk,
+wall-clock time, workspace lifetime, and network access. Enforce both an egress
+allowlist and a resource allowlist. Resolve and validate DNS and every redirect
+hop, blocking private, link-local, and metadata endpoints. Isolation can contain
+an inappropriate action; it cannot make the action appropriate.
+
+### Retrieval and evidence
+
+Authorize before retrieval, not after candidate documents have crossed the
+boundary. Every result should carry an evidence ID, source and corpus revision,
+index revision, authorization decision, and tenant boundary. Cache, checkpoint,
+session, task, and deduplication keys must include tenant and system-policy
+identity. @sec-retrieval-practice develops the underlying evidence contract.
+
+## Treat telemetry as evidence, not authority
+
+W3C Trace Context supplies correlation identifiers across services
+[@w3c2021tracecontext]. It is not authority. Never infer principal, tenant, or
+permission from `traceparent` or baggage. Baggage has no built-in integrity and
+must contain no secret, personal data, or authorization decision; allowlist and
+strip it at trust boundaries.
+
+Record the operation ID, physical attempt ID, route and adapter revisions,
+capability decision, error category, tool intent and receipt, evidence IDs, and
+terminal outcome. Still report missing telemetry, exporter loss, sampling, and
+redaction failure. A trace is partial evidence, not automatic proof that an
+effect did or did not occur (@sec-eval-practice).
+
+## Account for the accepted task
+
+Optimize the whole accepted task, not a convenient model-call subtotal. Cost
+includes every physical attempt, model usage, retrieval, tool execution, judge,
+infrastructure, and human review. Latency is the root elapsed time; do not sum
+parallel child durations. Use the exact response model, region, billing time,
+currency, and price-catalog revision rather than a mutable alias
+(@sec-economics, @sec-serving-problem).
+
+For task $q$, a useful accounting identity is
+
+$$
+C_q=\sum_{a\in\mathcal{A}_q}\sum_{m\in\mathcal{M}_a}u_{a,m}p_m(v_a,\rho_a,t_a,k_a)
+    +C_{\mathrm{infra}}+C_{\mathrm{human}},
+$$
+
+where $\mathcal{A}_q$ is the set of physical attempts, $\mathcal{M}_a$ contains
+disjoint billing meters for attempt $a$, $u_{a,m}$ is usage on meter $m$, and
+$p_m$ is its price for response-model revision $v_a$, region $\rho_a$, billing
+time $t_a$, and price-catalog revision $k_a$. The remaining terms cover shared
+infrastructure and human review. Disjoint meters prevent cached or reasoning
+subtotals from being counted twice.
+
+Build-versus-rent is likewise a measured crossover, not a universal percentage.
+Change the two prices below to current, contract-specific values. The chart's
+defaults are an editable example, not a recommendation.
 
 <figure id="fig-wiring-a-2026-stack-cost-crossover">
 <div class="viz" data-viz="cost-crossover" data-x-label="GPU-hours used per month" data-y-label="monthly cost (USD)" data-x-max="720" data-a-label="serverless (pay per use)" data-a-fixed="0" data-a-rate="4" data-a-rate-min="1" data-a-rate-max="10" data-a-rate-label="serverless price (USD per GPU-hour)" data-b-label="reserved (24/7)" data-b-fixed="1440" data-b-rate="0" data-b-fixed-min="360" data-b-fixed-max="2880" data-b-fixed-label="reserved flat bill (USD per month)"></div>
-<figcaption>Two cost lines over a month of 720 possible GPU-hours. Serverless rises with use at the per-hour price, so its cost is the price times the hours actually used and is zero when idle. Reserved is a flat monthly bill paid whether the hardware runs or sits idle. The crossover is where the two meet: at the default prices it lands at 360 GPU-hours, which is 50 percent utilization of one GPU. Below the crossover serverless is cheaper; past it, reserving the hardware 24/7 is cheaper. Raise the serverless price and the crossover moves left; raise the reserved bill and it moves right.</figcaption>
+<figcaption>An editable cost crossover over 720 possible GPU-hours. Serverless cost rises with used hours; reserved cost is flat. Replace both illustrative prices with current quotes and include idle capacity, operations, and reliability costs before deciding.</figcaption>
 </figure>
 
 :::: {.runnable}
 ```python
-import numpy as np
-# Illustrative figures only (mid-2026 indicative, not real quotes). Tune freely.
-serverless_per_gpu_hour = 4.0   # $/GPU-hour, pay only while running
-reserved_per_gpu_hour   = 2.0   # $/GPU-hour, billed 24/7 whether idle or not
-u = np.linspace(0.01, 1.0, 100)                      # sustained utilization
-serverless = serverless_per_gpu_hour * u * 24 * 30   # pay per busy hour
-reserved   = reserved_per_gpu_hour * 24 * 30          # flat monthly bill
-crossover = reserved_per_gpu_hour / serverless_per_gpu_hour
-print(f"crossover utilization = {crossover:.0%} of one GPU")
-print("below it serverless wins, above it reserved wins")
-import matplotlib.pyplot as plt
-plt.plot(u, serverless, label="serverless / managed (pay per use)")
-plt.axhline(reserved, color="C1", label="reserved (flat 24/7)")
-plt.axvline(crossover, color="gray", ls="--")
-plt.xlabel("sustained utilization (fraction of one GPU)")
-plt.ylabel("monthly cost ($)")
-plt.legend(); plt.title("Build vs rent crossover"); plt.show()
+def crossover_utilization(serverless_rate, reserved_monthly, hours=720):
+    """Return the utilization fraction where pay-per-use equals the flat bill."""
+    if serverless_rate <= 0 or reserved_monthly < 0 or hours <= 0:
+        raise ValueError("rates and hours must define a non-negative comparison")
+    return reserved_monthly / (serverless_rate * hours)
+
+example = crossover_utilization(4.0, 1440.0)
+assert abs(example - 0.5) < 1e-12
+print(f"illustrative crossover = {example:.0%}")
 ```
 ::::
 
-### From usage to eval
+@sec-scaling-laws and @sec-accelerators-networking explain why workload shape,
+memory, batching, and hardware efficiency matter beyond the simple curve.
 
-The third arc closes the loop. Every model and tool call the app makes is *usage*,
-and every unit of usage is something you can observe and score (@sec-eval-practice).
-A model that tops a public leaderboard can still misbehave in your product, because
-the benchmark measured a generic capability (@sec-benchmarks) while your app runs a
-specific prompt over your retrieval context inside an agent loop.
+## Test the seams, not just the happy path
 
-The loop has two halves that meet at the OTel seam. **Observability** captures the
-trace: the full tree of a request, every LLM call, retrieval, and tool invocation,
-with inputs, outputs, timing, tokens, and cost on each span. **Evaluation** scores
-those traces with deterministic assertions, reference-based metrics, and
-LLM-as-judge (@sec-judging-holistic), where a second model grades the first against
-a calibrated rubric. The two connect because you evaluate the traces you observe: a
-production trace that fails an online judge gets promoted into the offline
-regression suite, which gates the next release (@sec-evaluating-agents). Because the
-app, the evals, and the judge all call the gateway, an A/B between two models is a
-routing rule and the judge runs on a scoped, budget-capped virtual key.
+Every adapter and boundary should pass the same conformance fixtures before it
+joins a release.
 
-This arc feeds the other two. Eval datasets become preference data for the
-training arc, and failing agent traces become the fixtures that harden the agent
-arc. The three arcs are not parallel tracks. They are one cycle.
+| Fixture | Required assertion |
+| --- | --- |
+| Unary request | exact request identity, terminal status, usage, and error mapping |
+| Stream interruption | ordered typed events, partial status, no replay after visible output |
+| Tool arguments | no execution before complete parse, schema validation, authorization, and call-ID binding |
+| Structured output | final local validation; refusal, incomplete, and schema error remain distinct |
+| Rate limit and overload | `Retry-After`, bounded queue behavior, cancellation, and correct `429` or `503` |
+| Retry and fallback | one retry owner, finite attempts, compatible fallback, and changed system identity |
+| Tenant isolation | wrong-audience token, cross-tenant cache or handle, stale approval, and secret leakage all fail closed |
+| Telemetry | operation/attempt correlation, route decision, missing telemetry, and redaction are visible |
 
-## Pick a reference stack
+Add negative fixtures for unknown stream events, duplicate delivery, a worker
+crash after commit but before receipt, malicious tool output, schema drift, DNS
+rebinding, redirect to a metadata endpoint, filesystem escape, and runaway
+process creation. These tests verify behavior that a successful demo cannot.
 
-There is no single right stack, but there are three archetypes that cover most
-teams. The rows are the layers; pick the column that matches your constraints, then
-read down it. These are starting points to adapt, dated mid-2026, not rankings.
+## Cut over as a protocol
 
-| Layer | Lean / managed | Regulated / self-hosted | Cloud-native K8s |
-| --- | --- | --- | --- |
-| **Model** | Hosted frontier API (Claude / GPT-5 / Gemini), pinned IDs | Hosted for hard steps + self-hosted open weights for bulk | Same, plus in-cluster open-weight models |
-| **Gateway** | OpenRouter or Cloudflare AI Gateway (managed) | agentgateway or Lux self-hosted (compiled), virtual keys + budgets | Envoy AI Gateway or agentgateway (in-cluster) |
-| **Serving** | None you operate (the API is the server) | vLLM behind OpenAI-compatible endpoint, FP8 + prefix caching | vLLM / SGLang on the cluster, KV-aware routing at scale |
-| **Agent** | OpenAI Agents SDK or Claude Agent SDK | LangGraph (durable, checkpointed) or Pydantic AI | LangGraph + checkpointer in Postgres |
-| **Sandbox** | E2B (hosted microVM) | Self-host on Firecracker, default-deny egress | Sandboxes on the same cluster, scoped tokens |
-| **Retrieval** | Pinecone or Turbopuffer + Cohere Embed/Rerank | pgvector (+ pgvectorscale) + open embeddings (BGE-M3) | Qdrant + hybrid + open reranker |
-| **Eval / Obs** | LangSmith or Braintrust (managed) | Langfuse self-hosted + Promptfoo in CI | Phoenix (OTel-native) + DeepEval in CI |
-| **Compute** | Serverless GPU (Modal / Baseten / Fireworks) | Reserved neocloud (CoreWeave / Lambda), Slurm + K8s | K8s with Volcano/KAI gang scheduling, Kueue quotas |
+Migration is itself an integration. Begin with adapter contract tests. Run new
+read-only behavior in shadow mode with no side effects. Then use a sticky canary
+so one task or tenant stays on one fingerprint. Ramp only while quality,
+security, latency, error, and cost gates hold. Publish route and policy changes
+atomically. Keep the last-known-good manifest deployable and test rollback before
+the first canary receives traffic.
 
-The durable advice underneath the table: minimize new moving parts, put your
-quality budget where it pays (retrieval and reranking over a fancier vector DB,
-calibrated judges over more benchmarks), keep every layer addressable through the
-three contracts so each is swappable, and never hard-code a single vendor. The
-archetype you start in is not the one you end in; the contracts are what keep the
-migration cheap.
-
-## Wiring: the seams in code
-
-The glue that matters is not a tool tutorial. It is the code at the seams, the
-handful of lines that make the layers interchangeable. Two snippets show the load-
-bearing pattern: a gateway config that unifies a hosted and a self-hosted model
-with a fallback, and an agent that points at that one address with a virtual key.
-
-First, the gateway. The config below exposes one alias, `smart`, that
-load-balances or fails over between a hosted and a self-hosted model, so the
-application never learns which one served the request. The shape is illustrative,
-not any one product's schema: LiteLLM expresses it as a static YAML `model_list`,
-while agentgateway and Lux bind the routing strategy (weighted, least-latency,
-round-robin, or fallback) to a virtual key through an API or dashboard rather than
-a file (@sec-tooling-ecosystem). The seam the application sees is the same either
-way.
-
-```yaml
-# Illustrative gateway config: one alias, hosted primary with a self-hosted fallback.
-# Each gateway has its own schema; this shows the shape, not a product's exact keys.
-models:
-  - alias: smart                  # the name the app requests
-    target: anthropic/claude-opus-4-8
-    api_key: ${ANTHROPIC_API_KEY} # provider secret stays server-side
-  - alias: smart                  # same alias, fallback target
-    target: openai/gpt-5.6-sol
-    api_key: ${OPENAI_API_KEY}
-    upstream_api: responses       # reasoning tiers reject tools on /chat/completions
-  - alias: local                  # self-hosted, behind the same seam
-    target: vllm/your-open-weight-model
-    base_url: http://vllm-svc:8000/v1
-
-routing:
-  smart:
-    strategy: fallback            # if the hosted target fails, use the next
-    fallback: [local]
-    retries: 2
-# Virtual keys, team budgets, and spend caps are minted out of band,
-# through an admin API or dashboard, not in this file.
+```{dot}
+//| label: fig-cutover-path
+//| fig-cap: "A reversible integration cutover. Contract tests precede a side-effect-free shadow, sticky canary, staged ramp, and release. Any failed gate restores the last-known-good manifest."
+digraph {
+  bgcolor="transparent"; rankdir=TB; nodesep=0.16; ranksep=0.24;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1"];
+  edge [fontname="Helvetica", fontsize=8, color="#6b7280", arrowsize=0.65];
+  tests [label="Contract tests"];
+  shadow [label="Shadow"];
+  canary [label="Sticky canary"];
+  ramp [label="Staged ramp"];
+  release [label="Release"];
+  lkg [label="Last-known-good"];
+  tests -> shadow -> canary -> ramp -> release;
+  shadow -> lkg [label="fail"];
+  canary -> lkg [label="fail"];
+  ramp -> lkg [label="fail"];
+}
 ```
 
-Second, the agent. It holds a gateway virtual key, not a provider secret. It
-retrieves context, runs a tool, and never learns which model answered. The MCP
-tool is in-process here for brevity; in production it sits behind the MCP gateway
-over HTTP, and the agent code barely changes, which is the whole point of MCP being
-a wire protocol rather than a library API (Claude Agent SDK shape; see the SDK docs
-for the current API).
+The failure matrix turns vague caution into ownership.
 
-```python
-from claude_agent_sdk import tool, create_sdk_mcp_server, query, ClaudeAgentOptions
+| Failure | Detection | Containment and recovery |
+| --- | --- | --- |
+| Silent capability loss | capability and conformance mismatch | reject admission; restore prior adapter |
+| Retry storm | attempt amplification and queue alarms | disable nested retries; shed load |
+| Credential leak | secret canary or audience violation | revoke, rotate, and quarantine evidence |
+| Cross-tenant access | authorization and isolation fixture | fail closed; invalidate affected caches and handles |
+| Partial tool execution | intent without a matching effect receipt | query target state; reconcile rather than replay |
+| Configuration drift | signed-manifest or digest mismatch | stop rollout; restore atomic last-known-good state |
+| Missing telemetry | export and coverage SLO breach | halt evidence-dependent release decisions |
 
-@tool("search_docs", "Retrieve grounding context for a query", {"q": str})
-async def search_docs(args):
-    # hybrid retrieve + rerank; embed/rerank calls go through the gateway too
-    hits = await retriever.hybrid_search(args["q"], top_k=8)
-    return {"content": [{"type": "text", "text": "\n\n".join(h.text for h in hits)}]}
+## The release lifecycle
 
-server = create_sdk_mcp_server(name="rag", version="1.0.0", tools=[search_docs])
+The complete workflow is short enough to rehearse:
 
-async for msg in query(
-    prompt="Using the docs, summarize our refund policy and cite the source.",
-    options=ClaudeAgentOptions(
-        mcp_servers={"rag": server},
-        allowed_tools=["search_docs"],
-        # model access resolves through the gateway base_url + a scoped virtual
-        # key, never a raw provider credential. Swapping the model behind "smart"
-        # or capping this agent's spend is a server-side change with no redeploy.
-    ),
-):
-    print(msg)
-```
+1. State the capability, population, constraints, and rollback trigger.
+2. Inventory producers, consumers, owners, trust boundaries, and data classes.
+3. Freeze the system fingerprint and signed manifest.
+4. Publish capability, identity, failure, effect, and evidence contracts.
+5. Implement adapters that preserve, explicitly downgrade, or reject.
+6. Assign one retry owner and bound deadlines, queues, and concurrency.
+7. Bind credentials and tool effects to verified identity and tenant policy.
+8. Run protocol, policy, isolation, failure, and supply-chain conformance tests.
+9. Measure accepted-task quality, latency, cost, and missing evidence.
+10. Shadow without side effects, then run a sticky canary and staged ramp.
+11. Publish the atomic manifest and retain the tested rollback revision.
+12. Record owners, known gaps, expiry, and requalification triggers.
 
-The eval harness closes the loop with the same discipline. A Promptfoo config
-points its provider `apiBaseUrl` at the gateway and uses a different model family
-as the judge, on its own budget-capped virtual key (@sec-eval-practice). Every seam
-in the system, model calls, tool calls, retrieval, and judging, meets at the same
-two addresses (the model gateway and the MCP gateway) and emits the same span
-format. That is what makes the architecture one system rather than seven separate tools that merely sit side by side.
+The output is an integration release record: the exact manifest, boundary
+contracts, test evidence, accepted degradations, rollout state, known gaps,
+owners, expiry, and rollback procedure.
 
-One caution keeps this composability from overselling: integrations break at the seam's
-translation, and they break on small wire-level constraints, not on grand
-incompatibilities. The Responses API caps the `user` metadata field at 64
-characters while some harnesses send longer session ids, so the gateway must
-truncate. Anthropic's extended thinking migrated from a `budget_tokens` field
-to adaptive thinking with an output `effort` level; newer Claude models reject
-the old shape outright while older ones accept the new, so a gateway should
-emit the new shape uniformly. And under adaptive thinking, effort is a ceiling
-the model regulates itself within, not a quota it must spend: a request at high
-effort may legitimately use no reasoning tokens at all. The discipline that
-catches all of these is cheap: smoke-test every new model and harness pairing
-with one tool-bearing request before relying on it.
-
-## Contracts that make the stack operable
-
-The three contracts matter because they line up the stack's operating axes. On
-capability, they let you assemble a system more capable than any single
-layer: a grounded, tool-using, durable agent backed by the best model for each
-step, with each layer best-in-class for its job and still composable. Efficiency
-holds because per-task routing, fallback, and cost caps live in gateway
-configuration, so an expensive model is used only where a step needs it and load
-shedding does not touch application code. Trust is the third axis, and it rests on
-all three at once: virtual-key custody, the portable OTel substrate, and the
-eval loop that turns "it feels better" into a release gate. The stack is worth wiring
-this way only if all three hold.
-By mid-2026 the contracts have matured enough that
-they do, and the lifecycle the book opened with, from compute to a governed
-behavior, finally runs end to end through one architecture.
+::: {.callout-tip}
+## Constraint arrow
+An upper layer cannot recover semantics that a lower boundary silently removed.
+Provider limits constrain adapters; adapters constrain routing; routing and
+authorization constrain the application; the assembled fingerprint constrains
+what an evaluation result can claim. Make loss visible at the lowest boundary
+that knows about it.
+:::
 
 ::: {.callout-important}
 ## What's contested
-The reference stack is a snapshot, not a prescription. Gateways, MCP servers,
-agent frameworks, evaluation tools, and hosted model access layers are still
-moving quickly. The stable claim is the contract shape: model access should be
-routed and budgeted, tool execution should be sandboxed and observable,
-retrieval should be inspectable, and releases should be gated by evidence. The
-specific vendors can change without changing those contracts.
+Some teams expose one provider-shaped API everywhere; others keep provider-native
+clients behind a narrower domain interface. Some centralize admission in a
+gateway; others distribute it among services. Either can work. The durable
+requirements are explicit semantic loss, least authority, bounded failure,
+immutable identity, end-to-end evidence, and tested rollback, not a particular
+product topology.
 :::
 
 ## Further reading
 
-Gateways:
-
-- LiteLLM proxy (cost tracking, load balancing, fallbacks): <https://docs.litellm.ai/docs/proxy/cost_tracking>, <https://docs.litellm.ai/docs/proxy/reliability>
-- OpenRouter, "What is an LLM gateway": <https://openrouter.ai/blog/insights/llm-gateway/>
-- Portkey AI gateway: <https://portkey.ai/buyers-guide/ai-gateway-solutions>
-- agentgateway: <https://agentgateway.dev/> and <https://github.com/agentgateway/agentgateway>; Linux Foundation announcement: <https://www.linuxfoundation.org/press/linux-foundation-welcomes-agentgateway-project-to-accelerate-ai-agent-adoption-while-maintaining-security-observability-and-governance>
-- Envoy AI Gateway: <https://aigateway.envoyproxy.io/docs/capabilities/>
-- Cloudflare AI Gateway and Bifrost (Maxim AI): <https://github.com/maximhq/bifrost>
-- Lux (author's own gateway): <https://lux.latere.ai>
-
-The layers this chapter wires together:
-
-- Inference serving (vLLM disaggregation, structured output): <https://docs.vllm.ai/en/latest/> and <https://github.com/sgl-project/sglang>
-- Agent frameworks and MCP: OpenAI Agents SDK <https://openai.github.io/openai-agents-python/>; Claude Agent SDK <https://github.com/anthropics/claude-agent-sdk-python>; LangGraph <https://github.com/langchain-ai/langgraph>; MCP spec <https://modelcontextprotocol.io/> and 2026 roadmap <https://blog.modelcontextprotocol.io/posts/2026-mcp-roadmap/>
-- Sandboxes (isolation models, safe-usage discipline): E2B <https://e2b.dev/>; Modal <https://modal.com/resources/best-code-execution-sandboxes-ai-agents>; Firecracker <https://firecracker-microvm.github.io/>; Firecrawl security model <https://www.firecrawl.dev/blog/ai-agent-sandbox>; Cella (author's own) <https://cella.latere.ai/>
-- Retrieval (hybrid + rerank, pgvector): <https://github.com/pgvector/pgvector>; hybrid search and RRF overview <https://www.digitalapplied.com/blog/hybrid-search-bm25-vector-reranking-reference-2026>
-- Eval and observability (OTel GenAI): Promptfoo <https://www.promptfoo.dev/docs/intro/>; Langfuse <https://langfuse.com/docs/observability/overview>; OpenTelemetry GenAI conventions <https://github.com/open-telemetry/semantic-conventions-genai>
-- Compute and orchestration (build vs rent, schedulers): Modal pricing <https://modal.com/pricing>; SkyPilot, "Slurm vs K8s" <https://blog.skypilot.co/slurm-vs-k8s/>; KubeRay <https://github.com/ray-project/kuberay>
-- Frontier model access layers (Bedrock, Vertex, Azure): Anthropic models overview <https://platform.claude.com/docs/en/about-claude/models/overview>; OpenAI on Bedrock <https://aws.amazon.com/bedrock/openai/>; Gemini API pricing <https://ai.google.dev/gemini-api/docs/pricing>
+::: {#further-reading}
+:::

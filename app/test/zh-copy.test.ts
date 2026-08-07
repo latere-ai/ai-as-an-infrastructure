@@ -1167,7 +1167,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/08-wiring-a-2026-stack.qmd",
-      ["capability has a lifecycle", "end-to-end reference architecture", "seams can be named", "virtual-key custody", "three wire-format contracts"],
+      ["integration release", "system fingerprint", "boundary contract", "capability profile", "rollback"],
     ],
     [
       "zh/practice/08-wiring-a-2026-stack.qmd",
