@@ -1,368 +1,393 @@
 # The Compute Frontier: Bandwidth, Not FLOPs {#sec-compute-frontier}
 
-@sec-accelerators-networking framed a cluster as three bandwidth tiers and
-model FLOPs utilization as the number for diagnosing a run. That chapter
-described how the tiers work. This one asks where each tier breaks. The thesis
-is that the frontier's scarce resource is bytes rather than arithmetic:
-accelerators have become chiplet packages, the NVLink boundary has moved from
-chassis to rack, accelerator entrants are differentiated by their bandwidth
-bets, and the viable escape routes are the ones already shipping rather than
-promised.
+@sec-accelerators-networking introduced arithmetic intensity and the bandwidth
+tiers inside an accelerator cluster. This chapter turns those ideas into a
+method for locating a system's limit. Its working thesis is that the frontier's
+scarce resource is bytes rather than arithmetic. But that claim is not
+universal: it is meaningful only after naming the workload, the memory
+boundary, and the measured traffic that crosses it. A matrix multiplication
+with enough reuse can exhaust the arithmetic units; token-by-token inference
+can instead wait on weights, the KV cache, or a collective. “Bandwidth-bound”
+is therefore a diagnosis, not a property of AI hardware in general.
 
-![Schematic of the compute frontier's imbalance. Peak FLOPs can rise faster than memory bandwidth, making bandwidth and data movement the binding constraint. Idealized relative growth, not measured data.](/figures/the-compute-frontier-1.svg){#fig-the-compute-frontier-1}
+That distinction matters because accelerators have become chiplet packages and
+the NVLink boundary has moved from a chassis to a multi-node domain in one
+prominent system. Neither change abolishes data movement. Each moves a
+boundary, changes its cost, and creates a new place to measure.
 
-The book's closing part follows the same constraint arrow as the rest of the
-book, the one that points from the bottom of the stack to the top, but now the
-question at each layer changes: not how the layer works, but where it is breaking and where it
-is heading. The path starts at the silicon, because the bottleneck that
-reorganized everything above it in the last two years started here.
+## The frontier is a vector of bounds
 
-## The headline number is the wrong constraint
+The original Roofline model compares a kernel's operational intensity with
+peak compute and memory bandwidth [@williams2009roofline]. A frontier system
+needs more than one roofline because bytes can cross several boundaries. One
+optimistic lower bound for a step is
 
-A frontier accelerator's datasheet leads with a peak arithmetic rate, and
-the rate climbs fast across generations, faster still once the precision
-drops from FP16 to FP8 to FP4, the 16-, 8-, and 4-bit number formats a chip
-computes in, each step down trading numeric accuracy for throughput. Read only that line and the machine looks
-like it is getting better at the thing training and inference need most.
-The line is true and almost beside the point. The work a transformer does is
-not bound by how fast the multiply-accumulate units can run; it is bound by
-how fast operands reach them. Attention decode (generating one token at a
-time, which rereads the whole prior context from memory at every step),
-mixture-of-experts routing (sending each token to a few of many expert
-sub-networks chosen per token), and any kernel that touches more memory than
-it reuses spend their time waiting on high-bandwidth memory, not on the matrix
-units. The roofline of @sec-accelerators-networking already named this: a
-kernel's arithmetic intensity is the number of FLOPs it performs per byte it
-fetches from memory, and below the intensity the hardware needs the achievable
-rate is set by HBM bandwidth, with the peak FLOPs ceiling unreachable.
+$$
+T_{\text{step}}
+\ge
+\max\left(
+  \frac{F}{P_{\text{eff}}},
+  \frac{Q_{\text{HBM}}}{B_{\text{HBM}}},
+  \frac{Q_{\text{up}}}{B_{\text{up}}},
+  \frac{Q_{\text{out}}}{B_{\text{out}}}
+\right).
+$$
 
-The frontier problem is that the two numbers on the roofline diverge, and
-they diverge in the same direction every generation. Across recent
-accelerator families, low-precision matrix throughput has climbed much faster
-than HBM bandwidth per chip. The accurate way to state the trend is as a
-direction rather than a single headline multiple, because the multiple
-depends on which precision and which two generations you pick: from the V100
-era to Blackwell, peak compute grew by roughly an order of magnitude more
-than memory bandwidth did, and the recent FP4 and FP8 jumps widen the gap
-further because they multiply arithmetic throughput without moving a single
-byte faster. The arithmetic intensity a kernel must reach to escape the
-memory-bound region therefore rises every generation. This is the memory
-wall, and it is not a temporary manufacturing lag. It is the structural fact
-that organizes the whole chapter: every tier of the machine, the chip, the
-package, the rack, and the power behind them, is hitting a ceiling that
-bandwidth, not arithmetic, sets.
+where:
+
+- $F$ is the useful arithmetic work and $P_{\text{eff}}$ is the effective,
+  workload-specific arithmetic rate;
+- $Q_{\text{HBM}}$ is traffic volume between the processor and HBM, while
+  $B_{\text{HBM}}$ is sustainable bandwidth at that boundary;
+- $Q_{\text{up}}$ and $B_{\text{up}}$ describe traffic and sustainable
+  bandwidth inside the scale-up domain; and
+- $Q_{\text{out}}$ and $B_{\text{out}}$ describe traffic and sustainable
+  bandwidth across the scale-out fabric.
+
+The largest term identifies the first optimization target. The equation is not
+a latency predictor. It assumes perfect overlap among independent transfers
+and computation. Dependencies, queuing, synchronization, protocol overhead,
+and contention can make observed time larger; phases that cannot overlap may
+need to be added rather than maximized. Nor should a datasheet peak substitute
+for $P_{\text{eff}}$ or any sustainable bandwidth.
+
+:::: {.runnable}
+```python
+# Illustrative units: work in operations, traffic in bytes, rates per second.
+terms = {
+    "arithmetic": 2.0e15 / 1.0e15,
+    "HBM traffic": 8.0e12 / 3.0e12,
+    "scale-up traffic": 1.0e12 / 9.0e11,
+    "scale-out traffic": 5.0e11 / 2.0e11,
+}
+
+for name, seconds in terms.items():
+    print(f"{name:18s} {seconds:.2f} s")
+
+binding = max(terms, key=terms.get)
+print(f"Binding term: {binding}")
+```
+::::
 
 ```{dot}
-//| label: fig-compute-frontier-walls
-//| fig-cap: "The frontier as a stack of ceilings, each binding at a different tier. The spec sheet's FLOPs sits at the bottom and is the least scarce; bytes, package area, fabric reach, and megawatts bind above it. Each later chapter of this part follows one of these ceilings."
-digraph {
-  bgcolor="transparent";
+//| label: fig-compute-frontier-bounds
+//| fig-cap: "A step can meet several independent ceilings. The binding term changes with the workload, placement, and measured traffic; overhead and non-overlap can only increase observed time."
+digraph bounds {
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  flops [label="peak FLOPs\n(spec-sheet headline, least scarce)"];
-  hbm [label="HBM bandwidth + capacity\n(the memory wall, this chapter)"];
-  retic [label="reticle limit 858 mm²\n(chiplets on an interposer, this chapter)"];
-  fabric [label="scale-up fabric reach\n(how much silicon one coherent domain spans)"];
-  supply [label="interposer + HBM supply\n(the allocation gate)"];
-  power [label="power + cooling\n(the datacenter ceiling)"];
-  flops -> hbm -> retic -> fabric -> supply -> power;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
+
+  work [label="one measured step", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  terms [label="candidate lower bounds\n\narithmetic · F / P_eff\nHBM · Q_HBM / B_HBM\nscale-up · Q_up / B_up\nscale-out · Q_out / B_out"];
+  observed [label="observed time\n≥ largest term"];
+
+  work -> terms -> observed;
 }
 ```
 
-## The chip: a die too small for its own memory
+This model also explains why lowering precision is not automatically a speedup.
+It helps when it reduces the binding traffic or increases the binding compute
+rate. Extra conversion, padding, metadata, or an unchanged KV-cache path can
+leave the largest term where it was.
 
-The innermost ceiling is geometric. A photolithography scanner can expose at
-most one reticle field per shot, capped near 858 mm² [@shilov2026cowos]. A
-frontier compute die already presses against that limit, so the only way to
-add transistors is to stop building one die. Modern accelerators are several
-compute chiplets and a row of HBM stacks tiled side by side on a silicon
-interposer, the @gls-cowos package: an advanced package that places compute
-chiplets and HBM on one silicon interposer. The interposer,
-not the logic die, is now the object whose area sets how much compute and how
-many memory stacks one accelerator can carry. TSMC's interposer roadmap is
-the supply-side clock on the whole frontier: roughly 5.5 reticles of area
-with five to a dozen HBM stacks today, a nine-reticle "Super Carrier" near
-7,722 mm² in qualification for 2027, and a path past fourteen reticles with
-HBM5-class memory toward the end of the decade [@shilov2026cowos].
-@sec-making-silicon follows whether that interposer can be fabricated and bought;
-here it is enough to see that the reticle limit pushed packaging up into the
-architecture, making interposer area a first-class design parameter above the
-microarchitecture.
+## The package moves the memory boundary
 
-What gets tiled onto the interposer is mostly memory, and the memory is the
-point. NVIDIA's Rubin generation reaches roughly 288 GB of HBM4 at about
-22 TB/s per accelerator. Google's Ironwood, the TPU v7, carries 192 GB of
-HBM3e at 7.37 TB/s and is the first TPU to support FP8 natively rather than
-through emulation [@google2025ironwood]. The HBM stacks themselves are a
-moving frontier: HBM4 doubles the interface to a 2,048-bit bus, the first
-sixteen-high stacks were demonstrated in early 2026, and the base die at the
-bottom of the stack is migrating onto a logic process so that memory now
-competes for the same leading-edge wafers as compute, a coupling
-@sec-making-silicon develops. The numbers move every quarter, and any
-specific figure in this chapter is a date stamp rather than a constant. The
-durable observation is the ratio: capacity and bandwidth grow, but they grow
-more slowly than the arithmetic that consumes them, so the fraction of real
-workloads that are memory-bound rises over time.
+A reticle field limits the area that lithography exposes in one image. A large
+monolithic die near that limit is expensive to grow and vulnerable to defects.
+Splitting logic into chiplets can improve yield and reuse, but it adds
+die-to-die links, packaging work, and new failure surfaces. The interposer
+provides dense wiring among compute dies and HBM stacks; the package substrate
+connects that assembly to power and board-level signals. These are distinct
+layers, not synonyms.
+
+This is the @gls-cowos package: an advanced package that places compute
+chiplets and HBM on one silicon interposer. TSMC documents CoWoS as a family of
+integration technologies and describes interposers larger than a single
+reticle field [@tsmc2026cowos]. That is evidence for a packaging direction,
+not permission to extrapolate a vendor roadmap into exact future system
+capacity.
+
+```{dot}
+//| label: fig-compute-frontier-package
+//| fig-cap: "The memory boundary is built from several physical layers. An interposer links compute chiplets and HBM stacks; a package substrate carries the assembly to the board."
+digraph package {
+  rankdir=TB;
+  bgcolor="transparent";
+  graph [nodesep=0.35, ranksep=0.45];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", arrowsize=0.7];
+
+  subgraph cluster_top {
+    label="on the interposer";
+    color="#9ca3af";
+    compute [label="compute\nchiplets"];
+    hbm [label="HBM\nstacks"];
+  }
+  interposer [label="silicon interposer\ndense die-to-die wiring",
+              color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  substrate [label="package substrate\npower + board signals"];
+  board [label="accelerator board"];
+
+  compute -> interposer;
+  hbm -> interposer;
+  interposer -> substrate -> board;
+}
+```
+
+HBM adds several separate quantities to the design:
+
+- **Memory capacity** determines how much parameter, activation, optimizer, and
+  KV-cache state can reside near the processors.
+- **Sustainable bandwidth** is the rate a real access pattern reaches, after
+  accounting for controllers, locality, concurrency, and protocol effects.
+- **Traffic volume** is created by the algorithm, tensor layout, precision,
+  recomputation policy, and cache behavior.
+- **Energy per bit** makes unnecessary movement a power and cooling cost even
+  when latency is hidden.
+
+HBM4 documentation provides a useful, product-scoped example: SK hynix and
+Micron describe a 2,048-bit interface, twice the previous generation's width
+[@skhynix2025hbm4; @micron2026hbm4]. HBM4 also introduces a more capable base
+die beneath the stacked memory dies. The interface width alone does not reveal
+delivered bandwidth, capacity, yield, power, or application throughput. Those
+depend on the complete package and workload.
+
+The familiar memory wall can now be stated precisely. If effective arithmetic
+rate grows faster than sustainable HBM bandwidth, the arithmetic intensity
+required to become compute-bound rises. That rising arithmetic-intensity floor
+affects only work below it; kernels with sufficient reuse can remain
+compute-bound.
+
+## The scale-up boundary can span multiple nodes
+
+A **scale-up domain** is the set of accelerators connected by the system's
+lowest-latency, highest-bandwidth device fabric. A **scale-out fabric**
+connects those domains. The distinction is operational: it changes collective
+latency, bisection bandwidth, routing, congestion, and the cost of a failure.
+It does not imply one universal topology.
+
+NVIDIA's DGX GB200 NVL72 is a current, product-scoped example. Its official
+documentation describes a 72-GPU NVLink domain in one rack, with 18 compute
+trays, nine NVLink switch trays, and a passive copper cable backplane
+[@nvidia2026dgxgb200]. The accompanying tuning guide describes the system as an
+expansion beyond earlier eight-GPU scale-up systems
+[@nvidia2026multinode]. The protocol boundary is the NVLink domain, not the
+cabinet: other reference layouts can distribute that domain differently. And
+the dense wiring does not make 72 GPUs one device. Software still manages
+separate memory, processes, address spaces, logical topology, synchronization,
+and a multi-node failure domain.
+
+```{dot}
+//| label: fig-compute-frontier-domain
+//| fig-cap: "A multi-node scale-up fabric enlarges the fast locality domain, but software still maps process groups and collectives onto physical links. Crossing the scale-out edge changes both performance and failure behavior."
+digraph domain {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
+
+  graph [compound=true, pad=0.06];
+  subgraph cluster_up {
+    label="scale-up\ndomain";
+    color="#3b82f6";
+    gpu1 [label="GPU-local\nmemory + work"];
+    sw [label="scale-up\nswitch fabric"];
+    gpu2 [label="peer GPU\nmemory + work"];
+    gpu1 -> sw [dir=both, label="fast collective"];
+    sw -> gpu2 [dir=both];
+  }
+  out [label="scale-out fabric\nInfiniBand / Ethernet"];
+  peer [label="another domain"];
+  sw -> out [label="domain edge"];
+  out -> peer;
+}
+```
+
+Placement must follow traffic, not acronyms. Tensor parallel groups often run
+frequent all-reduces; expert parallel groups exchange routed token data;
+pipeline parallel stages send activations; data parallel replicas synchronize
+gradients or parameters. Yet message size, frequency, overlap, collective
+algorithm, model shape, and contention determine which group benefits most
+from the fast domain. The sound procedure is to measure each edge, map the
+heaviest latency-sensitive communication onto the logical topology, and then
+verify end-to-end time.
+
+An open specification is also not the same as an available implementation.
+UALink 1.0 specifies a 200 Gb/s-per-lane scale-up interface and a switched
+domain of up to 1,024 accelerators [@ualink2025spec]. It gives builders a common
+target. It does not establish that every switch, cable, software stack, or
+large deployment described by the specification is available.
+
+At rack-to-rack distance, scale-out networks already use optics. Co-packaged
+optics changes where electrical-to-optical conversion happens: placing optical
+engines near switch silicon shortens the lossy electrical channel and can
+reduce faceplate-density pressure. It also couples optics to a hot, expensive
+package. Reliability, laser placement, test, repair, and serviceability then
+become architectural questions [@minkenberg2021cpo]. This does not extend the
+NVLink domain.
+
+Optical circuit switching is a different idea: it reconfigures physical paths.
+TPU v4 is a documented deployed example of optical circuit switches changing a
+large system's topology [@jouppi2023tpuv4]. A proposal such as Opus instead
+reconfigures optical rails at parallelism-phase boundaries and remains a
+research prototype [@ding2026opus]. Neither technology makes communication
+free.
+
+## Architecture choices move terms rather than erase them
+
+The useful comparison among accelerator designs is which term in the lower
+bound above they change and which cost they expose elsewhere.
+
+A conventional HBM accelerator keeps a large software surface and targets many
+tensor shapes. Its package offers high external-memory capacity and bandwidth,
+but weights and activations still cross the HBM boundary. A custom accelerator
+can co-design dataflow, compiler, memory, and network for a narrower workload;
+the gain depends on whether that workload resembles the design target.
+
+Wafer-scale integration chooses a different locality point. Cerebras'
+architecture distributes SRAM and compute across a wafer-scale device and
+uses dedicated on- and off-wafer interconnects [@lie2023cerebras]. That can
+increase locality and on-device bandwidth, but SRAM capacity, defect
+management, compilation, system I/O, and multi-system scaling remain
+constraints. “No HBM” removes one named boundary; it does not remove state or
+movement.
+
+Technology claims should therefore carry an evidence status. As of 7 August
+2026, this chapter uses these labels:
+
+| Status | What the label establishes | What it does not establish |
+|---|---|---|
+| **Available system** | Shipping documentation, accessible service, or independent deployment evidence identifies a usable system. | That every configuration is generally available or achieves peak claims. |
+| **Announced product** | A vendor has named a product and intended capabilities or schedule. | Shipment, sustained performance, reliability, or schedule. |
+| **Research prototype** | A paper or demonstration establishes an implemented idea under stated conditions. | Production readiness, fleet operability, or economic viability. |
+| **Open specification** | A versioned interface contract is published. | Interoperable products, software maturity, or deployment scale. |
+
+For example, the NVL72 rack above is an available system documented by its
+operator guide. Opus is a research prototype [@ding2026opus]. UALink 1.0 is an
+open specification. A vendor roadmap counts only as an announced product until
+dated production or deployment evidence supports a different label. These
+labels can change; the cited evidence should change with them.
+
+## Prefill and decode are phases, not fixed hardware classes
+
+Prefill processes a prompt in parallel across its sequence length. Decode
+usually advances one or a few positions at a time while reading model state
+and the KV cache. This often gives prefill more reuse and decode lower
+arithmetic intensity, but the result is conditional. Batch size, sequence
+length, model architecture, quantization, tensor shape, kernel fusion, cache
+layout, and parallel placement can move either phase between bounds.
+
+Splitting the phases across different device pools can specialize capacity,
+bandwidth, and scheduling. It also creates a phase boundary: KV-cache state
+must be transferred or made remotely accessible, requests must be routed, and
+the two pools must be balanced under a changing workload. A design is better
+only if saved compute or memory time exceeds transfer, queueing, and
+under-utilization costs. @sec-memory-scheduling develops those serving
+tradeoffs; @sec-machine-breaks follows their operational failure modes.
+
+## Escape routes change a named term
+
+There is no single maturity ladder for escaping a bandwidth limit. The
+mechanisms are composable, and each trades one resource for another.
+
+| Lever | Term it tries to change | Typical cost or new check |
+|---|---|---|
+| **Reduce traffic** with lower precision, fusion, compression, or reuse | Lower $Q_{\text{HBM}}$, $Q_{\text{up}}$, or $Q_{\text{out}}$ | Numerical quality, metadata, conversion overhead, and kernel support |
+| **Increase locality** with larger caches, SRAM, tiling, or fusion | Keep repeated bytes inside a cheaper boundary | Capacity, compilation constraints, and lost flexibility |
+| **Increase sustainable bandwidth** with wider memory or a faster fabric | Raise one measured $B$ | Package area, power, signaling reach, yield, and cost |
+| **Distribute state** through sharding or phase specialization | Reduce per-device capacity and traffic pressure | More communication, coordination, imbalance, and failure behavior |
+| **Change the physical link** with optics or a reconfigurable topology | Raise reach or reduce network energy per bit | Serviceability, reconfiguration delay, reliability, and control complexity |
+
+```{dot}
+//| label: fig-compute-frontier-escape-map
+//| fig-cap: "An escape route is useful only when it changes the binding term. Every route creates a cost that must be measured at the same workload boundary."
+digraph escape_map {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
+
+  bound [label="measured\nbinding term", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
+  levers [label="change one named term\n\nreduce traffic\nincrease locality\nincrease sustainable bandwidth\ndistribute state"];
+  verify [label="remeasure step time,\nquality, power, cost"];
+
+  bound -> levers -> verify;
+}
+```
+
+@sec-quantization-kernels explains when FP8 and FP4 reduce bytes without
+unacceptable numerical loss. @sec-powering-ai follows the energy and cooling
+cost when the chosen escape route adds packages, links, or conversion.
+
+## How to compare frontier systems
+
+A useful hardware comparison starts with an operating contract, not two peak
+numbers. Record at least:
+
+1. the **model and operation** being measured;
+2. tensor shape, batch size, and sequence length;
+3. precision for inputs, weights, accumulation, communication, and stored
+   state;
+4. software version, compiler flags, kernels, and communication libraries;
+5. device count, placement, physical and logical topology, and competing
+   traffic;
+6. traffic volume and sustained bandwidth at each relevant boundary;
+7. latency and throughput distributions after warm-up, not only a best run;
+8. the power boundary: chip, board, rack, cooling overhead, or facility;
+9. availability, failure behavior, repair assumptions, and recovery time; and
+10. cost scope, currency, utilization, and time horizon.
+
+Measure in three passes. First, microbenchmark each boundary with the same
+message sizes and access patterns the workload uses. Second, profile the
+important kernels and collectives to estimate the terms in
+the lower bound above. Third, run the end-to-end workload and explain
+the gap between the lower bound and observed time. A claimed improvement is
+credible when the named binding term falls, the end-to-end result follows,
+and quality and reliability remain inside the stated acceptance limits.
 
 ::: {.callout-tip}
 ## Constraint arrow
 
-HBM bandwidth growing slower than low-precision matrix throughput sets a
-rising arithmetic-intensity floor. That floor dictates choices two layers
-up: an ever-larger share of inference kernels land in the memory-bound region,
-which is why the serving layer leans on FP8 and FP4 weights and on aggressive
-@gls-kv-cache management, where the cache holds each token's saved attention
-keys and values so later steps reuse them instead of recomputing, rather than
-on more FLOPs (cross-ref
-@sec-memory-scheduling and @sec-quantization-kernels). Adding arithmetic to a
-bandwidth-bound kernel buys nothing.
+When effective compute grows faster than memory and fabric bandwidth, the
+rising arithmetic-intensity floor pushes pressure upward. Packaging determines
+how much memory can sit near compute; topology determines which parallel groups
+share the fast domain; serving determines whether state is reused or moved.
+Those links hand off to @sec-making-silicon, @sec-memory-scheduling, and
+@sec-powering-ai. The arrow is conditional but testable: name the boundary,
+measure its traffic, change one term, and measure again.
 :::
-
-## The rack: the scale-up boundary that moved
-
-@sec-accelerators-networking drew a hard line at the node: tensor parallelism,
-the most communication-hungry axis, had to stay inside the NVLink domain,
-and that domain was the eight or so accelerators in one chassis. That line has
-moved, and watching it move is the clearest way to see the frontier as
-evolution rather than a list of products. The NVLink fabric began as a
-chip-to-chip link inside a board, grew an NVSwitch crossbar so every
-accelerator in a chassis could reach every other at full bandwidth, and has
-now been deliberately stretched across an entire liquid-cooled rack. NVIDIA's
-GB200 and GB300 NVL72 wire seventy-two GPUs into a single NVLink-coherent
-domain spanning the rack, and the Rubin NVL72 keeps the form factor while
-roughly doubling the fabric bandwidth again. The rule from @sec-accelerators-networking still
-holds, but its boundary is now the rack rather than the chassis: tensor
-parallelism stays inside the NVLink domain, and the domain got an order of
-magnitude larger.
-
-```{dot}
-//| label: fig-compute-frontier-domain
-//| fig-cap: "The scale-up domain that @sec-accelerators-networking pinned to a node has expanded to a rack. The most bandwidth-hungry parallelism axis can now span 72 accelerators inside one coherent fabric, where before it spanned roughly 8; beyond the domain edge, only sparse communication can afford the slower fabric."
-digraph scaleup {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280"];
-
-  old [label="2018 scale-up domain\n~8-16 GPUs, NVSwitch chassis\nTP fits here"];
-  new [label="2026 scale-up domain\n72 GPUs, one rack (NVL72)\nTP + EP fit here", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  out [label="scale-out\nDP / PP across racks\nInfiniBand / Ethernet"];
-
-  old -> new [label="NVLink domain\nblown open to rack scale"];
-  new -> out [label="cheaper bytes\nsparse communication only"];
-}
-```
-
-Why expand the domain at all? Because the memory wall and the parallelism
-math interact. A larger coherent domain lets a model's tensor-parallel and
-expert-parallel groups span more silicon at full fabric bandwidth, so the
-per-device memory pressure of a trillion-parameter model is spread without
-spilling the most bandwidth-demanding collective onto the slow inter-rack
-network. The rack became the unit of frontier compute because that is the
-largest domain where the fabric can still hide a collective.
-
-The expansion is not free, and copper is running out of reach. Past a rack,
-the per-interface power of pluggable optical transceivers, on the order of
-tens of watts each, becomes a budget the rack cannot spend. Co-packaged
-optics move the fiber onto the switch package and cut the per-interface power
-roughly from 30 W to 9 W, which is the case NVIDIA makes for Quantum-X and
-Spectrum-X co-packaged switches shipping through 2026 [@nvidia2025cpo].
-Beyond a fixed topology, optical circuit switching lets the fabric itself be
-reconfigured per training phase; recent work on parallelism-driven optical
-rails reports large network-power and cost reductions at a few percent
-training overhead [@ding2026opus]. The through-line is that the fabric's
-energy budget, not only its bandwidth, now bounds how large a coherent domain
-can be built and cooled, which is the thread @sec-powering-ai picks up.
-
-One more move complicates the old picture. NVIDIA has begun opening the
-NVLink domain to third-party silicon, so a rack can mix a custom accelerator
-or CPU into an otherwise NVIDIA fabric. The scale-up domain is therefore no
-longer strictly the property of one vendor's chips, which matters for the
-debate over whether the future fabric is proprietary or open.
-
-## The accelerator field: who is betting on bandwidth
-
-For most of the deep-learning era the merchant GPU was the only serious
-frontier accelerator, and its software ecosystem was the moat. The bandwidth
-wall has opened room for a wider accelerator field, and reading the entrants by
-what they optimize is more instructive than ranking them by peak FLOPs.
-
-The custom-@gls-asic bet is vertical integration: co-design the chip with the
-network and skip the merchant margin. Google's Ironwood scales to a
-9,216-chip superpod wired as a torus with optical circuit switches rather
-than a switched fat-tree, and targets the inference-dominated workload mix
-directly [@google2025ironwood]. Amazon's Trainium makes the same wager for
-its own fleet. The advantage is co-design: the chip, the interconnect
-topology, and the compiler are tuned together for one company's models.
-
-The merchant counter is AMD's memory-density play. Its rack-scale Helios
-system fills seventy-two accelerators, each carrying about 432 GB of HBM4,
-into a domain that totals on the order of 31 TB of HBM at roughly 1.4 PB/s of
-aggregate bandwidth, which exceeds the comparable NVIDIA rack's 21 TB or so
-of memory capacity while trailing it on aggregate bandwidth and on peak FP4
-throughput. That is the
-chapter's thesis stated as a product decision: if the wall is bytes, build the
-rack with more bytes and concede some arithmetic. Under export controls,
-Huawei's CloudMatrix 384 makes the same move with watts instead of process
-node: it knits 384 domestic NPUs across sixteen racks into one
-optically-meshed all-to-all scale-up domain that reaches frontier aggregate
-compute and memory by brute force, at several times the power of the Western
-rack it answers. The announced follow-on, the Atlas 950 SuperPoD, scales the
-same watts-for-nodes bet by an order of magnitude, 8,192 Ascend chips in one
-optically interconnected scale-up domain with self-developed memory stacks,
-slated for late 2026 [@huawei2025atlas950], which makes CloudMatrix a
-trajectory rather than a one-off. The pair is a reminder that the
-scale-up-domain idea is general,
-that the memory wall can be paid down with energy when the best silicon is
-unavailable, and that the compute frontier has a second front defined by who
-is allowed to buy what, which @sec-making-silicon takes up.
-
-At the contrarian edge sits wafer-scale. Cerebras keeps an entire model's
-weights in on-die SRAM across a single wafer of 900,000 cores, with no HBM to
-stream from, and reports multiples of GPU per-user token rate on
-latency-bound decode [@cerebras2024wse3]. It is the purest bet against the
-memory wall: if you never leave the die, there is no HBM bandwidth to be
-bound by. Its ceiling is capacity, since on-wafer SRAM cannot hold a
-trillion-parameter model, so it wins latency-bound serving rather than the
-largest training runs. In-memory and analog accelerators push the same idea
-further and sit further from production.
-
-```{dot}
-//| label: fig-compute-frontier-accelerator-field
-//| fig-cap: "The accelerator field organized by what each entrant optimizes against the bandwidth wall, not by peak FLOPs. The merchant GPU and custom ASIC fight over the same workload from opposite integration strategies; AMD and Huawei answer the wall with bytes and watts; wafer-scale answers it by never leaving the die."
-digraph accelerator_field {
-  rankdir=TB;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
-
-  wall [label="the memory wall\n(bytes scarcer than FLOPs)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  gpu  [label="merchant GPU (NVIDIA)\nsoftware moat, flexibility"];
-  asic [label="custom ASIC (TPU, Trainium)\nchip + network co-design"];
-  mem  [label="AMD Helios\nmore HBM per rack"];
-  hw   [label="Huawei CloudMatrix\nscale by watts under controls"];
-  saf  [label="wafer-scale (Cerebras)\nweights in on-die SRAM"];
-
-  wall -> gpu [label="hold the moat"];
-  wall -> asic [label="integrate"];
-  wall -> mem [label="add bytes"];
-  wall -> hw [label="add watts"];
-  wall -> saf [label="leave HBM behind"];
-}
-```
-
-## Escape routes, in order of maturity
-
-The chapter's payoff is to sort the ways out of the bandwidth wall by how real
-they are today, because the field's discourse mixes shipping hardware with
-research slides, and a reader deserves to know which is which.
-
-Shipping now is rack-scale copper: the NVL72-class domain is in production and
-is the reason tensor parallelism can span seventy-two devices. Co-packaged
-optics follows through 2026, the next step once copper runs out of
-reach past the rack [@nvidia2025cpo].
-
-A numeric escape route is already in training pipelines. Four-bit pretraining
-formats such as NVFP4 relax the arithmetic-intensity floor by halving operand
-bytes while preserving accuracy: a multi-billion-parameter model trained over
-many trillions of tokens in NVFP4 has matched an FP8 baseline, and the
-four-bit matrix multiply runs at a multiple of the FP8 rate on recent
-hardware. This is the cleanest way to make a memory-bound kernel less
-memory-bound without new silicon, because it attacks the bytes directly; the
-format mechanics belong to @sec-quantization-kernels, but the reason the
-frontier cares is bandwidth, not storage.
-
-A structural route is to split the workload across chips specialized for each
-phase. Prefill, the processing of a long prompt, is compute-bound and
-tolerates cheaper high-capacity memory; decode, the token-by-token generation,
-is bandwidth-bound and wants scarce HBM. A prefill-optimized accelerator built
-around abundant GDDR memory can therefore pair with HBM parts that handle
-decode, putting expensive bandwidth only where the workload is actually bound
-by it. NVIDIA announced exactly such a prefill-specialized part in 2025, then
-pulled it from the roadmap at its March 2026 conference, with reports that the
-idea may return in a later generation [@tomshardware2026cpx]; a part withdrawn
-within six months of its announcement is itself a frontier-uncertainty signal
-worth recording rather than smoothing over, because it shows the field still
-disagreeing about whether the split pays once the cost of moving the
-key-value cache between the two chips is counted, a systems question
-@sec-machine-breaks returns to.
-
-Further out sit reconfigurable optical fabrics [@ding2026opus] and wafer-scale
-integration [@cerebras2024wse3], real research with real demonstrations but
-not yet the default.
-
-```{dot}
-//| label: fig-compute-frontier-escapes
-//| fig-cap: "Escape routes from the bandwidth wall, ordered by maturity. The left column is in production; the right column is demonstrated but not default. The middle two attack the wall through numerics and through phase specialization rather than through new fabric."
-digraph escapes {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280"];
-
-  subgraph cluster_ship { label="shipping"; color="#6b7280"; fontname="Helvetica"; fontsize=10;
-    rack [label="rack-scale copper\n(NVL72 domain)"];
-    cpo  [label="co-packaged optics\n(Quantum-X / Spectrum-X)"];
-    fp4  [label="FP4 pretraining\n(NVFP4: fewer operand bytes)"];
-  }
-  subgraph cluster_emerge { label="emerging"; color="#6b7280"; fontname="Helvetica"; fontsize=10;
-    disagg [label="prefill/decode\nhardware split"];
-    ocs    [label="optical circuit\nswitching"];
-    wafer  [label="wafer-scale /\nin-memory compute"];
-  }
-  rack -> disagg [style=invis];
-  cpo -> ocs [style=invis];
-  fp4 -> wafer [style=invis];
-}
-```
 
 ::: {.callout-important}
 ## What's contested
 
-Four debates are genuinely live, and the camps disagree on which non-FLOPs
-wall binds first rather than on whether FLOPs stopped being the limit.
-
-- **One coherent fabric, an open standard, or cheap Ethernet?** NVIDIA bets
-  ever-larger proprietary NVLink domains are worth their cost. The UALink
-  consortium wants an open switched standard to commoditize the scale-up tier.
-  A pragmatist camp reuses Ethernet switch silicon for scale-up. Through 2026
-  the pragmatists shipped first, because rack vendors fell back to
-  Ethernet-substrate fabrics when native open-standard switch silicon was not
-  yet available. NVIDIA has meanwhile partially opened its own fabric to
-  third-party silicon, so the proprietary-versus-open line is itself blurring.
-- **Is co-packaged optics mandatory or a reliability risk?** Proponents say
-  copper is out of runway past a rack and optics is the only way to scale the
-  domain. Skeptics point to unproven laser reliability and repairability at
-  fleet scale and defend copper inside the rack. The dividing line is
-  distance: optics for inter-rack, copper still defended intra-rack.
-- **Do custom ASICs displace the merchant GPU?** The vertical-integration camp
-  says co-designed silicon wins perf-per-watt on the inference-heavy mix. The
-  incumbent camp says the software ecosystem and flexibility keep the GPU the
-  default, and ASICs win only captive first-party workloads.
-- **Is wafer-scale the answer or a niche?** It clearly wins latency-bound
-  single-user decode and clearly cannot hold the largest models in SRAM. The
-  unresolved question is whether model sizes plateau enough for on-die
-  capacity to catch up.
+- **How large should the scale-up domain be?** A larger domain can keep more
+  collectives on a fast fabric, but it increases switch, cable, power, cooling,
+  and failure-domain costs. Workload traffic, not GPU count alone, settles the
+  trade.
+- **Must scale-up use a proprietary fabric?** Proprietary systems are deployed;
+  UALink publishes an open contract; Ethernet-derived designs reuse a broad
+  component ecosystem. Their meaningful comparison requires implementations
+  at the same message sizes, topology, software maturity, and availability.
+- **When should optics enter the package?** Co-packaging can improve electrical
+  reach and energy, while pluggable optics preserves replacement boundaries.
+  Fleet reliability and serviceability evidence remains as important as link
+  rate.
+- **Will specialized or wafer-scale designs displace general accelerators?**
+  Specialization can increase locality for a target workload. General systems
+  retain value when models, shapes, numerics, or software change. The answer is
+  workload- and deployment-specific.
 :::
 
-## The scarce resources above FLOPs
-
-At this layer, capability, efficiency, and trust all point above raw FLOPs.
-Capability is no longer set by how many FLOPs a chip can retire but by how many
-bytes it can move and how much coherent silicon one fabric can span, which is
-why the rack replaced the chip as the unit of frontier compute. Efficiency moved
-into the numerics and the network: a
-four-bit operand and a nine-watt optical interface buy more frontier than a
-faster matrix unit, because both attack bytes rather than arithmetic. Trust,
-at the silicon layer, is supply and concentration: a frontier run now depends
-on whether a handful of buyers can secure interposer area and HBM stacks at
-all, and on which side of an export-control line the buyer sits, which is the
-allocation gate @sec-making-silicon takes up next. The spec-sheet FLOPs was
-never the scarce resource. The scarce resources are bytes, package area,
-fabric reach, and the megawatts behind them, and the rest of this part follows
-that scarcity up the stack.
+The compute frontier is therefore not a race between one FLOPs number and one
+bandwidth number. It is a set of boundaries whose traffic changes with the
+program. The durable skill is to locate the active boundary, distinguish
+sustainable rates from peaks, and follow the cost of moving that boundary into
+the next layer.
 
 ## Further reading
 
