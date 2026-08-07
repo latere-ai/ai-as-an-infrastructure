@@ -86,7 +86,7 @@ test("operating contracts are tracked in top-level book surfaces", () => {
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Operating contracts and infrastructure operations**");
   expect(src("en/index.qmd")).toContain("SLOs, cost governance, incidents");
   expect(src("zh/index.qmd")).toContain("SLO、成本治理、事故");
-  expect(src("en/summary.qmd")).toContain("operating contracts turn SLOs");
+  expect(src("en/summary.qmd")).toContain("versioned operating record");
   expect(src("zh/summary.qmd")).toContain("运营契约把 SLO");
 });
 
@@ -893,7 +893,7 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("zh/orientation/01-whole-stack.qmd")).toContain("环节二：基座模型形成");
   expect(src("en/foundations/summary.qmd")).toContain("Base-model formation is infrastructure, not background");
   expect(src("zh/foundations/summary.qmd")).toContain("基座模型形成不是背景知识");
-  expect(flat("en/summary.qmd")).toContain("We began with base-model formation");
+  expect(flat("en/summary.qmd")).toContain("The training loop changes a model artifact");
   expect(src("zh/summary.qmd")).toContain("我们从基座模型的形成开始");
 });
 

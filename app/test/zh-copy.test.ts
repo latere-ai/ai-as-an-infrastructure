@@ -1224,11 +1224,11 @@ test("polished chapter openings preserve key source theses", () => {
     [
       "en/summary.qmd",
       [
-        "artificial intelligence is now best understood as infrastructure",
-        "The book followed one capability through that stack",
-        "capability alone does not make infrastructure",
-        "Infrastructure is not merely machinery",
-        "what we are willing to remain responsible for",
+        "AI becomes infrastructure when products, workflows, or institutions depend on it",
+        "These loops carry different state and require different controls",
+        "Capability, efficiency, and trust therefore form a complete-system vector",
+        "A production event is an observation, not automatically a label",
+        "Responsibility does not end when the system acts",
       ],
     ],
     [
