@@ -1183,7 +1183,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/10-reliability-nondeterministic.qmd",
-      ["For an output that is never twice the same, a @gls-sli, the metric that decides whether served events count as valid", "measure a distribution", "reliable at every single step", "chase determinism", "embrace sampling and verify"],
+      ["A reliable model service is not one that repeats the same response bytes", "user-visible outcomes", "Sampled labels are evidence", "Retry by failure class, not by hope", "This is not a choice between determinism and verification", "reliability release record"],
     ],
     [
       "zh/practice/10-reliability-nondeterministic.qmd",

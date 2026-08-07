@@ -1,311 +1,481 @@
 # Reliability for Nondeterministic Systems {#sec-reliability}
 
-Classical site reliability engineering rests on an assumption that a language
-model breaks: that the same request, served by a healthy system, returns the
-same response. When the response is sampled from a distribution, the apparatus
-built on that assumption, the exact-match health check, the deterministic
-retry, the binary notion of a correct reply, stops describing the system. For an
-output that is never twice the same, a @gls-sli, the metric that decides whether
-served events count as valid, has to measure a distribution, not a byte string.
-The same arithmetic explains why an agent that
-is reliable at every single step can be unreliable over a long task, and it
-leaves two sound responses: chase determinism, or embrace sampling and verify
-what comes back. Reliability does not disappear when the system turns
-stochastic; it moves from the response to the distribution, and the whole
-operational toolkit has to follow it there.
+A reliable model service is not one that repeats the same response bytes. It is
+one that keeps a stated contract over user-visible outcomes. The contract may
+require a timely response, a correct answer, a permitted action, fresh evidence,
+or a side effect that occurs no more than intended. Some of those properties
+are deterministic invariants; others require statistical evidence. Production
+reliability needs both.
 
-![Schematic of reliability compounding in nondeterministic systems. A per-step success rate that looks high can still collapse over long dependent workflows. Idealized curves, not measured data.](/figures/reliability-nondeterministic-1.svg){#fig-reliability-nondeterministic-1}
+Nondeterminism changes how semantic outcomes are observed, but it does not
+replace the foundations of site reliability engineering. Conventional services
+already have variable latency, partial failures, stale data, and incorrect
+results. A `200` response has never proved that the result was useful. What
+model-backed systems add is a large outcome space in which byte equality is a
+particularly poor proxy for quality. The operational response is therefore not
+to invent a separate meaning of reliability. It is to write a reliability
+contract whose event, predicate, evidence, and recovery path match the promise
+made to users.
 
-## The health check that no longer works
+This chapter builds that contract. It separates service objectives from their
+measurement implementations, shows how to estimate semantic quality from a
+probability sample, states when the familiar $p^n$ task model is valid, and
+qualifies the retries, fallbacks, degradation, and replay controls placed around
+generation.
 
-A conventional service is monitored by asking it a question with a known
-answer and checking that the answer comes back. The probe is deterministic
-because the service is: a load balancer pings `/health`, expects `200`, and
-pulls the instance from rotation when it sees anything else. The reliability
-literature is built on top of this, from the error budget that converts an
-availability target into a quantity of permissible failure
-[@beyer2016sre]. None of it assumes the service might return a different,
-equally valid answer each time.
+## Start from the outcome contract
 
-A model-backed service violates the assumption at the core. Ask it the same
-question twice and the tokens differ, because generation samples from a
-distribution over next tokens (@sec-serving-problem). Two answers can both be
-correct, or both wrong, or one of each, and no exact-match probe can tell
-which case it is in. The failure is not that the service is down. The failure
-is that "up" no longer implies "correct," and the gap between them is exactly
-where a model service fails in production: the endpoint returns `200`, the
-latency is nominal, and the content is wrong.
+The SRE event model is a useful starting point. An @gls-sli, a quantitative
+indicator of one service property, is often implemented as the ratio of good
+events to eligible events. An @gls-slo sets a target for that indicator over a
+window. Crucially, SRE distinguishes an **SLI specification**, which states what
+should be measured, from an **SLI implementation**, which states how available
+telemetry estimates it [@thurgood2018implementing]. This distinction matters
+even more when production outcomes need human or model judgment.
 
-So reliability for these systems begins by separating three questions that a
-deterministic service let you conflate. Is the service reachable
-(availability)? Did it answer in time (latency)? And was the answer good
-(quality)? The first two carry over unchanged. The third is new, and it is the
-one that decides whether the product works.
+Do not compress the service into one vague "quality" number. Write separate
+dimensions so that a healthy aggregate cannot hide a broken safety or effect
+boundary.
 
-## A service level indicator for an answer that is never the same
+| Dimension | Eligible event | Good-event predicate | Typical evidence |
+|---|---|---|---|
+| Availability | accepted request | a qualified response is returned | gateway and application logs |
+| Latency | accepted request | the qualified outcome arrives before its deadline | end-to-end timing |
+| Semantic quality | request in a defined task and traffic slice | the outcome passes a versioned rubric | probability sample with judged labels |
+| Policy | request or proposed action | applicable policy and authorization checks pass | deterministic policy decision and audit log |
+| Freshness | answer that relies on changing facts | evidence age is within the declared bound | source and retrieval timestamps |
+| Effect correctness | requested external action | the intended effect occurs within its allowed cardinality | tool receipt and reconciliation |
+| Measurement coverage | eligible event | required evidence arrives before the label deadline | telemetry and labeling pipeline |
 
-The fix is to stop measuring the response and start measuring the
-distribution. An @gls-sli is the proportion of valid
-events in a window [@beyer2016sre]. For availability the event is a request
-and "valid" means answered; that definition needs no change. For quality the
-event is still a request, but "valid" has to be decided by something that can
-read a free-form answer and judge it, which is the evaluation machinery of
-@sec-evaluating-agents pointed at live traffic rather than a fixed test set.
+The contract must name the **eligible event**, exclusion rules, population and
+slice, observation window, system release, measurement implementation,
+missing-data rule, objective, and recovery action. "Good answers exceed 95%" is
+not yet a contract: it does not say whose answers, under which release, how they
+are judged, or what happens when the judge is unavailable.
 
-A quality SLI is therefore a sampled, judged measurement. Take a fraction of
-production responses, score each with an automated judge or a rubric check,
-and report the pass rate. The number is noisy, because the judge is itself a
-model and the traffic drifts, so a quality @gls-slo is a band rather than a line: a
-target of "at least 92 percent of sampled answers pass the rubric over a
-rolling day," with an alert when the lower confidence bound crosses the floor,
-not when a single sample fails. The interval arithmetic and the sample-size
-planning behind that bound come from @sec-statistical-reliability, applied to
-live traffic instead of a held-out set. The error budget is then denominated in
-failed
-*samples* over the window, and it is spent by a bad deployment, a drifting
-prompt, or an upstream model change just as a latency budget is spent by a slow
-dependency.
+```{dot}
+//| label: fig-reliability-contract
+//| fig-cap: "A reliability claim is traceable from a user promise to an event and predicate, then to evidence and an operational response. Deterministic checks and sampled judgments meet at the decision rather than replacing one another."
+digraph contract {
+  bgcolor="transparent";
+  size="3.0,8.0";
+  rankdir=TB;
+  nodesep=0.20; ranksep=0.25;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", width=1.55, height=0.34, margin="0.06,0.04"];
+  edge [color="#6b7280", arrowsize=0.65];
+  promise [label="user promise"];
+  event [label="event + predicate"];
+  evidence [label="evidence\nchecks + samples"];
+  decision [label="SLO decision"];
+  action [label="operate + recover"];
+  promise -> event -> evidence -> decision -> action;
+}
+```
 
-::: {.callout-tip}
-## Constraint arrow
+This structure also prevents a common category error. Reachability, latency,
+semantic quality, policy compliance, freshness, and effect correctness are
+related, but not interchangeable. A composite acceptance predicate can be
+useful for a specific product promise, yet each component still needs its own
+SLI and slice view. Otherwise an abundant supply of fast, easy requests can
+mask rare but severe policy failures.
 
-The achievable task reliability is set one layer down, by the agent's step
-count. If each step of the harness in @sec-agent-architectures succeeds
-independently with probability $p$, a task that needs $n$ steps in sequence
-succeeds with probability $p^n$, which falls fast: at $p = 0.99$, a
-fifty-step task is already near $0.61$. A reliability target on the task
-therefore reaches back down into the architecture and caps $n$, or forces
-checkpoints that let a failed step be retried without restarting the task. The
-SLO does not just measure the system; it dictates how many steps the system is
-allowed to take. An operator who promises 95 percent task success and lets the
-agent run two hundred unguarded steps has promised something the arithmetic
-forbids (cross-ref @sec-the-harness, @sec-capability-horizon).
-:::
+## Measure semantic outcomes without mistaking the sample for traffic
 
-## Why a reliable step is not a reliable task
+Suppose each eligible production event $i$ has a semantic outcome label
+$Y_i \in \{0,1\}$, where $1$ means that the event passes a frozen rubric. If a
+probability sample $S$ includes event $i$ with known inclusion probability
+$\pi_i > 0$, a useful weighted ratio estimator is
 
-The constraint arrow above is the single most important fact in operating
-agents, and it is worth seeing as a curve rather than a sentence. The gap between
-"my model is right 99 percent of the time" and "my agent finishes the job"
-is the difference between $p$ and $p^n$.
+$$
+\widehat{p}
+=
+\frac{\sum_{i \in S} Y_i / \pi_i}
+     {\sum_{i \in S} 1 / \pi_i}.
+$$
+
+This is a Hájek-style weighted ratio: each observed label represents the
+eligible events with the inverse inclusion weight $1/\pi_i$
+[@horvitz1952sampling]. It reduces to the ordinary sample pass rate when all
+inclusion probabilities are equal. The ratio is not magically unbiased in
+every finite design, but it is a
+far better description of the target population than an unweighted mixture of
+oversampled failures and routine traffic.
+
+The sampling policy determines what can be claimed:
+
+- A **representative probability sample** supports an estimate for its named
+  population because every eligible event has a known, nonzero chance of
+  inclusion.
+- A **diagnostic sample** deliberately enriches incidents, rare slices, or low
+  confidence outputs. It is excellent for finding defects, but its raw pass rate
+  is not the production pass rate. Combine it with the representative stream or
+  use the recorded inclusion probability in the estimator.
+- A convenience sample of events that happened to receive labels supports
+  neither claim unless its selection mechanism is justified.
+
+Sampling alone is insufficient. The measurement record must bind the traffic
+definition, sampling policy, $\pi_i$, rubric version, judge version, system
+release, and label timestamp. A judge needs a recurring human audit that
+estimates false positive and false negative behavior on important slices.
+Recalibrate or replace it when evaluator drift appears; never silently compare
+two windows scored by materially different judges. The evaluation practice in
+@sec-evaluating-agents and statistical intervals in
+@sec-statistical-reliability provide the offline machinery. Production adds
+selection, delay, and missingness.
+
+Treat a missing label as **unknown, not a pass**. Report measurement coverage
+beside quality. Here $C$ measures the fraction of due sampled events whose
+labels arrived by the deadline:
+
+$$
+C = \frac{\text{eligible sampled events labeled by the deadline}}
+         {\text{eligible sampled events due by the deadline}}.
+$$
+
+The numerator counts labels that arrived on time; the denominator counts every
+sampled event whose label was due.
+
+If user feedback or downstream effects arrive late, define a label delay and
+cohort events by the time they became eligible, not merely by the time their
+label appeared. Outcomes still unresolved at analysis time are censored; show
+their count and use a method appropriate to delayed outcomes instead of
+quietly dropping them. When coverage falls below its floor, the quality state
+is unknown. A broken judge or logging path is a telemetry failure, not evidence
+that the service improved.
+
+### Turn the estimate into an operating policy
+
+An SLO is a target, not a confidence interval. Its document should name the
+indicator, objective, population, slices, window, and error-budget policy. The
+uncertainty method then determines whether the available evidence is strong
+enough to make a decision. For example, a team might set a 30-day semantic
+success objective and page only when an uncertainty-aware estimate and minimum
+sample requirement imply rapid budget consumption.
+
+Sampled labels are evidence about eligible served events; they are not the
+currency of the error budget. Counting one deliberately oversampled incident
+as one user event would distort both the numerator and the budget. Use the
+weighted population estimate, retain the design information, and expose
+effective sample size and coverage beside it.
+
+For high-volume services, multiwindow alerts that compare more than one burn
+rate can combine a fast signal for severe consumption with a slower signal
+that resists noise
+[@ludwig2018alerting]. Low-traffic services need longer windows, synthetic or
+batch checks, and explicit minimum-evidence states; a ratio based on two labels
+should not page as though it were precise. Hard safety, authorization, and
+effect-integrity boundaries need direct alerts regardless of the aggregate
+error budget. Finally, an SLO decision is not automatically a release gate.
+The deployment policy in @sec-deployment-lifecycle may require stronger
+evidence, non-inferiority to a control, and complete guardrails before exposure
+widens.
+
+## Lower-layer constraint: model task reliability
+
+A multi-step agent succeeds only if the required sequence of conditions holds.
+For step-success events $S_1,\ldots,S_n$, the probability chain rule gives
+
+$$
+P(S_1,\ldots,S_n)
+=
+\prod_{k=1}^{n}
+P(S_k \mid S_1,\ldots,S_{k-1}).
+$$
+
+Each factor is the probability that step $k$ succeeds given the successful
+history before it. The familiar $p^n$ curve is a special case. Here $p$ denotes
+one identical per-step success probability. The shortcut assumes a fixed number
+of steps, independent outcomes, and a workflow in which every failed step is
+fatal and there is no recovery. Real agents often
+violate all four assumptions: later steps depend on earlier context, task length
+varies, difficult tasks have correlated failures, and validators can trigger a
+repair. Use the chain rule or measured end-to-end completion rate for a real
+claim; use $p^n$ to understand the idealized compounding mechanism.
 
 ```{=html}
 <figure id="fig-reliability-nondeterministic-curve">
-<div class="viz" data-viz="curve" data-family="pow-base" data-xlabel="steps n" data-ylabel="task success p^n" data-plabel="per-step reliability p" data-pmin="0.9" data-pmax="0.999" data-p="0.99"></div>
-<figcaption>Task success as independent steps multiply: with each step reliable at p, an n-step task succeeds with probability pⁿ. Drag the per-step reliability to watch how fast the task success falls and where it crosses below one half, a coin flip. At p = 0.99 a fifty-step task is already near 0.61.</figcaption>
+<div class="viz" data-viz="curve" data-family="pow-base" data-xlabel="required steps n" data-ylabel="task success p^n" data-plabel="iid step success p" data-pmin="0.9" data-pmax="0.999" data-p="0.99"></div>
+<figcaption>The idealized iid, fixed-length, fatal-failure model. At p = 0.99, fifty required steps succeed with probability about 0.605. The curve is explanatory, not an estimate for an unmeasured agent.</figcaption>
 </figure>
 ```
 
 :::: {.runnable}
 ```python
-import numpy as np
-import matplotlib.pyplot as plt
+import math
 
-steps = np.arange(1, 201)
-for p in (0.999, 0.99, 0.98, 0.95):
-    plt.plot(steps, p**steps, label=f"per-step p={p}")
-plt.axhline(0.5, ls="--", color="gray")
-plt.xlabel("steps in the task (n)")
-plt.ylabel("task success  p^n")
-plt.title("A reliable step is not a reliable task")
-plt.legend(); plt.ylim(0, 1); plt.tight_layout(); plt.show()
+def iid_task_success(step_success: float, required_steps: int) -> float:
+    assert 0.0 <= step_success <= 1.0
+    assert required_steps >= 0
+    return step_success ** required_steps
 
-# How many steps until a task is more likely to fail than succeed?
-for p in (0.999, 0.99, 0.98, 0.95):
-    n_half = int(np.ceil(np.log(0.5) / np.log(p)))
-    print(f"p={p}: task is coin-flip reliable at n={n_half} steps")
+def attempts_success(single_attempt: float, attempts: int) -> float:
+    """Independent attempts at one recoverable operation."""
+    assert 0.0 <= single_attempt <= 1.0
+    assert attempts >= 1
+    return 1.0 - (1.0 - single_attempt) ** attempts
+
+p = 0.99
+for n in (1, 10, 50, 100):
+    print(f"p={p:.2f}, n={n:3d}: {iid_task_success(p, n):.4f}")
+
+assert math.isclose(iid_task_success(0.99, 50), 0.6050060671,
+                    rel_tol=1e-9)
+assert attempts_success(0.8, 2) == 0.96
 ```
 ::::
 
-Two operational consequences follow. The first is that raising per-step
-reliability has a leveraged payoff on long tasks, which is why a small
-reduction in per-step error can matter more than a large feature. The second
-is that the cheapest way to raise task reliability is often to reduce $n$: fold
-three brittle steps into one robust call, or checkpoint so that the effective
-$n$ between recoverable points stays small. Both are architecture decisions
-forced by an operational target, the constraint arrow drawn in practice.
+Reducing unnecessary steps and improving conditional step success can raise
+task reliability. A checkpoint has a different effect: by itself it does not
+make the next step more likely to succeed. It reduces lost work and restart
+cost. It raises completion probability only when paired with a preserved state,
+a valid retry or repair path, and enough deadline and attempt budget. Measure
+the whole policy, including recovery exhaustion, rather than substituting the
+shortest segment length for $n$.
 
-## Fallbacks: making one bad sample not a failure
+## Retry by failure class, not by hope
 
-If any single response can be wrong, a reliable system needs a second chance
-that is not just the first chance repeated. A fallback chain is the ordered set
-of those second chances, and the order encodes a cost and latency budget.
+A retry is another load-bearing request. It is justified only when the failure
+class, side-effect semantics, and remaining budget make another attempt useful.
+Classify before retrying:
 
-The first link is the retry, and it is the most dangerous, because retrying a
-stochastic failure is sound only when the failure was stochastic. Resampling
-helps when the error was a single bad draw and the underlying request is
-answerable; it does nothing, at added cost and latency, when the request is one
-the model systematically gets wrong, and there it merely hides a defect behind
-a higher bill. A retry should therefore be bounded, and ideally gated by a
-cheap check that the previous answer actually failed, so the budget is spent on
-recoverable errors rather than on hopeless ones.
+| Observed condition | Default treatment | Why |
+|---|---|---|
+| transient transport failure | bounded retry if the deadline permits | another route or instance may succeed |
+| explicit rate limit | honor server guidance, backoff, and jitter | immediate retries amplify overload |
+| semantic failure | repair context, change method, or abstain | blind resampling may repeat a systematic defect |
+| policy failure | do not retry around the policy | a different sample must not bypass a denial |
+| unknown commit on a write | reconcile or use the operation's idempotency contract | timeout does not prove that no effect occurred |
+| invalid request or permanent dependency error | fail or route to a compatible alternative | time does not cure the request |
 
-The later links change the responder rather than repeat it. Fall back from a
-fast small model to a stronger, slower one when the cheap path fails a
-validator, a cheap programmatic check as opposed to an LLM judge, the inverse
-of the routing that sends easy traffic to the cheap model in the first place
-(@sec-economics). When both models fail, the next link
-drops from a generated answer to a cached or templated one, so that a degraded
-but correct response beats a fluent wrong one. The chain is drawn in
-@fig-reliability-fallback.
+Propagate one end-to-end deadline. Assign **one retry owner** for each call path
+so nested SDK, gateway, model, and agent loops do not multiply attempts. Give
+that owner a retry budget, exponential backoff, jitter, and a maximum attempt
+count. Retries consume capacity during the exact period when a dependency may
+be overloaded; limiting them is part of availability, not merely cost control
+[@brooker2019retries].
+
+An idempotency key helps only within its declared contract. The caller and
+service must agree on key scope, retention period, payload identity, concurrent
+duplicate handling, storage durability, and response replay. The record of the
+key and the intended mutation must be committed with suitable atomicity
+[@featonby2021idempotent]. Even then, idempotency is not exactly-once execution:
+effects outside the protected transaction, expired keys, or a downstream
+system that does not carry the identity can still duplicate work. HTTP's
+definition likewise concerns the intended effect of repeated requests; it does
+not promise identical responses or universal automatic retry safety
+[@fielding2022http].
+
+## Make fallback a qualified change of contract
+
+A fallback is not safe merely because it is different. It must satisfy
+**fallback compatibility**: the alternate path accepts the same relevant input,
+preserves authorization and tenant boundaries, produces an outcome the caller
+can interpret, and stays within its latency, freshness, policy, and effect
+limits. A cached answer can be stale. A template can omit required context. An
+abstention can fail to reach a human. Every terminal path can fail, so the
+design goal is a narrower qualified outcome with an explicit failure mode, not
+an imaginary infallible last link.
 
 ```{dot}
 //| label: fig-reliability-fallback
-//| fig-cap: "A fallback chain as an ordered set of second chances. Each link is tried only when the previous one fails its validator, and the order trades rising cost and latency for rising reliability. The terminal link is a deterministic path that cannot itself fail to respond."
-digraph {
+//| fig-cap: "A bounded fallback policy validates each outcome and may narrow the promise. No branch is assumed infallible: delivery and handoff remain observable outcomes."
+digraph fallback {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  req [label="request"];
-  cheap [label="fast model"];
-  v1 [label="passes\nvalidator?", shape=diamond];
-  done [label="return answer"];
-  retry [label="bounded retry / resample"];
-  strong [label="stronger model"];
-  v2 [label="passes\nvalidator?", shape=diamond];
-  det [label="cached or templated\ndeterministic answer"];
-
-  req -> cheap;
-  cheap -> v1;
-  v1 -> done [label="yes"];
-  v1 -> retry [label="no, budget left"];
-  retry -> v1;
-  v1 -> strong [label="no, budget spent"];
-  strong -> v2;
-  v2 -> done [label="yes"];
-  v2 -> det [label="no"];
-  det -> done;
+  nodesep=0.18; ranksep=0.28;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", width=1.55, height=0.36, margin="0.06,0.04"];
+  edge [fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280", arrowsize=0.6];
+  primary [label="primary attempt"];
+  check [label="validate contract\npass: deliver"];
+  alternate [label="compatible fallback\nthen validate"];
+  narrow [label="degrade or abstain\nunder narrower contract"];
+  handoff [label="deliver or hand off\nobserve outcome"];
+  primary -> check;
+  check -> alternate [label="failed"];
+  alternate -> narrow [label="budget exhausted"];
+  narrow -> handoff;
 }
 ```
 
-The terminal link matters most. A fallback chain that ends in another model
-ends in another thing that can fail; a chain that ends in a deterministic path,
-a cached answer, a templated response, an honest "I cannot answer this right
-now," has a floor. The discipline is to always have a last link that cannot
-fail to respond, even when every model in front of it has.
+Graceful degradation deliberately narrows the service promise: fewer tools,
+older but bounded data, a partial answer, or read-only operation. The degraded
+mode must be prequalified, visible to the user and telemetry, and prohibited
+when it would change authority or hide unsafe uncertainty. "Answer from the
+prompt when retrieval is down" is not graceful if the product promises current
+facts. Load shedding can be safer than accepting work that will miss its
+deadline, but test the overload path before it is needed
+[@beyer2016overload].
 
-## Graceful degradation and the reliability of the tools
+Abstention is a product outcome, not an evaluation afterthought. A selective
+system trades accepted-answer risk against coverage [@elyaniv2010selective].
+Its risk--coverage contract should report at least:
 
-Fallbacks swap the responder. Degradation keeps the responder and shrinks the
-job. When an agent is over budget or a dependency is failing, the reliable
-move is to do less rather than to fail: shed the optional tools and answer from
-what is already in context, shrink the retrieved context to the highest-ranked
-chunks (@sec-serving-problem), or return a partial result with its own
-uncertainty marked rather than spending an unbounded amount of compute chasing
-a complete one. A system that can only either fully succeed or fully fail has
-no degraded mode, and a system with no degraded mode fails hard under exactly
-the load where reliability matters most.
+- error or harm rate among accepted answers;
+- coverage, the share of eligible requests answered under the full contract;
+- abstention and handoff rate, latency, and eventual resolution;
+- every measure by consequential traffic slice.
 
-The tools an agent calls are themselves a reliability surface, and they are
-governed by the older, deterministic playbook because they are deterministic
-services. Three of its patterns carry the most weight. A timeout bounds the
-wait on any tool call, so one slow dependency cannot stall the whole task; the
-budget for it comes from the tail of the latency distribution, not the median,
-because at scale the rare slow call is the common user experience
-[@dean2013tail]. The second pattern, idempotency, makes a retried side effect
-safe: a tool call that times out after it has already committed its effect does
-not commit it twice when retried, and an idempotency key on a write is what lets
-the fallback chain above retry a tool at all. Last comes the circuit breaker,
-which stops calling a dependency that is already failing so a struggling service
-is given room to recover instead of being hammered by retries from every stalled
-task [@nygard2018releaseit]. Its three states are drawn in @fig-reliability-breaker.
+Increasing abstention can make accepted answers look better while abandoning
+more users. Report both sides of the trade.
+
+### Redundancy helps only across relevant failure domains
+
+Two outputs are not independent merely because two calls were made. They may
+have a shared provider, shared model, shared prompt, shared retrieval index,
+shared tool, and shared judge. Correlated design faults are a longstanding limit of
+multi-version redundancy [@knight1986independence]. A second sample improves
+reliability only through **conditional diversity**: given the request and known
+state, it has a useful chance of avoiding the first path's failure.
+
+Maintain a failure-domain matrix for each fallback or ensemble member. Record
+model family, provider and region, prompt lineage, retrieval source, tool
+dependencies, validator or judge, credentials, and serving infrastructure.
+Then inject the shared failures. Diversity that exists only in the model name
+does not protect against a poisoned index, expired credential, broken rubric,
+or common regional dependency.
+
+## Bound dependencies and overload
+
+Model servers, tools, retrieval systems, policy engines, and judges are all
+distributed dependencies. Any of them may vary, delay, partially commit, or
+fail. Put each call behind a timeout derived from the end-to-end deadline;
+isolate capacity with a bulkhead; reject excess work with load shedding; and
+use a circuit breaker where failing fast is safer than continuing to add load
+[@nygard2018releaseit].
+
+A production breaker needs more than three state names. Define the measured
+failure window, minimum sample count, qualifying errors, trip threshold, open
+duration, probe concurrency, breaker scope, and recovery criterion. One
+successful probe may prove reachability without proving capacity or semantic
+recovery. Close only after the stated recovery criterion is met, and preserve
+enough probes to detect a dependency that remains unhealthy.
 
 ```{dot}
 //| label: fig-reliability-breaker
-//| fig-cap: "A circuit breaker as a three-state machine in front of a failing dependency. Closed lets calls through and counts failures; once the failure rate crosses a threshold it trips open and fails fast without calling; after a cooldown it goes half-open and lets one trial through, closing on success or re-opening on failure."
+//| fig-cap: "A circuit breaker limits calls to a failing dependency. Its transition policy includes a window and minimum sample, a bounded open interval, limited probes, and an explicit recovery criterion."
 digraph breaker {
-  rankdir=LR;
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
-
-  closed [label="CLOSED\ncalls pass, count failures"];
-  open   [label="OPEN\nfail fast, do not call", color="#3b82f6", fontcolor="#3b82f6"];
-  half   [label="HALF-OPEN\nlet one trial through"];
-
-  closed -> open  [label="failure rate > threshold"];
-  open   -> half  [label="cooldown elapsed"];
-  half   -> closed [label="trial succeeds"];
-  half   -> open  [label="trial fails"];
+  size="3.0,8.0";
+  rankdir=TB;
+  nodesep=0.18; ranksep=0.25;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", width=1.55, height=0.34, margin="0.05,0.03"];
+  edge [fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280", arrowsize=0.6];
+  closed [label="CLOSED\nmeasure window"];
+  open [label="OPEN\nfail fast", color="#3b82f6", fontcolor="#3b82f6"];
+  probe [label="PROBE\nlimited calls"];
+  closed -> open [label="min N + threshold"];
+  open -> probe [label="interval ends"];
+  probe -> closed [label="recovery met"];
+  probe -> open [label="not recovered"];
 }
 ```
 
-Hedging is the pattern that ties tool reliability back to the stochastic core.
-When a call's tail latency is the problem, issue a second copy of the request
-after a short delay and take whichever returns first [@dean2013tail]. It spends
-a little extra compute to cut the tail, and it composes with sampling: two
-samples of the same prompt, taken in parallel, give both a latency hedge and a
-second draw to validate against, at the cost of paying for the loser.
+Keep latency hedging separate from quality redundancy. A **latency hedge** sends
+an equivalent read-only or idempotent request after a delay and accepts the
+first qualified completion; it should cancel the loser when possible and carry
+a capacity budget because hedges create load amplification
+[@dean2013tail]. **Quality redundancy** obtains multiple outcomes and applies a
+validator, comparison, or aggregation rule. The fastest response is not
+necessarily the best response, so "first wins" is not a semantic-quality
+policy. Never hedge an unprotected side effect.
 
-## Trade-offs: determinism or verified sampling
+## Engineer reproducibility without confusing it with reliability
 
-Underneath every technique above sits one unresolved choice, and an operator
-has to take a side. One path chases determinism: set temperature to zero (the sampling
-knob, where 0 gives greedy, deterministic decoding and higher values inject
-more randomness), pin a seed, and try to recover the deterministic service the
-rest of the playbook assumes. It buys reproducibility, which makes debugging and regression testing
-tractable, but it does not buy correctness, because the single greedy decode
-can be confidently wrong and now fails the same way every time. Even at
-temperature zero, determinism has to be engineered rather than assumed. The
-dominant source of run-to-run variance is not parallel floating-point
-arithmetic by itself but kernels whose numerics depend on batch size: the same
-prompt lands in a different dynamic batch shape as server load shifts, the
-reduction splits its work differently, and the slightly different sum can flip
-the chosen token [@he2025nondeterminism]. Batch-invariant kernels close that
-gap, and serving engines now ship them as an option (vLLM behind
-`VLLM_BATCH_INVARIANT=1`, SGLang's deterministic mode), so bit-identical
-decoding is a purchasable feature, at a throughput cost that early kernels put
-near 2x and tuned integrations bring closer to 1.3x
-[@vllm2026batchinvariance; @sglang2025deterministic]. The other path embraces
-sampling and leans on verification:
-accept that the response varies, and put a validator, a judge, or a vote across
-samples between the model and the user, so that reliability comes from checking
-the output rather than from fixing the input. It buys robustness through
-redundancy and a path to higher quality than any single greedy decode, at the
-cost of more compute per answer and a verifier that is itself fallible. Either
-way reliability is bought with compute: pay throughput for reproducibility, or
-pay verification for robustness.
+Deterministic replay is valuable for debugging, regression tests, caching, and
+forensics. Treat it as an **exact-replay contract** over the full system: model
+revision and weights, request and prompt, sampling configuration and seed,
+retrieval snapshot, tool responses, policy configuration, serving runtime,
+kernel implementation, hardware, and batch conditions. Pinning temperature and
+a seed while allowing the prompt, index, tools, or provider runtime to move is
+not such a contract.
+
+Even greedy decoding can vary when numerical kernels depend on dynamic batch
+composition [@he2025nondeterminism]. Serving runtimes can offer batch-invariant
+kernels for supported environments [@vllm2026batchinvariance], but the exact
+mechanism and cost are implementation details to benchmark for the pinned
+release. Exact replay does not prove correctness, safety, or availability. It
+only proves that the same recorded conditions reproduce the same computation.
+
+This is not a choice between determinism and verification. Strong systems use
+deterministic invariants at the boundaries: schema, authorization, quotas,
+effect identity, and provenance. They use statistical evidence for semantic outcomes.
+They may also preserve a replayable incident fixture. Each mechanism answers a
+different question. The serving mechanics in @sec-serving-problem determine
+which replay inputs and capacity controls must be recorded.
+
+## Operate quality failures as incidents
+
+A quality incident begins when user-visible outcomes, a consequential slice,
+or the measurement system violates its contract. If measurement coverage
+collapses, mark the semantic state unknown; do not wait for a falsely reassuring
+pass rate. The runbook should:
+
+1. **Confirm and scope.** Check the release fingerprint, traffic assignment,
+   slices, judge version, label delay, and telemetry failure modes.
+2. **Contain harm.** Freeze promotion, disable the implicated tool or route,
+   reduce authority, switch to a qualified fallback, shed work, or rollback the
+   complete release bundle.
+3. **Preserve evidence.** Retain request and release identifiers, policy
+   decisions, retrieval provenance, tool receipts, raw outcomes, judge records,
+   and human overrides subject to privacy limits.
+4. **Repair and validate recovery.** Reproduce the failure, test the proposed
+   correction offline, restore limited exposure, and validate recovery against
+   both semantic and deterministic guardrails before widening traffic.
+5. **Learn.** Add the failure to the corpus, update the failure-domain matrix,
+   and decide whether the SLI, policy, or fallback contract missed it.
+
+Exercise the runbook with scenario tests: judge outage and evaluator drift,
+provider degradation, stale retrieval, a rate-limit storm, a timeout after an
+unknown commit, duplicate effect delivery, expired idempotency state, correlated
+fallback failure, missing labels, and overload while the breaker probes. The
+test should assert the user-visible outcome and recovery action, not merely that
+an internal component changed state.
+
+## The reliability release record
+
+Reliability becomes operational when its evidence travels with the release. The
+output of this chapter is a **reliability release record** containing:
+
+- the release fingerprint and owners;
+- each SLI specification, implementation, eligible population, slices, window,
+  objective, exclusions, and missing-data rule;
+- sampling policy, inclusion probabilities, judge and rubric versions, human
+  audit results, uncertainty method, and measurement coverage;
+- retry owners and budgets, deadline propagation, idempotency contracts,
+  fallback compatibility, degraded modes, and abstention policy;
+- the dependency and failure-domain matrix, breaker configuration, capacity
+  limits, and common-mode analysis;
+- scenario-test results, alert and burn-rate policy, incident runbook,
+  rollback target, and recovery evidence.
+
+That record connects the deployment bundle from @sec-deployment-lifecycle to
+the operating promise. It also makes disagreements inspectable. Teams may
+reasonably choose different rubrics, sampling rates, abstention policies, or
+recovery thresholds. They should not disagree unknowingly because the judge,
+traffic population, or failure assumptions were left implicit.
 
 ::: {.callout-important}
 ## What's contested
 
-- **Do SLOs even apply to open-ended generation?** One camp holds that any
-  task whose success is judged by a rubric can carry a quality SLO like any
-  other; the other holds that for genuinely open-ended work, "success" is too
-  ill-defined to put a number on, and a quality SLO measures the judge more
-  than the system.
-- **Is retrying a stochastic failure principled or a smell?** Resampling is the
-  natural fix when a failure is a bad draw, but if the model is systematically
-  wrong on a request, retries only raise cost while hiding the defect. Whether a
-  retry is sound depends on a distinction the system usually cannot make at
-  runtime.
-- **Determinism or sampling-plus-verification?** Pin the batch-invariant,
-  seeded service and pay its throughput cost, or accept variance and put a
-  verifier in front of it.
-  The first makes failures repeatable; the second makes them survivable. The
-  field has not settled which is the right default, and most production systems
-  end up with an uneasy mix.
+- **Can open-ended quality support an SLO?** Only when the product can state a
+  repeatable outcome predicate and validate its measurement. For exploratory
+  work, a collection of slice metrics and user-harm guardrails may be more
+  honest than one pass rate.
+- **When is resampling a repair?** It can reduce an independent draw error, but
+  it can also conceal a systematic prompt, knowledge, policy, or judge defect.
+  The answer depends on observed conditional failure and the cost of delay.
+- **How much diversity is enough?** Different providers or model families may
+  reduce some common-mode failures while retaining the same data, prompt,
+  retrieval, or evaluator fault. Diversity is a measured property of the
+  failure domain, not a label on an architecture diagram.
 :::
 
-## Reliability around sampling
-
-Capability, efficiency, and trust pull against each other sharply here.
-Capability on a long task is bounded by $p^n$, so the reliability work that
-raises per-step success or cuts the step count is what lets an agent attempt
-longer work at all. Efficiency is the cost of every second chance: retries,
-hedged duplicates, stronger-model fallbacks, and sampled judging all spend
-compute to buy reliability, and the fallback order is precisely the dial that
-trades dollars and latency for a higher floor. Trust comes down to the quality SLI itself,
-the admission that "the endpoint is up" was never the promise that mattered,
-and the move that makes a stochastic system operable is to measure, budget, and
-alert on whether the answers are good rather than only on whether they arrive.
-The deepest limit, the one robotics meets in @sec-beyond-text and agents meet
-here, is that a system whose unit of work is a sample can be made reliable only
-by building reliability around the sample, never by pretending the sample is
-deterministic.
+Reliability for a nondeterministic system is therefore neither byte equality
+nor faith in a large sample. It is a traceable contract: define the outcome,
+observe the right population, quantify uncertainty and missingness, constrain
+recovery, and preserve deterministic boundaries around effects. Variability is
+then something the system measures and manages, not an excuse for an
+unfalsifiable promise.
 
 ## Further reading
 

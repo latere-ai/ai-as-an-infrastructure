@@ -855,7 +855,7 @@ test("audited leftover first uses define the role of the term in place", () => {
     ["zh/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc，也就是不崩溃却悄悄写出错误数字的静默数据损坏"],
     ["en/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped substitute for a provider key"],
     ["zh/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key，也就是短时效、限范围的模型密钥替身"],
-    ["en/practice/10-reliability-nondeterministic.qmd", "@gls-sli, the metric that decides whether served events count as valid"],
+    ["en/practice/10-reliability-nondeterministic.qmd", "@gls-sli, a quantitative indicator of one service property"],
     ["zh/practice/10-reliability-nondeterministic.qmd", "@gls-sli，也就是判断服务事件是否有效的指标"],
   ];
 
