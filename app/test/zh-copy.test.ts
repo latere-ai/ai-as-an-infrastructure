@@ -1159,7 +1159,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/07-evaluation-and-observability.qmd",
-      ["public leaderboard", "specific prompt", "retrieval context", "agent loop", "running system"],
+      ["evaluation release", "system fingerprint", "decision claim", "trace contract", "rollback"],
     ],
     [
       "zh/practice/07-evaluation-and-observability.qmd",

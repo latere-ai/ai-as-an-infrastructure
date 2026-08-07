@@ -1,319 +1,463 @@
 # Evaluation and Observability {#sec-eval-practice}
 
-A model that tops a public leaderboard can still misbehave in your product. The
-benchmark measured a generic capability on a fixed dataset. Your app runs a
-specific prompt over your retrieval context, inside an agent loop, against live
-user input that drifts week to week. The discipline that closes this gap
-has two halves, and by mid-2026 they have largely fused into one tooling
-category. The practical question is how to choose and wire that tooling without
-confusing public benchmark quality with product behavior.
+An evaluation does not begin with a leaderboard or a tool. It begins with an
+**evaluation release**: a named decision about one version of a complete system.
+Before running anything, freeze the system fingerprint, decision claim, target
+population, critical slice definitions, release gate, and rollback target. The
+result should tell an owner whether to merge, canary, ramp, stop, or continue
+operating, not merely whether one dashboard number moved.
 
-![Schematic of issue detection as instrumentation deepens. Offline evals catch known failure modes; live telemetry changes the slope for failures that only appear in production. Idealized curves, not measured data.](/figures/evaluation-and-observability-1.svg){#fig-evaluation-and-observability-1}
+This chapter turns the measurement principles from @sec-benchmarks,
+@sec-statistical-reliability, @sec-human-evaluation-rubrics,
+@sec-judging-holistic, @sec-factuality-grounding, @sec-evaluating-agents, and
+@sec-operational-evaluation into an operating protocol. The subject is the
+running application, including the serving layer (@sec-serving-stack), model
+gateway (@sec-wiring-stack), retrieval, agents (@sec-agents-practice), and any
+fine-tuned model (@sec-training-practice).
 
-Where it sits in the stack: Part VII defines the measurement theory. @sec-benchmarks
-measures models in the abstract, @sec-statistical-reliability decides whether a
-gap is real, @sec-human-evaluation-rubrics defines the human label, @sec-judging-holistic
-covers model judges, @sec-factuality-grounding covers groundedness, @sec-evaluating-agents
-covers multi-step trajectories, and @sec-operational-evaluation turns all of that
-into release gates. Here the object is *your running system*. It consumes the
-serving layer (@sec-serving-stack) and the model @gls-gateway (@sec-wiring-stack),
-and it produces the feedback signal that feeds back into agents
-(@sec-agents-practice) and fine-tuning (@sec-training-practice): eval datasets
-become preference data, and agent traces are where failures actually surface.
+## Freeze the release contract
 
-::: {.callout-note}
-## As of mid-2026
-This is a dated snapshot (June 2026). Prices, version numbers, acquisitions, and
-"best for" claims move fast in this category, and 2026 has been a year of heavy
-consolidation. Treat every specific dollar figure and ranking below as
-indicative and source-attributed, not timeless, and re-verify current values and
-roadmaps before committing. Lead with the durable parts: the categories, the
-trade-offs, and the wiring.
-:::
+A good contract answers six questions before results are visible.
 
-## The two halves of the loop
+| Contract field | What to record |
+| --- | --- |
+| Decision | Merge, shadow, canary, ramp, rollback, or continued operation; owner and expiry |
+| System fingerprint | Model revision, prompt revision, retrieval snapshot, tool schema, policy revision, parser, and gateway configuration |
+| Claim | Decision claim, metric direction, independent unit, target population, time window, and case weight |
+| Evidence | Dataset revision and provenance, scoring protocol, repeated-trial policy, critical slices, and uncertainty method |
+| Gate | Hard constraints, non-inferiority margins, risk ceilings, latency and cost budgets, and stop rules |
+| Recovery | Last-known-good revision, rollback trigger, rollback procedure, and requalification trigger |
 
-**Evaluation** asks "is the output good?" against criteria you define. It runs
-offline, on a curated dataset, in CI, before you ship, and online, sampled from
-production traffic and scored continuously. The unit of work is a *score*. Scores
-come in three flavors that you mix:
-
-- **Deterministic assertions**: regex, JSON-schema validation, exact match, a
-  latency or cost budget. Cheap, fast, and the first line of defense.
-- **Reference-based metrics**: BLEU and ROUGE and their retrieval cousins like
-  context precision, context recall, and faithfulness.
-- **LLM-as-judge**: a second model grades the first against a rubric. This is
-  the only practical way to score open-ended quality at scale, and the bulk of
-  @sec-judging-holistic is about doing it without fooling yourself.
-
-**@gls-observability** asks "what actually happened?" It captures a *trace*: the full
-tree of a request as it moves through your system, every LLM call, retrieval,
-tool invocation, and nested agent step, with inputs, outputs, timing, token
-counts, and cost attached to each span. Without it you are debugging a
-non-deterministic distributed system by reading flat logs.
-
-The two halves connect because **you evaluate the traces you observe**. A
-production trace is a ready-made test case. A judge run over sampled spans yields
-online scores, and a regression first caught on a dashboard gets promoted into
-the offline suite as a fixture. This loop, observe then score then curate then re-test, is the
-practical core of "continuously evaluate an LLM app", and it is the figure to
-keep in mind for the rest of the chapter (@fig-eval-loop).
+The fingerprint matters because a model name is not a system identity. A prompt,
+index, tool description, safety policy, parser, route, or provider alias can
+change behavior while the application version appears unchanged. Bind every
+evaluation result to immutable component digests. Production ML systems
+otherwise accumulate hidden dependencies and changing-world failure modes
+[@sculley2015debt; @breck2017mltest].
 
 ```{dot}
-//| label: fig-eval-loop
-//| fig-cap: "The continuous-evaluation loop. Production traces are observed, sampled spans are scored by judges and assertions, failures are curated into a regression dataset, and that dataset gates the next release. Every component calls the model gateway rather than providers directly."
+//| label: fig-evaluation-contract
+//| fig-cap: "An evaluation contract binds one system revision and target population to evidence, a release decision, and a recovery path."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  user [label="User / CI traffic"];
-  app [label="LLM app\nagent + retrieval"];
-  obs [label="Observability\nLangfuse / Phoenix"];
-  gw [label="Model gateway"];
-  providers [label="Providers / vLLM"];
-  eval [label="Eval / Judge\nPromptfoo / DeepEval"];
-  gate [label="Dashboards / CI gate"];
-  ds [label="Offline dataset\nregression suite"];
-  user -> app;
-  app -> obs [label="OTel GenAI spans"];
-  app -> gw [label="model call"];
-  gw -> providers;
-  obs -> eval [label="sampled traces"];
-  gw -> eval [label="judge call\nscoped virtual key"];
-  eval -> gate [label="scores"];
-  eval -> ds [label="promote failing trace"];
-  ds -> app [label="gates next release"];
+  rankdir=TB;
+  nodesep=0.18;
+  ranksep=0.22;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#374151", fillcolor="#f1ece1",
+        margin="0.12,0.08", width=1.75];
+  edge [color="#6b7280", arrowsize=0.65];
+  system [label="System fingerprint"];
+  claim [label="Claim + population"];
+  evidence [label="Evidence + gates"];
+  decision [label="Decision + rollback"];
+  system -> claim -> evidence -> decision;
 }
 ```
 
-## The 2026 shakeout
+### Three different jobs
 
-Two acquisitions reshaped the landscape in early 2026, and they tell you the
-direction of travel: the standalone eval/observability tool is becoming a feature
-of a larger data or model platform.
+**Evaluation asks** whether declared evidence supports a decision about a fixed
+system. **@gls-observability records** enough structured events to reconstruct
+what a running system did. **Monitoring compares** measurements with thresholds
+over time and routes exceptions to an owner. These jobs can share storage and
+instrumentation, but they do not share semantics.
 
-- OpenAI **acquired Promptfoo** (announced March 9, 2026) and is
-  **deprecating its own hosted Evals product** (read-only October 31, 2026,
-  shutdown November 30, 2026), steering users toward Promptfoo and Datasets. The
-  open-source `openai/evals` repo persists; the hosted dashboard does not.
-- ClickHouse **acquired Langfuse** (January 16, 2026, alongside ClickHouse's
-  $400M Series D). Langfuse states its OSS and self-host commitment continues.
+A trace is partial evidence, not a label and not ground truth. Instrumentation
+can be absent, sampled, dropped, redacted, or wrong. A quality score can also be
+wrong. Preserve the distinction so a telemetry export failure does not look like
+an improvement in product quality.
 
-Ownership is the wrong unit of analysis. The churn is real, so favor tools whose
-data and instrumentation you can carry elsewhere. That is the case for
-OpenTelemetry below.
+## Build an evaluation dataset
 
-## Key players
+An **evaluation case** is a versioned input plus the environment, expected
+behavior, allowed actions, label provenance, privacy status, and slice metadata
+needed to score it. Record whether it came from a designed scenario, a public
+benchmark, a synthetic generator, expert review, or production.
 
-All license, pricing, and acquisition claims below are as of mid-2026 and
-attributed in *Further reading*. Pricing is the published list shape at time of
-writing and changes often, so treat exact dollars as indicative. Judge accuracy
-and "best for" claims are workload-dependent and not independently benchmarked
-here.
+Production traffic is useful but selected. Consent or another valid authority
+must cover its use. Before a trace enters any suite, redact it, triage it,
+adjudicate its expected behavior, deduplicate it, and assign its split. Keep the
+following roles separate:
 
-### Eval harnesses and frameworks
+- a development suite for prompt, policy, and scorer iteration;
+- a diagnostic suite for incidents, adversarial cases, and exploratory slices;
+- a locked holdout for confirmation.
 
-| Name | What it is | License / model | Best for |
-| --- | --- | --- | --- |
-| **lm-evaluation-harness** (EleutherAI) | The de facto academic harness: 60+ standard benchmarks, hundreds of subtasks, reproducible configs, the backend behind many leaderboards | Open source (MIT) | Benchmarking a *model's* raw capability reproducibly |
-| **Inspect** (UK AISI) | Framework for model and agentic evals: tool use, multi-turn, model-graded scoring; `inspect_evals` ships 200+ ready evals | Open source (MIT) | Safety and agentic evaluation, sandboxed tool-use tasks |
-| **Promptfoo** | CLI + config-driven eval and red-teaming: assertions, LLM-as-judge, model comparison, RAG/agent tests, 50+ vuln categories | Open source (MIT) + paid Enterprise; **acquired by OpenAI (Mar 2026)** | App-level evals and security red-teaming you can drop into CI without notebooks |
-| **DeepEval** (Confident AI) | Pytest-native eval framework: 50+ metrics (LLM-as-judge, RAG, agentic, safety), G-Eval (rubric-guided judging), DAG metrics (checks composed as a dependency graph) | Open source + Confident AI cloud | Teams wanting unit-test-style regression on LLM output |
-| **RAGAS** | Reference-free RAG metrics: faithfulness, answer relevancy, context precision/recall | Open source | Quick RAG-pipeline scoring, often consumed *through* other frameworks |
-| **MLflow 3 Evaluate** | GenAI eval + tracing inside the MLflow platform | Open source | MLOps shops already standardized on MLflow / Databricks |
+Group by the unit that can leak: user, tenant, conversation family, repository,
+source document, or time block. Do this before split assignment, then search for exact and
+near duplicates across splits. If a holdout case, answer, label, or close
+paraphrase influenced the prompt, retriever, judge, parser, or selection of the
+candidate, mark it as contamination and remove it from confirmatory evidence
+[@kapoor2023leakage].
 
-### Tracing and observability platforms
+### Cases are not trials
 
-| Name | What it is | License / model | Best for |
-| --- | --- | --- | --- |
-| **Langfuse** | OSS LLM engineering platform: tracing, prompt management, evals, datasets | MIT, self-hostable; cloud Hobby free / Core $29 / Pro $199 / Enterprise $2,499 per mo, billed per unit | Teams wanting a fully self-hostable OSS observability + eval stack |
-| **Opik** (Comet) | OSS tracing + evaluation platform: traces, LLM-as-judge metrics, datasets, dashboards | Apache-2.0, self-hostable; Comet cloud | The other independent self-hostable OSS option next to Langfuse and Phoenix |
-| **LangSmith** (LangChain) | Framework-agnostic observability + eval + prompt platform; agent ops | Proprietary SaaS; Developer free / Plus $39/seat/mo / Enterprise custom | Teams in or near the LangChain/LangGraph ecosystem wanting a polished managed platform |
-| **Arize Phoenix** | OSS observability + eval built **on OpenTelemetry**, instrumented via **OpenInference** | Open source (ELv2-style); Arize AX is the commercial cloud | Teams wanting OTel-native, vendor-neutral tracing that runs locally with no account |
-| **Braintrust** | Eval-first commercial platform: experiments, scoring, tracing, prompt playground | Proprietary SaaS; Starter free / Pro $249/mo / Enterprise custom | Product teams wanting eval, tracing, and a prompt playground tightly integrated |
-| **W&B Weave** (Weights & Biases) | LLM tracing, evaluation, prompt/version tracking inside the W&B ecosystem | Proprietary SaaS | Teams already on W&B for experiment tracking |
-| **Confident AI** | Cloud platform behind DeepEval: datasets, tracing, monitoring | Proprietary SaaS | DeepEval users wanting a managed collaboration layer |
+A **stochastic trial** is one run of one system on one evaluation case under a
+recorded random seed and environment snapshot. A repeated trial estimates run
+variation; it does not create another independent user, task, or document.
+Preserve every timeout, refusal, parser failure, tool error, and empty result.
+Repeated trials are not independent cases, and selecting the best attempt is
+valid only when production uses that same selection policy.
 
-### The substrate
+The independent unit and case weight must follow the deployment claim. For a
+conversation product, turns and spans are nested within a conversation. For a
+repository assistant, files and tool calls may be nested within a repository
+task. Row count is not sample size.
 
-| Name | What it is | License / model | Best for |
-| --- | --- | --- | --- |
-| **OpenTelemetry GenAI semantic conventions** | Vendor-neutral spec for LLM/agent spans and metrics (`gen_ai.*` attributes), under CNCF OTel | Open standard (Apache 2.0) | The wire format that lets you switch backends without re-instrumenting |
-| **OpenInference** (Arize) | OTel-aligned conventions + drop-in auto-instrumentation across providers, agent frameworks, RAG libs | Open source | Practical auto-instrumentation today, ahead of the spec stabilizing |
+## Score behavior without hiding failure
 
-As of mid-2026 the OTel GenAI spec is still largely experimental ("Development"
-stability), though core attributes (`gen_ai.system`, `gen_ai.request.model`,
-token counts) are stabilizing. You opt into the latest with
-`OTEL_SEMCONV_STABILITY_OPT_IN`. OpenInference runs ahead of the spec and emits
-to any OTel backend (Datadog, Grafana, Jaeger), which is why it is the practical
-choice today.
+Use the most direct evidence available for each criterion.
 
-## How to choose
+1. A **deterministic check** executes an invariant: schema validity,
+   authorization, exact calculation, tool arguments, citation existence, or a
+   latency ceiling. It cannot establish semantic correctness merely because an
+   output parses.
+2. A task or reference score measures an observable outcome: tests passed,
+   evidence retrieved, claims supported, trajectory completed, or user goal
+   achieved.
+3. A **human judgment** applies a criterion-separated rubric when expertise and
+   context are required.
+4. A qualified model judge approximates a specific human or executable scoring
+   protocol.
+5. An **operational metric** measures availability, end-to-end latency, resource
+   use, or cost. A separate security criterion measures policy violations and
+   attack success.
 
-The first cut is **capability eval versus application eval**, because they are
-different jobs done by different tools.
+Do not collapse these into one “quality” number. Report every predeclared slice,
+especially low-volume or high-risk slices. Record `pass`, `fail`, `invalid`,
+`error`, `abstain`, and `fallback` separately. A small slice is unresolved, not
+automatically safe, and an aggregate gain must not hide its regression. HELM's
+multi-metric, multi-scenario framing is a useful warning against single-score
+evaluation [@liang2022helm].
 
-::: {.callout-tip}
-## Constraint arrow
-The serving layer dictates the shape of your eval harness. Because you point
-evals and judges at the **model gateway** (@sec-wiring-stack) rather than at
-providers, an A/B between two models becomes a routing rule, not a code change,
-and judge credentials become scoped virtual keys with their own budget rather
-than raw provider secrets. The gateway you chose in @sec-serving-stack is what
-makes continuous online evaluation cheap to operate.
-:::
+### Compare complete revisions
 
-Pick a **capability harness** when you are measuring a *model*: comparing
-checkpoints, validating a fine-tune (@sec-training-practice), or reproducing a
-leaderboard number. Use **Inspect** when the task is agentic, tool-using, or
-safety-flavored, and **lm-evaluation-harness** for classic academic benchmarks.
+Here, compare candidate system $B$ with baseline system $A$ using a
+higher-is-better score on the same cases and compatible environment. With case $i$, repeat $r$,
+$R_i$ declared repeats, score $s$, and predeclared case weight $w_i$, estimate
 
-Pick an **application eval tool** when you are measuring *your system*: this
-prompt, this RAG pipeline, this agent, against criteria that matter to your
-product. Within application eval, four axes decide the tool:
+$$
+\widehat{\Delta}
+=
+\frac{1}{\sum_i w_i}
+\sum_i w_i
+\left(
+  \frac{1}{R_i}
+  \sum_{r=1}^{R_i}
+  \left(s_{ir}^{B}-s_{ir}^{A}\right)
+\right).
+$$
 
-| Axis | Choose this | When |
-| --- | --- | --- |
-| CI-native vs platform-native | **Promptfoo** (config/CLI) or **DeepEval** (pytest) | Evals must live in the repo and gate merges with no external account |
-| | **Braintrust** or **LangSmith** | You want a hosted UI for non-engineers to curate datasets and compare runs visually |
-| Self-host vs managed | **Langfuse** or **Phoenix** | Data residency, cost control, or vendor-neutrality matter and you can run infra |
-| | **LangSmith**, **Braintrust**, **Confident AI** | You would rather not operate it and will pay for polish |
-| OTel-native vs proprietary SDK | **Phoenix / OpenInference** | You want one instrumentation that targets many backends and avoids lock-in |
-| | **LangSmith**, **Braintrust** | Smoother out of the box, at the cost of coupling your code to one vendor |
-| Red-teaming in scope? | **Promptfoo** | You need the deepest built-in adversarial scanning (OWASP LLM Top 10, jailbreaks, PII, prompt injection) |
+Here $s_{ir}^{B}$ is the candidate score and $s_{ir}^{A}$ is the baseline score
+for the same case and repeat; $\widehat{\Delta}$ is their deployment-weighted
+paired change. Share the case, corpus snapshot, tool policy, budgets, and scorer.
+Do not force a shared random seed when two implementations interpret it
+differently.
 
-### LLM-as-judge: cost versus trust
+Report a confidence interval for the estimand. Resample cases, or the
+higher-level user, conversation, repository, or document clusters named by the
+contract, rather than their nested turns, spans, or repeats. A hierarchical bootstrap can represent
+both case and run variation; a row-wise bootstrap invents information when rows
+share a deployment unit [@efron1979bootstrap; @bouthillier2021variance].
 
-A judge is roughly 500x to 5000x cheaper than human review and can approach
-human-to-human agreement, *but only when calibrated*. An uncalibrated judge will score confidently and be wrong just as confidently, and you will not see it. As of mid-2026 the consensus practice, covered in depth in
-@sec-judging-holistic, is:
+### Predeclare the release gate
 
-- **Validate against a human-labeled sample.** Report Cohen's kappa (agreement
-  corrected for what chance alone would produce) and target around $0.8$ before
-  you trust the judge to gate anything.
-- **Control for position bias.** Score both A/B and B/A orderings and count only
-  consistent wins.
-- **Control for verbosity and self-preference bias.** Never use the same model
-  family as both generator and judge.
-- **Use explicit, criterion-separated rubrics** (G-Eval style). Split hard rules
-  into a DAG of checks rather than one fuzzy prompt.
+Here $L_j$ denotes the lower confidence bound for oriented criterion-and-slice
+change $j$, and $\delta_j$ denotes its allowed non-inferiority margin. A release can
+require
 
-Change the human base rate and watch raw agreement stay high while Cohen's kappa
-collapses, which is why "the judge agrees 90% of the time" proves almost nothing.
+$$
+L_j \ge -\delta_j
+\qquad
+\text{for every required slice and criterion }j,
+$$
+
+The rule means that every hard constraint also passes. Examples include zero cross-tenant
+access, valid tool authorization, an upper risk bound below its ceiling, and a
+tail-latency budget. There is no universal margin or confidence level: choose
+them from consequence, desired precision, sample design, and decision cost.
+Prespecify confirmatory claims and handle multiple comparisons when searching
+for any favorable result [@dror2018significance].
+
+“No observed failures” is not “zero risk.” With sparse critical events, report an
+upper uncertainty bound; if the sample cannot exclude the risk ceiling, the gate
+is unresolved. A hard policy failure can remain a stop even when its estimated
+rate is imprecise.
+
+## Treat a model judge as an instrument
+
+A model judge can extend review capacity, but it is a versioned measurement
+instrument rather than an oracle. Freeze the judge revision, rubric revision,
+prompt, decoding settings, candidate order, output schema, and parser. Then
+qualify it on a locked human-labeled set for each criterion and slice where it
+will operate.
+
+Report the confusion matrix, false-pass and false-fail rates, abstentions, parser
+errors, uncertainty, and disagreement with humans. Test position bias by swapping
+candidate order and identifiers; test verbosity bias with meaning-preserving
+padding; test self-preference with generator-identifying and paraphrased outputs;
+test repeated-run stability and candidate-borne prompt injection. Research has
+documented position, verbosity, and self-preference effects, so using another
+model family is a hypothesis to test, not proof of independence
+[@zheng2023judge; @wang2024fairevaluators; @panickssery2024selfpreference].
+G-Eval demonstrates that rubric-guided judging can improve task-specific human
+alignment; it does not establish universal validity [@liu2023geval].
+
+Cohen's kappa adjusts observed categorical agreement for agreement expected from
+the marginal label frequencies [@cohen1960kappa]:
+
+$$
+p_o=\frac{1}{n}\sum_{a\in\mathcal C}n_{aa},
+\qquad
+p_e=\frac{1}{n^2}\sum_{a\in\mathcal C}n_{a\cdot}n_{\cdot a},
+\qquad
+\kappa=\frac{p_o-p_e}{1-p_e}.
+$$
+
+Here $\mathcal C$ is the label set, $n_{ab}$ counts human label $a$ and judge
+label $b$, $n$ is the number of cases, and the dotted subscripts are marginal
+totals. Kappa measures agreement, not correctness or safety, and it changes with
+prevalence. Use it beside criterion-specific error rates and confidence
+intervals, never as a universal trust threshold.
 
 :::: {.runnable}
 ```python
-import numpy as np
+def cohen_kappa(matrix):
+    total = sum(sum(row) for row in matrix)
+    observed = sum(matrix[i][i] for i in range(len(matrix))) / total
+    row_totals = [sum(row) for row in matrix]
+    col_totals = [sum(matrix[r][c] for r in range(len(matrix)))
+                  for c in range(len(matrix))]
+    expected = sum(r * c for r, c in zip(row_totals, col_totals)) / total**2
+    return observed, (observed - expected) / (1 - expected)
 
-# A lazy judge that says "good" almost always, scored against human labels.
-# Raw agreement looks great, but Cohen's kappa corrects for chance and collapses.
-def kappa(m):
-    m = np.array(m, float); n = m.sum()
-    po = np.trace(m) / n                       # raw agreement
-    pe = (m.sum(0) * m.sum(1)).sum() / n**2    # agreement expected by chance
-    return po, (po - pe) / (1 - pe)
-
-n = 1000
-for good_rate in [0.70, 0.80, 0.90, 0.95]:
-    good = int(n * good_rate); bad = n - good
-    caught = int(bad * 0.20)                    # judge flags only 20% of bad answers
-    miss = int(good * 0.02)                     # and wrongly flags 2% of good ones
-    cm = [[caught, miss], [bad - caught, good - miss]]
-    po, k = kappa(cm)
-    verdict = "trust" if k >= 0.8 else "do NOT trust"
-    print(f"human good={good_rate:.0%}  agreement={po:.2f}  kappa={k:.2f}  -> {verdict}")
+# Rows are human labels; columns are judge labels: [bad, good].
+agreement, kappa = cohen_kappa([[16, 4], [18, 162]])
+assert round(agreement, 2) == 0.89
+assert round(kappa, 2) == 0.53
+print(f"agreement={agreement:.2f}, kappa={kappa:.2f}")
 ```
 ::::
 
 <figure id="fig-evaluation-and-observability-judge-kappa">
 <div class="viz" data-viz="judge-kappa"></div>
-<figcaption>Two judges scoring the same items, with their accuracy held fixed. Drag the base rate toward all-good and watch raw agreement stay high while Cohen's κ collapses, because when almost everything is "good", agreeing is mostly chance. This is why a judge that agrees ninety percent of the time can still be telling you almost nothing. Illustrative.</figcaption>
+<figcaption>Hold the two raters' behavior fixed and change the label prevalence. Raw agreement and Cohen's kappa move differently because kappa uses the marginal label rates. The chart is illustrative; neither statistic alone qualifies a judge.</figcaption>
 </figure>
 
-## A sensible default
+## Promote production evidence carefully
 
-For a typical team shipping one or two LLM features and wanting a continuous eval
-loop without standing up a platform team, here is a stack that is OSS-first,
-self-hostable, OTel-native, and CI-gated, with a clean upgrade path to a managed
-platform later.
+The continuous loop should harden the suite without poisoning it. A complaint,
+incident, judge disagreement, or unusual trace enters a diagnostic queue first.
+An owner verifies use authority, removes sensitive data, reconstructs the system
+fingerprint, decides whether the case is reproducible, labels or adjudicates the
+expected behavior, deduplicates it, and assigns a suite role. Only then can it
+become a regression case.
 
-| Job | Default pick | Managed alternative |
+Maintain two production samples:
+
+- a probability or stratified sample for estimating population behavior;
+- a risk queue for incidents, rare failures, complaints, and uncertain cases.
+
+The risk queue is valuable for discovery, but its average is not a population
+rate. Record the inclusion probability, assignment unit, nonresponse, and label
+delay for the inference sample. User feedback, retries, and abandonment are
+selected observational signals. They do not identify the causal effect of a
+release; use randomized, sticky assignment and valid exposure logs when the
+decision requires that claim [@kohavi2009experiments].
+
+```{dot}
+//| label: fig-eval-loop
+//| fig-cap: "The operating loop separates observation from triage and labeling before a production case can enter a regression suite. Releases move through staged traffic and return to monitoring."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.16;
+  ranksep=0.2;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#374151", fillcolor="#f1ece1",
+        margin="0.12,0.08", width=1.6];
+  edge [color="#6b7280", arrowsize=0.62];
+  observe [label="Observe"];
+  triage [label="Triage + label"];
+  suite [label="Deduplicate + split"];
+  gate [label="Regression gate"];
+  stage [label="Shadow + canary"];
+  monitor [label="Monitor"];
+  observe -> triage -> suite -> gate -> stage -> monitor;
+  monitor -> observe;
+}
+```
+
+## Define the trace contract
+
+A trace groups work that belongs to one distributed request or task. Each span
+needs a trace ID, span ID, parent span when one exists, operation name, start and
+end times, status, and attributes. A span event records a timestamped occurrence
+inside a span; a span link connects causally related work that is not a
+parent-child edge. This distinction matters for queues, fan-out, retries, and
+multi-agent work.
+
+For an AI operation, record the immutable system fingerprint, model and route,
+prompt and policy identifiers, retrieval and tool revisions, input digest,
+output digest, usage, cache result, retry number, and evidence IDs. Raw content
+is not required for correlation. OpenTelemetry provides general trace semantics
+and evolving GenAI conventions, but custom attributes still need a local schema
+and version [@otel2026trace; @otel2026genaisemconv].
+
+Use W3C Trace Context to propagate the `traceparent` identifier across service
+boundaries [@w3c2021tracecontext]. Baggage is application metadata, not a secret
+store: never place credentials, personally identifiable information, tenant
+content, or authorization grants in baggage. Validate incoming context because
+external callers can forge it.
+
+### Minimize before export
+
+Apply data classification at instrumentation time. Raw payload recording is off
+by default. Redact before export, tokenize or hash only when the threat model
+permits it, and keep sensitive-content access separate from ordinary trace
+access. Enforce tenant isolation, purpose-bound roles, an access log, retention
+limits, and tested deletion across the collector, backend, cache, archive, and
+derived evaluation datasets. The telemetry path is a data system and belongs
+inside the AI risk-management boundary [@nist2023airmf].
+
+Treat prompts, retrieved text, tool results, and model output as untrusted data.
+They may contain indirect prompt injection or instructions aimed at a later
+judge. An evaluator should have no production write authority, secrets, network
+tools, or unbounded budget.
+
+```{dot}
+//| label: fig-observability-path
+//| fig-cap: "Telemetry is classified and redacted before a sampling decision and export. Each boundary can fail, so completeness is itself monitored."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.16;
+  ranksep=0.2;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#374151", fillcolor="#f1ece1",
+        margin="0.12,0.08", width=1.45];
+  edge [color="#6b7280", arrowsize=0.62];
+  request [label="Local spans"];
+  redact [label="Redact"];
+  sample [label="Sample"];
+  export [label="Export"];
+  backend [label="Store + alert"];
+  request -> redact -> sample -> export -> backend;
+}
+```
+
+### Sampling changes the estimate
+
+**Head sampling** decides near request start, usually from a fixed probability.
+**Tail sampling** waits for outcome information and can retain errors, slow
+requests, rare routes, or security events. Tail rules improve diagnosis but
+oversample the very outcomes they select.
+
+Record each stratum's inclusion probability and compute a design-weighted
+estimate when reporting population rates. Preserve a stable probability sample
+alongside special retention for errors, rare slices, security signals, and
+judge disagreement. A dashboard over retained traces is otherwise a biased
+sample. Monitor missing telemetry, collector queue depth, dropped spans, broken
+parentage, and export failure as first-class rates; unknown evidence must not be
+silently treated as success.
+
+### Replay has levels
+
+An **exact replay** requires immutable model artifacts, prompts, index, tool
+results, environment, and stochastic state. That is uncommon for hosted model
+aliases and live tools. A **structural replay** reruns the same operation graph
+against recorded or stubbed dependencies. A **semantic replay** asks whether the
+new system still satisfies the case criterion despite different tokens or
+steps.
+
+Label the achieved fidelity. Record external state and resolved provider
+revision; a mutable model alias is not reproducible evidence. Never replay a
+write, payment, message, or other tool side effect merely to reproduce a trace.
+Use an idempotent sandbox, recorded response, or explicit dry-run adapter.
+
+## Monitor a qualified release
+
+An alert definition is an operational contract. Record its metric revision,
+numerator, denominator, population and slices, aggregation window, label delay,
+threshold, required duration, missing-data rule, owner, and runbook. Version the
+reference window and detector. Alerts without an owner and a tested response are
+noise generators.
+
+Monitor at least:
+
+- traffic mix, critical slices, and system-fingerprint integrity;
+- trace completeness, missing telemetry, and schema validity;
+- deterministic, task, security, and delayed human-label rates;
+- judge output and judge–human disagreement on a fixed anchor set;
+- availability, end-to-end latency, tokens, and cost per accepted task.
+
+End-to-end latency includes queueing, every retry, cache lookup, model call, and
+tool call until an accepted result or terminal fallback. Cost per accepted task
+includes failed attempts, judge cost, and allocated human review, not only the
+last completion.
+
+A drift detector says that a monitored distribution changed. Drift does not
+identify the cause, prove quality declined, or isolate the changed component.
+Confirm trace integrity, traffic mix, system revision, label delay, and evaluator
+stability before attributing the movement. A judge changing on a fixed human
+anchor set is evaluator drift, not automatically application drift.
+
+## Test failures before release
+
+| Layer | Failure case | Required treatment |
 | --- | --- | --- |
-| Observability / tracing | **Langfuse** (self-host or free/Core cloud) | **LangSmith** (Plus) or **Braintrust** |
-| App evals in CI | **Promptfoo** (assertions, comparison, red-team) + **DeepEval** (pytest metrics) | Braintrust / LangSmith eval modules |
-| Model / capability eval | **Inspect** (agentic, safety) or **lm-evaluation-harness** (academic) | hosted leaderboards |
-| Instrumentation | **OpenTelemetry GenAI** via **OpenInference** auto-instrumentation | proprietary SDK |
+| Evidence | Holdout leakage, duplicate case, stale fingerprint | Invalidate the affected claim |
+| Execution | Timeout, refusal, parser error, fallback | Preserve the outcome and denominator |
+| Judge | Judge disagreement, order reversal, injected rubric override | Abstain, escalate, or disable the judge |
+| Trace | Missing span, duplicate span, broken link, export failure | Mark completeness unknown; repair instrumentation |
+| Sampling | Sampling bias, unknown inclusion probability, label nonresponse | Do not report an unweighted population rate |
+| Privacy | Privacy leak, secret in baggage, cross-tenant trace | Hard stop, contain, delete, and investigate |
+| Replay | Mutable model alias, changed external state, tool side effect | Downgrade fidelity; use a sandbox or recording |
+| Rollout | Critical-slice regression, latency breach, runaway cost | Stop ramp and restore last-known-good |
 
-Two caveats to this default. First, the churn: Promptfoo is now OpenAI-owned and
-Langfuse is ClickHouse-owned, so re-confirm roadmap and licensing before you
-commit long-term. Second, do not add a vendor you do not need. Teams already
-standardized on Databricks should prefer **MLflow 3 Evaluate**, and teams on
-Weights & Biases should prefer **Weave**, over bolting on a new platform.
+## Operate the release lifecycle
 
-## Wiring
+1. Freeze the decision, system fingerprint, population, slices, metrics, and
+   privacy boundary.
+2. Version the dataset manifest, provenance, consent basis, labels, and split
+   assignment.
+3. Declare cases, independent units, repeated trials, weights, invalid outcomes,
+   and uncertainty method.
+4. Qualify every human protocol and model judge against appropriate reference
+   evidence.
+5. Run baseline and candidate under matched conditions; retain every attempt.
+6. Apply hard constraints and confidence-bound gates to every required slice.
+7. Use shadow execution where it can reveal integration faults without user
+   effects, then start a small sticky canary.
+8. Ramp only while quality, security, latency, cost, and telemetry-completeness
+   stop rules pass.
+9. Roll back atomically to the last-known-good revision when a rollback trigger
+   fires.
+10. Store estimates, intervals, invalid outcomes, waivers, approvals, canary
+    results, expiry, rollback target, and each requalification trigger.
 
-The loop closes through the model gateway (@sec-wiring-stack): the app under
-test, the evals, and the judge all call it, never providers directly.
+The output is an evaluation release record. It binds the claim and evidence to
+the exact system that was released, explains uncertainty and unresolved slices,
+and makes recovery executable.
 
-Here is a minimal Promptfoo config that points at the gateway and uses an
-LLM judge with a deterministic guard in front of it. Save it as
-`promptfooconfig.yaml` and run `npx promptfoo@latest eval`.
+::: {.callout-tip}
+## Constraint arrow
 
-```yaml
-# promptfooconfig.yaml
-providers:
-  - id: openai:chat:gpt-5            # resolved by the gateway, not OpenAI directly
-    config:
-      apiBaseUrl: https://gateway.internal/v1
-      apiKey: ${GATEWAY_VKEY}        # scoped virtual key, budget-capped
-prompts:
-  - "Answer using only the context:\n{{context}}\n\nQ: {{question}}"
-tests:
-  - vars: { question: "...", context: "..." }
-    assert:
-      - type: is-json                # deterministic guard, runs first and free
-      - type: llm-rubric             # LLM-as-judge, calibrated rubric
-        value: "Answer is faithful to the context and cites it."
-        provider: openai:chat:gpt-5-mini   # judge via gateway, different family
-```
-
-To gate merges, run that one command in CI and fail the job on a regression:
-
-```bash
-# CI step: fail the build if any eval assertion regresses
-npx promptfoo@latest eval -c promptfooconfig.yaml --no-cache --output results.json
-# exit code is non-zero when assertions fail, which fails the pipeline
-```
-
-The heartbeat of the whole system is the promotion step. A production trace from
-Langfuse or Phoenix that fails an online judge gets promoted into the `tests:`
-set above, so the offline suite hardens against the failures you actually see in
-production rather than the ones you imagined at design time. Without that
-promotion step you have two disconnected tools. With it you have a loop.
-
-## The production evaluation loop
-
-That loop earns its keep only when it changes all three operating axes.
-Observability makes the system more capable by turning nondeterministic behavior
-into something you can debug, and evaluation turns "it feels better" into a
-release gate. The gateway keeps online judging cheap enough to run continuously,
-while deterministic assertions catch the cheap failures before a judge call is
-made. Trust rests on calibration and portability: an LLM judge is only as
-trustworthy as its agreement with humans, and the OTel substrate is what lets you
-carry traces and scores away from any vendor that changes its terms. The loop is
-worth building only if all three hold, and in mid-2026 the tooling has finally
-matured enough that they can.
+The serving architecture constrains what can be evaluated and replayed. Stable
+component identifiers, scoped evaluator credentials, metering, and a gateway or
+equivalent routing record make paired comparison safer. They do not make a trace
+complete or a judge valid; those remain separate contracts.
+:::
 
 ::: {.callout-important}
 ## What's contested
-The unstable choice is how much judgment to automate. LLM judges make continuous
-evaluation possible, but they also import model bias, drift, prompt sensitivity,
-and vendor dependence. Human review remains necessary for calibration, yet it is
-too slow and expensive to sit on every request. The practical answer is layered:
-deterministic checks first, calibrated model judges second, sampled human review
-third, and a release gate that records which layer actually carried the decision.
+
+The hard choice is how much judgment to automate. Deterministic checks are
+precise but narrow; model judges scale but inherit bias and attack surface;
+humans add expertise but also disagreement, selection effects, and delay. Use
+each for the criterion it can defend, preserve abstention and uncertainty, and
+record which evidence actually carried the release decision.
 :::
 
 ## Further reading
