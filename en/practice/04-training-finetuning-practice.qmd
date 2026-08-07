@@ -1,404 +1,655 @@
 # Training and Fine-tuning in Practice {#sec-training-practice}
 
-The theory of how weights move lives in @sec-sft-peft (supervised fine-tuning
-and parameter-efficient methods) and @sec-training-at-scale (sharding an
-optimizer across many accelerators). Practice asks a narrower question: in
-mid-2026, with a task and a budget, which tools should change a model's weights,
-how should they wire into the rest of the stack, and should the team be training
-at all? The answer is opinionated and dated. Lead with the
-categories and trade-offs, which are durable, and treat every version number,
-price, and ranking as a snapshot to re-check.
+Changing weights is not the first step in customization, and a completed
+training job is not the end of the work. A fine-tune is justified only when a
+measured behavior change must live in the weights. It becomes useful only when
+the resulting artifact can be reproduced, evaluated, served, monitored, and
+rolled back.
 
-![Schematic of task data efficiency. Fine-tuning can move quickly with few examples, while training from scratch needs much more data before it catches up. Idealized curves, not measured data.](/figures/training-finetuning-practice-1.svg){#fig-training-finetuning-practice-1}
-
-::: {.callout-note}
-## As of mid-2026
-Frameworks, prices, GitHub star counts, and revenue figures below are a
-June 2026 snapshot, each attributed to a source. Per-token prices show the
-*shape* of pricing, not a canonical quote. Treat anything called uncertain as
-needing a fresh check before you commit a budget. The categories and the
-"how to choose" logic age slowly; the specifics age in months.
-:::
-
-## The layer and what it contains
-
-Training and fine-tuning is the layer where you change weights, as opposed to
-the serving layer where you only run forward passes (@sec-serving-stack) or
-the agent and retrieval layers where you steer a frozen model with context
-(@sec-agents-practice, @sec-retrieval-practice), though that frozen model can
-itself be trained to act and not only to answer (@sec-training-agents). In a
-real 2026 stack it
-splits into three sub-layers that are easy to conflate and behave very
-differently.
+The practical unit is therefore an **adaptation release**: an adaptation
+contract, a frozen baseline, a governed dataset, a training run, an evaluation
+report, and a versioned model artifact. The mechanics of supervised fine-tuning
+and parameter-efficient methods appear in @sec-sft-peft; distributed training
+appears in @sec-training-at-scale. This chapter connects those mechanisms into
+an operating procedure for a product team.
 
 ```{dot}
 //| label: fig-training-layers
-//| fig-cap: "The three sub-layers of the training and fine-tuning stack in 2026. Most teams touch only the middle row; the engines sit underneath, the managed services replace all three."
-digraph layers {
+//| fig-cap: "The adaptation release, from a behavior contract to a reversible production artifact. Training is one stage in the path, not the unit of delivery."
+digraph adaptation {
   rankdir=TB;
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", penwidth=1.0];
 
-  toolkit [label="Post-training toolkits\nTRL, Axolotl, Unsloth, LLaMA-Factory\n(SFT, DPO, GRPO)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.6];
-  peft [label="Parameter-efficient methods\nPEFT: LoRA, QLoRA, DoRA"];
-  engine [label="Distributed engines\nFSDP2 / TorchTitan, Megatron-Core,\nDeepSpeed, JAX / MaxText"];
-  managed [label="Managed services\nTogether, Fireworks, Bedrock,\nAzure, Vertex"];
+  contract [label="Adaptation contract\ntarget • baseline • limits"];
+  data [label="Governed data\nlineage • split • template"];
+  run [label="Reproducible run\nmethod • config • checkpoints"];
+  gate [label="Promotion gate\ntarget • retention • safety"];
+  artifact [label="Versioned artifact\nserve • canary • rollback"];
 
-  toolkit -> peft [label="uses"];
-  toolkit -> engine [label="runs on"];
-  managed -> toolkit [label="hides all of this", style=dashed];
+  contract -> data -> run -> gate -> artifact;
 }
 ```
 
-1. **Distributed engines.** The heavy systems that shard a model and its
-   optimizer state across many accelerators: PyTorch FSDP2 and TorchTitan,
-   NVIDIA Megatron-Core, Microsoft DeepSpeed (ZeRO), and the JAX/XLA stack
-   (MaxText) on TPUs. This is where 4D and 5D parallelism, FP8 training, and
-   trillion-parameter scale live. @sec-training-at-scale explains the
-   mechanics.
-2. **Post-training toolkits.** Higher-level libraries that wrap those engines
-   for @gls-sft, preference optimization (DPO, which tunes directly on
-   preferred-versus-rejected answer pairs, and ORPO), and
-   reinforcement learning (GRPO, which scores groups of sampled answers,
-   alongside GSPO and PPO): Hugging Face TRL, Axolotl,
-   Unsloth, LLaMA-Factory. This is what most teams actually touch.
-3. **Parameter-efficient methods and managed services.** @gls-lora, @gls-qlora, DoRA,
-   carried by the PEFT library, plus hosted fine-tuning APIs that hide the
-   accelerators entirely.
+## Freeze the adaptation contract
 
-Two 2026 themes tie this layer to the rest of the book. FP8 training has gone
-mainstream: Google's Ironwood TPU has native FP8 in its matrix units,
-Megatron-Core ships FP8 training, and Unsloth does FP8 reinforcement learning
-([Google Cloud, 2026](https://cloud.google.com/blog/products/compute/training-large-models-on-ironwood-tpus)).
-More important for an infrastructure book, RL post-training has fused training
-with inference serving: modern RL toolkits embed an inference engine, almost
-always vLLM, to generate rollouts (sampled model attempts at a task), so the
-training box now contains a serving
-box. That is the wiring story at the end of this chapter.
+Select the training method only after writing down what must change and what
+must not. The **adaptation contract** is the reviewable statement of that
+boundary. It prevents a team from treating a falling loss curve as proof that a
+product problem was solved.
 
-## The first fork: should you train at all?
+| Contract field | Evidence to record |
+|---|---|
+| Task boundary | Accepted inputs, expected outputs, languages, domains, and excluded uses |
+| Target behavior | A measurable improvement on named task slices |
+| Frozen baseline | Base model, prompt, retrieval, tools, decoder settings, and current scores |
+| No-change requirements | General capabilities, safety behavior, calibration, and formats that must not regress |
+| Data boundary | Permitted sources, rights, retention, sensitive classes, and deletion obligations |
+| Deployment target | Serving runtime, latency and memory limits, adapter support, and data residency |
+| Budget ceiling | Data, compute, engineering, evaluation, and serving cost limits |
+| Promotion gate | Metrics, uncertainty rule, failure budget, approver, and evidence deadline |
+| Rollback | Last-known-good artifact, rollback trigger, owner, and maximum recovery time |
 
-Before tooling, answer the harder question. In 2026 the realistic default for
-many tasks is *do not train weights*. Prompt engineering, few-shot examples,
-retrieval (@sec-retrieval-practice), and structured outputs cover much of what
-fine-tuning used to be reached for. OpenAI, while winding down its self-serve
-fine-tuning product, points users to prompt caching, smaller base models, and
-RAG instead
-([explainx.ai, secondary](https://explainx.ai/blog/openai-gpt-55-pricing-fine-tuning-api-wind-down-2026)).
+The target behavior should be observable in examples before training begins.
+“Know our product” is not a contract. “Return a valid support-category object on
+at least 98 percent of the frozen test cases, without worsening refusal accuracy
+or the general-helpfulness retention set beyond its failure budget” is closer.
+The actual thresholds belong to the application, not to this book.
 
-Fine-tune when you need a *durable behavior change* the context window cannot
-carry cheaply:
+The frozen baseline includes the complete path that users see. A different chat
+template, retrieval index, tool schema, or decoder can move a score without any
+weight update. If those pieces are omitted, the experiment cannot attribute its
+result to fine-tuning.
 
-- a consistent output format or house style the prompt keeps drifting from,
-- a narrow domain with vocabulary or conventions absent from the base model,
-- a latency or cost win from distilling a large model's behavior into a small
-  specialized one (this is the constraint arrow below),
-- a capability shaped by reinforcement learning against a verifiable reward,
-  the reasoning and agentic case from @sec-training-to-reason.
+## Decide whether the behavior belongs in weights
 
-If none of these holds, spend the week on better prompts and retrieval, not
-on a training run.
+Run the frozen baseline and the cheapest plausible alternatives on the **same
+evaluation set**. This comparison is the train-or-not gate.
 
-::: {.callout-tip}
-## Constraint arrow
-The serving layer reaches up and justifies the most common reason to
-fine-tune. A small model that you have specialized costs far less per token
-to serve (@sec-serving-stack) than a large general model behind an API. When
-you serve a high volume, the training run pays for itself in inference
-savings, which is the same over-training-for-inference logic from
-@sec-scaling-laws applied one level up. Fine-tuning here is a *serving-cost*
-decision wearing a *training* costume.
-:::
+- Put changing facts and source-backed answers in **retrieval**, where they can
+  be updated and cited.
+- Put exact syntax in a **tool schema**, grammar, validator, or structured
+  decoder. A weight update cannot guarantee validity.
+- Put a short, inspectable policy in the **prompt** or application code.
+- Use tools when the task requires current state or an external effect.
+- Fine-tune when a frequent, durable behavior must live in the weights and the
+  measured gain survives the complete serving path.
 
-Change the numbers (the one-time fine-tune cost and the two serving prices,
-all illustrative) and watch where the two cost lines cross: below the
-break-even volume the big API model is cheaper, above it the fine-tuned small
-model wins.
+Do not train merely because examples exist. Training is a poor substitute for a
+missing database, an authorization check, or a deterministic parser. It is also
+a poor response to an evaluation failure whose cause has not been diagnosed.
+
+The available supervision then determines the next branch:
+
+| Need and evidence | Plausible intervention | Main risk to test |
+|---|---|---|
+| Correct demonstrations exist | Supervised fine-tuning (SFT) | Imitating annotation defects or formatting noise |
+| Chosen and rejected answers exist | Direct preference optimization (DPO) or another preference objective | Preference inconsistency, length bias, and overfitting |
+| A reliable programmatic or learned reward exists | Reinforcement learning or reinforcement fine-tuning | The reward can be gamed or optimized beyond its validity |
+| The base lacks a domain distribution, vocabulary, or modality | Continued pretraining, followed by task adaptation | Forgetting, data cost, and contamination |
+| A larger system is good enough but too costly to serve | Distillation from teacher outputs into a smaller student | Copying teacher errors and losing tail behavior |
+| Context, retrieval, or tools meet the contract | No weight change | Operational complexity in the non-training path |
+
+SFT learns from demonstrations. DPO learns from paired preferences without an
+online rollout loop [@rafailov2023dpo]. Classical RLHF first fits behavior from
+demonstrations, then learns a reward from rankings and optimizes a policy against
+that reward [@ouyang2022training]. These objectives consume different evidence
+and fail differently. A method name cannot repair labels that do not express the
+contract.
+
+## Build data that can be defended
+
+A training example is not just text. It is a source record, a permission to use
+that record, a transformation history, a split assignment, a template revision,
+and a decision about which tokens receive loss.
+
+Create a data provenance record before materializing examples. At minimum it
+contains a stable source ID, origin, collection time, owner, license or other
+legal basis, consent constraints where applicable, allowed purpose, retention
+period, sensitivity class, and deletion mechanism. Remove or explicitly govern
+personally identifiable information, credentials, customer secrets, and
+copyrighted material. A model checkpoint does not make deletion obligations
+disappear. Dataset-aggregator labels are not sufficient evidence: a large audit
+found frequent missing and misclassified license information and traced the need
+to retain original-source lineage [@longpre2024licensing].
+
+Structured data documentation makes those decisions visible. Data Cards record
+origins, collection and annotation processes, intended uses, and lifecycle
+maintenance [@pushkarna2022datacards]. The useful internal equivalent is a
+versioned dataset manifest whose rows point back to source IDs. When a source is
+withdrawn, lineage identifies every derived example, dataset version, run, and
+artifact that requires review.
+
+### Split by the unit that can leak
+
+Randomly splitting rows is often wrong. Choose a **grouping unit** that keeps
+related material together: customer, conversation, document, repository,
+incident, author, or time window. Assign groups to train, development, and test
+once, then deduplicate within each split and **across splits**. Near-duplicates
+can inflate evaluation and increase memorization; language-model experiments
+have shown both effects [@lee2022deduplicating].
+
+Assign the split before fitting data filters, choosing examples from model
+scores, generating synthetic variations, or tuning a template against the
+corpus. Cluster exact and near duplicates before assignment when possible so a
+duplicate family moves as one group. Compare the resulting training inventory
+with internal evaluation suites and public benchmarks, including prompts used
+to generate teacher data, and publish the residual overlap in a contamination
+report.
+
+The test set enters **test quarantine** before method selection. Training code
+must not read it, prompt authors must not tune against it, and synthetic-data
+generation must not use it as a seed. Store only its digest and access policy in
+the run manifest. A development set supports iteration; the quarantined test set
+supports the promotion decision.
+
+```{dot}
+//| label: fig-training-data
+//| fig-cap: "A leakage-resistant data path. Rights are checked first, related records and duplicate clusters stay together, and the test partition is sealed before training transforms are materialized."
+digraph data_path {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", penwidth=1.0];
+
+  sources [label="Source inventory\nID • rights • sensitivity"];
+  groups [label="Group related records\nand duplicate clusters"];
+  split [label="Assign one split\ntrain • development • test"];
+  seal [label="Seal test partition\ndigest • access policy"];
+  render [label="Materialize transforms\ntemplate • tools • masks"];
+
+  sources -> groups -> split -> seal -> render;
+}
+```
+
+### Treat formatting as part of the artifact
+
+Apply the exact tokenizer and chat template intended for training and serving.
+Validate role order, beginning and end tokens, tool-call serialization,
+truncation, and maximum length. Inspect decoded batches rather than trusting a
+configuration flag. For prompt-completion or conversational SFT, use a **loss
+mask** when the contract calls for assistant-only loss; otherwise the optimizer
+may spend capacity predicting user text or system scaffolding. Current TRL
+documentation, for example, distinguishes full-sequence, completion-only, and
+assistant-only loss behavior [@hf2026trl].
+
+For examples indexed by $i$, an assistant-masked SFT objective can be written
+as
+
+$$
+\mathcal{L}_{\mathrm{SFT}}(\theta)
+=
+-\frac{1}{Z}
+\sum_{i=1}^{N}
+\sum_{t=1}^{T_i}
+m_{i,t}
+\log p_{\theta}(y_{i,t}\mid x_i,y_{i,<t}),
+\qquad
+Z=\sum_{i=1}^{N}\sum_{t=1}^{T_i}m_{i,t}.
+$$
+
+where:
+
+- $N$ is the number of examples, and $T_i$ is the token length of example
+  $i$;
+- $x_i$ is the prompt and other conditioning input;
+- $y_{i,t}$ is output token $t$, while $y_{i,<t}$ is the preceding output
+  prefix;
+- $p_{\theta}$ is the model distribution with trainable parameters
+  $\theta$;
+- $m_{i,t}\in\{0,1\}$ is the loss mask, normally one on assistant answer tokens
+  and zero on excluded prompt, padding, or scaffolding tokens; and
+- $Z$ is the number of included tokens, which normalizes the loss.
+
+Unit-test the formatter with a few fixed examples. The test should assert token
+IDs, labels, mask positions, truncation behavior, and round-trip decoding. A
+template change is a data change and a serving-interface change.
+
+### Measure memorization rather than assuming privacy
+
+Fine-tuning on a small, repeated, or sensitive corpus can expose rare strings.
+Before training, scan for secrets and exact duplicates. During evaluation, probe
+held-out canaries and plausible prefixes, and record whether sensitive spans can
+be reproduced. Exposure testing was introduced precisely because ordinary loss
+and accuracy do not reveal unintended memorization [@carlini2019secret]. These
+tests do not prove privacy, but they turn a vague concern into a release gate.
+
+## Choose the smallest weight change that meets the contract
+
+Method selection has two independent axes: the objective determines **what
+signal** the model learns from, while parameter scope determines **how much of
+the model** can move.
+
+Let $W\in\mathbb{R}^{d_{\mathrm{out}}\times d_{\mathrm{in}}}$ denote a weight
+matrix. LoRA freezes that matrix and learns a low-rank update
+[@hu2021lora]:
+
+$$
+W' = W + \Delta W,
+\qquad
+\Delta W = BA,
+$$
+
+where:
+
+- $W'$ is the adapted matrix;
+- $A\in\mathbb{R}^{r\times d_{\mathrm{in}}}$ and
+  $B\in\mathbb{R}^{d_{\mathrm{out}}\times r}$ are trainable factors;
+- $d_{\mathrm{in}}$ and $d_{\mathrm{out}}$ are the input and output widths;
+  and
+- $r$ is the adapter rank, normally much smaller than either width.
+
+For that matrix, each factor contributes to the trainable parameter count:
+
+$$
+N_{\mathrm{LoRA}} = r(d_{\mathrm{in}} + d_{\mathrm{out}})
+$$
+
+This count excludes biases and framework-specific scaling. Rank, target
+modules, scaling, dropout, and which non-adapter modules remain trainable are
+part of the experiment, not universal defaults.
+
+| Parameter scope | What moves | What it can buy | What must be measured |
+|---|---|---|---|
+| LoRA | Low-rank factors on selected modules | Small trainable state and separate task artifacts | Rank and target-module sensitivity, adapter serving support, retention |
+| QLoRA | LoRA factors while the base is a frozen quantized base | Lower base-weight memory during adaptation | Quantization backend, compute dtype, peak memory, quality against non-quantized LoRA |
+| DoRA | Magnitude plus a low-rank directional update | A different capacity and optimization trade-off from LoRA | Extra state, runtime support, and empirical gain on the target task |
+| Full fine-tuning | All selected base parameters | Maximum freedom to change the model | Optimizer memory, forgetting, checkpoint size, and full regression suite |
+
+QLoRA backpropagates through a frozen 4-bit base into higher-precision adapters;
+its paper combines NF4, double quantization, and paged optimizers
+[@dettmers2023qlora]. DoRA decomposes magnitude and direction rather than using
+the same update geometry as LoRA [@liu2024dora]. Neither paper establishes a
+universal example-count threshold. Choose among LoRA, QLoRA, DoRA, and full
+fine-tuning through an **empirical comparison** on the same contract, beginning
+with the smallest viable pilot. Hold data, token budget, and evaluation constant
+when the purpose is to compare parameter scopes.
+
+## Size the run before launching it
+
+The checkpoint size is not the training memory requirement. A useful accounting
+identity is
+
+$$
+M_{\mathrm{peak}}
+= M_{\mathrm{params}}
++ M_{\mathrm{grads}}
++ M_{\mathrm{opt}}
++ M_{\mathrm{acts}}
++ M_{\mathrm{workspace}},
+$$
+
+where:
+
+- $M_{\mathrm{params}}$ is resident parameter and adapter storage at the
+  chosen precisions;
+- $M_{\mathrm{grads}}$ is gradient storage for trainable parameters;
+- $M_{\mathrm{opt}}$ is optimizer and any master-weight state;
+- $M_{\mathrm{acts}}$ is saved activation memory, which depends on batch,
+  sequence length, model shape, and activation checkpointing; and
+- $M_{\mathrm{workspace}}$ covers kernels, communication buffers, temporary
+  tensors, the runtime, and fragmentation.
+
+With $n_{\mathrm{shard}}$ data-parallel workers, a fully sharded method may
+bring parameter, gradient, and optimizer terms toward
+
+$$
+M_{\mathrm{local}}
+\gtrsim
+\frac{M_{\mathrm{params}}+M_{\mathrm{grads}}+M_{\mathrm{opt}}}
+{n_{\mathrm{shard}}}
++ M_{\mathrm{acts}} + M_{\mathrm{workspace}},
+$$
+
+but this is a planning lower bound, not a promise. Layer all-gathers, unsharded
+modules, activation placement, communication overlap, and optimizer choices
+change the peak. ZeRO established the state-sharding decomposition
+[@rajbhandari2020zero]; current FSDP2 similarly shards parameters, gradients,
+and optimizer state while scheduling all-gather and reduce-scatter operations
+[@pytorch2026fsdp2]. Measure the exact model, sequence distribution, batch,
+precision, checkpointing policy, and backend with a short dry run. Then repeat a
+checkpoint save, interruption, and **resume test** before renting a large fleet.
+
+### Count the program, not only GPU time
+
+The fixed cost of adaptation is
+
+$$
+C_{\mathrm{adapt}}
+= C_{\mathrm{data}}
++ C_{\mathrm{train}}
++ C_{\mathrm{eval}}
++ C_{\mathrm{engineering}}
++ C_{\mathrm{deploy}},
+$$
+
+where the five terms cover data preparation and review, training compute,
+evaluation, engineering time, and deployment work. If two systems meet
+**equivalent quality** and operational requirements, their costs after serving
+$V$ million accepted tokens can be modeled as
+
+$$
+C_{\mathrm{base}}(V)=F_{\mathrm{base}}+Vc_{\mathrm{base}},
+\qquad
+C_{\mathrm{tuned}}(V)=F_{\mathrm{tuned}}+Vc_{\mathrm{tuned}}.
+$$
+
+The break-even volume is
+
+$$
+V^*=
+\frac{F_{\mathrm{tuned}}-F_{\mathrm{base}}}
+{c_{\mathrm{base}}-c_{\mathrm{tuned}}},
+$$
+
+provided $c_{\mathrm{base}}>c_{\mathrm{tuned}}$. Here
+$F_{\mathrm{tuned}}$ includes $C_{\mathrm{adapt}}$, the $F$ terms are fixed
+costs in dollars, and the $c$ terms are dollars per million accepted tokens.
+There is no meaningful crossover if quality, safety, or reliability differs, or
+if the tuned path is not cheaper per accepted token.
 
 <figure id="fig-training-finetuning-practice-cost-crossover">
-<div class="viz" data-viz="cost-crossover" data-x-label="tokens served (millions)" data-y-label="total cost (USD)" data-x-max="40" data-a-label="big API model" data-a-fixed="0" data-a-rate="5" data-a-rate-min="2" data-a-rate-max="10" data-a-rate-label="big API price (USD per 1M tokens)" data-b-label="fine-tuned small model" data-b-fixed="50" data-b-rate="0.5" data-b-fixed-min="10" data-b-fixed-max="100" data-b-fixed-label="one-time fine-tune cost (USD)" data-b-rate-min="0.1" data-b-rate-max="3" data-b-rate-label="small model price (USD per 1M tokens)"></div>
-<figcaption>Two total-cost lines against tokens served. The big API model is fixed cost 0 plus its per-token price, a straight line through the origin. The fine-tuned small model carries the one-time fine-tune cost up front, then a much lower per-token price. Where they cross is the break-even volume: below it the API is cheaper, above it the fine-tune has paid for itself. Drag the three sliders to see the crossover move. It is a serving-cost decision in a training costume. Illustrative numbers, not a quote.</figcaption>
+<div class="viz" data-viz="cost-crossover" data-x-label="accepted tokens served (millions)" data-y-label="total cost (USD)" data-x-max="40" data-a-label="frozen baseline" data-a-fixed="0" data-a-rate="5" data-a-rate-min="2" data-a-rate-max="10" data-a-rate-label="baseline cost (USD per 1M accepted tokens)" data-b-label="adapted model" data-b-fixed="50" data-b-rate="0.5" data-b-fixed-min="10" data-b-fixed-max="100" data-b-fixed-label="adaptation program cost (USD)" data-b-rate-min="0.1" data-b-rate-max="3" data-b-rate-label="adapted cost (USD per 1M accepted tokens)"></div>
+<figcaption>An illustrative break-even model. The adapted path starts with the complete adaptation program cost, then adds serving cost per million accepted tokens. Drag the fixed and variable costs to see the crossover move. Compare paths only after they satisfy the same quality and operating contract; the numbers are not vendor quotes.</figcaption>
 </figure>
 
 :::: {.runnable}
 ```python
-import numpy as np
-import matplotlib.pyplot as plt
+# Illustrative only. All costs are USD; volume is millions of accepted tokens.
+base_fixed = 0.0
+adaptation_program = 50.0
+tuned_fixed = adaptation_program
+base_rate = 5.0
+tuned_rate = 0.5
 
-# Illustrative only: shape of the trade-off, not a quote.
-finetune_cost = 50.0      # one-time fine-tune run, USD
-big_price = 5.0           # large API model, USD per 1M tokens served
-small_price = 0.5         # fine-tuned small model, USD per 1M tokens served
-
-vol = np.linspace(0, 40, 200)            # millions of tokens served
-big_total = big_price * vol              # no training, pay per token
-small_total = finetune_cost + small_price * vol
-
-break_even = finetune_cost / (big_price - small_price)
-print(f"break-even at {break_even:.1f}M tokens served")
-
-plt.plot(vol, big_total, label="big API model")
-plt.plot(vol, small_total, label="fine-tuned small model")
-plt.axvline(break_even, ls="--", color="gray")
-plt.xlabel("tokens served (millions)"); plt.ylabel("total cost (USD)")
-plt.legend(); plt.title("When does a fine-tune pay for itself?")
-plt.show()
+if base_rate <= tuned_rate:
+    print("no positive break-even volume")
+else:
+    break_even = (tuned_fixed - base_fixed) / (base_rate - tuned_rate)
+    print(f"break-even volume: {break_even:.1f}M accepted tokens")
 ```
 ::::
 
-## Key players (mid-2026)
+## Select tools by capability
 
-The tables below are dated and source-attributed.
+A framework name is not an architecture. Build a **capability matrix** from the
+contract, then verify every required cell against the project's **official
+support matrix**, a smoke test, and the intended model revision.
 
-### Distributed engines
+| Capability | Questions to answer before selection |
+|---|---|
+| Objective and model | Does the exact model, tokenizer, template, SFT or preference objective, and adapter method work together? |
+| Scale and recovery | Does it fit one device, require sharding, survive preemption, save optimizer state, and resume deterministically enough for the contract? |
+| Artifact control | Are checkpoint portability, adapter format, exportability, and merge behavior documented and tested? |
+| Governance | Where do examples, logs, checkpoints, and metrics travel? Do data residency, access, deletion, and audit requirements hold? |
+| Evaluation | Can the runner evaluate during training without reading the quarantined test set or leaking it into early stopping? |
+| Operations | Are version pinning, observability, failure handling, cost attribution, and vendor exit covered? |
 
-| Name | What it is | License | Best for | Note (mid-2026) |
-|------|-----------|---------|----------|-----------------|
-| **PyTorch FSDP2** | Native fully-sharded data parallel; shards params, grads, optimizer state as DTensor | BSD | PyTorch-native sharded training without a heavy framework | FSDP2 is current; FSDP1 deprecated from PyTorch 2.11+. Adds per-param freezing, mixed FP8/BF16 ([PyTorch tutorial](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html)) |
-| **TorchTitan** | PyTorch-native pre-training platform on FSDP2; composable 4D parallelism | BSD | Production pre-training / continued pre-training on PyTorch | Reported speedups on Llama 3.1 recipes at 128 to 512 GPU scale ([arXiv 2410.06511](https://arxiv.org/pdf/2410.06511)); foundation under torchforge |
-| **NVIDIA Megatron-Core** | GPU-optimized tensor/pipeline/expert/context parallelism; product-supported | Apache-2.0-style + NVIDIA support | Large dense, MoE, and multimodal training on NVIDIA GPUs | Jan 2026 added dynamic context parallelism (reported up to ~1.48x on variable-length seqs); FP8 training ([docs](https://docs.nvidia.com/megatron-core/index.html), [roadmap](https://github.com/NVIDIA/Megatron-LM/issues/4003)) |
-| **NeMo / Megatron Bridge** | Higher-level orchestration over Megatron-Core; recipes, export, alignment | Open source + NVIDIA support | Teams standardizing on the NVIDIA stack end to end | Bridge 0.4.0 (Apr 2026) added Kimi 2.5, Nemotron 3, Qwen 3.5 VL, FP8 export ([docs](https://docs.nvidia.com/nemo/megatron-bridge/latest/)) |
-| **DeepSpeed (ZeRO)** | ZeRO sharding, CPU/NVMe offload, training optimizations | Apache-2.0 / MIT | Memory-constrained training, offload, very large models | Latest release v0.19.2 (Jun 2026); v0.19.x includes Muon-related ZeRO-3 updates ([releases](https://github.com/deepspeedai/DeepSpeed/releases)) |
-| **JAX + MaxText** | Decoder-only LLM reference on JAX/XLA, tuned for TPU | Apache-2.0 | Foundation-model training on Cloud TPU | Ironwood TPU FP8; Qwen3-Next and DeepSeek features (Mar 2026). Pairs with Tunix for RL ([docs](https://maxtext.readthedocs.io/), [Cloud TPU + JAX](https://docs.cloud.google.com/tpu/docs/jax-ai-stack)) |
+High-level post-training toolkits expose SFT, preference, reward-model, and RL
+trainers; TRL is one current example [@hf2026trl]. Adapter libraries such as
+PEFT implement LoRA-family methods and checkpoint operations [@hf2026peft].
+Configuration-oriented projects such as Axolotl can be useful when a reviewed
+file should describe the run [@axolotl2026]. Native distributed engines such as
+FSDP2 or ZeRO become relevant when model and optimizer state no longer fit the
+target topology. Managed services replace some infrastructure work, but they do
+not replace the data contract, evaluation gate, export decision, or rollback
+plan.
 
-### Post-training toolkits (what most teams touch)
+Do not select a tool from star counts, a vendor price snapshot, or a claim that
+one package is always fastest. Benchmark the smallest representative run. Pin
+versions and container images. Force a worker failure, restore from a checkpoint,
+export the artifact, and serve it through the target runtime before scaling up.
 
-| Name | What it is | License | Best for | Note (mid-2026) |
-|------|-----------|---------|----------|-----------------|
-| **Hugging Face TRL** | Official HF post-training: SFT, DPO, GRPO, reward modeling | Apache-2.0 | The reference; building blocks others wrap | De-facto standard trainers; integrates PEFT, accelerate, FSDP/DeepSpeed ([docs](https://huggingface.co/docs/trl)) |
-| **Axolotl** | Config-driven (YAML) wrapper over TRL/PEFT; LoRA, QLoRA, full FT, multimodal | Apache-2.0 | Reproducible config-as-code runs on a few GPUs | Multimodal since 2025; "edit a YAML, get a run" ([repo](https://github.com/axolotl-ai-cloud/axolotl)) |
-| **Unsloth** | Custom Triton kernels for faster, lower-VRAM SFT and RL on 1 to 2 GPUs | Apache-2.0 core; paid Pro | Single-GPU efficiency; long-context GRPO | OSS is effectively single-GPU; robust multi-GPU is Pro (**uncertain**, status evolving). GRPO on a 24GB GPU; FP8 RL ~1.4x vs BF16 ([docs](https://unsloth.ai/docs)) |
-| **LLaMA-Factory** | Broad toolkit + web UI (LlamaBoard); widest model support | Apache-2.0 | Many model families, low-code UI, breadth over peak speed | ~68k GitHub stars; can use an Unsloth backend reportedly within ~6% of native speed ([secondary](https://theaiengineer.substack.com/p/unsloth-vs-axolotl-vs-llama-factory)) |
-| **torchtune** | PyTorch-native post-training (SFT/DPO/PPO/GRPO/QAT), minimal abstraction | BSD | Hackable recipes on PyTorch | **Maintenance only:** active dev stopped Jul 15, 2025; an unnamed PyTorch-native successor is in development ([issue #2883](https://github.com/meta-pytorch/torchtune/issues/2883)) |
-| **torchforge** | PyTorch-native RL + agentic post-training on Monarch + TorchTitan + vLLM | Open source, **experimental** | Scalable RL post-training without writing distributed infra | Announced Oct 2025. Not the torchtune successor; sits on TorchTitan (training) and vLLM (rollouts) ([PyTorch blog](https://pytorch.org/blog/introducing-torchforge/)) |
-| **verl** | Hybrid-controller RL post-training (the HybridFlow design, EuroSys'25): PPO/GRPO/GSPO/DAPO/REINFORCE++ over FSDP or Megatron trainers with vLLM/SGLang rollouts | Apache-2.0 | Production multi-node RL post-training | ByteDance-initiated, community-maintained; the de-facto multi-node RL framework. vLLM's own vime (Jun 2026) repeats the pattern, wiring Megatron and vLLM into one RL pipeline ([repo](https://github.com/verl-project/verl), [vime](https://vllm.ai/blog/2026-06-09-announcing-vime)) |
-| **HF PEFT** | Library implementing LoRA, QLoRA, DoRA, rsLoRA | Apache-2.0 | The adapter layer under TRL/Axolotl/LLaMA-Factory | Where the LoRA-family methods live ([docs](https://huggingface.co/docs/peft)) |
+## Make the run reproducible
 
-### Managed services (no accelerators of your own)
+The configuration submitted to a trainer is only part of a **run manifest**.
+The manifest binds data, code, model, environment, and evaluation into one
+identity. This is the production counterpart of reproducibility reporting for
+code, data, configuration, and experimental conditions [@pineau2021reproducibility]:
 
-| Name | What it is | Best for | Note (mid-2026) |
-|------|-----------|----------|-----------------|
-| **OpenAI fine-tuning** | Hosted SFT/RFT on GPT models | (Winding down) | **Self-serve fine-tuning is being wound down.** No new orgs since May 7, 2026; all new jobs end Jan 6, 2027 ([deprecations](https://developers.openai.com/api/docs/deprecations)) |
-| **Tinker** (Thinking Machines) | Managed LoRA SFT and RL over open weights, including large MoE (e.g. Qwen 235B-A22B); you write the training loop in Python, they run the distributed GPUs | Research-grade control without GPU operations | Launched Oct 2025; the counterpoint to OpenAI's self-serve wind-down: managed FT is consolidating, not dying ([Tinker](https://thinkingmachines.ai/tinker/)) |
-| **Together AI** | Managed SFT, DPO, LoRA on open weights; per-training-token billing | Cheap LoRA/SFT on open weights + dedicated serving | E.g. LoRA SFT ~$0.48/M tokens (16B), full FT ~$3.20/M (70 to 100B), DPO ~$8/M; serving endpoint billed separately ([secondary](https://www.cloudzero.com/blog/together-ai-pricing/)) |
-| **Fireworks AI** | Self-serve post-training + fast serving in one place | Tune-and-serve together | Reported ~$800M ARR (May 2026), up from ~$305M (end 2025) ([secondary](https://sacra.com/c/fireworks-ai/)) |
-| **AWS Bedrock** | Managed SFT + RFT, including open weights, OpenAI-compatible APIs | AWS-native shops; RFT on open weights | RFT for open-weight + OpenAI-compatible FT added Feb 2026 ([what's-new](https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-bedrock-reinforcement-fine-tuning-openai)) |
-| **Modal** | Serverless GPU compute; run torchtune/Unsloth/Axolotl yourself | Bring-your-own-recipe on on-demand GPUs | Not fully managed FT; you write the training code ([ref](https://www.spheron.network/blog/fireworks-ai-alternatives/)) |
-| **Azure AI Foundry / Google Vertex** | Cloud-native managed fine-tuning (Azure OpenAI, Gemini tuning) | Enterprises on Azure/GCP | Azure has FT cost-management tooling ([Microsoft Learn](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning-cost-management)) |
+The prose names each field as well as the machine key: code revision, container
+digest, base checkpoint digest, tokenizer revision, dataset manifest, split
+rule, random seed, optimizer, scheduler, and checkpoint interval.
 
-### Parameter-efficient methods
+```yaml
+run_id: support-sft-0042
+code_revision: <git-commit>
+container_digest: <sha256>
+package_lock_digest: <sha256>
+driver_and_runtime: <versions>
+hardware_topology: <device-and-interconnect-description>
+base_checkpoint: <model-id-and-revision>
+base_checkpoint_digest: <sha256>
+tokenizer_revision: <revision>
+prompt_template_revision: <revision>
+dataset_manifest: <uri-and-sha256>
+split_rule: <grouping-unit-and-assignment-version>
+test_set_digest: <sha256-only-no-training-access>
+objective: sft
+parameter_scope: lora
+target_modules: <explicit-list>
+adapter_rank: <measured-candidate>
+optimizer: <name-and-all-parameters>
+scheduler: <name-and-all-parameters>
+random_seed: <integer>
+determinism_flags: <explicit-values>
+precision: <parameter-gradient-optimizer-dtypes>
+batching: <microbatch-accumulation-sequence-policy>
+checkpoint_interval: <steps-or-tokens>
+resume_state: <optimizer-scheduler-scaler-rng-sampler-cursor>
+evaluation_plan: <version>
+```
 
-These are techniques, not products; they live inside PEFT, Unsloth, and TRL.
-See @sec-sft-peft for the theory of why a low-rank update suffices.
+Resolve every placeholder before a run. Record the effective configuration
+after defaults and environment overrides, not only the file the operator
+intended to submit. Preserve data-loader order, packing policy, token counts,
+learning-rate history, gradient norms, skipped updates, throughput, peak memory,
+and checkpoint events. Resumable state includes the model or adapter, optimizer,
+scheduler, precision scaler, random-number generators, sampler or data-loader
+cursor, global token counter, and sharding metadata. Store the last complete
+checkpoint atomically and test restoration in a clean process.
 
-- **LoRA.** Low-rank adapters; the default. Zero added inference latency once
-  merged into the base weights.
-- **QLoRA.** A 4-bit NF4 (a number format for weights) frozen base plus LoRA;
-  the single-GPU sweet spot for roughly 1K to 50K examples.
-- **DoRA.** Weight-decomposed LoRA (magnitude plus direction); better
-  convergence, worth it at larger data, roughly 50K to 500K examples.
-- **rsLoRA.** Rank-stabilized LoRA for high ranks.
-- Newer arXiv variants (RandLoRA, activation-space methods) exist but are not
-  defaults. **Treat as frontier, unverified in production**
-  ([AppScale 2026](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026)).
+Bit-for-bit replay is not always available across accelerators and kernels. The
+operational goal is still strict: the manifest must reproduce the data and
+objective exactly, restore a run, and produce results within a declared
+statistical tolerance. When a small dataset or unstable objective makes seed
+variance material, run more than one random seed and carry that uncertainty into
+the promotion report.
 
-## How to choose
+## Evaluate the change, not the loss curve
 
-Once you have decided you genuinely need to train weights, four questions
-settle the tool.
+**Training loss is not a release metric.** It measures fit to the training
+objective, including all defects in the labels and template. Promotion compares
+the candidate with the frozen baseline on evidence that was not used to choose
+the checkpoint.
 
-**Scale of the run.** One consumer or single GPU points to **Unsloth** for
-its kernels and low VRAM. A few GPUs with config-as-code call for **Axolotl**
-or **LLaMA-Factory**. Multi-node pre-training or continued pre-training is the
-territory of **TorchTitan/FSDP2**, **Megatron-Core**, or **MaxText** on TPUs.
+Use at least five evaluation families:
 
-**Ecosystem you live in.** NVIDIA GPUs plus a desire for vendor support point
-to **Megatron-Core/NeMo**. If you want PyTorch-native and hackable, that is
-**FSDP2/TorchTitan + TRL**; on TPUs it is **JAX/MaxText**. Pure Hugging Face
-muscle memory needs only **TRL** directly.
+1. **Target-task quality.** Score the named success criteria and every important
+   task slice, including rare but costly cases.
+2. **Retention.** Re-run general capabilities and product behaviors listed in
+   the no-change requirements. Fine-tuning can cause catastrophic forgetting;
+   this has been observed directly in language-model tuning studies
+   [@li2024forgetting].
+3. **Safety and policy.** Test refusals, prompt injection, tool boundaries,
+   demographic or language slices, and application-specific harms.
+4. **Privacy and memorization.** Run secret scanning, canary exposure, and
+   extraction probes appropriate to the data threat model.
+5. **Operational behavior.** Measure output length, valid-structure rate, tool
+   call correctness, time to first token, total latency, memory, throughput, and
+   cost through the serving runtime.
 
-**Method.** Style or format with small data points to **QLoRA**. A deeper
-domain shift, with more data behind it, wants **DoRA** or high-rank LoRA. For a
-structural domain change with 500K or more examples, the answer is **full
-fine-tuning**. Reasoning or agentic behavior against a reward belongs to
-**GRPO/GSPO**: Unsloth on a single GPU, **verl** for multi-node production
-runs, TRL or the experimental torchforge on plain PyTorch
-(@sec-training-to-reason).
+Use paired prompts and the same decoder settings for baseline and candidate.
+Report the paired difference, confidence interval, sample count, and failures,
+not only an average. If multiple random seeds were trained, separate training
+variance from evaluation sampling uncertainty. A candidate passes only when its
+target gain clears the predeclared threshold and every retention, safety,
+privacy, and operational slice stays inside its failure budget. @sec-eval-practice
+develops the harness and statistical discipline behind this gate.
 
-**Self-host versus managed.** Managed wins on time-to-first-run, no GPU
-operations, and elastic cost, with predictable per-training-token pricing.
-Self-host wins on data residency and IP control, unusual recipes,
-repeated or large runs where you amortize hardware, and avoiding vendor
-lock-in or sudden deprecation. Note the convenience tax: Together prices LoRA
-per training token *plus* a separate hourly dedicated endpoint to serve the
-result, so the cheap headline number is not the full bill.
+Human review remains necessary when the contract contains qualities that an
+automatic metric does not capture. Fix the rubric and blind reviewers to model
+identity where practical. Inspect disagreements and concrete failures before
+converting production traces into the next training set.
 
-Concrete picks:
+## Package and deploy the complete artifact
 
-- **Pick Unsloth when** you are on one 24 to 80GB GPU and want the fastest,
-  lowest-VRAM SFT or long-context GRPO.
-- **Pick Axolotl when** you want reproducible YAML-configured runs across a
-  few GPUs and value config-as-code in CI.
-- **Pick LLaMA-Factory when** you need breadth of model support or a low-code
-  UI for non-experts.
-- **Pick TRL directly when** you are writing custom post-training logic and
-  want the canonical trainers.
-- **Pick TorchTitan/FSDP2 or Megatron-Core when** you are doing real
-  multi-node pre-training or continued pre-training.
-- **Pick MaxText when** you are on TPUs.
-- **Pick a managed service when** you have no GPU operations appetite and a
-  standard SFT/LoRA/DPO/RFT workload, but design an export path given 2026's
-  deprecation precedent.
+The release is larger than `adapter.safetensors`. Package or reference:
 
-## A sensible default (mid-2026)
+- the base model ID, **base model digest**, and license;
+- the **adapter digest** or full-checkpoint digest and its parameter scope;
+- tokenizer files and revision, prompt template, tool schemas, and generation
+  defaults;
+- the run manifest, dataset manifest, code and container digests, and training
+  logs;
+- the promotion report, intended uses, excluded uses, measured slices, and known
+  limitations; and
+- the compatible serving runtime, precision, hardware class, and rollback
+  instructions.
 
-For a typical product team that has decided it genuinely needs to fine-tune an
-open-weight model, as of June 2026:
+The package enters the serving path described in @sec-serving-stack only after
+those identities and compatibility constraints have been checked.
 
-**Default: Axolotl (YAML config) on top of TRL + PEFT, doing QLoRA**, on
-rented GPUs (Modal, Runpod, or your own cloud). It is reproducible,
-config-as-code fits CI and eval (@sec-eval-practice), QLoRA keeps it single-
-or few-GPU, and you keep your weights and data. A starting recipe is `r=16`,
-DoRA on, `target_modules="all-linear"`, and you raise the rank for harder
-tasks
-([AppScale 2026](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026)).
+Model Cards provide a useful structure for intended use, evaluation conditions,
+limitations, and disaggregated results [@mitchell2019modelcards]. Sign the
+manifest and bind it to artifact digests using the same lifecycle discipline as
+@sec-deployment-lifecycle.
 
-- **Alternative A, maximum single-GPU efficiency or RL:** Unsloth, especially
-  for consumer GPUs or long-context GRPO.
-- **Alternative B, no GPU operations at all:** a managed service. Together for
-  cheap open-weight LoRA/SFT, Fireworks if you want tune-and-serve in one
-  place, Bedrock if you are AWS-native, Tinker if you want to keep writing the
-  loop yourself and rent only the distributed GPUs. Build an export and
-  portability path;
-  do not assume a managed FT product is permanent. OpenAI's self-serve
-  wind-down, announced May 2026, is the cautionary tale.
-
-For multi-node pre-training rather than fine-tuning, the default shifts to
-**TorchTitan/FSDP2** or **Megatron-Core**, or **MaxText** on TPUs.
-
-## Wiring it into the stack
-
-The defining 2026 wiring fact is that **RL post-training now embeds the
-inference layer**. A GRPO or PPO loop generates rollouts from the current
-policy, scores them with a reward, then updates the weights. Generation is the
-bottleneck, so toolkits delegate it to a fast inference engine, almost always
-**vLLM**. Unsloth drives vLLM for rollouts; torchforge runs vLLM for
-generation and TorchTitan for training, shuttling weights between them through
-an RDMA tensor store
-([PyTorch blog](https://pytorch.org/blog/introducing-torchforge/)); verl, the
-production multi-node case, schedules vLLM or SGLang rollout workers and FSDP
-or Megatron trainers under one hybrid controller, the same pattern vLLM's own
-vime adopted in June 2026. So the
-training box in your architecture diagram contains a serving box. This is the
-same vLLM from @sec-serving-stack, now used as a training subcomponent, a
-clean instance of the book's thesis that these layers are one infrastructure. The architectural patterns that split that loop, colocated versus disaggregated, and the asynchronous-versus-on-policy trade, are the subject of @sec-training-agents.
+An adapter can remain separate or be merged into the base. Separate adapters
+reduce storage and can support several tasks over one base, but the serving
+runtime must load the correct base-adapter pair and account for adapter-switching
+latency and capacity. A merged checkpoint is easier for runtimes without adapter
+support, but it duplicates the base and needs its own license and digest review.
+Run **merge parity** on fixed prompts before release: compare separate-adapter and
+merged outputs or logits under the same tokenizer, precision, and serving
+runtime. Do not assume algebraic merge means identical runtime behavior after
+serialization or quantization.
 
 ```{dot}
 //| label: fig-training-wiring
-//| fig-cap: "End-to-end wiring. A toolkit drives PEFT and a distributed engine to produce weights, which then flow through serving, gateway, eval, and the agent and retrieval layers. In the RL case the serving engine (vLLM) sits inside the training loop."
-digraph {
-  bgcolor="transparent";
+//| fig-cap: "Promotion and deployment are reversible. The candidate is evaluated through the serving runtime, introduced to a canary cohort, and either promoted or returned to the last-known-good artifact."
+digraph release {
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
+  bgcolor="transparent";
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
 
-  data [label="Data\n(SFT / preference / reward)"];
-  toolkit [label="Toolkit\nTRL / Axolotl / Unsloth"];
-  peft [label="PEFT\nLoRA / QLoRA / DoRA"];
-  engine [label="Engine\nFSDP2 / DeepSpeed / Megatron"];
-  weights [label="Adapter or merged weights"];
-  vllm [label="vLLM rollouts"];
-  serving [label="Serving engine\nvLLM / TGI"];
-  gateway [label="Gateway"];
-  eval [label="Eval harness\n(gate before promotion)"];
-  agents [label="Agents / retrieval"];
+  manifest [label="Run manifest + checkpoint"];
+  package [label="Package complete artifact\nbase • adapter • template"];
+  offline [label="Offline promotion gate\npaired target + regressions"];
+  canary [label="Canary through serving runtime"];
+  promote [label="Promote or roll back\nretain last-known-good"];
 
-  data -> toolkit;
-  toolkit -> peft [label="uses"];
-  toolkit -> engine [label="runs on"];
-  peft -> weights;
-  engine -> weights;
-  toolkit -> vllm [style=dashed, label="RL loop"];
-  vllm -> toolkit [label="reward"];
-  weights -> serving;
-  serving -> gateway;
-  gateway -> eval;
-  eval -> agents;
+  manifest -> package -> offline -> canary -> promote;
+  promote -> package [label="next version", style=dashed];
 }
 ```
 
-After training you merge the adapter, or serve it directly with an
-adapter-aware engine, hand the weights to the serving layer behind your
-@gls-gateway (@sec-serving-stack), and route an eval harness against it before
-promotion (@sec-eval-practice). The retrieval and agent layers then consume
-the served model. Adapter-aware serving, many LoRAs over one base, is where
-managed adapter platforms historically fit. The whole flow assembles into the
-end-to-end stack of @sec-wiring-stack.
+Deploy first to a canary cohort with explicit rollback triggers. Compare quality
+proxies, errors, refusals, latency, token use, and task completion with the
+last-known-good version. Preserve execution provenance so an incident can be
+mapped back to the exact base, adapter, template, and runtime. A staged rollout
+does not relax the offline gate; it tests production conditions that offline
+data cannot reproduce. Operational rollback restores service behavior. It does
+not remove a withdrawn record's influence from already trained weights; that
+requires retraining, validated unlearning, or retirement under the deletion
+policy.
 
-## A config and a launch you can adapt
+### RL adds a serving system inside training
 
-A minimal Axolotl QLoRA config, illustrative and meant to be edited:
+Online RL post-training contains a **rollout generator** as well as training
+workers. Generation produces trajectories, a reward path scores them, and the
+learner updates the policy. Every batch therefore needs a weight version. If
+rollout workers lag behind training workers, record and bound **policy
+staleness** rather than silently treating old trajectories as current-policy
+data.
 
-```yaml
-# qlora.yml
-base_model: Qwen/Qwen3-8B
-load_in_4bit: true          # QLoRA: 4-bit NF4 frozen base
-adapter: lora
-lora_r: 16
-lora_alpha: 32
-lora_target_modules: all-linear
-datasets:
-  - path: ./data/sft.jsonl
-    type: chat_template
-gradient_checkpointing: true
-sequence_len: 4096
-micro_batch_size: 2
-num_epochs: 3
-# distributed backend (FSDP2 or DeepSpeed) configured via accelerate
-```
+A **colocated** topology places generation and training on the same accelerator
+pool. It avoids a dedicated rollout pool but may pay for memory contention,
+sleep or offload transitions, resharding, and phase switches. A
+**disaggregated** topology gives rollout and learner roles separate pools,
+allowing independent scaling but introducing transfer, scheduling, and
+freshness costs. HybridFlow formalizes one distributed RLHF dataflow and a
+mechanism for reshaping an actor between generation and training layouts
+[@sheng2024hybridflow]. @sec-training-agents examines these choices in depth. The
+important boundary here is artifact identity: rollout data records policy,
+reward, tokenizer, environment, and sampling versions so the update can be
+audited.
 
-Launch it, then merge the adapter for serving:
+## Operate the adaptation lifecycle
 
-```bash
-# train (single or few GPUs via accelerate)
-accelerate launch -m axolotl.cli.train qlora.yml
+A practical sequence is:
 
-# merge the LoRA adapter back into the base for adapter-free serving
-python -m axolotl.cli.merge_lora qlora.yml --lora_model_dir ./out
-```
+1. **Freeze the contract.** Name the target behavior, frozen baseline,
+   no-change requirements, budgets, promotion gate, owner, and rollback path.
+2. **Test the no-training alternatives.** Run prompt, retrieval, tool schema,
+   and structured decoder changes against the same evaluation set.
+3. **Inventory and govern data.** Record data provenance, rights, consent,
+   sensitivity, retention, and deletion lineage.
+4. **Build splits once.** Select the grouping unit, deduplicate across splits,
+   and quarantine the test set before experiments.
+5. **Choose the smallest viable pilot.** Match SFT, preference learning, RL,
+   continued pretraining, or distillation to the supervision, then compare the
+   smallest plausible parameter scopes.
+6. **Size and rehearse.** Measure peak memory, throughput, checkpoint time, and
+   cost; inject a failure and pass the resume test.
+7. **Run from a sealed manifest.** Capture effective configuration, data and
+   code digests, telemetry, checkpoints, and random seeds.
+8. **Write the promotion report.** Compare the candidate with the baseline on
+   target-task, retention, safety, memorization, operational, and human-review
+   slices with uncertainty.
+9. **Package and canary.** Verify digests, merge parity, serving compatibility,
+   and rollback, then use a staged rollout with the last-known-good artifact
+   still available.
+10. **Monitor and requalify.** Feed reviewed failures into a new dataset version,
+    never directly into the quarantined test set. Apply retention and deletion
+    jobs to raw records, derived datasets, logs, caches, checkpoints, and model
+    registries through the recorded lineage.
 
-The merged weights are then handed to the serving stack. Keep the config in
-version control so a training run is a reviewable diff, the same discipline
-you apply to the rest of the infrastructure.
+A **requalification trigger** includes a base-model change, tokenizer or
+template change, dataset or split-rule change, objective or parameter-scope
+change, serving-runtime change, precision or merge change, new device class,
+material traffic shift, policy change, or newly discovered data-rights issue.
+Each trigger creates a new artifact identity and reruns the affected gates.
 
-## What fine-tuning really buys
+The output is an adaptation decision record that links the contract, data
+lineage, run manifest, candidate artifact, promotion report, serving version,
+and rollback result. That record is what turns a training experiment into an
+operable part of the infrastructure.
 
-Fine-tuning is first a *capability* lever,
-the durable behavior change a prompt cannot carry. Increasingly it doubles as an
-*efficiency* lever, distilling a large model into a small cheap-to-serve one,
-which is why the serving-cost constraint arrow points up so often. It also opens
-a *trust* surface: a fine-tuned model has absorbed your data, so data residency,
-reproducible config-as-code, and an eval gate before promotion are not
-niceties but the controls that let you ship the weights at all. The
-2026 default is still to reach for prompting and retrieval first, and to train
-only when the behavior change has to live in the weights.
+## Lower-layer constraint
+
+Fine-tuning cannot compensate for an artifact that the serving stack cannot
+load, a tokenizer or template mismatch, insufficient accelerator memory, an
+unrecoverable checkpoint, or data that the organization has no right to use.
+The adaptation release therefore inherits constraints from storage, compute,
+distributed execution, artifact packaging, and serving. Those layers must
+preserve the identities and limits recorded in the contract; otherwise the
+evaluated candidate and the deployed system are different systems.
+
+Capacity planning also runs downward. Sequence length and batch policy set
+activation memory, parameter scope sets optimizer and checkpoint state, and the
+rollout topology sets communication and freshness costs. A method is viable
+only when those lower layers meet the recovery, latency, residency, and cost
+requirements of the release.
 
 ::: {.callout-important}
 ## What's contested
-The unstable decision is whether fine-tuning is a capability investment or an
-expensive way to encode a brittle workflow. Small adapters can be cheap and
-reversible, but they can also hide data leakage, weaken general behavior, or
-move policy into weights where it is harder to inspect. Full training gives more
-control and more risk. The operational test is therefore narrow: train only when
-the desired behavior is frequent, measurable, hard to carry in context, and
-valuable enough to justify a separate evaluation and rollback path.
+
+It remains unclear how often a weight update is the best long-term home for a
+product behavior. Adapters are cheap to store and can improve repeated tasks,
+but they can also encode stale policy, memorize private examples, weaken general
+behavior, or create a fleet of base-adapter dependencies. Full fine-tuning and
+RL offer more freedom and a larger failure surface. The decision should remain
+reversible: prefer the smallest measured intervention, preserve the frozen
+baseline, and promote only evidence that survives the complete release path.
 :::
 
 ## Further reading
 
-First-hand sources first.
+The primary papers define the adaptation methods and their measured scope; the
+systems and documentation sources explain how to operate the result.
 
 ::: {#further-reading}
 :::

@@ -1135,7 +1135,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/04-training-finetuning-practice.qmd",
-      ["which tools should change a model's weights", "wire into the rest of the stack", "should the team be training at all"],
+      ["adaptation release", "adaptation contract", "frozen baseline", "versioned model artifact"],
     ],
     [
       "zh/practice/04-training-finetuning-practice.qmd",
