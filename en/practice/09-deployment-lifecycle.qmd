@@ -1,244 +1,417 @@
 # The Deployment Lifecycle {#sec-deployment-lifecycle}
 
-A trained model that has been made to serve tokens (@sec-serving-problem) is
-still not an operated system. Something has to decide which version is live,
-move traffic onto a new one without betting the whole userbase on it, notice
-when the behavior drifts, and undo the change when it goes wrong. Operating AI
-in production treats that work as its own discipline: the deployable artifact is
-a bundle, promotion is a statistical pipeline rather than an exact diff, and
-rollback has to restore the model, prompts, retrieval indexes, tools, and
-guardrails together.
+Deployment is a controlled state transition from a known baseline to a
+candidate. The deployment release contract names the compatibility conditions,
+the evidence required to widen exposure, and the recovery action for each
+failure. Without that contract, a successful build says only that some files
+exist. It does not say that the candidate can coexist with the live system, that
+the comparison is trustworthy, or that service can be recovered.
 
-![Schematic of release risk across a deployment lifecycle. Canary ramps keep user-visible risk bounded compared with a single big-bang release. Idealized curves, not measured data.](/figures/deployment-lifecycle-1.svg){#fig-deployment-lifecycle-1}
+This chapter consumes the integration release from @sec-wiring-stack and turns
+it into an operated change. The unit of control is a release manifest: a signed
+record that composes the revisions used by a behavior, even when those parts are
+separately deployed. The lifecycle ends only when desired and observed state
+agree, the evidence is attached, and a release owner accepts the remaining
+risk. The output is a deployment release record.
 
-The recurring lesson of a decade of running machine learning in production is
-that the model is the small part. The 2015 paper that named the problem put it
-bluntly: only a tiny fraction of a real machine-learning system is the learning
-code, and the rest is configuration, data plumbing, serving infrastructure, and
-the monitoring that keeps it trustworthy [@sculley2015debt]. The deployment lifecycle
-is where that surrounding mass is operated, and it is the run-time half of what
-this book has so far built only at training and serving time.
+Production ML exposed this problem before generative AI. Learning code is a
+small part of a deployed ML system; data dependencies, configuration, serving,
+and monitoring create most of its operational surface [@sculley2015debt]. The
+ML Test Score consequently treats data, model, infrastructure, and monitoring
+tests as production-readiness evidence [@breck2017mltestscore]. Generative AI
+adds prompts, retrieval, tools, policies, stochastic evaluation, and often a
+hosted model whose implementation the operator cannot inspect. It enlarges the
+release state; it does not remove the earlier engineering obligations.
 
-## The artifact is not the model
+## Name the release state
 
-The first mistake is to think the thing being deployed is a set of weights. In a
-modern stack the unit that produces a behavior is a bundle, a container image
-plus its environment but for a model behavior: the model version,
-the system prompt, the decoding parameters, the tool schemas the model is
-allowed to call, the retrieval index it reads (@sec-rag-retrieval), and the
-guardrail configuration around it. Change any one of them and the observable
-behavior can change as much as swapping the weights would. A new system prompt
-shipped against the same checkpoint is a new deployment, and treating it as a
-mere text edit is how a quiet prompt change becomes an unattributable regression
-a week later.
+A model checkpoint is an artifact. It is not a release. A release manifest
+binds the behavior-bearing components to one reviewable identity. A deployment
+event maps that manifest to an environment and cohort. Observed runtime state
+then reports what is actually serving. Keeping those records separate matters:
+an approved manifest does not prove that every cell converged to it.
 
-So the registry has to version the bundle, not the checkpoint. The operational
-rule is that every element that can move the output is pinned and recorded
-together, and a deployment refers to one immutable bundle by a single
-identifier. This is the discipline behind the ML Test Score rubric, which scores
-a system not on its accuracy but on whether its data, model, and infrastructure
-are tested and reproducible enough to be run by someone who did not build them
-[@breck2017mltestscore]. An interview study of practitioners found the same
-thing from the field: the teams that stayed sane were the ones who treated
-versioning of data and configuration as seriously as versioning of code, and the
-ones who did not spent their time chasing changes no one could attribute
-[@shankar2022operationalizing].
+The manifest should fingerprint at least the following surfaces.
+
+| Surface | Identity to record |
+|---|---|
+| Inference | model revision, tokenizer or chat template, adapter, serving runtime, decoding policy |
+| Context | prompt revision, retrieval snapshot, corpus and index revision, embedding and reranking pipeline |
+| Action | tool implementation and tool schema, permission and policy revision, effect class |
+| Routing | router configuration, fallback order, feature flags, assignment policy |
+| State | API and event schema, data schema, serializer, cache namespace, migration phase |
+| Operation | infrastructure digest, region or cell, telemetry schema, evaluator revision |
+| Mutable dependency | endpoint, provider revision, region, declared mutability, evidence expiry, probe, fallback, kill switch |
+
+Controllable artifacts use immutable content digests rather than mutable tags
+such as `latest`. Secret values never belong in the manifest; it records only a
+scoped secret-version reference. A hosted API, live tool, or changing corpus may
+not offer byte identity. Record that limitation as a bounded mutable dependency
+with an owner, contract expiry, change-detection probe, requalification rule,
+and fallback. An opaque provider identifier is useful evidence, but it does not
+prove byte reproducibility.
 
 ```{dot}
 //| label: fig-deploy-bundle
-//| fig-cap: "The deployable artifact is a bundle, not a checkpoint. The registry pins every element that can move the output and refers to the whole by one immutable id, so a behavior change is always attributable to a named deployment."
+//| fig-cap: "A release manifest composes immutable artifacts and bounded mutable dependencies. The deployment event assigns it to an environment; observed state proves what actually serves."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  rankdir=TB;
+  nodesep=0.18; ranksep=0.24;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1, width=2.25];
+  edge [fontsize=8, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  subgraph cluster_B {
-    label="one deployment bundle (immutable id)";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    W [label="model version / weights"];
-    P [label="system prompt"];
-    D [label="decoding params"];
-    T [label="tool schemas"];
-    R [label="retrieval index version"];
-    G [label="guardrail config"];
-  }
-  S [label="served behavior"];
-  W -> S;
-  P -> S;
-  D -> S;
-  T -> S;
-  R -> S;
-  G -> S;
+  A [label="Artifacts\ncode · model · prompt\nretrieval · tools · policy"];
+  M [label="Signed release manifest\ndigests · schemas · evidence\nowner · expiry · recovery"];
+  D [label="Deployment event\nenvironment · cell · cohort"];
+  O [label="Observed state\nactual revisions · health"];
+  A -> M [label="compose"];
+  M -> D [label="authorize"];
+  D -> O [label="reconcile"];
 }
 ```
 
-## The promotion pipeline
+Identity alone is not trust. A digest proves byte identity, not who published
+the bytes. A signature authenticates a statement under a trust policy, not that
+the release is safe. A software bill of materials inventories declared
+composition, not correctness. Provenance records how a build was produced, not
+whether its source was benign. Use these controls together: verify the artifact
+digest, signed manifest, attestation subject, allowed builder and source, and
+software bill of materials at admission. Supply-chain provenance such as SLSA
+and in-toto makes that chain inspectable [@slsa2025spec;
+@torresarias2019intoto]. Update metadata should also resist a rollback attack,
+freeze attack, or mix-and-match of revisions that were never approved together,
+the threats formalized by The Update Framework [@tuf2026spec].
 
-With the artifact defined, the question becomes how a candidate bundle replaces
-the live one. The answer is a pipeline of widening exposure, and the reason it
-has stages is that each stage catches a failure the previous one could not.
+The manifest records the system fingerprint, but the release record also needs
+scope, owner, authority, acceptance evidence, known gaps, expiry, desired state,
+observed state, and recovery target. Every request, conversation, or long-running
+job records its assigned release so an incident can be traced to the behavior
+that handled it.
 
-The first gate is offline. A candidate runs against the benchmark suite
-(@sec-benchmarks), with the uncertainty discipline of @sec-statistical-reliability,
-and, for an agent, against the trajectory evaluations of @sec-evaluating-agents,
-the judged rubrics of @sec-judging-holistic, and the operating policy of
-@sec-operational-evaluation. This
-gate is cheap and fully under your control, and it catches gross regressions
-before any user sees them. Its weakness is that it measures the world you
-already knew to test, and production is the world you did not.
+## Separate the lifecycle verbs
 
-So the candidate next sees real traffic without affecting anyone. In shadow or
-mirror mode the live request is duplicated to the candidate, the candidate's
-output is logged and scored, and only the incumbent's output is returned to the
-user. Shadowing surfaces the distribution gap between your eval set and live
-input at zero user risk, and its only cost is the compute to run two models for
-a while.
+The following verbs are not synonyms.
 
-When the candidate survives shadowing, exposure begins for real. A canary routes
-a small percentage of live traffic to the candidate and watches online metrics,
-latency, error rate, refusal rate, and whatever task-success proxy the product
-can measure, then ramps the percentage up only while those metrics hold. The
-discipline of ramping on a small blast radius and watching real signals before
-widening is the oldest idea in the Google production playbook, predating
-machine learning entirely [@beyer2016sre]. Blue-green is the same idea with two
-full environments and an instant cutover, traded against running two fleets at
-once. The pipeline is drawn in @fig-deploy-pipeline.
+- **Deploy** makes a candidate available in an environment without necessarily
+  exposing users.
+- **Release** activates the candidate for a declared cohort.
+- **Promote** widens exposure after the required evidence passes.
+- **Abort** stops a transition before more exposure or irreversible work occurs.
+- **Rollback** restores a previous compatible serving path.
+- **Roll forward** deploys a repair when reversal is unsafe or impossible.
+
+A feature flag can separate deployment from release. A rolling update replaces
+capacity while old and new versions coexist. Blue-green maintains two
+environments and switches traffic; it becomes a canary only if both receive
+concurrent traffic. A canary is a partial, time-limited release evaluated
+against a control [@warner2018canarying]. The mechanism follows from the state
+and risk being changed; none is universally safest.
+
+## Prove coexistence before exposure
+
+During a rollout, old and new code run at the same time. The compatibility
+envelope therefore covers more than request and response types. It includes the
+API and event schema, data schema and serializer, old reader and new reader, old
+writer and new writer, retrieval index generations, cache namespaces, session
+state, checkpoint state, queued jobs, and tool-effect records. The old version
+must safely interpret what the candidate can write if traffic rollback is meant
+to remain available.
+
+Test both directions before production:
+
+| Fixture | Question answered |
+|---|---|
+| Old client to new server; new client to old server | Are request and response contracts compatible? |
+| Old reader after new writer; new reader after old writer | Can mixed versions share persisted state? |
+| Half-old and half-new fleet | Do routing, cache, queue, and session semantics survive coexistence? |
+| Upgrade, candidate write, then downgrade | Does the promised rollback actually preserve data? |
+| Long session and queued job across cutover | Is release identity sticky for stateful work? |
+| Migration retry and restore | Are migration steps idempotent, observable, and recoverable? |
+
+AWS's rollback-safety guidance describes the same reader-before-writer and
+writer-before-reader discipline for distributed deployments
+[@pokkunuri2019rollback]. The conformance test matrix should run in CI and in a
+production-like environment with the real serializers, queues, schemas, and
+adapters. A passing unit test against one version cannot prove mixed-version
+compatibility.
+
+When a schema cannot change in one compatible step, use **expand, migrate,
+contract** [@sato2014parallel]. First expand readers and schemas to accept both
+forms while writers preserve the old form. Then dual-read or dual-write where
+necessary, backfill with resumable checkpoints, and verify counts, referential
+integrity, and semantic equivalence. Activate the new form only after mixed
+versions pass. Contract in a later release, after old readers, old writers,
+sessions, and jobs are gone and the rollback window has closed. Removing the old
+form is a declared recovery boundary, not routine cleanup.
+
+## Promote by widening evidence and exposure
+
+Promotion begins with build and verify, not with user traffic. Verify digests,
+signatures, provenance, configuration, schemas, capacity, credentials, and the
+compatibility fixtures. Then run the offline gate from @sec-eval-practice,
+including deterministic invariants and quality estimates over representative
+slices. A dark launch starts the candidate and its dependencies without routing
+requests, revealing startup, capacity, and control-plane faults.
+
+Shadow execution can expose gaps between an offline set and live inputs, but it
+is not harmless. Duplicating a request may disclose data, consume provider quota,
+pollute a shared cache, mutate shared state, or execute a tool. A safe shadow
+path must apply current authorization before duplication, suppress side effects,
+use sandboxed tools, restrict egress, use an isolated cache and isolated
+state, cap load, quarantine its traces, and discard the candidate output.
+Some workloads cannot be shadowed safely.
+
+Real exposure starts with a limited cell, then a sticky canary. Declare the
+assignment unit: tenant, user, session, conversation, or task. Use the unit that
+prevents one workflow from crossing candidate and baseline when state or
+experience can carry over. Keep a concurrent control, record both the assignment
+record and actual exposure, and label telemetry by observed release. Before
+interpreting outcomes, test for sample ratio mismatch; a mismatch between
+planned and observed allocation can reveal assignment or instrumentation faults
+[@fabijan2019srm].
 
 ```{dot}
 //| label: fig-deploy-pipeline
-//| fig-cap: "Promotion as widening exposure. Each stage catches what the one before it cannot: the offline gate catches known regressions, shadow traffic catches the eval-to-production distribution gap at zero user risk, and the canary ramp catches live failures on a small blast radius before full rollout. A failed metric at any stage routes back to rollback."
+//| fig-cap: "Promotion widens evidence before blast radius. Every stage can advance, hold, contain, roll back, or roll forward; missing evidence never advances the release."
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  rankdir=TB;
+  nodesep=0.13; ranksep=0.20;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1, width=2.25];
+  edge [fontsize=8, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
 
-  C [label="candidate bundle"];
-  O [label="offline eval gate"];
-  SH [label="shadow / mirror traffic"];
-  CA [label="canary ramp 1% to 100%"];
-  F [label="full rollout"];
-  RB [label="rollback / hold"];
-  C -> O;
-  O -> SH [label="pass"];
-  SH -> CA [label="metrics hold"];
-  CA -> F [label="metrics hold"];
-  O -> RB [label="fail"];
-  SH -> RB [label="gap too large"];
-  CA -> RB [label="regression"];
+  B [label="Build and verify\nsupply chain · compatibility"];
+  O [label="Offline gate\ninvariants · evals · slices"];
+  D [label="Dark launch + shadow\ncapacity · isolated replay"];
+  C [label="Cell + sticky canary\nconcurrent control"];
+  R [label="Regional waves\nbake · widen parallelism"];
+  F [label="Full release\nreconcile · observe"];
+  B -> O -> D -> C -> R -> F;
 }
 ```
+
+Regional waves bound correlated failure. Start with a small but representative
+cell, then a contrasting or higher-volume region. Increase parallelism only
+after a bake period. Preserve failover capacity and capacity headroom; honor
+residency and local dependency constraints; never update every replica in one
+failure domain together. Where possible, keep one active change per comparison
+so its effect remains attributable. Publish routing and configuration atomically
+from a last-known-good record, and give every wave the same global stop
+condition. This staged shape follows established hands-off deployment practice
+[@liguori2020deployments].
+
+## Make the gate answer the release question
+
+Deterministic checks and statistical checks answer different questions. Schema
+validation, authorization, policy, idempotency, tool permission, migration
+integrity, and route identity are deterministic invariants: one violation blocks
+promotion. Statistical comparison does not replace them. It estimates uncertain
+quality or performance differences over a population.
+
+For required metric or slice $j$, define
+
+$$
+\Delta_j = \mathbb{E}[Y_j(1)-Y_j(0)],
+$$
+
+where $Y_j(1)$ is the candidate outcome and $Y_j(0)$ the concurrent-control
+outcome for the same declared population. Let $L_j$ be a valid lower confidence
+bound for $\Delta_j$, and let $\delta_j \geq 0$ be the predeclared practical
+loss, or non-inferiority margin, the service can tolerate. A necessary quality
+condition is
+
+$$
+L_j \geq -\delta_j
+\qquad \text{for all required } j.
+$$
+
+This is not the whole gate. Declare one primary metric, guardrail metrics,
+minimum detectable effects, slices, minimum traffic, dwell time, and delayed
+outcome window before the release. Require evidence completeness and fail closed
+when assignment, exposure, evaluator, or telemetry data is missing. Apply an
+absolute SLO and harm boundary even if the candidate looks better than a failing
+control. Shared failure, interference between cohorts, carryover from earlier
+assignments, novelty effects, and a delayed outcome can all invalidate a naive
+comparison. Online controlled-experiment practice provides the experimental
+foundation for these checks [@kohavi2009experiments].
+
+Repeatedly checking an ordinary fixed-horizon interval until it passes changes
+its error rate. Choose a fixed horizon or an always-valid method designed for
+continuous monitoring and optional stopping [@johari2022alwaysvalid]. “No
+significant difference” is not evidence of safety: the experiment may simply be
+underpowered. Promotion requires the predeclared bounds and operational
+guardrails to pass, not the absence of an alert.
 
 ::: {.callout-tip}
 ## Constraint arrow
 
-Serving samples from a distribution, so the same input run twice does not return
-the same bytes (@sec-serving-problem). That fact, which lives entirely in the
-inference layer, dictates the shape of the release process two layers up: you
-cannot promote a candidate by diffing its outputs against the incumbent's,
-because they would differ even if nothing changed. Promotion has to be
-statistical. You compare distributions of a scored metric over many requests and
-ask whether the candidate is worse with significance, not whether any single
-output changed. This is why the evaluation harness of @sec-evaluating-agents
-quietly becomes the release gate: the thing that decides whether a deployment
-ships is the same machinery that decides whether an agent is any good, and a
-team without a trustworthy harness has no trustworthy way to promote.
+Stochastic generation means exact output bytes are usually the wrong quality
+contract (@sec-serving-problem). It does not make every release decision
+statistical. The serving layer pushes quality comparison toward population
+estimates, while schema, permission, side-effect, and state contracts remain
+exact. The release gate therefore joins the evaluation evidence of
+@sec-eval-practice with the boundary contracts of @sec-wiring-stack and the
+authorization rules of @sec-security-authorization.
 :::
 
-## When the ground moves
+## Detect changes after promotion
 
-A deployment that was good on the day it shipped does not stay good, because the
-world it serves keeps moving. Two kinds of drift matter, and they fail in
-opposite directions.
+A release can move without a new model. Configuration drift, policy drift,
+retrieval-corpus or index drift, schema drift, tool drift, evaluator drift,
+telemetry drift, runtime drift, and infrastructure drift can all change observed
+behavior. Self-hosted systems are not exempt: mutable tags, kernels, hardware,
+caches, and live data can move under them.
 
-Input drift is the familiar one: the distribution of what users send shifts week
-to week, a new use case arrives, a product launch changes who is asking, and the
-candidate that aced last month's eval is now answering questions it never saw.
-The defense is to grow the regression suite from production itself. A trace that
-the live system handled badly, caught by a user report or by an online judge, is
-promoted into the offline suite so the next candidate is graded on it. The
-suite is therefore never finished; it is a sediment of every way the system has
-already failed, and the chapter on the production data engine (@sec-data-engine)
-is where that loop is operated as infrastructure.
+For a hosted dependency, prefer an immutable revision and record the response
+model or provider revision actually observed. If the provider exposes only a
+mutable alias, shorten the evidence expiry, run a change-detection probe, watch
+deprecation notices, and require requalification before or immediately after an
+identity change. Fixed probes cannot establish complete equivalence, but they
+can make an otherwise silent change visible. Production failures should feed a
+curated regression set through the data loop in @sec-data-engine; raw trace
+replay still requires current authorization and side-effect isolation.
 
-Behavior drift is the one peculiar to building on models you do not host. When
-the product calls a third-party endpoint (@sec-model-landscape), the provider
-can upgrade the model under a stable name, and the bundle you thought was pinned
-moves without a deployment on your side. The output you validated last quarter is
-produced by a different model this quarter, and nothing in your own change log
-records it. The only defenses are to pin an explicitly dated model version when
-the provider offers one, and to run a continuous canary of fixed inputs against
-the live endpoint so a silent upgrade shows up as a metric shift you can see
-rather than a support ticket you cannot explain.
+Continuously reconcile desired and observed state in every cell. A healthy
+control plane is not proof that every replica loaded the right prompt, index, or
+policy. Mixed-version detection, release-labeled telemetry, and periodic
+black-box probes close that gap.
 
-## Incident response and the rollback you must have
+## Recover the system, not just traffic
 
-Everything above assumes the change can be undone, and for a model system the
-undo is less obvious than for code. Rolling back weights is easy if the previous
-bundle is still addressable in the registry, which is the entire payoff of
-versioning the bundle rather than the checkpoint. A behavior that emerged from a
-prompt-and-retrieval interaction is harder: it reverts cleanly only when the
-prompt and the index version were pinned in the same bundle, which is why the
-registry discipline is not bookkeeping but the precondition for recovery. The operational
-minimum is that the previous good bundle is always one routing change away, and
-that the canary's online metrics are wired to an alert so a regression triggers a
-rollback before it reaches everyone, not after.
+Recovery has several actions. An abort stops further exposure. A traffic
+rollback routes new work to a compatible earlier release. A state restore
+recovers persisted data to a known point. Feature disable or a kill switch
+contains one capability. Credential revoke limits a compromised dependency.
+Compensate reconciles an external effect that cannot be erased. Roll forward
+repairs a state the previous release cannot safely read. These actions are not
+interchangeable.
 
-A minimal promotion-and-rollback control loop makes the shape concrete. The gate
-is a statistical comparison, and the rollback is a routing change, not a rebuild.
+Before calling rollback safe, prove that the previous artifact is retained and
+loadable, its credentials and dependencies remain valid, sufficient capacity
+headroom exists, its readers are backward-compatible with current persisted and
+queued state, and no irreversible effect crosses the declared recovery window.
+Record the recovery time objective (RTO) and recovery point objective (RPO)
+[@nist2010contingency]. Backup restoration is a recovery procedure with
+measurable data loss and time; it is not an ordinary routing operation.
 
-```python
-def promote(candidate, incumbent, traffic, alpha=0.01):
-    # Offline gate: candidate must not regress the held-out suite.
-    if score(candidate, OFFLINE_SUITE) < score(incumbent, OFFLINE_SUITE):
-        return hold(candidate, reason="offline regression")
+Classify each change before rollout:
 
-    # Widen exposure in steps, comparing distributions, not single outputs.
-    for pct in (0, 1, 5, 25, 100):          # pct == 0 is shadow: log, do not serve
-        route(candidate, fraction=pct)
-        cand, base = sample_scored_metrics(candidate, incumbent, traffic)
-        if worse_with_significance(cand, base, alpha):
-            route(incumbent, fraction=100)   # rollback is a routing change
-            return hold(candidate, reason=f"regression at {pct}%")
-    return live(candidate)
+- **Reversible:** traffic rollback to the previous release restores service.
+- **Recoverable:** state restore or an explicit compensate action is also
+  required.
+- **Roll-forward-only:** rollback becomes unsafe after a named migration or
+  external effect.
+
+```{dot}
+//| label: fig-recovery-path
+//| fig-cap: "Recovery follows the state that changed. Abort stops a ramp; Restore adds state recovery or compensation; Roll forward repairs a state that an older release cannot safely consume."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.14; ranksep=0.22;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1, width=1.35];
+  edge [fontsize=8, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  X [label="Release fails a gate"];
+  A [label="Abort\nhold exposure"];
+  Q [label="Old release reads\ncurrent state safely?"];
+  T [label="Traffic rollback"];
+  S [label="State/effect changed?"];
+  R [label="Restore\nor compensate"];
+  F [label="Roll forward\nrepair current state"];
+  V [label="Recovery verification"];
+  X -> A -> Q;
+  Q -> T [label="yes"];
+  Q -> F [label="no"];
+  T -> S;
+  S -> V [label="no"];
+  S -> R [label="yes"];
+  R -> V;
+  F -> V;
+}
 ```
+
+Stopping traffic is only the start. Decide whether to drain or cancel in-flight
+requests, how to handle a queue and backlog, which long sessions retain their
+assignment, and how to prevent mixed-version writers during recovery. Reconcile
+the tool-effect ledger and external side effects. Then perform recovery
+verification: compare desired and observed manifest hashes per cell, run
+black-box tasks and deterministic invariants, inspect SLO and policy metrics,
+validate data and serializer integrity, inspect queues and caches, check
+dependencies, and verify the telemetry path itself. Measure RTO and RPO, observe
+through a bake period, and close only when explicit termination criteria pass.
+NIST recovery guidance likewise requires plans, testing, restoration validation,
+and continued monitoring [@nist2016recovery].
+
+If impact or uncertainty is material, declare an incident early. Assign an
+incident commander, operations lead, communications lead, release owner, and
+recorder; freeze unrelated releases; maintain a timeline of evidence, decisions,
+and observed impact. Mitigation restores safe service. Root-cause analysis can
+continue after the emergency. Clear roles and a working record keep those jobs
+from competing during response [@mace2018incident].
+
+## Exercise failure, not only success
+
+The release procedure is software and needs its own conformance test and failure
+matrix.
+
+| Failure | Required response and proof |
+|---|---|
+| Underpowered or misassigned canary | Hold; verify assignment, actual exposure, sample ratio, power, and dwell |
+| Shadow side effect or data-policy breach | Stop shadowing; contain effects; audit duplicated data and authorization |
+| Missing or stale telemetry | Fail closed; prove the telemetry path before resuming |
+| Partial regional rollout | Stop new waves; reconcile desired and observed state cell by cell |
+| Schema incompatibility after candidate writes | Block traffic rollback; restore or roll forward according to the migration record |
+| Failed rollback or restore | Escalate the incident; isolate writers; preserve evidence; use the tested alternate recovery path |
+| Provider alias change or deprecation | Hold evidence; identify the observed revision; requalify or activate the fallback |
+| Recovery appears healthy but user tasks fail | Keep the incident open; repeat black-box and data-integrity verification |
+
+Drill mixed-fleet upgrade and downgrade, rollback after candidate writes, backup
+restore, regional evacuation, control-plane failure, telemetry failure, and
+effect compensation. A plan that has never restored a representative state is a
+hypothesis, not recovery evidence.
+
+## The complete lifecycle
+
+For each candidate:
+
+1. Freeze the signed release manifest, trust evidence, owner, scope, expiry,
+   compatibility envelope, rollout policy, and recovery class.
+2. Build and verify artifact identity, provenance, schemas, configuration,
+   capacity, credentials, and mixed-version conformance fixtures.
+3. Pass the offline gate: deterministic invariants, representative quality
+   estimates, safety policy, migration checks, and recovery prerequisites.
+4. Dark launch, then shadow only where data handling and effect isolation have
+   been proved.
+5. Release to a limited cell and sticky canary with a concurrent control,
+   recorded assignment and exposure, minimum dwell, and complete telemetry.
+6. Promote through regional waves only while deterministic blockers, absolute
+   guardrails, and predeclared non-inferiority bounds pass.
+7. Complete the migration only after the rollback window closes; reconcile
+   desired and observed state and retain the last-known-good recovery path.
+8. Record evidence, incidents, deviations, RTO/RPO results, known gaps, expiry,
+   and the owner who accepted the final state.
+
+The output is a deployment release record. It says what was intended, what
+actually ran, why exposure widened, what changed during the transition, and
+which recovery path was proved. The next chapter asks how to define reliability
+for the nondeterministic behavior now serving users (@sec-reliability).
 
 ::: {.callout-important}
 ## What's contested
 
-- **Pin a version or ride the latest.** Pinning a dated model gives
-  reproducibility and a stable behavioral contract; riding the provider's latest
-  gives capability gains for free but surrenders the contract. Regulated and
-  agentic systems lean toward pinning; consumer features that want the newest
-  capability lean toward riding. There is no setting that wins both.
-- **Offline eval or mandatory online canary.** One camp trusts a strong offline
-  suite to gate promotion and treats the canary as a formality; the other holds
-  that no offline suite predicts live behavior well enough, so the canary is the
-  real gate and the offline number is only a filter. The disagreement is really
-  about how representative anyone's eval set actually is.
-- **How much trace replay predicts live behavior.** Replaying production traces
-  against a candidate is the cheapest realism you can buy, but a stochastic,
-  context-dependent agent may not reproduce on replay what it did live, so the
-  predictive value of replay is itself unsettled.
+- **How representative the first canary should be.** A low-risk internal cohort
+  limits harm but can miss production load and behavior. A representative
+  cohort improves inference but accepts more exposure. The manifest should state
+  which objective the first wave serves.
+- **Fixed horizon or continuous decision.** A fixed horizon is simpler to audit;
+  an always-valid design can stop earlier while preserving its error guarantee.
+  Switching after looking at the data invalidates either plan.
+- **How long to preserve downgrade compatibility.** A longer rollback window
+  improves recoverability but delays schema contraction and raises operating
+  cost. The decision belongs in the release contract, not in an ad hoc cleanup.
 :::
-
-## What deployment really buys
-
-The deployment lifecycle buys almost no new capability; a model is exactly as
-capable after it is promoted as before. What it buys is the other two. Efficiency
-is the cost of the machinery: shadowing and canarying mean running more than one
-bundle at once and paying for the eval compute that gates every promotion, and
-the operational question is how much of that insurance a given risk level
-justifies. Trust is the whole point. The pipeline exists so that a change to a
-production behavior is attributable, reversible, and caught small, and a team
-that cannot say which bundle is live, cannot promote without diffing exact
-outputs, or cannot roll back in one routing change has a capable model and an
-untrustworthy system. The next chapter takes the trust question further into the
-reliability of a system whose outputs are nondeterministic by construction
-(@sec-reliability).
 
 ## Further reading
 

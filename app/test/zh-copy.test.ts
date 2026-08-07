@@ -1175,7 +1175,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/09-deployment-lifecycle.qmd",
-      ["deployable artifact is a bundle", "promotion is a statistical pipeline", "rollback has to restore", "model, prompts, retrieval indexes, tools"],
+      ["controlled state transition", "deployment release contract", "release manifest", "compatibility envelope", "deployment release record"],
     ],
     [
       "zh/practice/09-deployment-lifecycle.qmd",
