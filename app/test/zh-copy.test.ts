@@ -1199,7 +1199,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/12-production-data-engine.qmd",
-      ["records of real users", "standing apparatus", "training signal", "scarce labeling budget", "intake of the next one"],
+      ["governed evidence pipeline", "data intake contract", "Sample for the question being asked", "Assign partitions before looking at content", "production data release record"],
     ],
     [
       "zh/practice/12-production-data-engine.qmd",

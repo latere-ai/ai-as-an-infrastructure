@@ -1,215 +1,417 @@
 # The Production Data Engine {#sec-data-engine}
 
-The corpus in @sec-data-curation was built once, frozen, and trained on. A
-deployed product cannot stop there, because the moment it ships it begins
-generating the one thing its next model most needs: records of real users
-asking real questions and reacting to real answers. That traffic only becomes
-training signal if a standing apparatus captures it, selects the useful traces,
-routes scarce labeling budget to the cases that matter, and treats the human
-side of labeling as the quiet determinant of quality. Deployment is not the end
-of the training loop; it is the intake of the next one. The accept, edit,
-reject, escalate, approve, and stop events from @sec-human-interface-oversight
-are the first structured inputs to that intake.
+A production data engine is a governed evidence pipeline. It turns eligible
+product events into versioned data products for a declared purpose, such as
+monitoring quality, investigating failures, building an evaluation set, or
+acquiring training examples. It does not treat traffic as free raw material.
+Production traces are biased observations about a deployed system, and often a
+sensitive liability. A click, edit, regeneration, approval, or stop event is
+useful evidence, but it is not automatically a label.
 
-![Schematic of freshness versus quality control in a production data engine. Raw streams are fresh but risky; curated streams try to move the frontier rather than choose one endpoint. Idealized placement, not measured data.](/figures/production-data-engine-1.svg){#fig-production-data-engine-1}
+This distinction changes the design. The pipeline must decide what may be
+collected, minimize it before storage, preserve the context needed to interpret
+it, sample according to purpose, obtain and check judgments, keep evaluation
+apart from training, and publish an immutable release with lineage. A model
+update is only one possible consumer. It still has to pass the evaluation and
+rollout gates in @sec-deployment-lifecycle.
 
-This is a different machine from the one in @sec-synthetic-data. That loop
-manufactures data the model did not have; this one harvests data the product
-already produced and turns it into a label. The two are often run together, but
-confusing them hides the operational cost, because synthetic generation is
-compute and harvesting is people, contracts, and consent.
+The data work is not a clerical tail on model development. Small problems in
+collection and labeling can cascade into failures that are expensive to locate
+later [@sambasivan2021datawork]. Dataset documentation exists for the same
+reason: creators need to tell consumers why data exists, how it was collected,
+what it contains, and which uses are appropriate [@gebru2021datasheets]. The
+production version of that discipline begins at the product boundary.
 
-## The product is a data collector that also answers questions
+## Start with a data intake contract
 
-A served model emits more than an answer. Every request leaves a trace: the
-prompt, the retrieved context, the tool calls, the tokens generated, and, if
-the surface is instrumented, what the user did next. That last part is the
-asset. A user who accepts a suggestion, edits it before using it, regenerates
-it, or abandons the session has graded the output without being asked, and at a
-volume no labeling vendor can match. Implicit signal of this kind is cheap,
-plentiful, and continuous, which is exactly why it is the backbone of a
-production data engine.
+Instrumentation should not begin with "log everything." Begin with the decision
+the data must support and the minimum evidence needed for that decision. A data
+intake contract defines what an eligible event means before the first event is
+stored.
 
-It is also biased in ways a held-out benchmark is not. Users who regenerate are
-not a random sample, the edit a user makes reflects their own goal rather than a
-ground truth, and a thumbs-down arrives far more reliably than a thumbs-up. The
-engine therefore pairs cheap implicit signal with a thin stream of expensive
-explicit judgment: a small, deliberately sampled set of traces sent to trained
-humans who answer a precise question under a written guideline. The implicit
-stream finds the interesting cases; the explicit stream says what the right
-answer was. @fig-data-engine-loop draws the circuit.
+| Contract field | What it must answer |
+|---|---|
+| Event identity | What stable event identity supports deduplication and lineage? |
+| Subject and tenant | Whose interaction is represented, and which isolation boundary applies? |
+| System context | Which task version, model release, prompt version, retrieval version, tool version, policy version, and interface version produced the experience? |
+| Evidence and outcome | Which inputs, outputs, tool effects, provenance, later outcome, and outcome delay are necessary to interpret the event? |
+| Purpose and authority | What is the declared purpose, which allowed downstream uses follow, and what use authorization or consent is required where applicable? |
+| Lifecycle | What retention period, deletion lineage, access control, and derived artifacts apply? |
+| Selection | Which sampling policy selected the event, and what was its inclusion probability? |
+
+The contract is a schema and a policy. Reject or quarantine events with missing
+identity, unknown tenant, absent use authorization, invalid versions, or a
+purpose that does not permit the proposed consumer. Apply data minimization and
+redaction before storage when possible. Encrypting an unnecessary copy does not
+make its collection necessary.
+
+The system context matters because behavior is conditional. A regeneration
+after model release A, prompt version 7, retrieval version 3, and interface
+version 2 is not interchangeable with the same gesture after any of those
+components change. @sec-human-interface-oversight defines correction events at
+the decision boundary. The data engine preserves those events and their
+context; it does not reinterpret them as grades.
+
+## Keep the evidence types separate
+
+Several objects that look similar in a warehouse mean different things:
+
+- A **behavioral event** records an action, such as accept, edit, regenerate,
+  abandon, approve, reject, escalate, or stop.
+- An **observation** joins eligible events with the system context and any later
+  outcome that the intake contract permits.
+- An **annotation** records a person's or machine's answer to a versioned task
+  specification. It retains annotator identity or class, timestamp, guideline
+  version, and confidence or abstention where relevant.
+- An **adjudicated label** is a resolved answer that passed the defined quality
+  process. Agreement is not truth: reviewers can agree because they share a bad
+  instruction or the same missing evidence.
+- A **data product** is an immutable, purpose-specific release of observations,
+  annotations, or labels with a manifest, lineage, quality results, and allowed
+  consumers.
+
+The separation prevents an attractive but invalid shortcut. An accepted answer
+may be correct, merely convenient, or never inspected. An abandoned session may
+indicate a poor answer, a solved problem, an interruption, or a slow interface.
+Edits reveal a difference between before and after artifacts, not why the user
+made it. These signals can prioritize investigation, but ground truth requires a
+task-specific outcome or a qualified judgment.
+
+@fig-data-engine-loop shows the pipeline. The final gate notes that a model
+change alters future exposure, but there is no automatic train-and-deploy cycle.
 
 ```{dot}
 //| label: fig-data-engine-loop
-//| fig-cap: "The production data engine as a standing loop. Served traffic emits traces and implicit signal; sampling and active learning select the few traces worth a human label; labeled data splits into a regression eval set and fresh post-training data, which produce the next model that serves the next traffic."
+//| fig-cap: "A governed production data pipeline. Eligible events are minimized and authorized, sampled by declared purpose, annotated when needed, assigned to stable partitions, and published as versioned data products. Training is one gated consumer, not the destination of every event."
 digraph engine {
-  rankdir=LR;
+  rankdir=TB;
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", fontsize=9];
+  graph [nodesep=0.18, ranksep=0.26];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", margin="0.09,0.06", width=2.45];
+  edge [color="#6b7280", fontcolor="#6b7280", fontsize=8];
 
-  serve [label="served model\ntraffic + traces"];
-  imp   [label="implicit signal\naccept / edit / regen / rate"];
-  sel   [label="select\nsampling + active learning", color="#3b82f6", fontcolor="#3b82f6"];
-  label [label="human labeling\nguideline + QA"];
-  data  [label="labeled data"];
-  evalq [label="regression eval\n(promote failures)"];
-  train [label="post-training\npreference + SFT"];
+  event [label="eligible product event\n+ system and exposure context"];
+  intake [label="minimize + authorize\nvalidate intake contract", color="#3b82f6", fontcolor="#3b82f6"];
+  sample [label="sample by purpose\nrecord inclusion probability"];
+  judge [label="annotate + adjudicate\nretain guideline and judge version"];
+  split [label="stable assignment\naudit / eval / train / quarantine"];
+  release [label="versioned data product\nmanifest + lineage + quality gates", color="#3b82f6", fontcolor="#3b82f6"];
+  consumer [label="declared consumer\nmonitor / diagnose / evaluate / train"];
+  gate [label="qualify candidate\noffline eval + controlled rollout\nchanges future exposure"];
 
-  serve -> imp -> sel;
-  serve -> sel [style=dashed, label="full traces"];
-  sel -> label -> data;
-  data -> evalq;
-  data -> train;
-  train -> serve [label="next model"];
+  event -> intake -> sample -> judge -> split -> release -> consumer;
+  consumer -> gate [label="if model changes"];
 }
 ```
 
-## The labelers are the model
+## Sample for the question being asked
 
-The phrase "human feedback" in @sec-rlhf hides a supply chain. Someone wrote the
-guideline that defines a good answer. Someone else trained the annotators on it,
-a third checked whether two of them given the same item actually agree, and a
-fourth audited the ones who drifted. The quality of a preference dataset, the
-scored answer pairs from @sec-rlhf where a human marked which of two responses
-was better, is set there,
-not in the optimizer, and a model trained on labels that encode an ambiguous
-guideline learns the ambiguity faithfully.
+One sampler cannot serve every purpose. Maintain separate streams and budgets:
 
-The field has a documented blind spot here. The work of defining, collecting,
-and cleaning data is treated as logistics rather than as the engineering it is,
-and the result is data cascades: small upstream labeling problems that surface
-as large, hard-to-diagnose failures downstream [@sambasivan2021datawork]. The
-problem is not exotic. Widely used benchmarks themselves carry pervasive label
-errors, enough that the ranking of models can flip once the test labels are
-corrected [@northcutt2021labelerrors]. If the sets used to crown
-state-of-the-art are this noisy, a hastily assembled production labeling
-operation is noisier.
+| Stream | Selection design | Proper use | Main warning |
+|---|---|---|---|
+| Representative monitoring | Probability sample, usually stratified by declared slices | Estimate quality and safety for an eligible population | Every eligible unit needs a known, positive chance of selection |
+| Diagnostic discovery | Error clusters, novelty search, uncertainty, disagreement, or targeted slices | Find mechanisms and difficult cases | Not a representative sample and not a population estimate |
+| Training acquisition | Coverage gaps, expected learning value, weak supervision, and deduplication | Build a candidate training release | Selection policy changes the training distribution |
+| Incident intake | Severity triggers and user or operator reports | Contain, investigate, and reproduce harm | Preserve evidence, access limits, and incident procedure |
 
-Three controls keep a labeling operation rigorous. A written guideline with
-worked examples turns a vague preference into a repeatable judgment.
-Inter-annotator agreement, measured continuously, says whether the guideline is
-actually shared or only nominally so. And a QA layer that re-labels a sample of
-completed work catches drift before it reaches the optimizer. None of this is
-glamorous, and all of it is load-bearing.
+Do not mix the streams in reporting. A queue enriched for difficult examples is
+valuable for diagnosis, but its raw failure rate cannot describe the served
+population. Conversely, representative monitoring may spend many labels on
+ordinary cases because those cases are part of the quantity being estimated.
+That is measurement, not waste.
+
+If unequal-probability sampling is used for monitoring, retain each inclusion
+probability. For an eligible population of $N$ events, a probability sample
+$s$, an observed outcome $y_i$ for event $i$, and inclusion probability
+$\pi_i = P(i \in s)$, the Horvitz-Thompson estimate of the population mean is
+[@horvitz1952sampling]:
+
+$$
+\widehat{\mu}_{HT}
+= \frac{1}{N}\sum_{i \in s}\frac{y_i}{\pi_i}.
+$$
+
+Here, $N$ is the number of eligible events in the measurement window, $s$ is
+the set actually sampled, $y_i$ is the measured value for event $i$, and
+$\pi_i$ is that event's known positive chance of entering $s$. The
+inverse-probability weight is $1/\pi_i$. This estimator does not repair a
+broken eligibility rule, missing outcomes that depend on unobserved quality, or
+an unknown selection policy. Outcome delay and nonresponse need their own
+measurement treatment.
+
+## Use active learning as acquisition, not measurement
+
+Active learning can direct scarce review toward examples expected to be useful
+for a learner [@settles2009activelearning]. Uncertainty sampling is one method,
+not the definition. Teams may also select by expected model change, diversity,
+novelty, error clusters, or slice coverage. Each method encodes a different
+notion of value.
+
+The limits matter. Model uncertainty can be miscalibrated. A high-uncertainty
+queue can overselect outliers and underselect confident failures. For generated
+answers, disagreement among repeated samples is a diagnostic feature, not a
+calibrated probability of error. Consensus can be wrong, and deciding whether
+two free-form answers are semantically equivalent may itself require judgment.
+Keep an independent representative audit sample so the acquisition policy does
+not grade its own discoveries.
+
+Weak supervision can expand a training candidate set with programmatic labeling
+functions [@ratner2016dataprogramming]. Its label model relies on assumptions
+about labeling-function accuracy and labeling-function dependencies. Correlated
+rules can repeat the same mistake while appearing to provide several votes.
+Version the functions, test their coverage and conflicts, and compare their
+outputs with a held-out human audit. Weak labels are useful inputs to a release
+process, not automatically denoised truth.
+
+## Operate annotation as a production service
+
+"Human feedback" hides a socio-technical system. The optimizer never sees the
+conversation that resolved an ambiguous instruction; it sees the resulting
+label. That makes the annotation operation part of model behavior, even though
+the people performing it are not the model.
+
+A credible operation includes:
+
+1. A versioned task specification with scope, definitions, counterexamples,
+   evidence requirements, and an abstain or escalate option.
+2. Annotator qualification for the domain and language, followed by practice on
+   a calibration set with explained answers.
+3. Seeded quality checks, blind relabel of a probability sample, and slice-level
+   audits that remain separate from production scoring.
+4. An adjudication process for disagreement and guideline defects. Agreement is
+   a consistency measure, while adjudication and external outcomes address
+   validity.
+5. An operated queue with priority, queue age, throughput, a service-level
+   objective, reviewer fatigue controls, and a bounded escalation path.
+
+Data cascades often begin when these decisions are undocumented
+[@sambasivan2021datawork]. Benchmark label errors show why a familiar dataset is
+not exempt from review [@northcutt2021labelerrors]. Track error estimates and
+their uncertainty by task, guideline version, annotator cohort, language, and
+other material slices. Do not rank annotators solely by agreement with a
+majority that may itself be wrong.
+
+### Machine judgments need the same discipline
+
+AI feedback can reduce cost and latency. InstructGPT is an example of training
+with human preference data [@ouyang2022instructgpt], while Constitutional AI
+demonstrates a process that uses written principles and AI feedback for much of
+the supervision [@bai2022constitutional]. Neither design makes a judgment
+source infallible.
+
+Record a machine annotation with the judge model, judge prompt, decoding
+settings, policy or rubric version, input evidence, output, and abstention. Run
+expert calibration on held-out items, inspect disagreement by slice, and define
+when a person must review the case. A machine annotation is not ground truth.
+Changing the judge version creates a new measurement instrument and requires a
+bridge study before scores are compared across time.
 
 ::: {.callout-tip}
-## Constraint arrow
-The post-training recipe sets the shape of the operation below it. @gls-rlhf in
-@sec-rlhf and verifiable-reward training in @sec-training-to-reason both consume
-fresh, on-distribution preference and outcome data, and they consume it every
-cycle, not once. That appetite reaches down and mandates a standing
-collection-and-labeling apparatus wired into the deployment, because the cheapest
-source of on-distribution data is the model's own production traffic. The
-training loop's hunger, an upper layer, dictates that the serving surface be
-built as a data instrument, a lower one. A product that ships without it starves
-the next model.
+## Constraint Arrow
+The consumers above the pipeline determine the evidence contracts below it.
+Representative service metrics require probability sampling. A regression suite
+requires frozen, independently qualified cases. @gls-rlhf in @sec-rlhf requires
+preference data tied to a rubric and judge population. Verifiable-reward
+training in @sec-training-to-reason requires outcomes whose verification rule is
+recorded. Therefore the serving surface must capture version and exposure
+context, but only within the purpose and rights defined at intake. Training
+demand does not authorize collection by itself.
 :::
 
-## Spending a labeling budget where it moves the model
+## Assign partitions before looking at content
 
-If every trace could be labeled, selection would not matter. None can, so the
-engine's intelligence is in which few traces it sends to humans. Random sampling
-wastes the budget on cases the model already handles. Active learning spends it
-on the cases the model is least sure about, on the argument that a label is worth
-most where the model's current guess is closest to a coin flip
-[@settles2009activelearning]. Uncertainty sampling and
-selection by expected model change are the standard instruments; in a
-generation setting, where there is no single probability to read off, the
-model's uncertainty is inferred from its own outputs: sample the same prompt
-several times and measure how often the answers agree, and low agreement, a low
-self-consistency score, stands in for the classical uncertainty estimate.
+An event cannot safely become both a training example and proof that training
+worked. Make a stable assignment before inspecting content or outcome, using an
+immutable split salt and a stable event identity. Typical destinations are:
 
-Active learning chooses which items to label by hand. Weak supervision attacks
-the budget from the other side, by replacing some hand labels with programmatic
-ones. Data programming has domain experts write labeling functions, noisy rules
-that vote on a label, then learns each rule's accuracy from their agreements and
-disagreements and combines them into probabilistic labels without ground truth
-[@ratner2016dataprogramming]. A regex, a heuristic over tool output, and a
-weaker model's judgment each become a voter. The labels are noisier than a
-human's, but there are orders of magnitude more of them, and for many tasks that
-trade wins.
+- **Monitoring and audit**, for representative measurement and independent
+  quality checks.
+- **Regression evaluation**, for qualified cases that gate future releases.
+- **Training and weak supervision**, for candidate examples and programmatic
+  labels.
+- **Quarantine**, for missing authority, corrupt records, suspected poisoning,
+  unresolved incidents, or schema violations.
 
-The two compose. Weak supervision labels the bulk cheaply; active learning sends
-the residual that weak rules disagree on to the humans whose judgment is worth
-the cost.
+Entity-aware grouping may be necessary. Two events with different identities
+can still contain the same conversation, document, user, or generated variant.
+Check for exact and semantic duplicates across partitions. Record and block a
+split collision. Once a case has influenced model or prompt development, moving
+it into a supposedly held-out set creates adaptive leakage.
 
-## The failure that becomes a test
+This dependency-free sketch demonstrates deterministic assignment. In a real
+system, the split salt is an access-controlled release parameter, and related
+entities are grouped before hashing.
 
-Not all harvested data goes to training. The most valuable single output of the
-engine is often an eval case, not a gradient. When a production trace is judged
-wrong, promoting it into the regression suite of @sec-evaluating-agents converts
-a one-time miss into a permanent guard: every future model is now measured
-against the exact failure that reached a user. This is the same promote-failure
-discipline that @sec-deployment-lifecycle relies on to decide whether a new model
-is safe to roll out. The data engine and the deployment lifecycle share a spine
-here, the live trace, and read it for two purposes, one to retrain and one to
-gate the retrained result.
+:::: {.runnable}
+```python
+import hashlib
 
-The asymmetry is deliberate. A failure that becomes training data might be fixed;
-a failure that becomes an eval case can never silently regress. Sending the
-sharpest failures to the eval set rather than the training set is how an
-operation stops paying for the same bug twice.
 
-## Trade-offs: the loop that grades itself
+def stable_partition(event_id, split_salt, eligible=True):
+    """Assign an event before its content or outcome is inspected."""
+    if not eligible:
+        return "quarantine"
 
-A data engine wired to its own model creates feedback the model did not have at
-launch, and the same wiring creates pathologies. The first is sampling bias
-already named: the production distribution is shaped by the current model's
-behavior, so training on it narrows the next model toward what the last one
-already did, and capabilities the current model handles poorly generate little
-traffic to learn from. The second is the grading question. Implicit signal is
-abundant but ambiguous; a small explicit set is trustworthy but thin and slow.
-The third is provenance and consent, which is not optional: every trace
-collected carries the obligations of @sec-privacy-provenance, and a preference
-dataset assembled from user content without a lawful basis is a liability, not an
-asset.
+    key = f"{split_salt}:{event_id}".encode("utf-8")
+    bucket = int.from_bytes(hashlib.sha256(key).digest()[:8], "big") % 10_000
+    if bucket < 1_000:
+        return "monitoring-and-audit"
+    if bucket < 2_000:
+        return "regression-evaluation"
+    return "training-and-weak-supervision"
+
+
+purpose = stable_partition("event-0042", "split-policy-v3")
+assert purpose == stable_partition("event-0042", "split-policy-v3")
+assert purpose in {
+    "monitoring-and-audit",
+    "regression-evaluation",
+    "training-and-weak-supervision",
+}
+assert stable_partition("event-0042", "split-policy-v3", eligible=False) == "quarantine"
+```
+::::
+
+## Turn a failure into a qualified test
+
+A production failure is a lead, not a ready-made evaluation case. Before
+promotion into the suite from @sec-evaluating-agents:
+
+1. **Minimize and sanitize** the trace. Remove irrelevant personal or secret
+   material while preserving the failure mechanism.
+2. **Reproduce** the behavior in a controlled harness and record the model,
+   prompt, retrieval, tool, policy, and interface version context.
+3. **Adjudicate** what failed, which evidence was available, and whether the
+   expected behavior is valid.
+4. **Freeze expected behavior** at the right level. Prefer a property or outcome
+   over a brittle exact string when several answers are acceptable.
+5. **Preserve provenance and independence** in the evaluation manifest, and
+   prevent the case and close variants from entering training.
+
+The resulting test is a durable guard only while it remains valid, observable,
+and enforced. A stale test can encode an obsolete policy. A brittle test can
+reject a legitimate improvement. A team can also overfit to a visible suite or
+ignore a failing gate. Promotion therefore needs ownership, review dates, and
+retirement criteria as well as permanence.
+
+## Propagate rights through every derivative
+
+The data engine inherits the privacy and provenance duties in
+@sec-privacy-provenance. Its deletion lineage must connect a raw event to every
+derived feature, annotation, label, evaluation case, dataset shard, and training
+artifact that the policy says can be removed. A deletion request should create
+an auditable workflow with an owner, deadline, affected releases, completion
+evidence, and an explicit record of any lawful exception.
+
+Purpose limits must travel with derivatives. Access to a raw event does not
+imply permission to place it in a training corpus, send it to an external
+labeler, or retain it in an evaluation case forever. Enforce use authorization
+at each promotion boundary, not only at collection. Dataset releases should
+name their allowed consumers so undeclared reuse is detectable. Hidden data
+dependencies and undeclared consumers are recurring sources of technical debt
+in production ML systems [@sculley2015technicaldebt].
+
+Security controls also belong here. Deduplicate retries, validate event origin,
+rate-limit public feedback, separate tenant keys, scan for injected secrets,
+and quarantine suspected poisoned feedback. A user report is important evidence
+without being trusted code or a trusted label.
+
+## Measure the feedback loop, not just the dataset
+
+Deployment changes which evidence will exist next. A recommendation changes
+what a person sees; a refusal changes what they try; a slow answer changes
+whether they wait. This is a performative feedback effect: the deployed system
+helps shape the future distribution it later observes
+[@perdomo2020performative].
+
+Capture exposure, treatment assignment, model release, and serving policy
+version. Where a policy makes probabilistic choices, retain its propensity, the
+probability of the action under that policy. Without exposure context, absence
+of a click is uninterpretable because the user may never have seen the option.
+
+A before-and-after improvement does not establish causality. The population,
+interface, season, or concurrent policy may also have changed. Use a randomized
+holdout where ethical and practical, a staged experiment, or a justified
+counterfactual design. Monitor guardrails as well as the target outcome. If an
+experiment is impossible, state the weaker observational claim and its likely
+confounders.
+
+Useful operating metrics cover the pipeline rather than celebrating row count:
+
+- eligible-event coverage, schema rejection, deduplication, redaction, and
+  unknown-version rates;
+- representative, inverse-probability weighted quality with uncertainty and
+  slice coverage;
+- acquisition yield, novelty, duplicate rate, and overlap with protected
+  evaluation partitions;
+- annotation disagreement, adjudication rate, blind-relabel error, abstention,
+  queue age, service-level misses, and reviewer workload;
+- deletion completion latency, unauthorized-use attempts, and unresolved
+  lineage;
+- downstream evaluation change, rollout guardrails, and experiment results.
+
+No single metric certifies the engine. High annotation agreement can coexist
+with a wrong rubric, fast queue service with reviewer fatigue, and a larger
+dataset with worse coverage.
+
+## Release a data product, not a mutable table
+
+A candidate release moves through explicit states: collect, validate, curate,
+assign, annotate, qualify, freeze, publish, monitor, and deprecate or delete.
+Publishing creates an immutable manifest. A later correction creates a new
+version rather than silently changing what an earlier model consumed.
+
+Before release, exercise the pipeline with scenario tests for:
+
+- a duplicate event and a retry carrying a conflicting payload;
+- missing use authorization, a deletion request, and an unauthorized consumer;
+- a stale outcome or an outcome joined to the wrong exposure;
+- sampler outage, an incorrect inclusion probability, and biased slice
+  coverage;
+- schema drift, labeler drift, and an unreviewed guideline change;
+- judge version change without expert calibration;
+- a split collision, near-duplicate leakage, and adaptive leakage;
+- poisoned feedback, adversarial instructions, and a cross-tenant record.
+
+The production data release record is the handoff artifact. It names:
+
+- release identity, owner, purpose, time window, and immutable manifest;
+- intake schema, eligibility rule, versions, provenance, and source counts;
+- sampling policies, inclusion probabilities, partition rule, and split salt
+  identifier;
+- annotation specification, workforce or judge versions, quality results,
+  adjudication policy, and unresolved limitations;
+- use authorization, allowed consumers, access control, retention, deletion
+  lineage, and completed privacy review;
+- scenario-test results, leakage checks, known incidents, and rollback or
+  withdrawal procedure;
+- downstream evaluation, experiment, and deployment decisions linked to the
+  exact release.
+
+@sec-data-curation explains how to prepare a dataset for training, and
+@sec-synthetic-data explains how to generate candidate examples. This chapter's
+engine governs the live evidence entering either process. The next chapter adds
+the operating contracts around cost, service levels, ownership, and tenant
+boundaries. A reliable production loop is therefore not a product harvesting
+its users. It is an evidence system whose purposes, uncertainty, rights, and
+release decisions can be inspected.
 
 ::: {.callout-important}
 ## What's contested
-- **Human labels or AI feedback for the standing loop?** RLHF assumes the grader
-  is human [@ouyang2022instructgpt]; Constitutional AI replaces much of that
-  grader with the model judging itself against written principles
-  [@bai2022constitutional], which scales the loop to the model's own speed but
-  inherits the model's blind spots. Whether the ongoing engine should be
-  human-graded, AI-graded, or a measured blend is unsettled and task-dependent.
-- **How far to trust production data.** One camp treats on-distribution
-  production traffic as the highest-value training signal there is; the other
-  warns that a model training on the data its own behavior shaped is optimizing a
-  moving, self-selected target, and that periodic injection of out-of-distribution
-  and adversarial data is required to keep the loop from collapsing inward.
-- **Buy labels or harvest signal.** Purchased expert labels are clean, expensive,
-  and slow; harvested implicit signal is noisy, cheap, and continuous. The mix is
-  a live operational choice, not a settled ratio.
+
+- **How much production traffic should enter training?** More traffic improves
+  freshness but can amplify the current model's blind spots and the product's
+  existing user mix. The right amount depends on coverage evidence and
+  independently measured outcomes.
+- **When should machines judge machines?** Machine judgment can provide scale
+  and consistency, while expert review can expose shared model blind spots. A
+  measured blend is common, but the acceptable calibration error and escalation
+  rate are domain-specific.
+- **How long should an evaluation case live?** Permanent suites preserve memory,
+  yet old cases can encode obsolete policy and consume attention. Retirement
+  should require evidence and a versioned decision, not silent deletion.
 :::
-
-## Implementation: a thin sketch
-
-The engine is more pipeline than model. At the serving surface, a trace logger
-writes structured records. On a schedule, a sampler draws candidates by
-uncertainty and by strata the team cares about, then hands them to a labeling
-system that presents each against the current guideline and records the answer
-alongside the annotator and the agreement check. The last stage is a promotion
-step that routes the result: clear failures to the eval set, scored pairs to the
-preference store, everything to a governed table with its consent basis
-attached. None of these steps is novel
-infrastructure; the discipline is in running them continuously and treating the
-guideline, the agreement metric, and the consent basis as first-class artifacts
-rather than afterthoughts.
-
-## Production traffic as training signal
-
-The production data engine is the mechanism that keeps a deployed model
-improving rather than decaying. What makes the next model more
-capable is the freshest possible on-distribution data, the cases real users
-actually bring, which no static corpus contains. Efficiency is a selection
-problem: active learning and weak supervision exist to buy the most model
-improvement per dollar of human judgment, because labeling, not compute, is the
-binding cost here. The dimension the field underinvests in is trust, and it lives
-in the human supply chain and the consent ledger, where an ambiguous guideline or
-an unlawful collection turns the engine from an asset into a slow-acting
-liability. A model is only as good as
-the data it is fed, and after launch the product is what feeds it.
 
 ## Further reading
 
