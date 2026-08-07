@@ -1,442 +1,523 @@
 # The Tooling Ecosystem {#sec-tooling-ecosystem}
 
-The stack from earlier parts is realized by software others wrote: training
-frameworks, serving engines, agent frameworks, and the standards that let
-them interoperate. Each layer of the tooling ecosystem owns a different control
-point. Once the caller stops being an application and becomes an agent, every
-layer faces the same shift: the control point has to move back into the layer
-itself.
+A tooling stack is a set of versioned contracts, not a framework list.
+@sec-model-artifacts ended with a verified model bundle. Making that bundle
+useful may involve a trainer, conversion tools, a serving runtime, a model
+gateway, an agent host, capability servers, sandboxes, policy engines, and
+telemetry. A product name does not say whether those components agree on file
+formats, schemas, defaults, authority, cancellation, or failure recovery.
+The broad categories remain training frameworks, serving engines, agent
+frameworks, and the standards that let them interoperate, but those category
+names do not define the contracts between them.
 
-![Schematic of the tooling stack's responsibilities. Lower layers carry runtime execution, while upper layers increasingly carry governance, memory, and evaluation concerns. Idealized allocation, not measured data.](/figures/tooling-ecosystem-1.svg){#fig-tooling-ecosystem-1}
-
-## The caller that broke the tooling
-
-A capability does not run on a paper. It runs on tooling, and the tooling
-ecosystem divides into a few layers, each owning one stage of the lifecycle
-this book has traced. Training frameworks turn FLOPs into weights and own the
-parallelism and memory of @sec-training-at-scale. From those weights, serving
-engines produce tokens under a latency and throughput budget, the subject of
-@sec-serving-problem. Agent frameworks go one step further, making a model into
-something that plans, calls tools, and acts over many steps [@yao2023react], the
-harness of @sec-the-harness and the architectures of @sec-agent-architectures.
-Standards let a tool written once be reached by any of them.
-
-The first generation of this tooling assumed a tidy caller: an application
-server, long-lived, holding its own credentials, calling a model once per
-request and logging the result. An agent breaks that assumption. It runs in a
-sandbox, invokes a CLI, writes a script, spawns a helper, hands work to
-another agent, and keeps going after the chat window that started it is gone.
-The important caller is no longer the application. It is a process the agent
-chose, a background task it spawned, a session that outlives the request.
-
-When the caller moves like that, every control point that sat in the
-application is now in the wrong place. A provider key in a config file is a
-key the model itself can read. Compile a permission into the app and no reviewer
-can see it; leave a plan in the chat history and no one can edit it. These
-layers need to be treated together rather than buried inside the
-chapters that use them, because a single change in who calls them reshapes all
-four at once. The question is what each tooling layer does when the caller
-becomes an agent.
-
-## The one move
-
-The answer, repeated four times, is a single move: pull the control point out
-of the caller and into the layer the caller cannot bypass. The layer must own
-its own control point, because the caller can no longer be trusted to hold it
-(@fig-tooling-control-shift).
+The useful question is therefore not “Which framework is best?” It is “What
+does each boundary promise, under which version and workload, and how will we
+know when that promise stops holding?” A component earns its place through
+explicit compatibility, failure containment, replaceability, and observed
+evidence. Those properties belong to the composed system, not to a logo.
 
 ```{dot}
-//| label: fig-tooling-control-shift
-//| fig-cap: "The one move, made four times. Each primitive lifts a control point out of the agent caller, where the model could read or bypass it, and into a layer the caller must pass through."
-digraph control_shift {
-  rankdir=LR;
+//| label: fig-tooling-planes
+//| fig-cap: "A production toolchain has three distinct planes. Control chooses versions and authority, execution performs model, tool, and task calls, and evidence records the resulting facts. Combining them in one framework does not remove the distinctions."
+digraph tooling_planes {
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, fillcolor="#f1ece1", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
-
-  subgraph cluster_caller {
-    label="Agent caller (untrusted)";
-    style="rounded,dashed";
-    fontname="Helvetica"; fontsize=10; fontcolor="#6b7280"; color="#6b7280";
-    agent [label="Agent\nprocess", fillcolor="#3b82f6", fontcolor="white", color="#3b82f6"];
-  }
-
-  subgraph cluster_layer {
-    label="Layer (control point lives here)";
-    style="rounded,dashed";
-    fontname="Helvetica"; fontsize=10; fontcolor="#6b7280"; color="#6b7280";
-    key [label="Provider key\nin the gateway"];
-    runtime [label="Secret at the\negress proxy"];
-    perm [label="Permission in\nthe document"];
-    plan [label="Scope in\nthe plan"];
-  }
-
-  agent -> key [label="cannot read"];
-  agent -> runtime [label="cannot read"];
-  agent -> perm [label="cannot widen"];
-  agent -> plan [label="cannot exceed"];
+  rankdir=TB;
+  nodesep=0.15;
+  ranksep=0.28;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        margin="0.12,0.08"];
+  edge [color="#6b7280", fontcolor="#6b7280", fontname="Helvetica",
+        fontsize=9, arrowsize=0.65];
+  C [label="Control plane\nversions + identity + authority"];
+  X [label="Execution plane\nmodel + tool + task calls"];
+  E [label="Evidence plane\ntraces + outcomes + cost"];
+  C -> X [label="governs"];
+  X -> E [label="observes"];
 }
 ```
 
-## Protocols divide the ecosystem boundary
+## Start with planes, not products
 
-The new tooling ecosystem is not only a list of frameworks. It is becoming a pair
-of protocol boundaries. The Model Context Protocol (MCP) standardizes how an AI
-application or agent reaches external data, tools, prompts, and workflows
-[@anthropic2024model]. MCP originated at Anthropic in November 2024, was adopted by
-OpenAI, Google, and Microsoft hosts, and since December 2025 is governed neutrally
-under the Linux Foundation's Agentic AI Foundation [@anthropic2025aaif], so the
-boundary no longer belongs to any one vendor. It is the host-to-tool boundary: this
-agent needs calendar events, a database query, a code search, or a workflow.
-Agent2Agent standardizes a different boundary: how one agent discovers another
-agent's capabilities, communicates over an existing enterprise protocol stack,
-coordinates long-running tasks, and exchanges artifacts across vendors or frameworks
-[@google2025a2a]. It is the agent-to-agent boundary, Google-originated and, since
-June 2025, under Linux Foundation governance as well [@linuxfoundation2025a2a].
+Three concerns recur at every layer (@fig-tooling-planes):
 
-![Schematic placement of agent tooling control points. Gateways and sandboxes keep local control high, MCP crosses host-to-tool boundaries, and A2A crosses agent-to-agent boundaries. Idealized placement, not measured data.](/figures/tooling-ecosystem-2.svg){#fig-tooling-ecosystem-2}
+- The **execution plane** executes the call. It loads a checkpoint, schedules
+  tokens, invokes a tool, runs code, or delegates a task.
+- The **control plane** decides whether that execution may happen and which
+  version, identity, budget, route, and policy apply.
+- The **evidence plane** records what happened: the resolved inputs, decision,
+  timing, output status, resource use, and effect.
 
-```{=html}
-<figure id="fig-tooling-protocol-stepper">
-<div class="viz" data-viz="stepper" data-interval="4200">
-  <div data-chip="HOST" data-title="1 · Host owns the session">The application or agent host holds identity, policy, budget, and user consent.</div>
-  <div data-chip="MCP" data-title="2 · MCP exposes tools and data">A server publishes tools, resources, and prompts through a standard boundary the host can inspect.</div>
-  <div data-chip="A2A" data-title="3 · A2A coordinates peer agents">A peer agent advertises capabilities, receives a task, streams state, and returns artifacts.</div>
-  <div data-chip="AUDIT" data-title="4 · The control plane records the action">The gateway, sandbox, and governance layer bind the call to an owner, scope, and log.</div>
-</div>
-<figcaption>MCP and A2A solve different interop problems. MCP turns external systems into inspectable tools for a host. A2A lets agents collaborate across vendors and frameworks. The control plane still has to bind every action to identity, scope, and audit.</figcaption>
-</figure>
+A single process may implement all three, but they still answer different
+questions. A successful tool response does not prove that the call was
+authorized. An authorization decision does not prove that the tool performed
+the intended operation. A trace does not enforce either property; it preserves
+evidence about what the system observed.
+
+Each control point must therefore be explicit and testable, while execution,
+policy, and evidence remain separate contracts.
+
+The layer boundaries are also different:
+
+| Layer | Boundary contract | State that must survive | Characteristic failure |
+|---|---|---|---|
+| Training framework | program, data order, distributed layout, numerical policy, checkpoint schema | model, optimizer, scheduler, sampler, and progress | restart loads incomplete or incompatible state |
+| Serving runtime | verified bundle, backend, hardware, request semantics, scheduler configuration | loaded model, active requests, caches, adapter state | request succeeds under changed defaults or misses its service objective |
+| Model gateway | caller identity, model route, request policy, budget | attribution, quotas, routing decision | alias drift, partial retry, or spend without an accountable owner |
+| Agent host | model loop, context assembly, tool registry, approvals, budgets | task state, messages, effects, pending decisions | repeated or unauthorized side effect after retry or resume |
+| Capability server | authenticated operation, input schema, effect policy | resource transaction and idempotency record | schema-valid call performs the wrong or duplicate effect |
+| Peer agent | delegated objective, authority, task lifecycle, artifacts | independently managed task and delivery state | ambiguous completion, lost cancellation, or duplicated delivery |
+
+This table is not an ownership chart for vendors. It is a review checklist for
+interfaces. If two boxes are supplied by one platform, test the boundary
+anyway. If they are supplied by different projects, record the adapter that
+joins them.
+
+## Make compatibility a reviewable claim
+
+Represent component (i) by the contract
+
+$$
+C_i = (V_i, I_i, O_i, A_i, S_i, F_i, E_i).
+$$
+
+For a toolchain (T=(C_1,ldots,C_n)) and workload (w), acceptance requires
+both component readiness and edge compatibility:
+
+$$
+\operatorname{accept}(T,w) =
+\bigwedge_{i=1}^{n}\operatorname{ready}(C_i,w)
+\;\land\;
+\bigwedge_{(i,j)\in E_T}
+\operatorname{compatible}(C_i,C_j,w).
+$$
+
+Every term has an operational meaning:
+
+```text
+where:
+  C_i            : the versioned component contract for component i
+  i, j           : component indexes from 1 through n
+  V_i            : supported version and extension set
+  I_i            : accepted inputs, including formats and schemas
+  O_i            : produced outputs and their semantics
+  A_i            : authority requirements for identity, consent, and budget
+  S_i            : state semantics for persistence, retry, and cancellation
+  F_i            : failure semantics, timeouts, and recovery behavior
+  E_i            : emitted evidence, including logs, traces, metrics, and receipts
+  T              : the ordered set of n component contracts in the toolchain
+  n              : the number of component contracts in T
+  w              : the declared workload and operating environment
+  E_T            : the set of directed integration edges in T
+  (i, j)         : an edge from the output of component i to component j
+  ready(C_i, w)  : true when component i meets its own contract under workload w
+  compatible     : true when one edge preserves versions, schemas, authority,
+                   state, failures, and evidence under workload w
+  bigwedge       : logical AND across every listed component or edge
+  land           : logical AND between the two required groups of checks
 ```
 
-This split is useful because it prevents a false abstraction. A tool is not an
-agent. A tool exposes a bounded operation; an agent has its own task state,
-capabilities, and policy surface. Treating every collaborator as a tool hides
-delegation and accountability. Treating every tool as an agent adds coordination
-overhead where a simple call would do.
+An API schema is only part of edge compatibility. Two runtimes can accept the
+same request while applying different chat templates, sampling defaults, stop
+rules, tool-call encodings, retry policies, or cancellation semantics. Those
+differences are semantic, not syntactic. They belong in contract tests rather
+than prose claims about compatibility.
 
-We use the Latere stack as the running case study because its four products
-map cleanly onto four primitives of the agent-facing tooling layer: model
-access, the execution sandbox, governance, and orchestration. They are an
-example of the move, not the only way to make it. The four sections that
-follow are the same move made on four different control points, and each one
-pays for its property with a matching cost.
+The release record should pin at least the model-bundle digest, runtime image
+digest, exact configuration, dependency and compiler versions, hardware and
+driver class, protocol revisions and extensions, policy revision, and workload
+definition. A container digest is useful but incomplete: it does not identify
+the host driver, accelerator, mounted configuration, or remote services.
 
-## Four primitives, one shape
+## The ecosystem grew around different boundaries
 
-### Model access as a scoped front door
+The major tool families did not arrive as one coherent stack. Megatron-LM in
+2019 made tensor-parallel training practical within its evaluated PyTorch
+setup, while ZeRO, published at SC in 2020 after its 2019 preprint, partitioned
+the states that ordinary data parallelism replicated [@shoeybi2019megatron;
+@rajbhandari2019zero]. Their mechanisms belong to @sec-training-at-scale. The
+tooling lesson is that distributed layout and checkpoint state became explicit
+interfaces between a training program and a cluster.
 
-A gateway routes calls to OpenAI, Anthropic, Gemini, OpenRouter, or Ollama,
-tracks usage, and caps spend. The first generation stopped there. The
-agent-facing version, exemplified by Latere Lux, adds one rule: the real
-provider key lives in the gateway and never reaches the calling process. The
-agent connects to the gateway, not to the provider, so model choice becomes
-configuration and every call can be attributed to an organisation, person,
-product, session, and model. Revoking or narrowing the gateway credential
-stops a runaway task without rotating the provider key. The control point is
-model access itself, not a key in a file.
+Serving developed a different interface. The vLLM system presented at SOSP
+2023 used PagedAttention to manage key-value cache blocks without requiring
+contiguous physical memory [@kwon2023pagedattention]. Its reported throughput
+gains belong to the complete evaluated system, models, workloads, and
+baselines, not to a universal property of one algorithm. @sec-serving-problem
+and @sec-memory-scheduling cover that mechanism; here it illustrates why a
+runtime contract must include scheduler policy and workload.
 
-The cost is a hop for control. Routing every call through a gateway adds a
-network hop and makes the gateway a dependency on the critical path. What it
-buys is that the provider key never reaches the process and spend is
-attributable per session. For agent traffic, where the caller is untrusted,
-the hop is worth it; for a single trusted application server it can be pure
-overhead.
+Agent tooling exposed a third boundary. ReAct interleaved model reasoning with
+environment actions in 2023 experiments on question answering and interactive
+tasks [@yao2023react]. It did not define a production framework or security
+model, but it made the repeated model-action-observation loop concrete. MCP,
+introduced by Anthropic in November 2024, later standardized an
+application-to-capability-server interface [@anthropic2024model]. A2A,
+introduced by Google in April 2025, standardized messages and task lifecycles
+between independently operated agents [@google2025a2a]. These histories
+overlap, but they do not form a maturity ladder. Training, serving, host-to-tool
+integration, and peer delegation solve different problems.
 
-### Execution as a durable-or-disposable sandbox
+Once a shared boundary is explicit, implementation choices that do not cross
+it move back into the layer itself, where the relevant chapters examine them.
 
-Cloud compute is sold in two shapes that do not fit agent work: a function
-that vanishes when it returns, and a machine you must babysit. The sandbox
-primitive, exemplified by Latere Cella, sits between them by separating what
-you keep from what you throw away. State persists in a named workspace;
-compute stops when idle and resumes in under half a second, so losing it
-costs nothing. Secrets stay in a locked store: the workspace sees only an opaque placeholder,
-and a TLS-terminating egress proxy swaps in the real value on the wire, but only
-toward the hosts a secret is scoped to, so the real secret never enters the box
-and a leaked placeholder is worthless (@sec-security-authorization). Network
-egress runs deny-by-default behind that proxy's allowlist, which travels with the
-workspace, and every command, secret use, and start or stop is logged against
-whoever caused it. That last
-property is what the governance layer above will consume.
+## Training and serving expose portability limits
 
-The cost is durability versus cost. Keeping a named workspace warm enough to
-resume in half a second is not free, and the deny-by-default allowlist and the
-egress proxy that swaps in real secrets add friction that a throwaway function
-does not pay. The trade is sound exactly when the work is long, stateful, or
-touches real secrets, and wasteful for a stateless one-shot that a plain
-function would serve.
+A training checkpoint is useful only if the intended loader can reconstruct
+the required state. PyTorch Distributed Checkpoint supports load-time
+resharding, including changes in trainer count or parallel layout. The same
+documentation gives no backward compatibility guarantee for state dictionaries
+across PyTorch versions [@pytorch2026dcp]. “Can reshard” therefore does not mean
+“can load in any future framework.” A training release should record:
 
-### Governance as an agent-is-a-document substrate
+- canonical model and optimizer state and the code that maps it into the
+  running program;
+- scheduler, sampler, random-state, data-position, and progress state needed
+  for the promised form of resume;
+- distributed layout and resharding assumptions;
+- framework, extension, kernel, compiler, and checkpoint-schema versions;
+- a tested restore procedure that resumes on the target topology and compares
+  the next steps with the declared tolerance.
 
-Once more than one agent runs, autonomy bought visibility away: an answer and
-a bill arrive, the steps between them do not. The governance primitive,
-exemplified by Latere Topos, refuses that trade by making an agent a
-document: a name, a human owner, the model, the tools, a budget, and the
-approval steps, all in version-controlled plain text a reviewer can read
-before and after a run. Every action is an append-only log line with a
-timestamp and an actor, so a session that fans out across a dozen agents
-reconstructs as one family tree. Two rules give the document teeth.
-Permissions can only attenuate as work is delegated: a child agent inherits
-its parent's permissions minus whatever was withdrawn, and can never grant
-itself back what it lost. And a human can be placed at any step where a
-decision matters, so the agent pauses until a sign-off arrives.
+Serving has a similar gap between model format recognition and behavior. NVIDIA
+Triton's model-repository documentation, for example, says TensorRT plans are
+tied to a CUDA compute capability, ONNX support depends on the bundled ONNX
+Runtime and operator set, and TorchScript compatibility can change with the
+PyTorch version [@nvidia2026triton]. A recognized filename is not a serving
+contract.
 
-The cost is overhead versus auditability. Agent-as-a-document and an
-append-only log cost write amplification and a review step in the loop. The
-return is that a compliance reviewer who has never seen the code can read the
-whole picture, and that no refused request goes unrecorded. The cost is
-justified once more than one agent runs unattended, and is mostly ceremony
-for a single supervised one.
+KServe's V2 inference protocol standardizes health, metadata, and inference
+operations over HTTP or gRPC. Optional behavior remains outside its minimum
+conformance surface [@kserve2026v2]. Passing that wire test does not establish
+equivalence for tokenization, chat templates, streaming chunks, sampling
+defaults, structured output, tool calls, adapters, or error mapping. Test those
+semantics against a locked corpus before replacing a serving runtime.
 
-### Orchestration as a plan you steer
+Performance claims need the same discipline. Measure the production-shaped
+arrival process, prompt and output length distributions, concurrency,
+accelerator, runtime flags, failures, and tail latency. Report useful
+throughput only for requests that also satisfy the quality and latency gates.
+A benchmark that sends every request at time zero answers a different question
+from a bursty interactive service. Every result is workload-specific.
 
-A model that plans and acts over many steps needs a structure between the
-request and the code. The orchestration primitive, exemplified by Latere
-Wallfacer, makes that structure an explicit artifact: turn an idea into a
-plan, the plan into scoped tasks, the tasks into agent execution, and the
-output into reviewable changes.
+## An agent host is not a protocol
+
+An agent host chooses what enters context, when the model runs, how tool calls
+are dispatched, which state persists, and when a person must approve an effect.
+That is the harness studied in @sec-the-harness and the model loop developed in
+@sec-agent-architectures. A protocol standardizes messages across one of the
+host's edges. A runtime or capability server decides which real effects are
+possible. Conflating these roles makes protocol support look like a safety or
+portability guarantee.
+
+The risk also changes when the caller stops being an application and becomes
+an agent: a model-generated request can depend on untrusted context and can be
+repeated after a partial failure. The host must still mediate that request.
+
+MCP and A2A occupy different edges (@fig-tooling-protocols):
+
+- A **tool server** exposes operations or context to a host. Its schema may
+  describe a bounded operation, but the host must independently bound real
+  side effects.
+- A **peer agent** has independent task state and may manage its own model,
+  tools, policy, and lifecycle. Delegating to it crosses an accountability
+  boundary that an ordinary function call does not.
+- The **agent host** remains responsible for application state, policy,
+  context, approvals, and the interpretation of results received through
+  either protocol.
 
 ```{dot}
-//| label: fig-tooling-orchestration-pipeline
-//| fig-cap: "Orchestration as an explicit artifact. The plan sits between request and code, and every arrow is a point where a person can pause and steer."
-digraph {
+//| label: fig-tooling-protocols
+//| fig-cap: "MCP and A2A connect different roles. An application host uses an MCP client to reach a capability server, while an A2A client delegates a task to an independently operated peer agent. Discovery and message exchange do not supply trust or authorization."
+digraph tooling_protocols {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  idea [label="idea"];
-  spec [label="spec"];
-  tasks [label="tasks"];
-  exec [label="execution"];
-  review [label="review"];
-  commit [label="commit"];
-  ship [label="ship"];
-  human [label="human can steer\nat any arrow", shape=circle];
-
-  idea -> spec;
-  spec -> tasks;
-  tasks -> exec;
-  exec -> review;
-  review -> commit;
-  commit -> ship;
-  human -> spec [style=dashed];
-  human -> tasks [style=dashed];
-  human -> review [style=dashed];
+  rankdir=TB;
+  nodesep=0.14;
+  ranksep=0.25;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        margin="0.10,0.07"];
+  edge [color="#6b7280", fontcolor="#6b7280", fontname="Helvetica",
+        fontsize=8, arrowsize=0.6];
+  H [label="Application host\nstate + policy"];
+  M [label="MCP client"];
+  S [label="Capability server\ntools + resources + prompts"];
+  A [label="A2A client"];
+  P [label="Peer agent\ntask + artifacts"];
+  H -> M [label="one edge"];
+  M -> S [label="MCP"];
+  H -> A [label="another edge"];
+  A -> P [label="A2A"];
 }
 ```
 
-The plan, not the chat history, is the thing a human reads, edits, and pushes
-back on, and the tasks underneath stay within what the plan describes. Each
-arrow is a point where a person can pause and steer the work
-(@fig-tooling-orchestration-pipeline).
+### MCP: application host to capability server
 
-The cost is planning latency versus rework. Inserting a plan between the
-request and the code is slower to first output than a coding agent that jumps
-straight to code. It pays back by giving a human one artifact to steer
-instead of a chat history or a wall of diffs, and by keeping the tasks inside
-a reviewed scope. For a one-line change the plan is overhead; for multi-step
-work it is the only thing you can hold.
+@gls-mcp [@anthropic2024model], a common protocol for connecting models to
+tool servers, is more precisely a host-client-server protocol. In the current
+`2026-07-28` specification, the base protocol uses JSON-RPC, is stateless, and
+performs per-request capability negotiation. The host owns application state;
+an open connection is not a protocol-level conversation or session. Servers
+can expose tools, resources, and prompts, while optional extensions add other
+facilities [@mcp2026spec].
 
-The four primitives share one shape. Each takes a control point that used to
-sit inside the caller, a key, a runtime, a permission, a plan, and moves it
-into a layer the caller cannot bypass. Standards are what keep those layers
-composable: a tool exposed once through the @gls-mcp
-[@anthropic2024model], a common protocol for connecting models to tool servers,
-can be reached by any harness, so the agent framework does not re-implement the
-tool for every model.
+MCP uses JSON Schema 2020-12 by default. Schema validation checks structure,
+not meaning, side effects, publisher identity, or truthfulness. The current
+specification also makes client and server implementation names self-reported
+metadata that must not drive security decisions. A production registry should
+therefore bind an authenticated server origin or package digest, tool name,
+canonical descriptor digest, protocol revision, and approved capability set.
+If discovery reports a changed descriptor, quarantine it and repeat review.
 
-## Where the layers came from
+MCP does not grant permission merely because a tool was discovered. Its HTTP
+authorization framework defines how protected resource servers and clients use
+OAuth, while local stdio deployments obtain credentials through their runtime.
+The surrounding application must still provide least privilege, explicit
+consent, effect-specific approval, and isolation. The specification treats tool
+descriptions and annotations as untrusted unless they came from a trusted
+server and notes that the protocol itself cannot enforce the required safety
+principles [@mcp2026spec; @mcp2026security].
 
-Each layer reached its current shape by superseding an earlier one, and the
-lineage is worth tracing because it shows the same caller-shift driving all
-of them.
+### A2A: client to independent agent
 
-Training frameworks came first and are the most settled. Megatron-LM
-established intra-layer tensor parallelism, splitting one layer across devices,
-in native PyTorch [@shoeybi2019megatron], and ZeRO, the optimizer behind
-DeepSpeed, removed the memory redundancy of data-parallel training, which
-replicates the whole model on every device, so model size could scale with
-device count [@rajbhandari2019zero]. Their internals belong to
-@sec-training-at-scale; here they matter as the layer whose caller never
-moved. A training run is still launched by an operator, so this layer felt
-the agent shift least.
+A2A v1.0 describes a longer-lived application interaction. An A2A server
+publishes an Agent Card that declares interfaces, skills, media types,
+capabilities, and authentication requirements. An A2A client sends a Message;
+the server may create a stateful Task; progress changes the task state; and
+results should be returned as Artifacts. Each request identifies wire version
+`1.0` with `A2A-Version`, and a tracked task eventually reaches a terminal state
+such as completed, failed, canceled, or rejected [@a2a2026spec].
 
-Serving engines moved next. The decisive step was treating the key-value
-cache, the attention state a model retains for every token already in the
-session, like operating-system memory: PagedAttention, the algorithm behind
-vLLM, stores the cache in fixed-size blocks mapped to non-contiguous physical
-memory, which removed the fragmentation that capped throughput
-[@kwon2023pagedattention]. That story is @sec-serving-problem and
-@sec-memory-scheduling. The serving layer's caller is shifting now, from an
-application that sends one prompt to an agent that holds a long, branching
-session, which is why session-aware routing and attribution are becoming
-serving concerns and not only gateway ones.
+Those structures make delegation observable, but they do not prove that the
+remote agent is correct, safe, honest, or authorized for a particular resource.
+An Agent Card describes claimed skills. An optional card signature can
+authenticate its bytes under a chosen trust policy; it does not verify
+competence. Authentication and authorization are applied by the deployment on
+every operation. A2A also permits at-least-once push delivery, so consumers must
+deduplicate effects rather than assume that one notification means one action.
 
-The agent-facing layers show the shift in the open, because they are new
-enough that their first generation is still visible. The gateway began as a
-cost-and-routing tool: one connection address for a messy multi-provider
-bill. That solved a software problem, and it assumed the key could safely sit
-in a config file because the caller was an app. Lux is the second generation,
-built once the caller became an agent and the key could no longer be trusted
-to the caller. The sandbox evolved from the serverless-versus-VM split toward
-a middle that keeps state and discards compute. And agent orchestration
-evolved through a sharper empirical detour, recorded in the goalless-agents
-experiment behind Wallfacer [@ou2026goalless]: a structured crew of
-role-specialized agents kept shipping but stopped discovering, polishing
-trivia inside its lane, while a single goalless agent with full freedom
-ballooned a project past 60,000 lines and collapsed. The resolution was
-neither more rules nor fewer, but a deliberate rhythm, roughly 80% improving
-what exists and 20% exploring, with a human present at each change of
-direction.
+Use a tool call when the other side performs a defined operation under the
+host's task. Use A2A when the other side owns independent task state, may ask for
+more input, and returns reviewable artifacts. Do not turn every function into
+an agent, and do not hide an independent agent behind a tool label. The design
+choices for composing several such peers continue in @sec-multi-agent-systems.
 
-::: {.callout-important}
-## What's contested
-How much structure an agent framework should impose is unsettled, and the
-poles are real. One camp builds rigid orchestration: a fixed workflow graph,
-typed steps, every transition specified, which is legible and safe but, as
-the goalless-agents experiment found, can suppress discovery until an agent
-only polishes inside its lane. The other camp runs open-ended agent loops
-with broad freedom, which discover more but, past a point, collapse into
-unmaintainable sprawl. The 80/20 improve-versus-explore rhythm is one
-empirical data point, not a settled law, and the same tension recurs in
-@sec-multi-agent-systems as the choice between a scripted pipeline and an
-autonomous swarm. Treat the right amount of structure as task-dependent, not
-a constant the framework can fix once.
-:::
+## Security belongs to the composed path
 
-## Why the boundaries hold
+Discovery is not authorization. A catalog entry, MCP descriptor, or Agent Card
+helps a caller form a request; the enforcement point must authenticate the
+caller and subject, check the exact resource and action, and bind the decision
+to current policy. The controls in @sec-security-authorization apply at every
+hop, including model gateway, agent host, tool server, peer agent, sandbox, and
+downstream API.
 
-The boundary between these primitives is itself a design choice. Lux is kept
-separate from Cella and Wallfacer on purpose: model access is not runtime
-lifecycle and not task orchestration, so the provider keys, routing, and
-spend policy live in one place rather than piling up inside the sandbox or the
-task runner. Clean layer boundaries are what let standards like the Model
-Context Protocol connect the layers without each one absorbing the others.
-They also create a new attack surface. Tool descriptors are now part of the
-prompt-like environment the model reads. MCPTox shows that malicious instructions
-hidden in MCP tool metadata can cause unsafe tool use across live servers
-[@wang2025mcptox], and subsequent work frames tool poisoning, shadowing, and
-descriptor rug pulls as protocol-level risks that require signing, semantic
-vetting, and runtime guardrails [@jamshidi2025securing]. Interoperability lowers
-integration cost, but it also means untrusted tools can arrive through a standard
-door. The standard does not remove the need for identity, provenance,
-permissions, and audit; it makes those controls portable.
+At minimum:
+
+- issue audience-bound, short-lived credentials with least privilege; token
+  passthrough is forbidden by MCP's authorization guidance because it bypasses
+  resource-server validation and weakens attribution;
+- keep each provider or downstream secret outside model-visible context, tool
+  arguments, workspace files, and logs;
+- sandbox local capability servers and generated code, restrict filesystem and
+  network access, and put outbound destinations behind an allowlist;
+- bind human approval to the exact tool identity and descriptor digest,
+  normalized arguments, target resource or recipient, cost or effect bound,
+  and expiry;
+- recheck policy at execution time, since an approval does not authorize a
+  changed request or a later retry;
+- validate results and downstream effects, not only inputs, and redact secrets
+  and sensitive content from retained evidence.
+
+Protocol metadata can itself influence a model. The archival MCPTox study
+constructed 1,348 malicious descriptor cases over 353 authentic tools drawn
+from 45 real-world MCP server toolsets and tested 20 agent settings
+[@wang2025mcptox]. It is controlled evidence about descriptor poisoning, not
+evidence that 45 deployed servers were compromised. AgentDojo separately
+evaluated indirect prompt injection through untrusted environment and tool
+content while measuring benign task utility [@debenedetti2024agentdojo]. These
+tests support a bounded conclusion: syntactically valid, interoperable content
+can still be adversarial, so both utility and attack resistance must be tested
+on the exact composed system.
 
 ::: {.callout-tip}
 ## Constraint arrow
-The security rule that a provider key must never reach the agent process,
-from @sec-security-authorization, is what forces the shape of the agent
-framework's call path. Because the key cannot live with the caller, the
-framework cannot call the provider directly: it must route through a gateway
-that holds the key and exposes only scoped access. A lower layer's
-authorization constraint thus dictates an upper layer's architecture. The
-same arrow runs from the sandbox to governance: the audit log can only record
-what the runtime surfaces, so what @sec-oversight-control can review is
-bounded by what the execution layer chose to log.
+
+The verified bundle from @sec-model-artifacts constrains which serving runtime
+can load the model, and the runtime's observed request semantics constrain which
+gateway or agent host can safely replace it. In the other direction, the
+authorization model from @sec-security-authorization constrains tool discovery:
+a host may display many capabilities, but it must expose to the model only the
+subset authorized for this subject, task, and budget. Lower-layer loadability
+and authority therefore bound upper-layer orchestration before a plan begins.
 :::
 
-## How the layers compose
+## Build an evidence plane across the edges
 
-The implementation reality is that these layers compose, and the composition
-is where the value is. An agent under Topos runs inside a Cella workspace,
-reaches models through Lux, and is owned by a real identity, so a single
-session links a permission document, a runtime log, a model-usage trail, and
-a named owner (@fig-tooling-composition). Each layer cites the one below:
-governance consumes the sandbox's audit log (`Cella` start/stop and secret-use
-records), and the gateway's attribution feeds the same session id the
-governance log keys on.
+A request can cross a gateway, model runtime, host, sandbox, capability server,
+and downstream API. Give the logical operation one trace id and preserve child
+span relationships across those hops using a documented propagation format;
+W3C Trace Context standardizes the `traceparent` and `tracestate` headers for
+that purpose [@w3c2021tracecontext]. A trace id correlates records. It is not an
+identity credential and must never authorize a call.
 
-```{dot}
-//| label: fig-tooling-composition
-//| fig-cap: "The layers compose around one session id. Governance reads the sandbox audit log, the gateway's attribution keys on the same session id, and a named owner ties it all to a real identity."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+For each privileged operation, retain enough evidence to reconstruct:
 
-  owner [label="Named owner\n(real identity)"];
+- actor and subject identity, tenant, delegated authority, and authorization
+  decision;
+- resolved model bundle and serving runtime, agent-host version, protocol
+  version, server origin, tool or Agent Card schema digest, and policy revision;
+- normalized argument digest and target, with sensitive content redacted or
+  stored under separate access control;
+- approval identifier when required, plus budget reservation and reconciliation;
+- start, deadline, retry, idempotency key, cancellation request and
+  acknowledgement, terminal status, returned artifact digest, and observed
+  downstream effect;
+- latency, token and resource usage, cost, and failure classification.
 
-  subgraph cluster_cella {
-    label="Cella: sandbox"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    rec [label="Start/stop and\nsecret-use records"];
-    work [label="Named workspace"];
-  }
-  subgraph cluster_lux {
-    label="Lux: model access"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    gw [label="Gateway holds provider key"];
-    attr [label="Per-call attribution"];
-  }
-  subgraph cluster_topos {
-    label="Topos: governance"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    doc [label="Permission document"];
-    log [label="Append-only audit log\nkeyed on session id"];
-  }
+Do not equate “logging enabled” with a complete audit trail. Completeness
+requires mediation of every effect, durable writes, stable identifiers, clock
+handling, retention, and access controls. Tamper evidence is another property
+again. Likewise, a telemetry convention is a vocabulary, not proof that every
+component emitted the required record. @sec-eval-practice develops the
+evaluation and observability loop that consumes this evidence.
 
-  owner -> doc;
-  doc -> work [label="governs", style=dashed];
-  rec -> log [label="feeds audit log"];
-  attr -> log [label="same session id"];
-  work -> gw;
-}
-```
+## Test portability before depending on it
 
-A reader implementing any one layer should hold two invariants. First, the
-control point stays in the layer, never in the caller: the key in the
-gateway, the secret behind the egress proxy, the permission in
-the document, the scope in the plan. Second, every privileged action is
-logged against an actor at the moment it happens, because an append-only
-record is what makes oversight possible after the fact. Capability
-attenuation is the one rule worth stating in code terms: a delegated context
-is the parent's minus a withdrawal, never a superset.
+Protocol adoption can reduce adapter work, but portability has layers:
 
-```
-child.permissions = parent.permissions - withdrawn
-assert child.permissions <= parent.permissions   # can only shrink
-```
+1. **Wire compatibility**: messages parse, required methods exist, versions and
+   capabilities negotiate, and errors have the expected shape.
+2. **Semantic compatibility**: defaults, tool effects, streaming, artifacts,
+   cancellation, retries, and state mean the same thing to the application.
+3. **Operational compatibility**: the replacement meets workload-specific
+   latency, throughput, availability, isolation, and cost requirements.
+4. **Governance compatibility**: identity, authorization, approval, evidence,
+   retention, and deletion obligations remain enforceable.
 
-Run this to watch both attenuation rules at once: permissions shrink down a
-delegation chain, and a descendant cannot grant back what a parent withdrew.
+A conformance test usually proves only part of the first layer. Add contract
+tests for application semantics, negative authorization tests, malformed and
+adversarial content, failure injection, retry and idempotency, cancellation,
+restart, rollback, and workload-shaped performance. Reject silent fallback to
+an older protocol or a smaller capability set when the missing behavior matters.
+
+An exit test is the clearest measure of replaceability. In a staging
+environment, swap the component using only the documented contract and adapter,
+restore state, replay the locked test corpus, and recover the original version.
+Record every undocumented dependency discovered. The resulting migration work,
+data conversion, retesting, retraining, and operational learning are switching
+cost even when the wire protocol stays the same.
+
+Run this small compatibility matrix before treating a candidate as a drop-in
+replacement. It intentionally checks exact values: a newer schema and a missing
+lifecycle guarantee are incompatible until reviewed.
 
 :::: {.runnable}
 ```python
-parent = {"read_fs", "write_fs", "net", "spend", "spawn"}
+requirements = {
+    "artifact.bundle": "sha256:release-a",
+    "serving.api": "chat.v2",
+    "mcp.protocol": "2026-07-28",
+    "tool.schema": "calendar.v3",
+    "auth.audience": "calendar-service",
+    "task.cancel": "required",
+}
 
-def delegate(perms, withdraw):
-    return perms - withdraw   # child inherits parent minus a withdrawal
+def evaluate(label, offered):
+    for key, expected in requirements.items():
+        actual = offered.get(key, "missing")
+        if actual != expected:
+            return f"{label}: rejected ({key}: expected {expected}, got {actual})"
+    return f"{label}: compatible ({len(requirements)} contracts)"
 
-child = delegate(parent, {"spend", "net"})
-grandchild = delegate(child, {"write_fs"})
+candidate_a = dict(requirements)
 
-# A descendant tries to grant itself back "spend", already withdrawn upstream.
-wanted = grandchild | {"spend"}
-granted = wanted & child           # clamp to the parent's set: cannot exceed
-print("parent     :", sorted(parent))
-print("child      :", sorted(child))
-print("grandchild :", sorted(grandchild))
-print("re-grant spend ->", sorted(granted), "blocked:", "spend" not in granted)
-for ctx in (child, grandchild, granted):
-    assert ctx <= parent           # every step can only shrink
-print("invariant holds: every delegated context is a subset of its parent")
+candidate_schema_drift = dict(requirements)
+candidate_schema_drift["tool.schema"] = "calendar.v4"
+
+candidate_no_cancel = dict(requirements)
+del candidate_no_cancel["task.cancel"]
+
+print(evaluate("candidate-a", candidate_a))
+print(evaluate("candidate-schema-drift", candidate_schema_drift))
+print(evaluate("candidate-no-cancel", candidate_no_cancel))
 ```
 ::::
 
-Outside the case study, the scope here is narrow on the lower layers. Training
-frameworks and serving engines are named here as
-ecosystem categories and owned in depth by @sec-training-at-scale and
-@sec-serving-problem. The depth here is on the agent-facing layers and the
-standards that bind them, because that is where the caller-shift is live and
-where the case study has something to show.
+## Adopt through quarantine and promotion
 
-The four primitives separate cleanly once they are put in a running stack. Model
-access and the sandbox are efficiency layers: they make agent compute cheap to
-attribute and cheap to discard. Governance and the human-in-the-loop handoff are
-trust layers: they make autonomy reviewable. Orchestration is where capability
-lives, the rhythm that lets an agent go deep without collapsing. The tooling
-ecosystem is the place where capability, efficiency, and trust stop being chapter
-themes and become software a team runs.
+Treat a new framework, runtime, server, extension, or upgrade as an untrusted
+change to the system tuple:
+
+1. **Inventory the affected edges.** Name every input, output, state store,
+   credential, policy decision, side effect, and evidence consumer.
+2. **Pin the candidate.** Record source or package revision, image digest,
+   configuration, dependencies, protocol versions, extensions, and platform.
+3. **Build the compatibility matrix.** Compare versions, formats, schemas,
+   defaults, authority, lifecycle, failures, and telemetry with each adjacent
+   component.
+4. **Update the threat model.** Classify discovery metadata, tool output,
+   artifacts, callbacks, remote prompts, and peer messages as untrusted where
+   appropriate; narrow the sandbox and network allowlist.
+5. **Run conformance and contract tests.** Include malformed input, negative
+   authorization, changed descriptors, timeouts, duplicate delivery,
+   idempotency, cancel and resume, and an unavailable dependency.
+6. **Run workload and adversarial evaluation.** Hold the bundle and corpus
+   fixed, measure quality, service behavior, cost, benign utility, and attack
+   success, and compare with the approved component.
+7. **Exercise exit and rollback.** Export state, switch away, restore the prior
+   version, and confirm that in-flight and terminal work remain interpretable.
+8. **Promote the exact tuple.** Sign or approve the release record, deploy
+   progressively, watch the gates, and revoke or roll back on divergence.
+
+```{dot}
+//| label: fig-tooling-adoption
+//| fig-cap: "Tooling adoption is a promotion workflow. A candidate stays outside the production path until its versions and edges are inventoried, its authority and failure behavior are tested, and rollback has been exercised."
+digraph tooling_adoption {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.13;
+  ranksep=0.24;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        margin="0.10,0.07"];
+  edge [color="#6b7280", arrowsize=0.6];
+  I [label="Inventory edges"];
+  P [label="Pin candidate"];
+  C [label="Conformance + auth tests"];
+  W [label="Workload + failure tests"];
+  R [label="Exit + rollback"];
+  G [label="Promote exact tuple"];
+  I -> P -> C -> W -> R -> G;
+}
+```
+
+::: {.callout-important}
+## What's contested
+
+The unresolved choice is how much of the stack to integrate behind one product
+and how much to compose through open protocols. An integrated stack can align
+defaults, identity, upgrades, and support, reducing the number of visible
+edges. It can also hide assumptions and increase switching cost. A modular
+stack exposes boundaries and permits independent replacement, but adapters,
+version skew, and cross-system diagnosis become the operator's responsibility.
+
+Neither choice is automatically safer or more portable. Protocol compatibility
+does not imply semantic compatibility, and one vendor does not imply one
+coherent failure domain. Compare both designs with the same compatibility
+matrix, threat model, workload, exit test, and evidence requirements. The right
+boundary is the one the team can specify, test, observe, and recover.
+:::
+
+## From tools to economics
+
+The toolchain record identifies more than software. It identifies engineering
+labor, hosted services, accelerators, storage, network paths, observability, and
+the operational work needed to keep every contract valid. Those costs and the
+switching cost exposed by the exit test feed directly into @sec-economics. Later,
+@sec-wiring-stack turns the same contracts into a deployable reference stack,
+while @sec-deployment-lifecycle governs promotion and rollback over time.
+
+A protocol makes an edge legible; only tests and policy make the composed system acceptable.
 
 ## Further reading
 
