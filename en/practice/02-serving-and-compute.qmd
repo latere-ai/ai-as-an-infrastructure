@@ -1,494 +1,522 @@
 # Serving, Gateways, and Compute {#sec-serving-stack}
 
-The theory of why serving is hard lives in @sec-serving-problem and
-@sec-memory-scheduling; the practice is a request path with three decisions. A
-self-hosted endpoint only pays when the workload justifies it, a @gls-gateway
-sits in front for keys and cost control, and the whole thing has to land on
-compute the team can actually pay for. The path runs top down through three
-layers: the gateway you talk to, the serving engine that decodes tokens, and the
-GPUs underneath.
+A model is not served merely because an endpoint returns text. It is served
+when a declared class of requests receives acceptable results within a latency,
+availability, cost, and policy envelope. The unit to operate is therefore a
+**versioned serving contract**: the model artifact, runtime, adapter, request
+semantics, route policy, and compute placement that jointly produced the result.
+This extends the versioned served system from @sec-choosing-model into
+production.
 
-![Schematic of batching in serving. Larger batches improve utilization but eventually push latency through the service objective. Idealized curves, not measured data.](/figures/serving-and-compute-1.svg){#fig-serving-and-compute-1}
+The theory behind the runtime is developed in @sec-serving-problem and
+@sec-memory-scheduling. This chapter turns it into an operating method. First
+freeze the contract. Then measure the complete path under representative load.
+Only after that should a team choose an engine, insert a @gls-gateway, or buy
+capacity. Those components are means, not the architecture's starting point.
 
-::: {.callout-note}
-## As of mid-2026
-Everything below is a dated snapshot. Tool rankings, version numbers, and
-prices move every quarter. Benchmark deltas are from third-party blogs and are
-workload-specific, so treat them as directional, not as facts, and re-verify
-current values before you commit. The durable content here is the categories,
-the trade-offs, and the wiring, not any single number.
-:::
+```{dot}
+//| label: fig-serving-and-compute-1
+//| fig-cap: "A serving decision is made against a workload envelope. Increasing offered load can improve useful throughput, but queueing and rejection eventually rise; the saturation point must be measured on the complete served system."
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.35; ranksep=0.45;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.1, margin="0.12,0.08"];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280",
+        fontcolor="#6b7280"];
+  load [label="Offered load\nrequest-class mix"];
+  system [label="Versioned served system\ncontract + route + runtime + compute"];
+  result [label="Observed envelope\nquality • latency • rejection • cost"];
+  decision [label="Eligible, resize,\nor reject"];
+  load -> system [label="open-loop trace"];
+  system -> result [label="measure tails"];
+  result -> decision [label="compare with gates"];
+}
+```
 
-## The three layers
+## Freeze the serving contract
 
-A self-hosted inference stack is three layers with one interface running
-through all of them. @fig-serving-stack shows the request path.
+An HTTP request shape is useful plumbing, but it is not a behavioral standard.
+Providers differ in message roles, tool and JSON-schema dialects, tokenization,
+stream events, stop conditions, usage fields, errors, safety behavior, data
+handling, and model-specific defaults. Official documentation shows the gap:
+Anthropic lists transformed, ignored, and unsupported fields, while Google
+recommends its native API when an application is not already tied to the common
+client [@anthropicOpenAICompatibility; @googleOpenAICompatibility]. Treat an
+OpenAI-shaped API, or any other shared envelope, as a **common transport
+subset**. Put provider-specific behavior behind adapters and retain native
+escape hatches where the common subset is insufficient.
+
+The internal request contract should state at least the following.
+
+| Concern | What the contract must fix |
+| --- | --- |
+| Identity | Tenant, caller, request class, trace ID, and idempotency key when an effect may occur |
+| Model input | Message roles, prompt template, tool schemas, media formats, context policy, and token limits |
+| Generation | Sampling and reasoning settings, structured-output dialect, stop behavior, and allowed tool choice |
+| Lifecycle | Deadline and cancellation, streaming and error behavior, backpressure, and overload response |
+| Policy | Data classification and region, retention, provider allowlist, safety policy, and budget |
+| Effects | Read-only or side-effect class, authorization subject, retry eligibility, and duplicate-effect handling |
+| Evidence | Selected deployment, adapter version, usage, finish reason, quality check, and correlated trace |
+
+For each provider adapter, run an **adapter conformance** corpus. It should cover
+ordinary messages, every tool/schema feature the application uses, partial and
+cancelled streams, context-limit errors, usage accounting, timeouts, rate
+limits, refusals, and malformed responses. A field that is transformed,
+emulated, or dropped must be rejected or reported; silently ignoring it is not
+conformance. Record that outcome as a translation loss report. The same corpus
+must run against every candidate route and during every adapter upgrade.
+
+The deployment identity must include every layer that can change behavior. One
+useful fingerprint is
+
+$$
+c = (a, e, m, z, p, k, d, h, r),
+$$
+
+where $a$ is the provider adapter and version; $e$ the engine image and
+configuration; $m$ the model, tokenizer, and artifact digests; $z$ the prompt
+template, tool parser, and structured-output settings; $p$ the numerical
+precision and parallel placement; $k$ the attention and KV-cache policy; $d$
+the decoding, batching, and admission policy; $h$ the accelerator and network
+topology; and $r$ the route, retry, and fallback policy. Every symbol denotes a
+versioned record, not a product name. Changing any term creates a new candidate
+that must pass the relevant evaluation again.
+
+@fig-serving-stack shows the boundary. A mediation service is optional, and
+the self-managed branch is only one possible deployment mode. The contract and
+evidence cross every branch.
 
 ```{dot}
 //| label: fig-serving-stack
-//| fig-cap: "The request path through a self-hosted stack. One OpenAI-compatible interface runs from the app down to the engine, so any layer can be swapped without rewriting the others."
+//| fig-cap: "A contract-preserving request path. Provider adapters translate a tested internal contract; the compute-placement boundary applies only to the self-managed deployment mode."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  app [label="App / Agent / RAG retriever"];
-  gw [label="Gateway\nauth, routing, budgets, fallback"];
-  api [label="Hosted APIs\nOpenAI / Anthropic / Gemini"];
-  eng [label="Serving engine\nvLLM / SGLang / TRT-LLM"];
-  gpu [label="GPUs\nserverless / neocloud / hyperscaler"];
-  obs [label="Cost + audit + OTel", shape=cylinder];
-  app -> gw [label="OpenAI-compatible API\nvirtual key"];
-  gw -> api [label="hosted fallback"];
-  gw -> eng [label="self-hosted"];
-  eng -> gpu;
-  gw -> obs [label="spend, traces"];
+  nodesep=0.35; ranksep=0.45;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.1, margin="0.12,0.08"];
+  edge [fontsize=9, fontname="Helvetica", color="#6b7280",
+        fontcolor="#6b7280"];
+  app [label="Application\ninternal request contract"];
+  policy [label="Optional mediation boundary\nidentity • policy • route • budget"];
+  adapter [label="Versioned provider adapter\nconformance-tested translation"];
+  deployment [label="Qualified deployment\nAPI • managed endpoint\n• self-managed engine"];
+  compute [label="Optional owned placement\naccelerators • network\n• scheduler"];
+  evidence [label="Evaluation + telemetry\nquality • latency\n• rejection • cost",
+            shape=cylinder];
+  app -> policy [label="deadline + trace"];
+  policy -> adapter [label="qualified route"];
+  adapter -> deployment;
+  deployment -> compute [style=dashed, label="self-managed only"];
+  compute -> evidence;
 }
 ```
 
-The interface is the key to the whole design. By 2026 almost every engine and
-gateway speaks the OpenAI HTTP shape (`/v1/chat/completions`,
-`/v1/completions`, `/v1/embeddings`). That single convention is what lets you
-swap a self-hosted model for a hosted one, put a gateway in front of many
-engines uniformly, and point an eval harness (@sec-eval-practice) at the same
-URL as production. A second shape is emerging beside it: OpenAI's own primary
-interface is now the stateful Responses API, and vLLM serves `/v1/responses`
-alongside the classic endpoints. Chat Completions remains the least common
-denominator that engines and gateways interoperate on. Build against it and
-keep every layer replaceable.
+## Measure what the user waits for
 
-## Layer 1: the serving engine
+The engine processes a prompt during **prefill**, then produces further tokens
+through autoregressive **decode**. Prefill often has enough parallel work to be
+compute-limited; decode often has low arithmetic intensity and becomes limited
+by memory traffic. These are common regimes, not laws. Prompt length, batch
+shape, model architecture, kernels, cache state, and hardware can move either
+phase to another bottleneck. Measure the exact fingerprint $c$ rather than
+assigning it a bottleneck by name.
 
-A serving engine turns a set of weights into a service: it loads the model onto
-accelerators, batches requests, runs the forward passes, manages the key-value
-cache, and streams tokens back. This is where most controllable cost and most
-user-visible latency live. The same weights under two engines, or one engine
-with two configs, can differ by an order of magnitude in tokens per second and
-tail latency.
+For a simple request with $O$ output tokens, a useful critical-path
+decomposition is
 
-Two phases drive every design decision (@sec-serving-problem). **Prefill**
-processes the whole prompt in parallel and is compute-bound. **Decode** emits
-one token at a time, each step re-reading the cache, and is
-memory-bandwidth-bound. The features that matter are answers to the tension
-between them, and most are developed in @sec-memory-scheduling and
-@sec-faster-decoding; the short version follows. **Continuous batching** adds
-and retires requests every step, table stakes by 2026. **PagedAttention**
-stores the cache in non-contiguous pages so memory is not fragmented. **Prefix
-caching / KV reuse** computes a shared leading prefix once, the dominant win for
-agents and RAG, generalized to a radix tree (a trie keyed by token prefixes) by
-SGLang's **RadixAttention**. **Quantization** (@sec-quantization-kernels)
-shrinks weights to fewer bits: FP8, FP4, INT4 via AWQ/GPTQ, GGUF K-quants.
-**Speculative decoding** (@sec-faster-decoding) drafts cheap tokens and verifies
-them in one pass. **Structured output** is grammar-constrained decoding via
-XGrammar, so tool calls and extracted data parse. **Prefill/decode
-disaggregation** puts the two phases on separate worker pools, the headline
-datacenter pattern of 2026.
+$$
+T_{\mathrm{e2e}}
+= T_{\mathrm{queue}}
++ T_{\mathrm{prefill}}
++ \sum_{k=2}^{O} T_{\mathrm{decode},k}
++ T_{\mathrm{tools}}.
+$$
 
-### The players
+Here $T_{\mathrm{queue}}$ is admission and scheduling delay;
+$T_{\mathrm{prefill}}$ includes the work needed to produce the first token;
+$T_{\mathrm{decode},k}$ is the interval for output token $k$; and
+$T_{\mathrm{tools}}$ is serial tool or external-service time on the critical
+path. For parallel branches, add the maximum branch duration, not their sum.
+Network and client buffering should be recorded separately when they are
+material.
 
-The table below is a mid-2026 snapshot. Licenses and "best for" are durable;
-the benchmark notes are third-party and workload-specific.
+**Time to first token** (TTFT) measures the interval from accepted request to
+the first visible token. For $O>1$, **time per output token** (TPOT) is commonly
+reported as the elapsed time from first to last visible token divided by
+$O-1$. End-to-end latency still matters: an attractive TTFT can hide a slow
+decode, tool call, or retry. Report p50, p95, and p99 by request class, together
+with the rejected and timed-out fraction. A system can otherwise manufacture
+good latency by refusing its hardest traffic.
 
-| Engine | What it is | License / HW | Best for |
-| --- | --- | --- | --- |
-| **vLLM** | The de-facto open-source default. Origin of PagedAttention, broadest model and feature coverage, "V1" core re-architected for lower overhead. | Apache-2.0, GPU | General-purpose GPU serving; the safe default |
-| **SGLang** | High-performance engine built on RadixAttention (radix-tree prefix reuse) plus a frontend for structured LLM programs. | Apache-2.0, GPU | Prefix-heavy traffic (agents, RAG, multi-turn), large MoE |
-| **TensorRT-LLM** | NVIDIA's optimized engine; compiled kernels plus a now-default PyTorch backend that loads HF weights without a build step. | Apache-2.0, NVIDIA only | Max throughput/latency on Hopper/Blackwell, FP8/FP4 |
-| **LMDeploy** | InternLM/OpenMMLab engine with a C++ TurboMind backend and aggressive built-in w4a16 quantization (weights in 4-bit, activations in 16-bit). | Apache-2.0, GPU | Low-TTFT (time to first token) quantized serving, INT4 70B-class |
-| **llama.cpp** | Portable C/C++ engine for GGUF quantized models. Runs on CPU, CUDA, ROCm, Vulkan, Metal. | MIT, portable | Local / edge / CPU / mixed-vendor; max portability |
-| **Ollama** | Developer-friendly wrapper (registry + CLI + OpenAI API) over llama.cpp; moving to an MLX backend on Apple Silicon (preview). | MIT, portable | Local dev, laptops, fastest path to localhost |
-| **MLX / mlx-lm** | Apple's framework for Apple Silicon (unified memory, zero-copy). | MIT, Apple only | Fastest single stream on Macs |
-| **NVIDIA Dynamo** | Not an engine: a datacenter orchestrator above engines. Disaggregation, KV-aware routing, NIXL transport, memory tiering. | Apache-2.0, NVIDIA | Multi-node, SLO-driven fleets at scale |
-| **llm-d** | Kubernetes-native distributed stack: vLLM workers + KV-aware routing + disaggregation + Inference Gateway. | Apache-2.0 (CNCF Sandbox) | K8s-native fleets without going all-NVIDIA |
-| **Hugging Face TGI** | Formerly a leading server. Archived March 2026, maintenance mode; HF now points users to vLLM/SGLang/llama.cpp/MLX. | Apache-2.0, archived | Legacy only; do not start here |
+### Engine mechanisms are conditional levers
 
-As of mid-2026, secondary benchmarks report SGLang ahead of vLLM on some H100
-single-model tests (one cites roughly 29 percent) with larger gains on
-prefix-heavy shapes, the gap narrowing at 70B scale; LMDeploy near SGLang on
-throughput with best-in-class TTFT for INT4 70B; MLX 30 to 50 percent faster
-than llama.cpp on some Apple Silicon models. These come from vendor and blog
-benchmarks that vary by model, GPU, batch shape, and tuning, and they age fast.
-Verify on your own workload before treating any of them as a tiebreaker.
+Modern serving runtimes combine several techniques. Their history clarifies
+what each one actually solves. Orca introduced iteration-level scheduling: the
+active batch can change between decoding iterations instead of waiting for a
+static batch to finish [@yu2022orca]. vLLM's PagedAttention applied block-based
+allocation to the growing KV cache, reducing over-reservation and fragmentation
+that limited resident sequences [@kwon2023pagedattention]. Later systems
+explored chunked prefill and separate prefill/decode placement
+[@agrawal2024sarathi; @zhong2024distserve]. None of these results establishes a
+universal production default.
 
-### How to choose an engine
+| Mechanism | Potential benefit | Prerequisite and cost |
+| --- | --- | --- |
+| Iteration-level or continuous batching | Rebuilds the active set as requests arrive and finish, improving scheduling opportunities | Admission and batch policy change TTFT, token cadence, fairness, and memory pressure |
+| Paged KV allocation | Avoids requiring one contiguous maximum-size cache allocation and reduces wasted capacity | Block metadata, tail waste, cache eviction, and kernel support remain |
+| Exact prefix reuse | Skips repeated prefill work for an exact tokenized prefix | Model revision, template, adapter state, positions, cache format, multimodal state, and isolation policy must match; changing document order or timestamps causes misses |
+| Quantization | Reduces some combination of weight, activation, or KV memory and may enable faster kernels | Name the quantized object: weights, activations, or KV state; calibration, scales, kernel availability, and task quality all require verification |
+| Speculative decoding | Uses a proposer and target acceptance rule to reduce serial target steps | Acceptance rate, proposer cost, memory, batch shape, and distribution-preservation assumptions determine the gain; see @sec-faster-decoding |
+| Grammar-constrained output | Restricts completed output to a supported grammar | Guarantees syntax, not semantic correctness, authorization, safe tool choice, or a complete non-refused stream [@dong2025xgrammar] |
+| Chunked prefill | Interleaves bounded prompt chunks with ongoing decodes to reduce long generation stalls | Adds scheduler choices and can change TTFT, throughput, and cache behavior |
+| Prefill/decode disaggregation | Isolates phase interference and permits independent placement and sizing | Adds KV transfer, network queueing, duplicated capacity, routing state, and new failure boundaries |
 
-The decision is mostly a function of where you run, what your traffic looks
-like, and how much performance engineering you can afford.
+Prefix reuse is not semantic caching: similar meaning does not imply reusable
+KV state. It also saves prefill work only. When decode dominates or prefixes do
+not repeat, retaining cached state can be a net capacity cost. Likewise, a
+lower-bit artifact can be slower if the runtime lacks an efficient kernel and
+must repeatedly convert it. Validate the exact artifact on the exact hardware,
+then rerun the task-quality gate from @sec-eval-practice.
 
-- **Pick vLLM** when you want one safe, broadly-supported default on GPUs, need
-  a wide range of models and features now, and value ecosystem maturity over
-  the last 20 percent of performance. This is the right answer for most teams.
-- **Pick SGLang** when your traffic is prefix-heavy (agents, RAG, multi-turn)
-  or you serve large MoE models, and you want top throughput on those shapes.
-  Verify the win on your own traffic first.
-- **Pick TensorRT-LLM** when you are all-NVIDIA, latency and throughput are
-  first-order costs, and you can invest in the toolchain (the default PyTorch
-  backend lowers that cost versus the old build flow).
-- **Pick LMDeploy** when quantized w4a16 serving and low TTFT on a NVIDIA fleet
-  matter most.
-- **Pick llama.cpp** when you need portability (CPU, AMD via Vulkan/ROCm,
-  Metal), edge or local deploys, and GGUF quant, and you do not need
-  datacenter-grade concurrency.
-- **Pick Ollama or MLX** when the target is a laptop or a few internal users;
-  pick MLX specifically on Apple Silicon for the fastest single stream.
-- **Reach for Dynamo or llm-d** when you have outgrown a single node and need
-  KV-aware routing, disaggregation, and SLO-driven autoscaling across a fleet.
-- **Do not start on TGI** in 2026; it is archived and maintenance-only.
-
-**Sensible default (mid-2026):** vLLM behind an OpenAI-compatible endpoint,
-prefix caching on, an appropriate quantization (FP8 on Hopper/Blackwell, or
-AWQ/GPTQ INT4 to fit a bigger model on smaller cards), and XGrammar-backed
-structured output for any tool-calling or extraction path. It is the broadest,
-lowest-regret choice. For local and dev, the default flips to Ollama or
-llama.cpp on Linux/Windows and MLX on Macs. Those are single-node,
-low-concurrency tools; do not promote them into a high-traffic path.
-
-A minimal single-node vLLM launch:
-
-```bash
-vllm serve <model-id> \
-  --enable-prefix-caching \
-  --quantization fp8 \
-  --guided-decoding-backend xgrammar
-# exposes an OpenAI-compatible server on :8000
-```
-
-Flag names and structured-output parameters drift between vLLM versions; check
-the docs for your release.
-
-## Layer 2: the gateway
-
-A model gateway is the control plane between your application code and the many
-model providers it talks to. In the thinnest framing it is a reverse proxy that
-speaks one API and fans requests out to OpenAI, Anthropic, Google, Bedrock,
-Azure, your own vLLM, and aggregators like OpenRouter. That undersells it. The
-gateway is where five concerns nobody wants scattered across application code
-get centralized:
-
-1. **Unified API.** One request schema, so swapping `gpt-5` for `claude-opus-4`
-   or a self-hosted variant is a config change, not a code change.
-2. **Key custody.** Provider secrets live on the server. Apps and agents hold
-   short-lived *virtual keys* scoped to a model allowlist and a budget, never
-   the raw provider credential.
-3. **Cost tracking.** Per-key, per-team, per-tag spend, attributed and
-   exportable. This is the single most cited reason teams adopt a gateway.
-4. **Fallback and routing.** Retries, provider failover, load balancing,
-   context-window fallback, cost- or latency-aware model selection.
-5. **Budgets and policy.** Hard spend caps, rate limits, guardrails (PII
-   redaction, jailbreak filtering), and an audit trail.
-
-The gateway is the seam between the serving layer and everything above it. The
-newest gateways extend the idea past plain LLM calls into agent-native
-protocols (MCP for tools, A2A for agent-to-agent), so the gateway becomes the
-policy point for tool and agent traffic too, which connects directly to the
-harness work in @sec-agents-practice and the authorization model in
+Structured decoding deserves the same restraint. After generation, check the
+finish reason, parse and schema result, domain invariants, caller authorization,
+and any effect-specific preconditions. A syntactically valid request to transfer
+money is still an authorization decision. That boundary connects serving to
 @sec-security-authorization.
 
-### The players
+### Benchmark the complete fingerprint
 
-| Gateway | What it is | Hosting | Best for |
-| --- | --- | --- | --- |
-| **LiteLLM** | Python SDK + self-hostable proxy translating 100+ providers to OpenAI format; virtual keys, budgets, spend logs, UI. | Self-host (OSS core) + Enterprise tier | Broadest provider coverage, Python stack, DevOps in place; a Python proxy, so throughput is its ceiling under load (@sec-wiring-stack) |
-| **OpenRouter** | Managed aggregator: one endpoint, prepaid credits, 300+ models, BYOK. | Managed SaaS | Solo devs and small teams wanting zero-setup catalog access |
-| **Portkey** | Gateway with guardrails, virtual keys, fallbacks, caching, prompt management, observability. | OSS core + managed | Enterprises needing governance: PII redaction, audit, compliance |
-| **agentgateway** | Rust data plane for HTTP/gRPC and AI-native protocols: LLM + MCP + A2A in one. | Self-host (Apache-2.0, Linux Foundation) | Platform teams wanting one proxy for LLM, tool, and agent traffic |
-| **Envoy AI Gateway** | Kubernetes-native gateway on Envoy + Gateway API; token rate limiting, InferencePool. | Self-host (OSS) | Teams already on Envoy/Istio/Gateway API |
-| **Kong AI Gateway** | LLM routing as plugins in Kong's API platform; PII redaction, semantic caching. | OSS core + Enterprise | Orgs already running Kong |
-| **Cloudflare AI Gateway** | Platform-native gateway: observability, caching, rate limiting, cost tracking; Unified Billing. | Managed SaaS | Teams already on Cloudflare/Workers |
-| **Helicone** | OSS gateway/proxy, observability-first logging and analytics; Rust runtime. | OSS + hosted | Logging and analytics with low overhead (often paired with LiteLLM) |
-| **Bifrost** (Maxim AI) | Go gateway: adaptive load balancing, cluster mode, guardrails; markets very low overhead. | OSS + commercial | High-throughput self-hosted LiteLLM alternative |
-| **Lux** (latere.ai) | The author's own gateway: one address to OpenAI/Anthropic/Gemini/OpenRouter/Ollama; sealed credentials, virtual keys, spend caps, hooks, audit. | Latere product | The Latere stack; a worked example here, not a neutral pick |
+A useful comparison fixes a production-shaped, open-loop arrival trace. It
+preserves the observed request-class mix, input and output length distributions,
+prefix-reuse distribution, tool and schema mix, cancellations, and bursts.
+Open-loop means arrivals follow the recorded schedule rather than waiting for
+the previous response; otherwise a slow system reduces its own offered load and
+looks deceptively stable.
 
-Several vendors publish dramatic overhead numbers (Bifrost "50x faster than
-LiteLLM" and "~11µs"; Portkey "<1ms"; LiteLLM "~8ms P95 at 1k RPS"). These are
-vendor benchmarks under inconsistent conditions and are not independently
-verified. The durable point: compiled-language gateways (Go/Rust: Bifrost,
-agentgateway, Helicone, Envoy) generally claim lower proxy overhead than the
-Python LiteLLM proxy, but for most workloads provider and model latency
-dominate gateway overhead by orders of magnitude. Benchmark on your own traffic
-before treating overhead as a tiebreaker. A controlled benchmark in
-@sec-wiring-stack sharpens where the gap actually shows: not per-request overhead
-but throughput, with the Python proxy saturating at a few hundred RPS while the
-compiled gateways stay flat through 1000.
+For each candidate:
 
-### How to choose a gateway
+1. Pin the full fingerprint $c$ and verify adapter conformance and task quality.
+2. Run both cold and representative warm-cache conditions.
+3. Sweep offered load from idle through saturation without changing the trace.
+4. Record admitted and rejected requests, TTFT, TPOT, end-to-end tails, output
+   rate, memory, power where available, and cost per accepted task.
+5. Change one mechanism at a time. A one-feature ablation makes the cause of a
+   gain inspectable.
+6. Repeat enough trials to expose variance, then test worker loss, network
+   delay, cancellation, and recovery.
 
-Work two axes in order: managed versus self-hosted, then plain-LLM versus
-agent-native.
+Do not compare two engine names while also changing model revision, template,
+precision, hardware, or request mix and attribute the result to the engine. If
+those changes are intentional, compare them as two complete served-system
+candidates.
 
-- **Pick OpenRouter** when you are a solo dev or small team and want the
-  largest catalog with no infra and no contracts.
-- **Pick LiteLLM** when you want a self-hosted, broadly compatible gateway and
-  have the DevOps to run it, especially on a Python stack, at low-to-moderate
-  traffic where its provider coverage matters more than its throughput ceiling.
-- **Pick Portkey** (or Kong if you already run Kong) when governance,
-  guardrails, and compliance are requirements, not nice-to-haves.
-- **Pick agentgateway** when your roadmap is agentic and you need LLM, MCP, and
-  A2A traffic under one governed policy point.
-- **Pick Envoy AI Gateway** when your platform team already lives in
-  Envoy/Istio/Gateway API and wants the AI control plane in the same CRDs.
-- **Use a managed gateway** (OpenRouter, Cloudflare, Portkey managed) when you
-  want zero infrastructure and accept that keys and request metadata transit a
-  third party. Move to self-hosted when key custody, audit, or compliance
-  forces it.
+A configuration is eligible only when it passes every hard constraint and its
+joint service objective. For request class $s$, define all three gates together:
 
-**Sensible default (mid-2026):** self-host a performant compiled gateway,
-agentgateway (Rust, Apache-2.0, neutral) or Lux (Go, this book's worked example),
-paired with an observability layer for spend and request analytics. It gives you
-virtual keys with budgets, spend tracking, and fallbacks in your own environment,
-and stays flat under agent load where a Python proxy saturates (@sec-wiring-stack).
-LiteLLM stays a reasonable pick for the broadest provider coverage at
-low-to-moderate traffic, where its ecosystem reach outweighs its throughput
-ceiling. agentgateway also puts LLM, tool, and agent traffic under one policy
-point, which matters once the roadmap is agent-heavy.
+$$
+\begin{aligned}
+H_j(c) &= 1 && \text{for every hard constraint } j, \\
+Q_s(c) &\ge q_s, \\
+\Pr\!\left(
+  \mathrm{TTFT}\le F_s,
+  \mathrm{TPOT}\le D_s,
+  T_{\mathrm{e2e}}\le L_s
+  \mid \mathrm{admitted},s
+\right) &\ge \alpha_s.
+\end{aligned}
+$$
 
-::: {.callout-note}
-Disclosure: the author's own stack uses **Lux** as its gateway. It appears here
-as a worked example of these patterns, not as a neutral recommendation over the
-options above.
-:::
+Here $H_j$ covers such constraints as license, region, interface, and capacity;
+$Q_s$ is measured quality with threshold $q_s$; $F_s$, $D_s$, and $L_s$ are
+the TTFT, TPOT, and end-to-end limits; and $\alpha_s$ is the required joint
+attainment rate. Unknown hard-constraint evidence does not pass. Optimize cost
+or throughput only over this feasible set, and always publish the admission
+rate beside the conditional latency result.
 
-A minimal gateway config that unifies a hosted and a self-hosted model behind
-one name and adds a fallback. The shape is illustrative, not one product's
-schema:
+## Use mediation where it earns its boundary
+
+A gateway or mediation service is a **design option**, not a mandatory layer.
+It can centralize identity, credential references, quotas, routing, budgets,
+and telemetry when many callers or providers would otherwise duplicate them.
+A direct, well-tested adapter can be simpler for one application and one
+provider. The question is whether centralization creates a boundary the team
+can actually enforce and operate.
+
+A mediation boundary is valuable only if its invariants are explicit:
+
+- Authenticate the caller and tenant, then authorize the requested model,
+  tools, data class, and effect. Possession of a proxy key is not sufficient.
+- Route only within the allowed candidate set that has passed the same contract
+  and policy-compatible fallback evaluation.
+- Check and reserve the budget atomically before dispatch; reconcile the
+  reservation against measured usage afterward.
+- Propagate the original remaining deadline and cancellation. A retry does not
+  receive a fresh timeout.
+- Retry only when the failure class and operation are eligible, an idempotency
+  key or read-only guarantee makes repetition safe, and budget and deadline
+  remain. An ambiguous outcome is not proof that no work occurred.
+- Correlate every attempt, selected deployment, policy decision, and result in
+  one trace. W3C Trace Context defines interoperable propagation fields for
+  that purpose [@w3c2021tracecontext].
+- Fail closed when identity, authorization, route qualification, or budget
+  evidence is missing. An observability outage should not silently disable
+  policy.
+
+Separate the administrative control plane---where routes, policies, and
+credentials change---from the request data plane that evaluates those records.
+Protect and audit both. Prefer workload identity or short-lived,
+audience-restricted credentials over long-lived bearer keys, and resolve
+provider secrets through a credential reference rather than copying them into
+route configuration.
+
+HTTP distinguishes idempotent methods, but inference is commonly invoked with
+`POST`, and the generated result may cause an external action. Transport retry
+safety therefore cannot establish application-effect safety by itself
+[@fielding2022http]. If a timeout occurs after a tool may have executed, query
+the effect ledger by idempotency key or surface an ambiguous outcome for
+reconciliation. Do not blindly submit the action to a different model.
+
+Assign one retry owner and set a bound on total attempts. Nested retries in the
+client, mediator, and provider SDK multiply rather than add. Distinguish a
+transport retry to the same deployment, provider failover to another qualified
+deployment, and model fallback to a different served system. A fallback is
+eligible only before the first byte has reached the caller and only within the
+same contract; once streaming has started, return a visible partial-stream
+failure. Never treat authentication, authorization, invalid input, or an
+unreconstructable stateful session as a reason to try another provider.
+
+The following policy object is illustrative. It is an internal design record,
+not a promise that a particular gateway accepts this schema.
 
 ```yaml
-# Each gateway has its own schema; this shows the shape, not a product's exact keys.
-models:
-  - alias: smart                 # the name your app requests
-    target: anthropic/claude-opus-4
-    api_key: ${ANTHROPIC_API_KEY}
-  - alias: smart                 # same alias, load-balanced / fallback target
-    target: openai/gpt-5
-    api_key: ${OPENAI_API_KEY}
-  - alias: local
-    target: vllm/<model-id>      # your vLLM, OpenAI-compatible
-    base_url: http://vllm-svc:8000/v1
-
-routing:
-  smart:
-    strategy: fallback           # if the hosted target fails, use the next
-    fallback: [local]
-    retries: 2
-# Virtual keys, team budgets, and spend caps are minted out of band,
-# through an admin API or dashboard, not in this file.
+route_contract: support-summary-v3
+request_class: read_only_summary
+candidates:
+  - deployment_ref: hosted-eu@sha256:...
+    adapter_ref: adapter-a@sha256:...
+    data_classes: [internal]
+    regions: [eu]
+  - deployment_ref: managed-eu@sha256:...
+    adapter_ref: adapter-b@sha256:...
+    data_classes: [internal]
+    regions: [eu]
+credential_ref: workload-identity://inference/support
+deadline_ms: 2500
+budget_reservation: required
+retry:
+  attempts: 1
+  eligible_failures: [connect_before_send, rate_limited]
+  requires: read_only_or_idempotency_key
+fallback:
+  requires_same_contract: true
+telemetry:
+  record_content: false
+  propagate_trace_context: true
 ```
 
-The application then points a standard OpenAI client at the proxy and requests
-model `"smart"`. The gateway resolves the alias, load-balances or fails over,
-records spend against the virtual key, and emits traces. Upstream, `"local"`
-resolves to your Layer-1 engine, so self-hosted and hosted models become
-interchangeable behind one name:
+This route has two candidates only because both have passed the conformance,
+quality, region, and load gates. A different model behind the same alias is not
+automatically a fallback. It can change tool behavior, safety policy, context
+limits, data handling, latency, and price.
 
-```python
-from openai import OpenAI
-client = OpenAI(base_url="https://gateway.internal/v1", api_key="<virtual-key>")
-resp = client.chat.completions.create(
-    model="smart",
-    messages=[{"role": "user", "content": "..."}],
-)
-```
+Record low-cardinality operational facts by default: request class, logical
+route, deployment version, token counts, finish reason, latency, attempts,
+policy outcome, and cost ledger references. OpenTelemetry provides evolving
+generative-AI semantic conventions, but input and output content can contain
+PII and other sensitive data [@otelGenAI]. Keep prompts, completions, tool
+arguments, and retrieved documents out of ordinary telemetry unless a specific
+retention, access, and redaction policy authorizes them.
 
-Each gateway has its own schema and it drifts between versions; check its docs
-for the exact keys.
+Keep an unsampled logical request ledger separate from sampled diagnostic
+traces. The ledger links every attempt to the route revision, actual provider
+and deployment, upstream request ID, translation loss, usage, price version,
+estimated charge, policy decision, and stream termination. Reconcile that
+ledger with provider invoices; a local estimate is not invoice reconciliation
+and cannot by itself prove a hard budget ceiling.
 
-## Layer 3: the compute under it
+## Procure capacity from measurements
 
-Everything above eventually lands on a GPU someone has to provision, schedule,
-and pay for. Two questions sit at the center, and they are mostly orthogonal:
-where the GPUs come from (the **build versus rent** axis) and how they are
-scheduled. The hardware itself is @sec-accelerators-networking; the
-orchestration substrate is @sec-orchestration-data-infra; the cost arithmetic
-is @sec-economics. Here we choose.
+Deployment and procurement are separate choices. A team can use a
+**first-party API**, a provider-operated **managed endpoint** for a selected
+artifact, or a **self-managed** engine on rented or owned accelerators. The
+right comparison applies the same hard constraints, quality gate, workload,
+and accounting horizon to all three.
 
-### Self-host versus call an API
+| Dimension | Questions to record |
+| --- | --- |
+| Charging | Per token, request, accelerator-second, or reserved interval? What is the billing quantum and minimum commitment? |
+| Capacity | Is there a capacity guarantee, quota, reservation, or merely best effort? How are bursts and admission handled? |
+| Startup | What cold-start and scale-up delay applies, and what warm capacity must be paid while idle? |
+| Failure | Is capacity interruptible? What notice, checkpoint, retry, and recovery behavior is supported? |
+| Location | Which regions, data paths, storage tiers, and egress charges apply? |
+| Hardware | Which accelerator, memory size, interconnect, host bandwidth, and topology are actually allocated? |
+| Operations | Who owns patches, rollout, monitoring, incident response, and capacity forecasting? |
+| Exit | Can artifacts, logs, adapters, and evaluation evidence move without changing the serving contract? |
 
-Before sizing GPUs, settle the prior question: should you self-host at all? Most
-teams should start on a hosted API and self-host only when a concrete pressure
-forces it. The decision rule is blunt:
+There is no universal utilization percentage at which one mode becomes
+cheaper. Capacity is purchased in steps, demand is bursty, warm replicas and
+redundancy are billed, and a cheaper route may produce fewer acceptable
+results. Model low, base, and high demand, including capacity steps, commitments,
+interruption, egress, operations labor, and incident cost. Then compare the
+end-to-end cost per accepted task from @sec-choosing-model and @sec-economics.
 
-- **Call a hosted API** (through your gateway) when traffic is bursty or low
-  volume, when you want the frontier model without operating it, when
-  time-to-ship matters more than per-token cost, and when your data can leave
-  your environment. This is the right default for most application teams.
-- **Self-host** when at least one of these binds: sustained high utilization
-  makes per-token economics dominate (you keep the hardware busy), data
-  residency or compliance requires weights and prompts to stay in your
-  environment, you need an open-weight model or a fine-tune no API offers, or
-  you need latency and tail-behavior control the API will not give you.
+### Establish a planning bound, then load-test it
 
-The gateway makes this reversible. Because both paths speak the same
-OpenAI-shaped interface, you can start hosted, add a self-hosted route as one
-more alias, and shift traffic with a config change. Choosing a model for either
-path is @sec-choosing-model; the wiring of the whole stack is @sec-wiring-stack.
+Here $\lambda_{\mathrm{peak}}$ is the declared peak arrival rate,
+$\mathbb{E}[S]$ is measured accelerator-seconds of service per request under
+the production mix, and $\rho_{\max}<1$ is a chosen planning utilization cap.
+A rough lower bound on accelerator count is
 
-### Where the GPUs come from
+$$
+g_{\min}
+= \left\lceil
+\frac{\lambda_{\mathrm{peak}}\,\mathbb{E}[S]}
+     {\rho_{\max}}
+\right\rceil.
+$$
 
-A spectrum runs from serverless GPU platforms (push a function or a model, they
-handle the machine), through rented GPU clouds and neoclouds, to the
-hyperscalers, to owning hardware in a colo. The deciding variable is **sustained
-utilization**.
+Here the expression is a planning approximation, not an autoscaling formula.
+Dynamic batching
+makes service demand non-linear; prompt and output tails matter; tensor or
+pipeline placement can require several accelerators as an indivisible unit;
+and startup delay prevents instantaneous scale-out. For measured service rate
+$\mu_g$ at placement size $g$, queue stability requires
 
-| Tier | Examples | Billing shape | Best for |
-| --- | --- | --- | --- |
-| **Serverless GPU / managed inference** | Modal, Replicate, Baseten, RunPod Serverless, Fireworks, Together | Per-second / per-token, scale-to-zero | Bursty or low-utilization inference, zero infra to run |
-| **GPU clouds / neoclouds** | CoreWeave, Lambda, Nebius, Crusoe | On-demand + reserved GPU-hour | Steady, high-utilization training and serving clusters |
-| **Marketplaces / spot** | Vast.ai, decentralized | Per-hour, interruptible | Cheapest fault-tolerant batch; never latency-critical serving |
-| **Hyperscalers** | AWS, GCP, Azure | On-demand / reserved; custom silicon | Already there, broadest menu, managed pipelines, TPU/Trainium |
-| **Own hardware (colo)** | self-operated | Capex + ops | Sustained very-high utilization at scale, with ops muscle |
+$$
+\lambda < \mu_g,
+$$
 
-Pricing is volatile and aggregators disagree, so anchor on the **shape**, not
-the dollar. As of mid-2026, list-price anchors put serverless H100 around 3 to
-4 dollars per hour (Modal ~3.95/hr, RunPod ~2.89/hr), with roughly a 5x spread
-in H100 on-demand rates across tiers. Re-check before committing; these move
-quarterly.
+where $\lambda$ is offered load and $\mu_g$ is measured service rate for the
+placement. That necessary condition does not guarantee p95 or p99 latency. Validate
+$g_{\min}$ with the open-loop sweep, then add explicit headroom and redundancy
+for failures, deploys, maintenance, and forecast error. Provisioned capacity is
+the feasible placement size plus those reserves, rounded to the supplier's
+allocation unit.
 
-The rule of thumb: below roughly 40 to 50 percent sustained utilization of a
-dedicated GPU, serverless is cheaper because you pay nothing when idle. Above
-it, reserved GPU-hour rates on a neocloud or hyperscaler undercut both
-serverless and on-demand. Own hardware only at sustained very-high utilization
-where amortized capex beats years of rental. Use a marketplace or spot only for
-fault-tolerant batch. Use **SkyPilot** across all of these when you want to stay
-portable, chase the cheapest available capacity across clouds, and avoid
-lock-in.
+For each demand scenario, report accepted tasks, rejected tasks, quality-pass
+rate, SLO attainment, billed idle time, and total cost. Divide the full ledger
+by accepted tasks, not raw requests or generated tokens. That prevents a cheap
+but unreliable or low-quality path from appearing economical.
 
-Edit the two hourly rates and watch where the serverless and reserved cost
-lines cross; with the chapter's price anchors the break-even lands near the
-stated 40 to 50 percent band.
+## Choose orchestration by workload semantics
 
-:::: {.runnable}
-```python
-import numpy as np, matplotlib.pyplot as plt
-serverless_rate = 3.95   # $/GPU-hour, pay only when busy (scale-to-zero)
-reserved_rate   = 2.00   # $/GPU-hour, billed 24/7 whether idle or not
-hours = 730              # one month
-u = np.linspace(0, 1, 101)
-serverless = u * hours * serverless_rate      # cost scales with utilization
-reserved   = np.full_like(u, hours * reserved_rate)  # flat cost
-breakeven = reserved_rate / serverless_rate   # crossover utilization
-print(f"break-even utilization: {breakeven*100:.1f}%")
-plt.plot(u*100, serverless, label="serverless (pay-per-use)")
-plt.plot(u*100, reserved, label="reserved (flat)")
-plt.axvline(breakeven*100, ls="--", color="gray")
-plt.xlabel("sustained utilization (%)"); plt.ylabel("monthly cost ($)")
-plt.legend(); plt.title("GPU cost: serverless vs reserved"); plt.show()
-```
-::::
+Once the team controls a pool, it needs placement and lifecycle controls. Do
+not choose the control plane from an industry popularity claim. Write down the
+workload first.
 
-### How the GPUs are scheduled
+- A **long-lived service** needs health and readiness checks, rolling deployment,
+  bounded disruption, stable addressing, traffic draining, autoscaling, and
+  fast rollback.
+- A finite distributed job may need gang scheduling, topology-aware placement,
+  checkpoint and restart, preemption, priorities, and fair quota across teams.
+- Both need accelerator identity, health, isolation, and accounting. Multi-node
+  jobs also need network-topology constraints and all-or-nothing admission.
+- A Python or other application execution framework can manage tasks and actors,
+  but it does not replace cluster admission, device allocation, or service
+  lifecycle controls.
 
-Once you control a pool, a control plane decides placement. The three dominant
-ones, and how they split:
+Slurm is designed as a cluster workload manager with allocation, queueing, and
+job-step execution [@slurmOverview]. Kubernetes supplies service controllers
+and pod placement; extensions such as Kueue add quota and workload admission
+without replacing the scheduler or job controller [@kueueOverview]. Either can
+be extended, and some organizations combine them. The durable distinction is
+the required lifecycle and scheduling semantics, not a slogan such as
+“training uses Slurm, inference uses Kubernetes.”
 
-- **Slurm** when the dominant workload is large multi-node training and batch:
-  jobs that start, run for hours, checkpoint, and exit. Gang scheduling (all of a
-  job's workers scheduled together or not at all) is native and simple. The cost is no native services, ingress, or autoscaling.
-- **Kubernetes** when you run inference serving, mixed workloads, or
-  microservices alongside AI, and want the autoscaling, ingress, and
-  service-mesh ecosystem. Add **Volcano** or **NVIDIA KAI Scheduler** for gang
-  scheduling, **Kueue** for multi-team quota and admission, and **DRA** for
-  fine-grained GPU/MIG allocation.
-- **Ray (on KubeRay)** when your team is Python-native and wants distributed
-  training, RL, data, and serving in one framework, riding on K8s.
-
-The common large-team split is Slurm for training, Kubernetes for serving. The
-2026 convergence is **Slurm-on-K8s** projects (SchedMD Slinky, CoreWeave SUNK,
-Nebius Soperator) that keep Slurm's gang semantics on shared K8s infra,
-narrowing the split. The momentum is toward standardizing on Kubernetes even
-for training, via the add-ons above, because inference, not training, is now
-the majority of AI compute spend and serving wants exactly the elastic,
-scale-to-zero, latency-aware scheduling that Kubernetes provides.
-
-**Sensible default (mid-2026):** for a team shipping AI features with mixed
-bursty inference and occasional fine-tuning and no dedicated infra team, start
-on a serverless GPU or managed-inference platform (Modal for general serverless
-Python ergonomics, Baseten for production serving with SLAs, Fireworks or
-Together for pure open-model token inference). Promote to reserved neocloud
-clusters scheduled with Slurm-for-training and Kubernetes-for-serving as
-utilization climbs and the rental premium starts to dominate the bill.
+Autoscaling is bounded by physical reality. If a replica takes minutes to
+allocate hardware, load weights, compile kernels, and warm caches, a seconds-old
+queue signal cannot save the current request burst. Maintain warm capacity or
+admit less traffic, forecast ahead of known peaks, and test the full scale-up
+path. Device plugins and dynamic allocation likewise do not prove that a model
+fits, that the requested topology exists, or that degraded hardware is safe to
+serve.
 
 ::: {.callout-tip}
-## Constraint arrow
-The serving cost of a token, set at this layer, reaches all the way back up to
-pre-training. @sec-scaling-laws over-trains a smaller model past Chinchilla
-optimal precisely because the GPU-hour and per-token economics decided here are
-paid for the model's entire serving lifetime. The bottom of the stack sets a
-parameter at the top.
+## Lower-layer constraint
+Serving economics can influence training choices, but the causal chain must be
+measured. A smaller model may justify more training compute when its lifetime
+serving demand makes lower per-request cost valuable, as discussed in
+@sec-scaling-laws. That argument depends on accepted-result quality, expected
+volume, hardware, and accounting horizon; it is not implied by a low parameter
+count alone.
 :::
 
-## Wiring it together
+## Operate the decision
 
-The three layers compose into one request path, shown in @fig-serving-wiring,
-and the OpenAI-compatible interface is what keeps each replaceable.
+The end-to-end workflow in @fig-serving-wiring keeps architecture and evidence
+together.
 
 ```{dot}
 //| label: fig-serving-wiring
-//| fig-cap: "The full stack wired end to end. The gateway is the hub: apps, agents, and eval harnesses all hold a virtual key and one base URL, and the gateway fans out to hosted APIs and self-hosted engines running on scheduled GPUs."
+//| fig-cap: "The serving evidence loop. A candidate advances only after contract, quality, load, and failure checks; production evidence creates explicit re-evaluation triggers."
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  app [label="App / Agent runtime"];
-  gw [label="Gateway (agentgateway / Lux)"];
-  eval [label="Eval harness"];
-  api [label="Hosted APIs"];
-  orch [label="Orchestrator (fleet scale)\nDynamo / llm-d"];
-  prefill [label="Prefill workers (vLLM / SGLang)"];
-  decode [label="Decode workers (vLLM / SGLang)"];
-  engine [label="Single engine (vLLM)"];
-  sched [label="GPUs scheduled by\nK8s+KAI / Slurm / Ray"];
-  obs [label="Cost + audit + OTel", shape=cylinder];
-  app -> gw [label="virtual key"];
-  eval -> gw [label="same API"];
-  gw -> api [label="alias smart"];
-  gw -> orch [label="alias local"];
-  orch -> prefill;
-  orch -> decode;
-  prefill -> decode [label="KV transfer (NIXL/NVLink/IB)"];
-  gw -> engine [style=dashed, label="single node: skip orchestrator"];
-  prefill -> sched;
-  decode -> sched;
-  engine -> sched;
-  gw -> obs [label="spend, traces"];
+  nodesep=0.3; ranksep=0.4;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.1, margin="0.10,0.07"];
+  edge [fontsize=8, fontname="Helvetica", color="#6b7280",
+        fontcolor="#6b7280"];
+  freeze [label="Freeze contract\nand workload"];
+  baseline [label="Pin candidate\nand baseline"];
+  verify [label="Conformance +\nquality gates"];
+  load [label="Load test +\ncapacity plan"];
+  fail [label="Failure injection"];
+  rollout [label="Shadow • canary\nrollback ready"];
+  observe [label="Production evidence\nand drift triggers"];
+  freeze -> baseline -> verify -> load -> fail -> rollout -> observe;
+  observe -> freeze [label="re-evaluate", constraint=false];
 }
 ```
 
-Three facts make this hold together in practice. Applications never hold
-provider keys: they hold a virtual key minted by the gateway, so rotating a
-credential or capping a runaway agent is a server-side operation with no client
-redeploy. One base URL, OpenAI-shaped, serves app code, eval harnesses, and
-agent runtimes alike, so switching models or adding a fallback is configuration.
-And the engine, not the prompt, enforces structured output: guided decoding via
-XGrammar is the reliable path when downstream code parses tool calls or
-extracted data.
+1. **Freeze the contract and workload.** Declare request classes, arrival
+   traces, quality gates, SLOs, admission policy, data rules, and cost horizon.
+2. **Pin one baseline.** Record the complete fingerprint and establish a simple,
+   colocated configuration before adding cache reuse, speculation, or phase
+   separation.
+3. **Verify behavior.** Run adapter conformance, task evaluation, safety checks,
+   and structured-output invariants. Reject unknown hard-constraint evidence.
+4. **Load test and size.** Sweep offered load through saturation, including
+   cold and warm states. Size capacity with headroom and redundancy, then price
+   low, base, and high demand.
+5. **Run failure injection.** Exercise connection failure, provider `429` and
+   `5xx` responses, slow streams, cancellation, worker loss, scale-up delay,
+   corrupted output, budget exhaustion, and an ambiguous tool action. Verify
+   that deadline, retry, authorization, and accounting invariants hold.
+6. **Roll out reversibly.** Shadow production traffic where policy permits,
+   canary by request class and tenant, and maintain tested rollback for the
+   adapter, route, engine, model, and scheduler configuration.
+7. **Keep an evidence record.** Define a re-evaluation trigger for artifact or
+   adapter change, provider behavior drift, workload shift, SLO regression,
+   price or quota change, policy change, and scheduled expiry.
 
-## The gateway as the policy point
-
-The layers tie back to the book's spine through the gateway. **Capability** is
-its reach: one interface that makes every model, hosted or
-self-hosted, addressable, so the best model for each call is a routing rule.
-**Efficiency** comes from the engine and the compute tier working in concert,
-where continuous batching, prefix caching, and quantization raise tokens per
-second while the build-versus-rent and utilization decision sets the dollar
-floor under every token. **Trust** brings the gateway back as the policy point,
-the place for key custody, spend caps, audit, PII redaction, and the
-agent-native protocols that bring tool and agent traffic under one governed
-seam, which is where this chapter hands off to the safety and authorization
-work in @sec-security-authorization.
+Prefill/decode disaggregation, learned routing, semantic caches, and multi-cloud
+failover enter this workflow as hypotheses. Add one only when the simpler
+baseline misses a declared objective and the new design wins under the same
+trace after transfer, duplicate capacity, policy, and failure costs are counted.
 
 ::: {.callout-important}
 ## What's contested
-The unstable choice is how much of this stack should be owned. Hosted APIs move
-fast and collapse operational burden, but place latency, key custody, pricing,
-and model behavior partly outside the team. Self-hosted engines restore control
-and can win at high volume, but make scheduling, upgrades, utilization, and
-incident response the team's problem. The practical answer is workload-specific:
-use the gateway to keep both routes possible until measured latency, cost,
-compliance, and reliability force a narrower decision.
+Teams reasonably disagree about where to place the operating boundary. A direct
+provider adapter minimizes moving parts; mediation can centralize policy and
+evidence across many callers. First-party APIs reduce operations; managed
+endpoints expose more artifact control; self-managed engines expose the whole
+runtime and capacity problem. Advanced schedulers can improve a measured
+bottleneck while creating another queue or failure domain. There is no durable
+product default. Preserve the versioned contract and compare complete candidates
+against the same workload.
 :::
+
+The worked stack in @sec-wiring-stack is one implementation of these
+boundaries. The method here is the acceptance test for it: an endpoint, gateway,
+or GPU pool earns its place only when the complete served system produces better
+accepted results without violating the contract.
 
 ## Further reading
 

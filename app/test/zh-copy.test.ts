@@ -1119,7 +1119,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/02-serving-and-compute.qmd",
-      ["self-hosted endpoint", "@gls-gateway", "keys and cost control", "serving engine that decodes tokens", "GPUs underneath"],
+      ["versioned serving contract", "complete path", "choose an engine", "@gls-gateway", "means, not the architecture"],
     ],
     [
       "zh/practice/02-serving-and-compute.qmd",
