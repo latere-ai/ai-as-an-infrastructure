@@ -560,7 +560,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/generative/01-diffusion-flow-matching.qmd",
-      ["几乎所有非文本媒体", "去噪器、分数或速度", "一千次网络评估"],
+      ["固定形状生成", "概率流 ODE", "网络函数评估次数"],
     ],
     [
       "en/generative/02-nar-diffusion-lms.qmd",
