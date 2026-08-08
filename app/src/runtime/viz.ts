@@ -1260,6 +1260,10 @@
   // rank, so a few components recover most of it and detail saturates; the
   // readout shows the parameter saving r(d+k) vs dk and the shrinking residual.
   R['lora-lowrank'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
+    var L = zh
+      ? { target: '目标更新 ΔW', rank: '秩', params: '参数', versus: '对比', residual: '残差', slider: '秩 r' }
+      : { target: 'target ΔW', rank: 'rank', params: 'params', versus: 'vs', residual: 'residual', slider: 'rank r' };
     var d = 16, RANK = 12, r = 2;
     function uk(k, i) { return Math.sin(1.3 + k * 2.1 + i * 0.7) * Math.cos(0.5 + k * 1.1); }
     function vk(k, j) { return Math.cos(0.9 + k * 1.7 + j * 0.6) * Math.sin(0.3 + k * 0.9); }
@@ -1277,12 +1281,12 @@
         for (var i = 0; i < d; i++) for (var j = 0; j < d; j++) { ctx.fillStyle = color(val(i, j, rank)); ctx.fillRect(ox + j * cell, pd + i * cell, cell - cv.dpr, cell - cv.dpr); }
         ctx.fillStyle = th.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(label, ox + panel / 2, pd + panel + 15 * cv.dpr);
       }
-      grid(pd, RANK, 'target ΔW');
-      grid(ox2, r, 'rank-' + r + ' B·A');
+      grid(pd, RANK, L.target);
+      grid(ox2, r, L.rank + '-' + r + ' B·A');
       var num = 0, den = 0; for (var k = 0; k < RANK; k++) { if (k >= r) num += sv[k] * sv[k]; den += sv[k] * sv[k]; }
-      read.textContent = 'rank ' + r + ' · params ' + (2 * d * r) + ' vs ' + (d * d) + ' · residual ' + Math.sqrt(num / den).toFixed(2);
+      read.textContent = L.rank + ' ' + r + ' · ' + L.params + ' ' + (2 * d * r) + ' ' + L.versus + ' ' + (d * d) + ' · ' + L.residual + ' ' + Math.sqrt(num / den).toFixed(2);
     }
-    host.appendChild(slider('rank r', 1, d, 1, r, function (v) { r = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider(L.slider, 1, d, 1, r, function (v) { r = Math.round(v); draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };
@@ -1292,17 +1296,21 @@
   // and when they point opposite ways their sum cancels, the sign conflict that
   // TIES and DARE clean up. Slider sets the angle; toggle switches add/negate.
   R['task-arithmetic'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
+    var L = zh
+      ? { unlearn: '反向：回到基座', aligned: '方向一致：相互加强', conflict: '符号冲突：相互抵消', combine: '组合两个任务', op: '操作：', add: '相加（多任务）', negate: '取反（遗忘）', result: '结果', angle: '两个任务向量的夹角' }
+      : { unlearn: 'unlearn: returns toward base', aligned: 'aligned: reinforce', conflict: 'sign conflict: cancels', combine: 'combine both tasks', op: 'op: ', add: 'add (multi-task)', negate: 'negate (unlearn)', result: 'result', angle: 'angle between τA and τB' };
     var ang = 55, op = 'add';
     var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
     bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 280);
     function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, cx = W / 2, cy = H / 2, L = Math.min(W, H) * 0.3;
+      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, cx = W / 2, cy = H / 2, vectorLength = Math.min(W, H) * 0.3;
       ctx.clearRect(0, 0, W, H);
       ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
       ctx.beginPath(); ctx.moveTo(18 * cv.dpr, cy); ctx.lineTo(W - 18 * cv.dpr, cy); ctx.moveTo(cx, 14 * cv.dpr); ctx.lineTo(cx, H - 14 * cv.dpr); ctx.stroke();
-      var aA = -Math.PI / 6, Ax = Math.cos(aA) * L, Ay = Math.sin(aA) * L;
-      var aB = aA + ang * Math.PI / 180, Bx = Math.cos(aB) * L, By = Math.sin(aB) * L;
+      var aA = -Math.PI / 6, Ax = Math.cos(aA) * vectorLength, Ay = Math.sin(aA) * vectorLength;
+      var aB = aA + ang * Math.PI / 180, Bx = Math.cos(aB) * vectorLength, By = Math.sin(aB) * vectorLength;
       if (op === 'negate') { Bx = -Ax; By = -Ay; }
       function arrow(x, y, col, w) { ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = w * cv.dpr; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + x, cy + y); ctx.stroke(); ctx.beginPath(); ctx.arc(cx + x, cy + y, 4.5 * cv.dpr, 0, 7); ctx.fill(); }
       var Rx = Ax + Bx, Ry = Ay + By;
@@ -1312,13 +1320,13 @@
       ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left';
       ctx.fillStyle = t.accent; ctx.fillText('τA', cx + Ax + 6 * cv.dpr, cy + Ay);
       ctx.fillStyle = t.accent2; ctx.fillText(op === 'negate' ? '−τA' : 'τB', cx + Bx + 6 * cv.dpr, cy + By);
-      var mag = Math.sqrt(Rx * Rx + Ry * Ry) / L;
-      var rel = op === 'negate' ? 'unlearn: returns toward base' : (ang < 50 ? 'aligned: reinforce' : ang > 130 ? 'sign conflict: cancels' : 'combine both tasks');
-      btn.textContent = 'op: ' + (op === 'add' ? 'add (multi-task)' : 'negate (unlearn)');
-      read.textContent = 'result ' + mag.toFixed(2) + '× · ' + rel;
+      var mag = Math.sqrt(Rx * Rx + Ry * Ry) / vectorLength;
+      var rel = op === 'negate' ? L.unlearn : (ang < 50 ? L.aligned : ang > 130 ? L.conflict : L.combine);
+      btn.textContent = L.op + (op === 'add' ? L.add : L.negate);
+      read.textContent = L.result + ' ' + mag.toFixed(2) + '× · ' + rel;
     }
     btn.addEventListener('click', function () { op = op === 'add' ? 'negate' : 'add'; draw(); });
-    host.appendChild(slider('angle between τA and τB', 0, 180, 5, ang, function (v) { ang = v; draw(); }).wrap);
+    host.appendChild(slider(L.angle, 0, 180, 5, ang, function (v) { ang = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };

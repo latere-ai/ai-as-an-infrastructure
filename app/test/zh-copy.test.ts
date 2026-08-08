@@ -608,7 +608,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/adaptation/01-sft-peft.qmd",
-      ["小的、低秩", "rank-16 的适配器能近似替代", "QLoRA", "两次微调能相加到一起"],
+      ["SFT 与 PEFT 回答的是两个不同的问题", "低秩形式是一项容量约束", "QLoRA", "模型合并"],
     ],
     [
       "en/adaptation/02-behavior-specs-preference-data.qmd",
