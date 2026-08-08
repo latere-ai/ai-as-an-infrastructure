@@ -516,7 +516,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/foundations/01-scaling-laws.qmd",
-      ["Kaplan 时代偏向参数", "Chinchilla 式的数据分配", "推断感知的过度训练"],
+      ["大部分预算会分给更大的模型", "约合每个参数 20 个词元", "把预期服务需求与成本纳入计算"],
     ],
     [
       "en/foundations/index.qmd",
