@@ -1,230 +1,331 @@
 # 大规模训练：稳定性与分布式并行 {#sec-training-at-scale}
 
-前面几章的架构选择，只有在训练能够执行时才算数。一个前沿模型放不进单张加速器，而产出它的那次训练，会横跨数千张加速器、连续运行数周。一旦把工作切到这么多设备上，三种资源就开始相互角力：每个分片必须持有的显存、维持各分片一致所需的通信，还有这种规模的机群把故障当成常态后产生的故障恢复成本。训练系统要做的，就是在三者之间反复权衡，让达成的吞吐保持高位，让一张失效 GPU 的代价是几分钟，而不是几天。贯穿这一层的记分牌是@gls-mfu：通信、气泡、重算和故障各自分走一块之后，机器还有多少时间真正在做有效的模型计算。
+训练需要走向分布式，通常只有两个原因：模型状态已经放不进一张加速器，或者只用一张加速器会耗时太久。分布式训练解决了这两个问题，也带来了新的问题。每个分片都必须和其他分片交换数据，每个参与训练的工作进程也都可能让任务停下来。
 
-## 相互角力的三种力量
+因此，设计分布式训练本质上是在做核算。面对任何一种布局，都要回答四个问题：
 
-接下来的一切，都由两个事实决定：一个前沿模型的参数、梯度与优化器状态，放不进单张设备的显存；训练它所需的算术，也无法在单张设备上以任何能接受的时间完成。于是工作被切到数千张加速器上，而一旦切开，三个约束便开始相互制约。
+1. 哪些内容会复制，哪些内容会切分？
+2. 每台设备的峰值显存是多少，其中是否计入临时缓冲区？
+3. 一个训练步骤中，哪些消息位于关键路径上？
+4. 为了在故障后正确续训，哪些状态必须保存下来？
 
-第一个是显存。权重、占主导地位的 Adam 矩估计状态（即优化器为每个权重维护的梯度滑动平均，见 @sec-scaling-laws）、激活（前向传播时保存、留给反向传播使用的中间值）与梯度，全都得各有去处，而峰值激活显存还随序列长度往上涨。第二个是通信。每一次切分都引入一份用来维持各分片一致的流量，这份流量又和计算抢同一份时间预算。第三个是故障。在数千个节点上连跑数周，一张失效的 GPU 或网卡是常态，而非例外，单单一个就足以让整个集合通信失败。训练系统层的职责，就是把显存、通信与恢复三者拿来彼此权衡，让达成的吞吐保持高位，让一次故障的代价是几分钟，而不是几天。没有哪一种单一切法能同时解决这三者，所以设计里给出了好几种正交的切法，再把它们组合起来用。
+本章从单设备上的一个训练步骤出发，逐步扩展到多维设备网格。这里没有普遍适用的配方。模型形状、序列长度、数值格式和网络拓扑会共同决定合适的布局。
 
-## 四种切法，以及各自的代价
+## 从一个逻辑优化器步骤开始
 
-每个轴回答一个不同的扩展问题、切分一种不同的资源，而且都是在上一代遇到某个限制时才进入文献的。按这个顺序读下来，它们并不是一份简单菜单，而是一份记录，记下这套工具箱怎样逐步形成。
+数据并行是最直接的起点。$D$ 个副本各自接收批中的不同部分，运行同一个模型，再共同完成一次同步梯度更新。假设每个副本在优化器更新前处理 $m$ 个微批，每个微批包含 $B_\mu$ 条序列，那么
 
-*@gls-tp*先切开单层内部的矩阵乘法：把注意力头和前馈网络的列与行分散到各设备上。Megatron-LM 展示了怎样靠每层仅两次 all-reduce 做到这件事，让一个数十亿参数的模型在放不下单张设备之后仍然可以训练 [@shoeybi2019megatron]。代价是它通信密集：每个 TP 层都要在每一次前向与反向的关键路径上做一次 all-reduce（或者一对 reduce-scatter 与 all-gather）。这笔开销只有在最快的互连上才用得起，所以 TP 通常限制在节点内。
+$$
+B_{\mathrm{global}} = DmB_\mu.
+$$
 
-*@gls-pp*几乎同期出现，切掉的是另一种资源。它把层栈拆成若干阶段、摆到不同节点上，再让微批一个个流式穿过，于是第二阶段处理第一个微批时，第一阶段已经在处理第二个微批了。GPipe 确立了让各阶段不闲着的微批化做法 [@huang2019gpipe]，PipeDream 又把调度推广开来，进一步压缩气泡 [@narayanan2019pipedream]。PP 在带宽上很省，只搬运各阶段边界处的激活，但要付出流水线气泡的代价：每一步两端的填充与排空期间，总有一些阶段空着。@fig-training-bubble 画出了这段空闲时间落在哪里。
+其中，$B_{\mathrm{global}}$ 是一次优化器步骤中的序列总数，$D$ 是数据并行度，$m$ 是每个副本累积的微批数，$B_\mu$ 是一个微批中的序列数。不同序列的词元数可能不同，因此生产训练通常同时记录每步序列数和每步词元数。
+
+当各副本的本地批大小相同时，all-reduce 可以得到平均梯度：
+
+$$
+\begin{aligned}
+g &= \frac{1}{D}\sum_{r=1}^{D}g_r, \\
+g_r &= \frac{1}{B_{\mathrm{global}}/D}
+      \sum_{i\in\mathcal B_r}\nabla_\theta \ell_i(\theta).
+\end{aligned}
+$$
+
+这里，$r$ 是副本编号，$\mathcal B_r$ 是副本 $r$ 的本地批，$\theta$ 是参数向量，$\ell_i$ 是样本 $i$ 的损失，$g_r$ 和 $g$ 分别是本地平均梯度和全局平均梯度。局部批大小不同时，不能对各副本的均值做等权平均；归约时必须按样本数或词元数对各自的和加权。
+
+这组方程规定了语义契约。不同切分方案可以改变张量存放的位置，也可以改变浮点归约的顺序，但它们都应实现同一个同步更新。位级一致是更强的要求，而且通常取决于拓扑。
+
+## 核算模型状态显存
+
+普通分布式数据并行（DDP）会在每个副本上复制参数、梯度和优化器状态。它切分了计算和批，却没有切分这些持久模型状态。@gls-zero 分三个阶段逐步消除复制 [@rajbhandari2019zero]：
+
+| 布局 | 在数据并行组内切分的内容 | 每设备持久状态字节数 |
+|---|---|---:|
+| DDP | 不切分 | $P_\theta(b_w+b_g+b_o)$ |
+| ZeRO 第 1 阶段 | 优化器状态 | $P_\theta(b_w+b_g+b_o/D)$ |
+| ZeRO 第 2 阶段 | 优化器状态和梯度 | $P_\theta[b_w+(b_g+b_o)/D]$ |
+| ZeRO 第 3 阶段 | 参数、梯度和优化器状态 | $P_\theta(b_w+b_g+b_o)/D$ |
+
+其中，$P_\theta$ 是参数量；$b_w$、$b_g$ 和 $b_o$ 分别是工作参数、梯度以及全部优化器相关状态为每个参数占用的字节数；$D$ 是数据并行度。一种常见的 Adam 配方取 $b_w=2$、$b_g=2$、$b_o=12$：工作参数和梯度各占两个字节，FP32 主参数与两个 FP32 矩各占四个字节。激活和临时存储尚未计入时，这套配方需要 $16P_\theta$ 字节。数据类型是配方选择，并不是 Adam 的常数。
+
+这张表给出的是持久状态估算，不是峰值显存估算。采用全分片时，计算某个封装单元之前要先聚合它的参数，计算之后再对梯度做归约与分散。一个有用的峰值下界是
+
+$$
+\begin{aligned}
+M_{\mathrm{peak}}
+&\gtrsim \frac{P_\theta(b_w+b_g+b_o)}{D}
++ P_u b_w \\
+&\quad + M_{\mathrm{act}} + M_{\mathrm{tmp}}.
+\end{aligned}
+$$
+
+其中，$P_u$ 是当前单元与预取单元同时物化的参数量，$M_{\mathrm{act}}$ 是需要保存的激活显存，$M_{\mathrm{tmp}}$ 包括通信工作区、分配器开销、填充和其他临时缓冲区。PyTorch @gls-fsdp 则是同一全分片思路的原生版本：它把全分片应用到封装单元，并可在当前单元计算时预取后续单元的参数 [@zhao2023pytorch]。ZeRO-Infinity 进一步把内存层级扩展到 CPU 内存和 NVMe 存储 [@rajbhandari2021zeroinfinity]。
+
+切分得更多，并不会让通信消失。按 ZeRO 论文采用的元素传输量模型，DDP、ZeRO 第 1 阶段和第 2 阶段每步大约传输两份模型大小的数据；第 3 阶段约为三份，因为前向和反向都需要聚合参数 [@rajbhandari2019zero]。每设备持久状态随 $1/D$ 下降，但当 $D$ 增大时，每设备参数聚合载荷会趋近一份模型。更大的组仍可能因为延迟和拓扑而变慢。
+
+## 另外四种切分工作的方式
+
+数据并行只是一个轴。模型如果仍然放不下，或者单设备无法高效运行某些层，就需要继续切分。
+
+### 张量并行：切开单层
+
+张量并行（TP）会切分一层内部的矩阵乘法。对输入为 $X$ 的前馈块，一组配对的列切分与行切分可以写成
+
+$$
+\begin{aligned}
+H_r &= \phi(XW_1^{(r)}), \\
+Z &= \sum_{r=1}^{T}H_rW_2^{(r)}.
+\end{aligned}
+$$
+
+其中，$T$ 是张量并行度，$r$ 是组内 rank，$W_1^{(r)}$ 是第一层投影的列分片，$W_2^{(r)}$ 是对应的第二层投影行分片，$\phi$ 是激活函数，构造 $Z$ 的求和需要一次归约。注意力也可以用同样思路切分查询头、键头和值头，再对输出投影做行切分。
+
+Megatron-LM 的原始布局会安排好注意力块和前馈块，使每个 Transformer 层的前向传播需要两次 all-reduce，反向传播也有对应的归约 [@shoeybi2019megatron]。TP 会减少每个 rank 的参数和算术量，却把通信放进每一层的关键路径。因此，它通常应映射到可用的最快互连域。这是一条放置原则，不是一条定律：TP 组能否跨节点，取决于消息大小、拓扑和性能目标。
+
+### 流水线并行：切开层栈
+
+流水线并行（PP）把连续的层组分配给不同阶段，再让微批依次通过这些阶段。阶段边界会向前发送激活，并在反向传播时送回激活梯度。阶段并不一定与节点边界重合。
+
+同步刷新调度在开始和结束时会让一部分阶段空闲。假设各阶段耗时相同且通信可以忽略，GPipe 的理想空闲比例为 [@huang2019gpipe]
+
+$$
+f_{\mathrm{bubble}}=\frac{p-1}{m+p-1}.
+$$
+
+其中，$p$ 是流水线阶段数，$m$ 是每个副本在一次优化器步骤中处理的微批数，$f_{\mathrm{bubble}}$ 是填充与排空造成的空闲阶段时隙占比。分母不能省略：常见的 $(p-1)/m$ 是气泡时间相对于理想计算时间的比值，并不是气泡占总阶段容量的比例。
 
 ```{dot}
 //| label: fig-training-bubble
-//| fig-cap: "四个阶段、四个微批上的流水线气泡：起始处的填充与末尾处的排空让各阶段空闲。仿照 Huang 等，2019。"
+//| fig-cap: "四个均衡阶段中的一次前向波。每一行按时隙列出微批工作与空闲位置，展示理想 GPipe 模型所计入的填充和排空气泡。完整训练调度还会向后传递激活梯度。"
 digraph bubble {
   bgcolor="transparent";
-  rankdir=LR;
-  node [shape=plaintext, fontname="Helvetica", fontcolor="#6b7280"];
-  t [label=<
-    <table border="0" cellborder="1" cellspacing="0" cellpadding="6" color="#6b7280">
-      <tr><td bgcolor="#f1ece1"><b>时间</b></td><td bgcolor="#f1ece1">1</td><td bgcolor="#f1ece1">2</td><td bgcolor="#f1ece1">3</td><td bgcolor="#f1ece1">4</td><td bgcolor="#f1ece1">5</td><td bgcolor="#f1ece1">6</td><td bgcolor="#f1ece1">7</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>阶段 1</b></td><td bgcolor="#dbeafe">mb1</td><td bgcolor="#dbeafe">mb2</td><td bgcolor="#dbeafe">mb3</td><td bgcolor="#dbeafe">mb4</td><td>空闲</td><td>空闲</td><td>空闲</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>阶段 2</b></td><td>空闲</td><td bgcolor="#dbeafe">mb1</td><td bgcolor="#dbeafe">mb2</td><td bgcolor="#dbeafe">mb3</td><td bgcolor="#dbeafe">mb4</td><td>空闲</td><td>空闲</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>阶段 3</b></td><td>空闲</td><td>空闲</td><td bgcolor="#dbeafe">mb1</td><td bgcolor="#dbeafe">mb2</td><td bgcolor="#dbeafe">mb3</td><td bgcolor="#dbeafe">mb4</td><td>空闲</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>阶段 4</b></td><td>空闲</td><td>空闲</td><td>空闲</td><td bgcolor="#dbeafe">mb1</td><td bgcolor="#dbeafe">mb2</td><td bgcolor="#dbeafe">mb3</td><td bgcolor="#dbeafe">mb4</td></tr>
-    </table>
-  >];
+  rankdir=TB;
+  nodesep=0.12; ranksep=0.16;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.0];
+  edge [style=invis];
+  s1 [label="阶段 1｜mb1 mb2 mb3 mb4 · 空 空 空"];
+  s2 [label="阶段 2｜空 mb1 mb2 mb3 mb4 · 空 空"];
+  s3 [label="阶段 3｜空 空 mb1 mb2 mb3 mb4 · 空"];
+  s4 [label="阶段 4｜空 空 空 mb1 mb2 mb3 mb4"];
+  s1 -> s2 -> s3 -> s4;
 }
 ```
 
-*@gls-dp*把模型复制开来，再把批切到各副本上；每个副本在自己那一份切片上算梯度，最后由一次 all-reduce 求平均。朴素的 DP 并不省显存，因为每个副本都保存一份完整的拷贝。@gls-zero 注意到，标准 DP 里的优化器状态、梯度和参数是被冗余复制的，于是把它们沿 DP 组分三个递进阶段切开 [@rajbhandari2019zero]；ZeRO-Infinity 进一步把这一思路扩展到卸载至 CPU 与 NVMe [@rajbhandari2021zeroinfinity]，而 PyTorch @gls-fsdp 则是同一全分片思路的原生版本，只在某层真正运行时才聚合那层权重 [@zhao2023pytorch]。切分能在不改动数学的前提下压低每设备显存：某一层的参数，要用之前才 all-gather 取回，用完立刻释放。这正是 @sec-scaling-laws 指出优化器状态是占主导的显存项时，所指向的那种切分。
+这个公式适合估算规模，不适合预测实测吞吐。阶段耗时不均、通信、优化器工作和其他调度都会改变结果。1F1B 调度可以减少保存的激活，但不会改变上述理想气泡；交错调度可以缩小气泡，却会发送更多点对点消息 [@narayanan2021efficient]。PipeDream 研究的是异步调度和权重版本，它与 GPipe 的同步刷新属于不同的优化器语义取舍 [@narayanan2019pipedream]。
 
-*序列与上下文并行（SP/CP）*沿序列维度切分，激活显存恰好就落在这根轴上。SP 把一层里被 TP 留作复制的那些部分，也就是归一化和 dropout，沿序列切开，以削减激活显存；它和选择性重算一并引入，后者只重做那些重做廉价、却占显存大的算子，而不是整层 [@korthikanti2022reducing]。CP 的典范形式是 ring attention，它切分的是注意力计算本身，让一段对单张设备来说过长的上下文，能拆成若干块来处理，键与值的瓦片绕着环传递，上下文于是几乎可以无界地增长 [@liu2023ring]。
+![均衡同步刷新调度下的理想 GPipe 气泡占比。模型假设各阶段耗时相同且通信可以忽略；这不是实测吞吐量。](/figures/training-at-scale-1.svg){#fig-training-at-scale-1}
 
-对每个轴，要问的设计问题都一样：它切分什么、通信成本是多少、用得起互连里的哪一层级。@fig-training-axes 把这些答案并排摆开。
-
-```{dot}
-//| label: fig-training-axes
-//| fig-cap: "四个并行轴外加专家并行，各自按它切分什么、运行哪种集合通信，以及用得起哪一层级的互连。"
-digraph axes {
-  bgcolor="transparent";
-  rankdir=LR;
-  node [shape=plaintext, fontname="Helvetica", fontcolor="#6b7280"];
-  t [label=<
-    <table border="0" cellborder="1" cellspacing="0" cellpadding="10" color="#6b7280">
-      <tr><td bgcolor="#f1ece1"><b>轴</b></td><td bgcolor="#f1ece1"><b>切分</b></td><td bgcolor="#f1ece1"><b>集合通信</b></td><td bgcolor="#f1ece1"><b>互连层级</b></td></tr>
-      <tr><td>DP / ZeRO</td><td>批、优化器状态</td><td>all-reduce、reduce-scatter、all-gather</td><td>跨节点</td></tr>
-      <tr><td>TP</td><td>层内矩阵乘法</td><td>每层 all-reduce</td><td>节点内，NVLink</td></tr>
-      <tr><td>PP</td><td>层栈阶段</td><td>点对点激活</td><td>跨节点</td></tr>
-      <tr><td>SP / CP</td><td>序列维</td><td>all-gather、环式交换</td><td>随 TP 或跨节点</td></tr>
-      <tr><td>EP</td><td>专家</td><td>all-to-all 派发与合并</td><td>自己的 all-to-all 组</td></tr>
-    </table>
-  >];
-}
-```
-
-@gls-moe层添了第五种切法。专家被切到各设备上，每个词元经一次 all-to-all 集合通信派发给它选中的专家，再由第二次 all-to-all 把结果合并回来，这套派发模式可追溯到 GShard [@lepikhin2020gshard]。系统层只讨论这部分执行：每个 MoE 层的两次 all-to-all 交换、某个热门专家吸走超出份额的词元时引发的负载不均和掉队节点、用来给每个专家工作量设上限的容量填充，以及把派发和合并跟专家计算重叠起来。产生这套流量模式的路由决策和负载均衡损失，则留给 @sec-moe-ssm-hybrids。
-
-## 以位宽为代价：精度轴
-
-算术不是非在 fp32 下跑不可。混合精度把前向和反向的矩阵乘法及激活留在 bf16，同时保有一份 fp32 的主权重副本和 fp32 的优化器状态，这样微小的更新加到一个大权重上时才不至于消失，这套配方由 Micikevicius 等确立 [@micikevicius2017mixed]。bf16 更宽的指数位正是它安全的根源：它免掉了 fp16 为把梯度推离其狭窄范围下限而需要的损失缩放（把梯度整体放大，使其中的小值不致下溢）。
-
-fp8（即 E4M3 与 E5M2 格式）在 Hopper 级及更新的硬件上，把矩阵乘法又往前推了一步，大致让矩阵乘法吞吐翻倍、让操作数占的显存减半；那篇格式论文为支持 fp8 矩阵乘法的那一代硬件，定义了 E4M3 与 E5M2 [@micikevicius2022fp8]。代价在范围上：fp8 的指数位实在太少，操作数必须逐张量、甚至更细地重新缩放，才能把数值压在可表示的区间里。它的用法是有选择的，矩阵乘法走 fp8，而那些数值敏感的算子，也就是归一化、残差相加和注意力 softmax，仍留在更高精度上。用得过度时，fp8 不会崩溃，它只是悄悄折损质量，这正是它难以用好的地方。
-
-这条边界后来又往下挪了。2024 年底，DeepSeek-V3 用 fp8 矩阵乘法完成了前沿规模的训练，证明这个格式撑得起一次完整的预训练 [@deepseek2024deepseekv3]。活跃的边界如今在四位。NVFP4 与 MXFP4 这类 fp4 格式是微缩放（microscaling）格式：数值本身只存四位，每一小块（十六或三十二个数）另带一个自己的缩放因子，在局部补回四位装不下的范围，而 Blackwell 级硬件原生支持四位矩阵乘法。NVIDIA 已用 NVFP4 在十万亿词元上训练一个 12B 模型，追平 fp8 基线，靠 Hadamard 变换与随机舍入让这个狭窄格式不产生偏差 [@nvidia2025nvfp4]；四位训练靠哪些设计才能站得住，这一设计空间也正被系统梳理 [@hu2025fp4]。这场押注的硬件一面，也就是计算前沿为何想要更少的操作数字节，是 @sec-compute-frontier 的主题。
-
-@fig-training-precision 说明了指数位为何要紧。bf16 保留了 fp32 的八个指数位，所以跨越的动态范围一样，从来不需要 fp16 那种损失缩放；而 fp8 只能把寥寥几位，分给范围（E5M2）与精度（E4M3）之间的取舍。fp4 的 E2M1 布局已经到底：一位尾数、两位指数，其余全靠逐块的缩放因子来承担。
-
-```{=html}
-<figure id="fig-training-at-scale-float-bits">
-<div class="viz" data-viz="float-bits"></div>
-<figcaption>每种浮点格式如何分配数值位。指数宽度决定范围，尾数宽度决定精度。分块缩放的 FP4 格式还带有额外的缩放元数据，此处的单值位布局没有画出这些元数据。</figcaption>
-</figure>
-```
-
-```{dot}
-//| label: fig-training-precision
-//| fig-cap: "各训练精度的位布局。符号、指数与尾数字段按宽度绘制。bf16 继承了 fp32 的八个指数位，这正是它无需损失缩放即可跨越相同范围的原因。fp4 的 E2M1 几乎什么都留不下，所以微缩放格式要给每一小块数值配一个自己的缩放因子。"
-digraph precision {
-  bgcolor="transparent";
-  rankdir=LR;
-  node [shape=plaintext, fontname="Helvetica", fontcolor="#6b7280"];
-  t [label=<
-    <table border="0" cellborder="1" cellspacing="0" cellpadding="5" color="#6b7280">
-      <tr><td bgcolor="#f1ece1"><b>格式</b></td><td bgcolor="#f1ece1"><b>符号</b></td><td bgcolor="#f1ece1"><b>指数</b></td><td bgcolor="#f1ece1"><b>尾数</b></td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp32</b></td><td>1</td><td bgcolor="#dbeafe">8 位</td><td>23 位</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp16</b></td><td>1</td><td bgcolor="#dbeafe">5 位</td><td>10 位</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>bf16</b></td><td>1</td><td bgcolor="#dbeafe">8 位</td><td>7 位</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp8 E4M3</b></td><td>1</td><td bgcolor="#dbeafe">4 位</td><td>3 位</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp8 E5M2</b></td><td>1</td><td bgcolor="#dbeafe">5 位</td><td>2 位</td></tr>
-      <tr><td bgcolor="#f1ece1"><b>fp4 E2M1</b></td><td>1</td><td bgcolor="#dbeafe">2 位</td><td>1 位</td></tr>
-    </table>
-  >];
-}
-```
-
-## 掩盖流量
-
-上面每一种切法都产生流量，而这些流量都走一小组集合通信：all-reduce、reduce-scatter、all-gather 与 all-to-all。NCCL（在 AMD 上叫 RCCL）实现这些通信，并各自映射到拓扑上，挑选环算法还是树算法，在节点内经 NVLink、在节点间经网络来路由 [@nvidia2024nccl]。
-
-集合通信纯属开销，除非它们能趁设备忙于别的计算时一起跑，所以重叠是吞吐的核心手段。FSDP 在当前层计算时，用一次 all-gather 预取下一层的参数 [@zhao2023pytorch]。梯度的 reduce-scatter 折进反向传播，PP 通信折进阶段计算，EP 的 all-to-all 折进专家矩阵乘法。无法掩盖的部分，就是暴露的通信，会直接表现为吞吐下降。
-
-@gls-mfu是衡量重叠有没有奏效的记分牌。它等于达成的 FLOPs 除以硬件峰值 FLOPs，只计入模型在数学上真正需要的那些 FLOPs。它和 HFU（硬件 FLOPs 利用率）不是一回事，后者还把激活重算的冗余 FLOPs 也算进去，所以只要开了重算，HFU 就会超过 MFU。MFU 是判定系统层实现是否到位的核心数字，它的预算是一组损失项之和：暴露的通信、流水线气泡、重算和未融合的内核各分走一块。MFU 偏低，要靠每步的时间线来诊断，而不是看损失曲线。它是贯穿整章的共同指标，因为每一种切法、每一个精度选择，最终都在这里被记分。
-
-::: {.callout-important}
-## 争议所在
-训练精度能压到多低，至今没有定论，但问题的前沿已经下移。bf16 是保守的默认值；自 DeepSeek-V3 用 fp8 撑过一次前沿规模的训练之后，fp8 成了主力 [@micikevicius2022fp8; @deepseek2024deepseekv3]；活跃的边界如今是 fp4，NVFP4 一类微缩放格式加上 Blackwell 的原生四位矩阵乘法，吞吐收益明确，但配方还年轻 [@nvidia2025nvfp4; @hu2025fp4]。每一级上的分歧都相同：哪些算子可以下移、缩放得做到多细，以及一次训练能撑过多少万亿词元，才不至于因范围收窄而折损最终质量。让这件事难以靠经验判断的，正是它的失效方式：精度推得太远不会崩溃，而是悄悄劣化模型，于是代价在一次靠后的评估之前都是隐形的。把这条边界当成一个逐算子、逐配方、必须验证的选择，别当成一个能照搬的设定。
-:::
-
-::: {.callout-tip}
-## 下层约束
-互连决定并行布局。张量并行要在每一层的关键路径上做一次 all-reduce，这只有在最快的链路上才用得起，所以 NVLink 域的大小，就划定了最大的 TP 组；一旦越界，TP 流量便跨上网络，整体吞吐会迅速下降 [@shoeybi2019megatron]。搬运更少、又能把通信藏起来的流水线并行与数据并行，才是跨节点的那两根轴，而专家并行另有自己的 all-to-all 组。所以 @sec-accelerators-networking 那套带宽层级，位于本章每一个网格决策的上游：底层的线缆，决定了上层能在哪里用上哪种切分。
-:::
-
-## 调整各项参数
-
-每个轴消耗一种不同的资源，最终胜出的布局，是对某个特定模型形态、在某个特定互连上，能把最多通信藏到计算之下的那一个。到 2021 年，各轴开始被刻意组合：PTD-P 那项工作把数据、张量与流水线并行作为一个组合的 3D 布局，映射到单个 GPU 集群上，确立了前沿训练至今仍沿用的排序 [@narayanan2021efficient]。下面这些参数，正是工程师在那套布局里实际需要调整的。
-
-- **并行布局，以及它不可移植。** TP 削减每设备显存和延迟，却消耗节点内带宽，所以它以 NVLink
-  域为上限。PP 在带宽上廉价，却要付出流水线气泡，可以靠更多微批和交错调度来缓解
-  [@narayanan2019pipedream]，不过一旦气泡已经很小，再加就收益递减（@fig-training-at-scale-1）。DP 和 ZeRO 把批扩大，但优化器状态分片和 all-gather 流量会随 DP
-  度增长 [@rajbhandari2019zero]。对的布局并不通用：换个模型规模、换个序列长度或者换个集群，最优点
-  就挪了位。
-
-![平衡、同步刷新且忽略通信时，GPipe 流水线气泡占比随每步微批数量变化的解析结果；并非实测吞吐量。](/figures/training-at-scale-1.svg){#fig-training-at-scale-1}
-
-把这个精确公式运行一遍，亲眼看看收益递减：改改阶段数或微批的取值范围，看看曲线在哪儿趋平。
+下面的可运行单元让气泡规模更直观。32 个阶段配 32 个微批时，即使在这个理想模型中，仍有接近一半的总阶段容量处于空闲状态。
 
 :::: {.runnable}
 ```python
-import numpy as np
-import matplotlib.pyplot as plt
+def bubble_fraction(stages, microbatches):
+    """均衡的 GPipe 刷新调度；忽略通信。"""
+    if stages < 1 or microbatches < 1:
+        raise ValueError("stages 和 microbatches 必须为正数")
+    return (stages - 1) / (microbatches + stages - 1)
 
-m = np.arange(1, 33)  # 每步微批数
-for p in [4, 8, 16, 32]:  # 流水线阶段数
-    bubble = (p - 1) / (m + p - 1)
-    plt.plot(m, bubble, marker="o", markersize=3, label=f"p={p} 个阶段")
 
-print("p=8 个阶段:", {int(mm): round((8 - 1) / (mm + 8 - 1), 3) for mm in [1, 4, 8, 16, 32]})
-plt.xlabel("每步微批数 m")
-plt.ylabel("流水线气泡占比")
-plt.title("气泡占比 (p-1)/(m+p-1)")
-plt.legend()
-plt.grid(alpha=0.3)
-plt.show()
+for stages in (4, 8, 16, 32):
+    values = {
+        microbatches: round(bubble_fraction(stages, microbatches), 3)
+        for microbatches in (1, 4, 8, 16, 32, 64)
+    }
+    print(f"p={stages}: {values}")
+
+print("p=32, m=32:", f"{bubble_fraction(32, 32):.1%}")
 ```
 ::::
 
 ```{=html}
 <figure id="fig-training-at-scale-pipeline-bubble">
 <div class="viz" data-viz="pipeline-bubble"></div>
-<figcaption>平衡、同步刷新且忽略通信时的理想 GPipe 气泡。可调整阶段数和微批数来查看公式；真实轨迹还会受阶段不均衡与通信时间影响，因而可能更差。</figcaption>
+<figcaption>均衡同步刷新调度在忽略通信时的理想 GPipe 气泡。调整阶段数或微批数可以检查公式；真实轨迹还会受到阶段不均和消息耗时的影响，结果可能更差。</figcaption>
 </figure>
 ```
 
-- **显存换计算。** 激活与梯度检查点，用反向传播里额外的前向 FLOPs，换更低的峰值激活显存。
-  选择性重算只重做那些廉价、却占显存大的算子 [@korthikanti2022reducing]。重算越多，就越能塞下
-  更大的模型或更长的序列，代价是 MFU，这正是开启重算时 HFU 超过 MFU 的缘由。
-- **精度换稳定性。** bf16 是安全的默认值，而 fp32 主权重对优化器来说没有商量余地
-  [@micikevicius2017mixed]。fp8 是经过验证的主力：换来吞吐与显存，却收窄范围，所以要配上
-  逐张量或更细的缩放来用，并避开敏感算子 [@micikevicius2022fp8; @deepseek2024deepseekv3]。
-  fp4 是活跃的边界，只有靠逐块缩放和最新的硬件才用得起 [@nvidia2025nvfp4]。无论哪一级，
-  推得太远，得到的都是静默的质量损失，而不是崩溃。
-- **检查点频率。** 检查点越频繁，每次故障丢掉的工作量就越小，但会加重存储带宽负担，还可能把训练拖停。
-  异步与切分检查点，是让高频率变得可承受的机制，而最优值取决于集群的平均无故障时间和写入
-  成本 [@mohan2021checkfreq]。
+### 序列并行与上下文并行：切开词元
 
-## 布置一次真实的训练，以及它如何失败
+这两个名称描述的是相关但不同的机制。Megatron 风格的序列并行（SP）会沿序列维切分层归一化、dropout 以及其他原本由 TP 复制的区域。它复用 TP 组，把部分 all-reduce 换成 reduce-scatter 与 all-gather；因此，SP 通常不会成为设备网格里的另一个乘数 [@korthikanti2022reducing]。选择性激活重算与 SP 相互补充，它只重算那些计算成本低、显存占用高的操作。
 
-### 组合各轴
+上下文并行（CP）会切分注意力计算中的序列。每个 rank 持有本地查询，再传递或聚合计算精确注意力所需的键值块。Ring Attention 使用在线 softmax，让键值块沿环传递 [@liu2023ring]；另一类实现会使用 all-to-all。CP 能减少每台设备保存的本地序列状态，但稠密注意力在全局仍要执行 $O(L^2)$ 算术，其中 $L$ 是上下文长度。最大上下文仍受总显存、通信、设备数和通信计算重叠程度限制。
 
-一次前沿训练，会把设备网格映射成各轴之积，惯例写作（DP x TP x PP），碰上 MoE 再添个 EP，并把 SP 叠在 TP 之上。排序的经验法则，直接来自这条下层约束和 PTD-P 的结果：把 TP 放在节点内的 NVLink 之下，把 PP 和 DP 放到节点间，因为它们更廉价的通信更容易被隐藏，再给 EP 自己的 all-to-all 组 [@narayanan2021efficient]。布局要和 @sec-transformer-architecture 与 @sec-moe-ssm-hybrids 给出的模型形态协同设计，并随模型规模、序列长度与互连而变。
+### 专家并行：切开条件参数
 
-@fig-training-mesh 勾勒了惯常的摆法。
+混合专家模型还会引入专家并行（EP）。词元会被发送到持有所选专家的 rank，专家输出随后返回原来的词元所有者，常见实现采用 all-to-all [@lepikhin2020gshard]。前向传播通常包含一次分发交换和一次合并交换，反向传播还要发送对应的梯度流量。热门专家会制造慢节点，因此路由局部性、负载均衡、可选的容量填充和无丢弃内核既是建模问题，也是系统问题。路由目标本身已在 @sec-moe-ssm-hybrids 讨论。
+
+@fig-training-axes 汇总了各条轴切分的状态和常见通信方式。图中的集合通信名称表示常见实现，并不是框架必须遵守的承诺；框架可以融合、拆解或重新调度这些操作。
 
 ```{dot}
-//| label: fig-training-mesh
-//| fig-cap: "惯常的设备网格布局：通信密集的 TP 与 SP 留在节点内的 NVLink 之下，而更易被隐藏的 DP、PP 与 EP 跨节点。"
-digraph {
+//| label: fig-training-axes
+//| fig-cap: "各条并行轴切分的状态与常见通信。SP 通常复用 TP 组，其他并行度可以形成彼此独立的网格维度。"
+// DDP｜切分批；模型状态复制
+// ZeRO-3 / 全分片 FSDP｜切分批和全部持久模型状态
+// TP｜切分单层内的矩阵乘法
+// PP｜切分连续的层组
+// SP｜切分 TP 原本复制的激活区域
+// CP｜切分注意力中的序列
+// EP｜切分专家参数和路由词元
+digraph axes {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_across {
-    label="跨节点"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    DP [label="DP / ZeRO-FSDP：切分批与优化器状态"];
-    PP [label="PP：层栈阶段，流式送入微批"];
-    EP [label="EP：专家切分，all-to-all 派发/合并"];
-  }
-  subgraph cluster_node {
-    label="节点内的 NVLink 之下"; labelloc="b"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    TP [label="TP：切分矩阵乘法，每层 all-reduce"];
-    SP [label="SP：切分序列维，削减激活显存"];
-  }
-  DP -> TP;
-  PP -> TP;
-  TP -> SP;
+  nodesep=0.10; ranksep=0.15;
+  node [shape=box, style="rounded,filled", width=2.20, fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.0];
+  edge [style=invis];
+  ddp [label="DDP\n切分：批；模型状态复制\n通信：梯度归约\nall-reduce"];
+  zero [label="ZeRO-3 / 全分片 FSDP\n切分：批与全部持久状态\n通信：参数聚合\nall-gather\n通信：梯度切分\nreduce-scatter"];
+  tp [label="TP\n切分：单层内矩阵乘法\n通信：归约或切分聚合\nall-reduce\nreduce-scatter\nall-gather"];
+  pp [label="PP\n切分：连续层组\n通信：点对点\n激活与梯度"];
+  sp [label="SP\n切分：TP 原本复制的激活区域\n通信：TP 组内\nreduce-scatter\nall-gather"];
+  cp [label="CP\n切分：注意力中的序列\n通信：键值环式交换\nall-to-all"];
+  ep [label="EP\n切分：专家参数与路由词元\n通信：分发与合并\nall-to-all"];
+  ddp -> zero -> tp -> pp -> sp -> cp -> ep;
 }
 ```
 
-### 框架
+## 把各条切分轴映射到网络
 
-各框架的差别，主要在于谁让哪种布局、哪种硬件用起来更顺手。Megatron-LM 与 Megatron-Core 在 NVIDIA 技术栈上承载 TP、PP、SP 与 EP [@shoeybi2019megatron]。DeepSpeed 把 ZeRO 和卸载整合在一起 [@rajbhandari2019zero]。PyTorch FSDP 是原生的切分 DP [@zhao2023pytorch]。JAX 与 XLA 在 TPU 上把切分写成 GSPMD 风格的注解，由 JAX 的 `pjit` 接口驱动分区器 [@xu2021gspmd]。实践中，一套前沿技术栈会拼几个部件，比如让 Megatron-Core 负责模型并行，再配上自研的数据与检查点层。
+如果数据并行、张量并行、流水线并行和上下文并行是彼此独立的维度，那么稠密模型的设备网格满足
 
-### 容错
+$$
+N = D T p C.
+$$
 
-在数千个节点上连跑数周，恢复就是一个一等的子系统。检查点频率由写入成本和每次故障丢掉的工作量之间的权衡来定；异步与切分检查点，比如 CheckFreq，把写入挪出关键路径，让高频率仍然负担得起 [@mohan2021checkfreq]。弹性重启会检测到一个失效节点、把它隔离，再从最近的检查点恢复，理想情况下落到备用容量上，不必整体重启。掉队节点和静默数据损坏，比明确的崩溃更难对付，因为训练还在往下跑，只是变慢了，或者悄悄出了错。
+其中，$N$ 是总设备数，$D$ 是数据并行度，$T$ 是张量并行度，$p$ 是流水线阶段数，$C$ 是上下文并行度。SP 通常复用 $T$ 组。EP 取决于模型：它的组可能从其他网格维度中划出，也可能与其他组重叠，因此盲目再乘一个专家并行度会重复计算设备。
 
-还有一个容错要求会影响数据层：一次重启必须恢复完全相同的数据顺序，这意味着采样器与打乱状态也是检查点的一部分。少了这一块，恢复时就会重复送入或跳过数据，破坏来自 @sec-data-curation 的配比契约，表现为每次重启都冒出一段没法解释的损失不连续。流式送出语料的存储底座，以及调度训练的集群编排，归 @sec-orchestration-data-infra；本章只保留可恢复性契约。
+放置原则很直接：最频繁、对延迟最敏感的交换，应留在最快的互连域中。TP 常常优先占用这个域，因为每一层都会通信。EP 的 all-to-all 需要较强的对分带宽。PP 的消息大小取决于边界激活，ZeRO-3/FSDP 则要反复聚合参数。究竟让哪条轴跨越节点或机架，必须根据测量结果决定，而不能照搬固定层级 [@narayanan2021efficient]。
 
-### 失效模式
+```{dot}
+//| label: fig-training-mesh
+//| fig-cap: "设备网格是在同一组工作进程上定义的多组通信关系。频繁的 TP 交换通常放在最快链路内；DP、PP、CP 与 EP 如何放置，则取决于载荷、拓扑和可实现的重叠。"
+digraph mesh {
+  bgcolor="transparent";
+  rankdir=TB;
+  nodesep=0.12; ranksep=0.22;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=8, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.0];
+  edge [fontsize=7, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", arrowsize=0.5];
+  workers [label="N 台加速器"];
+  groups [label="逻辑通信组\nDP × TP × PP × CP"];
+  topology [label="物理互连\n链路、交换机、故障域"];
+  profile [label="实测步骤\n计算、暴露通信、停顿"];
+  workers -> groups [label="分配 rank"];
+  groups -> topology [label="放置通信组"];
+  topology -> profile [label="运行并追踪"];
+  profile -> groups [label="修订布局"];
+}
+```
 
-症状成簇出现。MFU 偏低是个总括性症状，靠每步剖析追到暴露的通信、过大的气泡、过多的重算，或者未融合的内核。通信瓶颈意味着瓶颈在网络：TP 溢出了 NVLink 域、一次藏不进反向传播之下的 DP all-gather，或者 MoE 的 all-to-all 卡在某个热门专家上。OOM 意味着布局不能满足显存预算：长序列长度下的激活显存、优化器状态切分不够，或者只在某个微批数量下才出现的碎片化拐点。一次节点故障，若没有快速检测、隔离与新近的检查点，就会把训练回滚到上一次保存，中间那段间隔都会被浪费。
+不同集合通信的语义并不相同。all-reduce 会归约数值，并把结果交给每个 rank；reduce-scatter 会归约数值，但每个 rank 只保留一个分片；all-gather 会在每个 rank 上拼接所有分片；all-to-all 会向每个对端发送不同的分片。PP 主要使用点对点发送与接收。NCCL 等通信库会为这些操作提供多种算法，再根据硬件和消息形状进行选择 [@nvidia2024nccl]。
 
-最快的注意力内核也不改变这笔账：FlashAttention 让注意力保持精确，又让分数矩阵用得起，办法是从不把它写进高带宽显存。这是内核层面的一处巧解，位于这些并行轴之下，而不是替换掉其中任何一个 [@dao2022flashattention]。@fig-training-at-scale-2 对两个明确张量做字节计数：物化的注意力分数矩阵随序列长度二次增长，而单个词元状态张量线性增长。后者只是参照，不代表 FlashAttention 的完整峰值显存。
+通信是必要工作，但只有暴露在关键路径上的部分才会延长步骤时间。FSDP 可以在当前单元计算时聚合下一个单元；梯度桶可以在反向传播期间归约；PP 与 EP 消息也可以和相邻内核重叠。重叠并非免费，通信仍可能和计算争用显存带宽、执行资源或网络。要判断重叠是否生效，应看训练步骤轨迹，而不是只看配置中启用了哪些开关。
 
-![物化注意力分数张量与单个词元状态张量的精确字节计数，设 B=1、H=32、隐藏宽度为 4096，并使用 BF16 存储。线性曲线只是参照，并非 FlashAttention 完整峰值显存的模型。](/figures/training-at-scale-2.svg){#fig-training-at-scale-2}
+::: {.callout-tip}
+## 下层约束
 
-配方层面的稳定性，也就是让优化器不发散的 z-loss、QK-norm 与损失尖峰恢复，归 @sec-scaling-laws。这里讨论的稳定性有两层：数值层面的，由精度选择决定；以及运行层面的，由容错决定。
+物理网络限制着逻辑网格。链路带宽和延迟、交换机过度订阅、路由方式与故障域，共同决定哪些通信组能够频繁交换而不阻塞。评测任何并行布局时，都必须纳入 @sec-accelerators-networking 介绍的加速器和互连型号。在一个集群上调好的网格，并不会自动适用于另一个集群。
+:::
+
+## 按操作选择数值格式
+
+混合精度不是一种全局 dtype。常见配方会让大型矩阵乘法使用低精度格式，更谨慎地累积归约，并让敏感操作或优化器状态保留更宽的格式。最初的混合 FP16 配方使用 FP32 主参数、FP32 累积和损失缩放 [@micikevicius2017mixed]。BF16 有八个指数位，正常数值范围大致与 FP32 相同，因此通常无需 FP16 那样的损失缩放；但它只有七个尾数位，累积和微小更新仍可能受精度限制。
+
+FP8 常用两种布局：E4M3 把更多位用于精度，E5M2 把更多位用于范围 [@micikevicius2022fp8]。数值必须先缩放到可表示区间，缩放粒度也是配方的一部分，可以按张量、分块或更小的块设置。Hopper 级硬件的 FP8 稠密矩阵乘法峰值可以达到 BF16 的两倍，FP8 操作数的载荷字节也只有一半；但类型转换、缩放元数据、非矩阵乘法操作以及保留的高精度状态，都会降低端到端收益。
+
+DeepSeek-V3 展示了一次完整预训练：核心矩阵乘法使用 FP8，若干敏感操作和输出仍保留 BF16 或 FP32 [@deepseek2024deepseekv3]。之后，NVIDIA 用 NVFP4 训练了一个 12B 模型，共处理十万亿词元，并报告了与 FP8 基线相近的结果。该配方使用细粒度缩放、Hadamard 变换、随机舍入和选择性高精度 [@nvidia2025nvfp4]。这些都是经过实测的具体配方，不能证明所有模型或操作都能安全降到相同精度。
+
+```{=html}
+<figure id="fig-training-at-scale-float-bits">
+<div class="viz" data-viz="float-bits"></div>
+<figcaption>不同浮点格式如何分配位。指数宽度决定范围，尾数宽度决定精度。分块缩放的 FP4 还需要额外的缩放元数据，此处的单值布局没有画出这些元数据。</figcaption>
+</figure>
+```
+
+```{dot}
+//| label: fig-training-precision
+//| fig-cap: "训练中使用的单值位布局。完整的数值配方还必须说明累积数据类型、缩放粒度与历史，以及哪些操作保留更高精度。"
+digraph precision {
+  bgcolor="transparent";
+  rankdir=LR;
+  node [shape=plaintext, fontname="Helvetica", fontsize=8, fontcolor="#6b7280"];
+  t [label=<
+    <table border="0" cellborder="1" cellspacing="0" cellpadding="3" color="#6b7280">
+      <tr><td bgcolor="#f1ece1"><b>格式</b></td><td bgcolor="#f1ece1"><b>符号</b></td><td bgcolor="#f1ece1"><b>指数</b></td><td bgcolor="#f1ece1"><b>尾数</b></td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP32</b></td><td>1</td><td bgcolor="#dbeafe">8</td><td>23</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP16</b></td><td>1</td><td bgcolor="#dbeafe">5</td><td>10</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>BF16</b></td><td>1</td><td bgcolor="#dbeafe">8</td><td>7</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP8 E4M3</b></td><td>1</td><td bgcolor="#dbeafe">4</td><td>3</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP8 E5M2</b></td><td>1</td><td bgcolor="#dbeafe">5</td><td>2</td></tr>
+      <tr><td bgcolor="#f1ece1"><b>FP4 E2M1</b></td><td>1</td><td bgcolor="#dbeafe">2</td><td>1</td></tr>
+    </table>
+  >];
+}
+```
+
+稳健的更新必须明确规定顺序：先累积完所有微批；如果启用了损失缩放，再解除 FP16 梯度缩放；跨所有 rank 检查数值是否有限；对逻辑上的完整分片梯度计算全局梯度范数；按配置裁剪；最后让所有分片一起更新或一起跳过更新。检查点还必须保存缩放状态，包括 FP8 的 amax 历史或动态损失缩放器。窄格式可能造成下溢、饱和、Inf/NaN、跳过步骤、发散或不易察觉的质量漂移，这些情况都必须验证。
+
+::: {.callout-important}
+## 争议所在
+
+最低的可靠训练精度取决于具体配方。已经发表的 FP8 和 FP4 训练证明，特定模型、缩放规则、累积路径和硬件可以工作，但不能据此确定普遍适用的精度下限。更有用的问题不是“FP4 能不能用”，而是“这次训练中的哪些张量与操作可以使用这种格式，又要用什么验证阈值”。
+:::
+
+## 吞吐测量必须写清假设
+
+模型 FLOPs 利用率（MFU）把观测到的模型工作量与明确指定的硬件峰值作比较 [@chowdhery2022palm]：
+
+$$
+\mathrm{MFU}=
+\frac{r_{\mathrm{tok}}F_{\mathrm{model,tok}}}
+     {N P_{\mathrm{peak}}}.
+$$
+
+其中，$r_{\mathrm{tok}}$ 是全局实测每秒词元数，$F_{\mathrm{model,tok}}$ 是模型对每个词元执行前向与反向传播所需的 FLOPs，$N$ 是加速器数量，$P_{\mathrm{peak}}$ 是单台加速器在对应精度下的峰值 FLOP 率。报告必须说明采用的 FLOP 口径、如何处理 MoE 的活跃参数和填充、使用哪一种精度峰值，以及测量窗口多长。
+
+硬件 FLOPs 利用率（HFU）与 MFU 的口径不同：HFU 还会计入激活重算等实际执行的 FLOPs，因此即使有效词元吞吐没有变化，HFU 也可能高于 MFU。两个指标都不能证明训练质量或可靠性。稳态 MFU 通常不计重启时间，端到端有效吞吐还应计入失败步骤、检查点、评测暂停和输入停顿。
+
+MFU 偏低时，应先检查轨迹，再调整网格。常见原因包括内核过小或形状不佳、阶段不均衡、暴露通信、重算过多、输入停顿，以及同步等待慢节点。峰值显存、各通信组的集合通信耗时、每秒词元数、步骤时间尾部和恢复损失时间，才构成完整的运行视图。
+
+## 把正确重启纳入正确性要求
+
+普通同步任务中，只要一个 rank 失效，它所在的通信组就不再有效。弹性启动器通常会停止并重建整个工作进程组，再加载已经提交的检查点；它们不会把一台设备热替换进仍在运行的集合通信。完整控制流程是：检测训练不再前进；中止通信；隔离可疑工作进程；补充容量；重新会合；重建通信组；加载经过验证的检查点；核对数据游标；然后恢复训练。
+
+可恢复的检查点是一个原子集合，不只是一份参数文件。它要包含模型参数和任何主参数、优化器张量与步骤、学习率状态、损失缩放器和低精度缩放历史、各 rank 的随机数状态、采样器与打乱状态、数据混合计数与游标，以及分片清单、校验和与完成标记。在优化器步骤边界保存，可以避免记录只累积了一部分的梯度。还应保留不止最近一次检查点，因为数值已经损坏的状态也可能被保存下来。
+
+恢复有两种合理契约。**确定性重放**力图再次使用相同批次和随机数，通常要求拓扑不变，并使用确定性内核。**覆盖等价恢复**可以在不同总设备数上重新切分，只要整体消费的数据保持一致；它不要求位级相同。必须明确选择哪一种契约，并对它进行测试。
+
+检查点频率是在写入成本和重复计算之间取舍。一个一阶的故障停止模型给出
+
+$$
+\begin{aligned}
+W(\tau)&\approx\frac{C}{\tau}+\frac{\tau}{2M}, \\
+\tau^\star&\approx\sqrt{2CM}.
+\end{aligned}
+$$
+
+其中，$W(\tau)$ 是检查点与重算造成的预期时间损失比例，$\tau$ 是两次检查点之间的有效计算时间，$C$ 是暴露在关键路径上的检查点成本，$M$ 是同步任务的平均中断间隔，$\tau^\star$ 是近似最优间隔 [@daly2006higher]。这一近似假设故障停止事件相互独立，并省略了相关故障、恢复延迟和存储争用。异步检查点会降低暴露的 $C$，但仍会消耗设备链路、主机内存、网络和存储带宽。CheckFreq 展示的是自适应频率与流水化快照、持久化阶段，并不是免费的写入 [@mohan2021checkfreq]。
+
+## 长跑前验证布局
+
+只有通过小规模而有针对性的测试，分布式配置才适合进入长跑：
+
+- **更新等价性：** 在一个很小的确定性批上，用明确容差比较未切分与已切分实现的损失、梯度和一次优化器更新。
+- **显存核算：** 在不同微批大小和序列长度下测量持久、峰值和临时显存，确认封装单元与预取假设和轨迹一致。
+- **通信核算：** 分析每个通信组，区分暴露通信与总通信，并测试计划中的跨节点边界。
+- **数值稳定性：** 用更高精度对照比较逐操作精度配方，记录非有限张量、跳过步骤、裁剪前梯度范数、发生裁剪的步骤比例和评测漂移。
+- **重启正确性：** 在计算期间和检查点持久化期间分别终止一个工作进程，拒绝不完整清单，恢复声明的数据契约，并把恢复后的轨迹与对照比较。
+- **有效吞吐：** 运行时间要足以覆盖检查点、输入加载和至少一次恢复，并在 MFU 之外报告每墙钟秒的有效词元数。
+
+FlashAttention 展示了为什么每一层核算都不可省略。它不在 HBM 中物化完整分数矩阵，也能计算精确注意力 [@dao2022flashattention]。设批大小为 $B$、头数为 $H$、上下文长度为 $L$、每个分数元素占 $b$ 字节，仅物化分数就需要
+
+$$
+M_{\mathrm{score}} = BHL^2b.
+$$
+
+其中，$M_{\mathrm{score}}$ 不包括 softmax 工作区、输入、输出、保存的激活和分配器开销。FlashAttention 去掉了这个随 $L^2$ 增长的 HBM 张量，但不会消除稠密注意力的算术量，也不会取消对超长上下文做切分的需要。
+
+![物化注意力分数张量与单个词元状态张量的精确字节数，设 B=1、H=32、隐藏宽度为 4096，并使用 BF16 存储。线性词元状态只是参照，不代表 FlashAttention 的完整峰值显存。](/figures/training-at-scale-2.svg){#fig-training-at-scale-2}
+
+整次训练都应遵守同一种核算方法：说清张量名称，计算它占用的字节，指出它何时存在，再说明后续需要哪一次通信或恢复操作。这样，各种并行缩写才会变成一份能够验证的工程设计。
 
 ## 延伸阅读
 
