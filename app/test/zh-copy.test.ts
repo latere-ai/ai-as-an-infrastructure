@@ -592,7 +592,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/generative/05-beyond-text.qmd",
-      ["早期证据更支持后一种读法", "更多是由现成数据支撑起来的"],
+      ["预测合理的观测，不等于预测采取某个动作后会发生什么", "共享主干还不等于世界模型", "离线动作预测是开发指标，不是部署结果"],
     ],
     [
       "en/generative/index.qmd",
