@@ -107,6 +107,26 @@ test("ch07 moe-ssm-hybrids uses moe-routing in both languages", () => {
   expect(src("zh/foundations/05-moe-ssm-hybrids.qmd")).toContain('data-viz="moe-routing"');
 });
 
+test("Chapter 9 visualizations localize controls and live summaries", () => {
+  const moeStart = rt.indexOf("R['moe-routing']");
+  const moeEnd = rt.indexOf("R['tree-of-thoughts']", moeStart);
+  const moe = rt.slice(moeStart, moeEnd);
+  const ssmStart = rt.indexOf("R['ssm-vs-attention']");
+  const ssmEnd = rt.indexOf("R['rl-timeline']", ssmStart);
+  const ssm = rt.slice(ssmStart, ssmEnd);
+
+  for (const component of [moe, ssm]) {
+    expect(component).toContain("host.getAttribute('data-lang')");
+    expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  }
+  for (const phrase of ["路由器：均衡", "路由器：集中", "容量系数", "已路由", "已丢弃", "容量"]) {
+    expect(moe).toContain(phrase);
+  }
+  for (const phrase of ["序列长度", "注意力记录随长度增长", "递归状态槽位保持固定", "注意力：逐位置记录", "递归层：固定状态"]) {
+    expect(ssm).toContain(phrase);
+  }
+});
+
 test("the viz runtime registers the tree-of-thoughts component", () => {
   expect(rt).toMatch(/R\['tree-of-thoughts'\]\s*=\s*function/);
 });

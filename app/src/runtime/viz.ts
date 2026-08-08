@@ -714,6 +714,14 @@
   // capacity_factor x the even-share load; tokens routed past it are dropped.
   R['moe-routing'] = function (host) {
     var E = 6, mode = 'balanced', cap = 1.25, loads, dropped, total, timer;
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var L = lang === 'zh' ? {
+      balanced: '路由器：均衡', collapsed: '路由器：集中', capacityFactor: '容量系数',
+      capacity: '容量', routed: '个词元已路由', dropped: '次指派已丢弃'
+    } : {
+      balanced: 'router: balanced', collapsed: 'router: collapsed', capacityFactor: 'capacity factor',
+      capacity: 'capacity', routed: 'tokens routed', dropped: 'dropped'
+    };
     function reset() { loads = []; for (var i = 0; i < E; i++) loads[i] = 0; dropped = 0; total = 0; }
     reset();
     function pick() {
@@ -728,7 +736,7 @@
     bar.appendChild(btn); bar.appendChild(read);
     host.appendChild(bar);
     var cv = canvas(host, 240);
-    host.appendChild(slider('capacity factor', 0.6, 2, 0.05, cap, function (v) { cap = v; draw(); }).wrap);
+    host.appendChild(slider(L.capacityFactor, 0.6, 2, 0.05, cap, function (v) { cap = v; draw(); }).wrap);
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 30 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
@@ -740,7 +748,7 @@
       ctx.strokeStyle = t.accent2; ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); ctx.lineWidth = 1.5 * cv.dpr;
       ctx.beginPath(); ctx.moveTo(pd, Y(capLoad)); ctx.lineTo(W - pd, Y(capLoad)); ctx.stroke(); ctx.setLineDash([]);
       ctx.fillStyle = t.accent2; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left';
-      ctx.fillText('capacity', pd + 2 * cv.dpr, Y(capLoad) - 4 * cv.dpr);
+      ctx.fillText(L.capacity, pd + 2 * cv.dpr, Y(capLoad) - 4 * cv.dpr);
       loads.forEach(function (l, i) {
         var x = pd + i * bw + gap / 2, w = bw - gap;
         var over = l > capLoad;
@@ -750,8 +758,8 @@
         ctx.fillStyle = t.ink; ctx.textAlign = 'center'; ctx.font = (11 * cv.dpr) + 'px sans-serif';
         ctx.fillText('E' + (i + 1), x + w / 2, H - pd + 14 * cv.dpr);
       });
-      btn.textContent = 'router: ' + mode;
-      read.textContent = total + ' tokens routed · ' + dropped + ' dropped (' + (total ? Math.round(dropped / (total * 2) * 100) : 0) + '%)';
+      btn.textContent = mode === 'balanced' ? L.balanced : L.collapsed;
+      read.textContent = total + ' ' + L.routed + ' · ' + dropped + ' ' + L.dropped + ' (' + (total ? Math.round(dropped / (total * 2) * 100) : 0) + '%)';
     }
     function tick() {
       if (total > 120) reset();
@@ -1373,6 +1381,17 @@
   // This visualizes storage shape only; it does not invent a recall curve.
   R['ssm-vs-attention'] = function (host) {
     var len = 12, stateSlots = 6;
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var zh = lang === 'zh';
+    var L = zh ? {
+      attention: '注意力：逐位置记录', recurrent: '递归层：固定状态', length: '长度',
+      attentionGrowth: '注意力记录随长度增长', recurrentFixed: '递归状态槽位保持固定',
+      sequenceLength: '序列长度'
+    } : {
+      attention: 'attention: per-position records', recurrent: 'recurrent layer: fixed state', length: 'length',
+      attentionGrowth: 'attention records grow with length', recurrentFixed: 'recurrent state slots stay fixed',
+      sequenceLength: 'sequence length'
+    };
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 230);
     function draw() {
@@ -1380,8 +1399,8 @@
       ctx.clearRect(0, 0, W, H);
       var half = W / 2, y = H / 2;
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('attention: per-position records', half / 2, pd);
-      ctx.fillText('recurrent layer: fixed state', half + half / 2, pd);
+      ctx.fillText(L.attention, half / 2, pd);
+      ctx.fillText(L.recurrent, half + half / 2, pd);
       var cw = Math.min(16 * cv.dpr, (half - 2 * pd) / len);
       for (var i = 0; i < len; i++) {
         var x = pd + i * cw;
@@ -1394,9 +1413,9 @@
         ctx.fillStyle = t.accent2;
         ctx.fillRect(sx, y - sw / 2, sw - 3 * cv.dpr, sw - 3 * cv.dpr);
       }
-      read.textContent = 'length ' + len + ' · attention records grow with length (' + len + ') · recurrent state slots stay fixed (' + stateSlots + ')';
+      read.textContent = L.length + ' ' + len + ' · ' + L.attentionGrowth + ' (' + len + ') · ' + L.recurrentFixed + ' (' + stateSlots + ')';
     }
-    host.appendChild(slider('sequence length', 4, 40, 1, len, function (v) { len = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider(L.sequenceLength, 4, 40, 1, len, function (v) { len = Math.round(v); draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };
