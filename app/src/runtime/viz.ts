@@ -1612,6 +1612,13 @@
   // usually avoids FP16 loss scaling; scaled FP8/FP4 recipes also carry metadata
   // and accumulation rules that this value-level view intentionally omits.
   R['float-bits'] = function (host) {
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var zh = lang === 'zh';
+    var L = zh ? {
+      sign: '符号', exponent: '指数（范围）', mantissa: '尾数（精度）'
+    } : {
+      sign: 'sign', exponent: 'exponent (range)', mantissa: 'mantissa (precision)'
+    };
     var FORM = [
       { n: 'fp32', e: 8, m: 23 }, { n: 'fp16', e: 5, m: 10 }, { n: 'bf16', e: 8, m: 7 },
       { n: 'fp8 E4M3', e: 4, m: 3 }, { n: 'fp8 E5M2', e: 5, m: 2 },
@@ -1620,9 +1627,10 @@
     var sel = 2;
     var COL = { s: '#888', e: '#2d63a8', m: '#e0936b' };
     var formats = el('div', 'viz-fb-formats'), bits = el('div', 'viz-fb-bits'), note = el('div', 'viz-fb-note');
+    bits.setAttribute('role', 'img');
     var legend = el('div', 'viz-fb-legend');
-    [['sign', COL.s], ['exponent (range)', COL.e], ['mantissa (precision)', COL.m]].forEach(function (L) {
-      var k = el('span', 'viz-fb-key'); var sw = el('span', 'viz-fb-sw'); sw.style.background = L[1]; var tx = el('span'); tx.textContent = L[1] === COL.s ? 'sign' : (L[1] === COL.e ? 'exponent (range)' : 'mantissa (precision)'); k.appendChild(sw); k.appendChild(tx); legend.appendChild(k);
+    [[L.sign, COL.s], [L.exponent, COL.e], [L.mantissa, COL.m]].forEach(function (item) {
+      var k = el('span', 'viz-fb-key'); var sw = el('span', 'viz-fb-sw'); sw.style.background = item[1]; var tx = el('span'); tx.textContent = item[0]; k.appendChild(sw); k.appendChild(tx); legend.appendChild(k);
     });
     var chipEls = [];
     FORM.forEach(function (f, i) {
@@ -1632,11 +1640,14 @@
     });
     host.appendChild(formats); host.appendChild(bits); host.appendChild(legend); host.appendChild(note);
     function render() {
-      chipEls.forEach(function (b, i) { b.classList.toggle('on', i === sel); });
+      chipEls.forEach(function (b, i) { b.classList.toggle('on', i === sel); b.setAttribute('aria-pressed', i === sel ? 'true' : 'false'); });
       var f = FORM[sel]; bits.textContent = '';
       function cells(n, col) { for (var i = 0; i < n; i++) { var c = el('div', 'viz-fb-bit'); c.style.background = col; bits.appendChild(c); } }
       cells(1, COL.s); cells(f.e, COL.e); cells(f.m, COL.m);
-      note.textContent = (1 + f.e + f.m) + ' bits = 1 sign + ' + f.e + ' exponent + ' + f.m + ' mantissa';
+      note.textContent = zh
+        ? (1 + f.e + f.m) + ' 位 = 1 位符号 + ' + f.e + ' 位指数 + ' + f.m + ' 位尾数'
+        : (1 + f.e + f.m) + ' bits = 1 sign + ' + f.e + ' exponent + ' + f.m + ' mantissa';
+      bits.setAttribute('aria-label', f.n + (zh ? '：' : ': ') + note.textContent);
     }
     render();
   };
@@ -1645,15 +1656,25 @@
   // communication. Real traces also include stage imbalance and message time.
   R['pipeline-bubble'] = function (host) {
     var p = 4, m = 6;
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var zh = lang === 'zh';
+    var L = zh ? {
+      stage: '阶段 ', summary: '理想 GPipe', stages: '个阶段', microbatches: '个微批', bubble: '气泡',
+      stageSlider: '流水线阶段数 p', microbatchSlider: '微批数 m'
+    } : {
+      stage: 'stage ', summary: 'ideal GPipe', stages: 'stages', microbatches: 'micro-batches', bubble: 'bubble',
+      stageSlider: 'pipeline stages p', microbatchSlider: 'micro-batches m'
+    };
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); read.setAttribute('aria-live', 'polite'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 240);
+    cv.c.setAttribute('role', 'img');
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 26 * cv.dpr, lx = 60 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
       var laneH = (H - 2 * pd) / p, slots = m + p - 1, sw = (W - lx - pd) / slots;
       for (var s = 0; s < p; s++) {
         var y = pd + s * laneH;
-        ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right'; ctx.fillText('stage ' + (s + 1), lx - 6 * cv.dpr, y + laneH / 2 + 3 * cv.dpr);
+        ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right'; ctx.fillText(L.stage + (s + 1), lx - 6 * cv.dpr, y + laneH / 2 + 3 * cv.dpr);
         for (var mb = 0; mb < m; mb++) {
           var col = s + mb; // wavefront slot
           var x = lx + col * sw;
@@ -1662,10 +1683,11 @@
         }
       }
       var bub = (p - 1) / (m + p - 1);
-      read.textContent = 'ideal GPipe · p=' + p + ' stages · m=' + m + ' micro-batches · bubble ' + Math.round(bub * 100) + '%';
+      read.textContent = L.summary + ' · p=' + p + ' ' + L.stages + ' · m=' + m + ' ' + L.microbatches + ' · ' + L.bubble + ' ' + Math.round(bub * 100) + '%';
+      cv.c.setAttribute('aria-label', read.textContent);
     }
-    host.appendChild(slider('pipeline stages p', 2, 8, 1, p, function (v) { p = Math.round(v); draw(); }).wrap);
-    host.appendChild(slider('micro-batches m', 1, 16, 1, m, function (v) { m = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider(L.stageSlider, 2, 8, 1, p, function (v) { p = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider(L.microbatchSlider, 1, 16, 1, m, function (v) { m = Math.round(v); draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };
