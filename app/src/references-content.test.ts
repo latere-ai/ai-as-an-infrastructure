@@ -23,9 +23,8 @@ test("the English References page explains its order, labels, notes, and links",
   expect(prose).toContain("Select a citation in any chapter to jump to its entry here.");
 });
 
-test("the References summary overlay contains prose only and leaves metadata canonical", () => {
+test("the References summary overlay contains prose only", () => {
   const overlay = parseBib(summaryOverlay, { errorHandler: () => {} });
-  const bibliography = loadBibliographyDir(join(repoRoot, "refs"));
   expect(overlay.entries.length).toBeGreaterThan(100);
 
   for (const entry of overlay.entries) {
@@ -33,16 +32,22 @@ test("the References summary overlay contains prose only and leaves metadata can
     expect(Object.keys(fields), entry.key).toEqual(["tldr"]);
     expect(String(fields.tldr), entry.key).toEndWith(".");
     expect(String(fields.tldr), entry.key).not.toContain("—");
-
-    const canonical = bibliography.entries.get(entry.key);
-    expect(canonical?.authors.length, entry.key).toBeGreaterThan(0);
-    expect(canonical?.title.trim(), entry.key).not.toBe("");
   }
 });
 
 test("every source cited in the English book has a reader-facing summary", () => {
   const book = loadBook("en", repoRoot);
   const bib = loadBibliographyDir(join(repoRoot, "refs"));
+  const overlay = parseBib(summaryOverlay, { errorHandler: () => {} });
+  const missingCanonicalMetadata = overlay.entries
+    .filter((entry: { key: string }) => {
+      const canonical = bib.entries.get(entry.key);
+      return !canonical?.authors.length || !canonical.title.trim();
+    })
+    .map((entry: { key: string }) => entry.key)
+    .sort();
+  expect(missingCanonicalMetadata).toEqual([]);
+
   const ctx: CompileContext = {
     bib,
     xref: buildCrossref(book),
