@@ -584,7 +584,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/generative/04-multimodal-models.qmd",
-      ["图像词元数", "无分类器引导", "离散表示与连续表示"],
+      ["多模态带来的是接口，不是某一种架构", "视觉词元数是一项服务决策", "模块化程度与表示方式是两项不同的选择"],
     ],
     [
       "en/generative/05-beyond-text.qmd",
