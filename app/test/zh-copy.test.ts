@@ -43,7 +43,7 @@ test("zh introductory prose avoids abrupt bridges and stiff commitment framing",
   expect(preface).toContain("本书只关心它带来的一个朴素工程后果");
   expect(preface).not.toContain("它是一串承诺");
   expect(preface).not.toContain("能不能被信任、负担");
-  expect(orientation).toContain("为了让这种读法不散，每章都会提供三类路标");
+  expect(orientation).toContain("要让这种读法顺畅，需要养成三个习惯");
   expect(orientation).not.toContain("三个习惯让这种读法成立");
 
   const zhText = qmdFiles(zhRoot)
@@ -504,7 +504,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orientation/index.qmd",
-      ["请求穿过全栈的路线", "区分定论和争议的地图", "处理借来词汇的分寸"],
+      ["一项请求走完整条技术栈的路线", "哪些主张仍有争议，哪些已经成为稳定结论", "借来的词汇有了恰当的定位"],
     ],
     [
       "en/foundations/01-scaling-laws.qmd",
