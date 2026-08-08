@@ -600,7 +600,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/generative/index.qmd",
-      ["并不天然是一条从左到右的字符串", "世界模型、机器人和具身系统", "系统为训练和采样构造了怎样的顺序"],
+      ["生成对象本身并不是一串天然从左到右排列的字符串", "世界模型、机器人与具身系统", "架构正是这套人为构造的顺序"],
     ],
     [
       "en/adaptation/01-sft-peft.qmd",
