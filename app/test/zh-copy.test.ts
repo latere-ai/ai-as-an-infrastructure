@@ -40,7 +40,7 @@ test("zh introductory prose avoids abrupt bridges and stiff commitment framing",
   const preface = readFileSync(join(repoRoot, "zh/index.qmd"), "utf8");
   const orientation = readFileSync(join(repoRoot, "zh/orientation/index.qmd"), "utf8");
 
-  expect(preface).toContain("本书只取它的工程后果");
+  expect(preface).toContain("本书只关心它带来的一个朴素工程后果");
   expect(preface).not.toContain("它是一串承诺");
   expect(preface).not.toContain("能不能被信任、负担");
   expect(orientation).toContain("为了让这种读法不散，每章都会提供三类路标");
@@ -496,7 +496,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/index.qmd",
-      ["一项能力如何从原始算力和语料构造出发", "可度量、可约束、可运维的部署行为", "为什么长成这个样子"],
+      ["从原始算力和语料构建开始", "可测量、可约束、可运营的系统行为", "为何会形成今天的样子"],
     ],
     [
       "en/orientation/index.qmd",

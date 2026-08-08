@@ -867,7 +867,7 @@ test("audited leftover first uses define the role of the term in place", () => {
 test("the mid-training bridge is tracked in top-level book surfaces", () => {
   expect(outline("README.md")).toContain("mid-training bridges");
   expect(src("en/index.qmd")).toContain("mid-training bridges");
-  expect(src("zh/index.qmd")).toContain("中段训练桥接");
+  expect(src("zh/index.qmd")).toContain("承上启下的中段训练");
   expect(src("CONTENT-GAPS.md")).toContain("- [x] **Mid-training bridge**");
   expect(src("en/orientation/01-whole-stack.qmd")).toContain("@sec-mid-training");
   expect(src("zh/orientation/01-whole-stack.qmd")).toContain("@sec-mid-training");
