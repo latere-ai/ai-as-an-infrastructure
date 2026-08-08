@@ -576,7 +576,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/generative/03-speech-and-voice.qmd",
-      ["弱监督", "语义词元", "流匹配"],
+      ["流式处理改变了什么才算正确", "词元速率不等于比特率", "全双工是一项系统契约"],
     ],
     [
       "en/generative/04-multimodal-models.qmd",

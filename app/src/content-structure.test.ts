@@ -334,7 +334,7 @@ test("abbreviations and decoding methods are defined at first use", () => {
     ["en/inference/03-faster-decoding.qmd", "@gls-speculative-decoding is proposal-and-verification with a correction rule"],
     ["zh/inference/03-faster-decoding.qmd", "@gls-speculative-decoding就是这个模式的精确版本"],
     ["en/generative/03-speech-and-voice.qmd", "@gls-tts, the task of synthesizing speech from text"],
-    ["zh/generative/03-speech-and-voice.qmd", "@gls-tts，也就是把文字合成为语音的任务"],
+    ["zh/generative/03-speech-and-voice.qmd", "@gls-tts，也就是从文本合成语音的任务"],
   ];
 
   for (const [path, snippet] of required) {
