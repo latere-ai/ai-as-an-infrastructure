@@ -568,7 +568,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/generative/02-nar-diffusion-lms.qmd",
-      ["自回归教师", "离散扩散", "2025 年出现的一批"],
+      ["依赖深度", "一组按扰动程度加权的掩码语言模型损失", "标准的因果前缀 KV 缓存"],
     ],
     [
       "en/generative/03-speech-and-voice.qmd",
