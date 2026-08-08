@@ -1162,6 +1162,12 @@
   // not remove the false-positive/false-negative tradeoff.
   R['minhash-buckets'] = function (host) {
     var rows = 5, bands = 20;
+    var xLabel = host.getAttribute('data-xlabel') || 'Jaccard similarity';
+    var yLabel = host.getAttribute('data-ylabel') || 'candidate probability';
+    var parameterLabel = host.getAttribute('data-plabel') || 'rows per band';
+    var bandsLabel = host.getAttribute('data-bands-label') || 'bands';
+    var rowsLabel = host.getAttribute('data-rows-label') || 'rows';
+    var midpointLabel = host.getAttribute('data-midpoint-label') || '50% candidate at';
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 250);
     function candidateProbability(s) {
@@ -1195,12 +1201,12 @@
       ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(X(s50), Y(0.5), 4 * cv.dpr, 0, 7); ctx.fill();
 
       ctx.fillStyle = t.ink; ctx.font = (10.5 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('Jaccard similarity', (left + W - right) / 2, H - 8 * cv.dpr);
+      ctx.fillText(xLabel, (left + W - right) / 2, H - 8 * cv.dpr);
       ctx.save(); ctx.translate(12 * cv.dpr, (top + H - bottom) / 2); ctx.rotate(-Math.PI / 2);
-      ctx.fillText('candidate probability', 0, 0); ctx.restore();
-      read.textContent = bands + ' bands × ' + rows + ' rows · 50% candidate at J=' + s50.toFixed(2);
+      ctx.fillText(yLabel, 0, 0); ctx.restore();
+      read.textContent = bands + ' ' + bandsLabel + ' × ' + rows + ' ' + rowsLabel + ' · ' + midpointLabel + ' J=' + s50.toFixed(2);
     }
-    host.appendChild(slider('rows per band', 1, 12, 1, rows, function (v) { rows = Math.round(v); draw(); }).wrap);
+    host.appendChild(slider(parameterLabel, 1, 12, 1, rows, function (v) { rows = Math.round(v); draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };

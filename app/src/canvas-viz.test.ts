@@ -292,10 +292,21 @@ test("outlier quantization localizes and exposes its changing result", () => {
 });
 
 test("the MinHash viz uses the LSH banding probability rather than hidden clusters", () => {
+  const start = rt.indexOf("R['minhash-buckets']");
+  const end = rt.indexOf("R['blast-radius']", start);
+  const component = rt.slice(start, end);
+
   expect(rt).toContain("1 - Math.pow(1 - Math.pow(s, rows), bands)");
   expect(rt).toContain("rows per band");
   expect(rt).not.toContain("function bucketOf(c)");
   expect(rt).not.toContain("var clusters = [0, 0, 0, 0");
+  for (const attr of ["data-xlabel", "data-ylabel", "data-plabel", "data-bands-label", "data-rows-label", "data-midpoint-label"]) {
+    expect(component).toContain(`host.getAttribute('${attr}')`);
+  }
+  const zh = src("zh/foundations/02-data-curation.qmd");
+  expect(zh).toContain('data-xlabel="Jaccard 相似度"');
+  expect(zh).toContain('data-ylabel="候选概率"');
+  expect(zh).toContain('data-plabel="每个分带的行数"');
 });
 
 test("wave-3 components are used in their chapters, both languages", () => {
