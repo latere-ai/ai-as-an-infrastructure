@@ -170,6 +170,20 @@ test("the three-cadence viz does not present training as a nested runtime cost",
   expect(rt).not.toContain("training · paid once");
 });
 
+test("the three-cadence viz localizes its labels and accessible name", () => {
+  const start = rt.indexOf("R['nested-loops']");
+  const end = rt.indexOf("R['bandwidth-tiers']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  expect(component).toContain("智能体循环 · 每个任务步骤");
+  expect(component).toContain("解码 · 每个词元");
+  expect(component).toContain("训练 · 发布前");
+  expect(component).toContain("host.setAttribute('role', 'img')");
+  expect(component).toContain("host.setAttribute('aria-label'");
+  expect(component).toContain("watchTheme(host, draw);");
+});
+
 test("ch01 whole-stack uses nested-loops in both languages", () => {
   expect(src("en/orientation/01-whole-stack.qmd")).toContain('data-viz="nested-loops"');
   expect(src("zh/orientation/01-whole-stack.qmd")).toContain('data-viz="nested-loops"');

@@ -973,6 +973,11 @@
   // Training sweeps before release, decoding advances per generated token, and
   // an agent task advances through model and tool steps.
   R['nested-loops'] = function (host) {
+    var zh = document.documentElement.lang.indexOf('zh') === 0;
+    host.setAttribute('role', 'img');
+    host.setAttribute('aria-label', zh
+      ? '三个过程的节奏：训练发生在发布前，解码按词元推进，智能体循环按任务步骤推进。'
+      : 'Three process cadences: training before release, decoding per token, and the agent loop per task step.');
     var cv = canvas(host, 340);
     var t0 = 0, sweep = 0, timer = null;
     function draw() {
@@ -980,9 +985,9 @@
       var cx = W / 2, cy = H / 2 + 8 * cv.dpr, R = Math.min(W * 0.5, H * 0.43);
       ctx.clearRect(0, 0, W, H);
       var rings = [
-        { r: 0.96, speed: 0.5, accent: false, label: 'agent loop · per task step' },
-        { r: 0.62, speed: 2.3, accent: false, label: 'decoding · per token' },
-        { r: 0.28, speed: 0, accent: true, label: 'training · before release' }
+        { r: 0.96, speed: 0.5, accent: false, label: zh ? '智能体循环 · 每个任务步骤' : 'agent loop · per task step' },
+        { r: 0.62, speed: 2.3, accent: false, label: zh ? '解码 · 每个词元' : 'decoding · per token' },
+        { r: 0.28, speed: 0, accent: true, label: zh ? '训练 · 发布前' : 'training · before release' }
       ];
       rings.forEach(function (ring) {
         var rr = R * ring.r;
@@ -1005,6 +1010,7 @@
     // inspect, so freezing it on hover only reads as the animation breaking.
     // Training sweeps and rests to represent an upstream released artifact;
     // decoding and agent execution continue at runtime.
+    watchTheme(host, draw);
     loop();
   };
 

@@ -345,9 +345,9 @@ test("abbreviations and decoding methods are defined at first use", () => {
 test("early-book glossary first uses are readable without leaving the page", () => {
   const required = [
     ["en/orientation/01-whole-stack.qmd", "a @gls-moe model that activates only a few expert sub-networks"],
-    ["zh/orientation/01-whole-stack.qmd", "DeepSeek-V3 是@gls-moe模型，也就是每个词元只激活少数专家子网络的模型"],
+    ["zh/orientation/01-whole-stack.qmd", "DeepSeek-V3 则采用@gls-moe，每个词元只激活少数几个专家子网络"],
     ["en/orientation/01-whole-stack.qmd", "with @gls-mla, an attention design that shrinks the inference-time cache"],
-    ["zh/orientation/01-whole-stack.qmd", "配上@gls-mla这种压缩推断时缓存的注意力设计"],
+    ["zh/orientation/01-whole-stack.qmd", "结合@gls-mla，也就是一种能够缩小推断时缓存的注意力设计"],
     ["en/orientation/02-field-map.qmd", "@gls-scaling-law, an empirical formula that predicts loss from model size, data, and compute"],
     ["zh/orientation/02-field-map.qmd", "@gls-scaling-law 给训练定规模，也就是用一条把损失同模型规模、数据量与算力联系起来的经验公式"],
     ["en/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding, which turns sequence probabilities into one near-optimal bit stream"],
@@ -890,7 +890,7 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("en/orientation/index.qmd")).toContain("base-model formation (training the raw model), adaptation");
   expect(src("zh/orientation/index.qmd")).toContain("基座模型形成（训练原始模型）、适配（调整训练后模型的行为）");
   expect(src("en/orientation/01-whole-stack.qmd")).toContain("Part I calls this full sequence *base-model formation*");
-  expect(src("zh/orientation/01-whole-stack.qmd")).toContain("环节二：基座模型形成");
+  expect(src("zh/orientation/01-whole-stack.qmd")).toContain("第一部分把这套完整流程称为「基座模型形成」");
   expect(src("en/foundations/summary.qmd")).toContain("Base-model formation is infrastructure, not background");
   expect(src("zh/foundations/summary.qmd")).toContain("基座模型形成不是背景知识");
   expect(flat("en/summary.qmd")).toContain("The training loop changes a model artifact");
