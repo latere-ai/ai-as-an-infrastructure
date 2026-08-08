@@ -114,6 +114,28 @@ test("a tldr survives the merge when the same key recurs without one later", () 
   expect(renderBibliography(bib, "en")).toContain("The summary that must survive.");
 });
 
+test("citation aliases for one URL render one source while preserving every fragment", () => {
+  const first = entry({
+    key: "paper2024",
+    authors: ["Author"],
+    year: "2024",
+    title: "One paper",
+    url: "https://example.com/paper/",
+  });
+  const alias = entry({
+    key: "author2024paper",
+    authors: ["Author"],
+    year: "2024",
+    title: "One paper",
+    url: "https://example.com/paper",
+  });
+
+  const html = renderBibliography(bibOf([first, alias], [first.key, alias.key]));
+  expect(html.match(/class="rdr-ref"/g)?.length).toBe(1);
+  expect(html).toContain('id="ref-paper2024"');
+  expect(html).toContain('id="ref-author2024paper"');
+});
+
 test("an entry without a tldr renders no tldr block", () => {
   const e = entry({ key: "x2020", authors: ["X"], year: "2020", title: "X" });
   expect(renderBibliography(bibOf([e], ["x2020"]))).not.toContain("rdr-ref-tldr");

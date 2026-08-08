@@ -113,8 +113,19 @@ export function renderCite(bib: Bibliography, tok: CiteToken, prefix = ""): stri
 export function renderBibliography(bib: Bibliography, lang: Lang = "en"): string {
   const cited = [...bib.cited].map((k) => bib.entries.get(k)).filter((e): e is BibEntry => !!e);
   cited.sort((a, b) => (a.authors[0] ?? "").localeCompare(b.authors[0] ?? "") || a.year.localeCompare(b.year));
+  // Chapters sometimes cite one source through different historical keys. A
+  // shared URL identifies those aliases without conflating unlinked works.
+  // Keep every fragment target so an inline citation still lands here, but
+  // present the source once to the reader.
+  const sources = new Map<string, { entry: BibEntry; keys: string[] }>();
+  for (const entry of cited) {
+    const identity = entry.url ? `url:${entry.url.replace(/\/+$/, "")}` : `key:${entry.key}`;
+    const source = sources.get(identity);
+    if (source) source.keys.push(entry.key);
+    else sources.set(identity, { entry, keys: [entry.key] });
+  }
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  const items = cited.map((e) => {
+  const items = [...sources.values()].map(({ entry: e, keys }) => {
     // Lead each entry with the same "[Author et al. Year]" label the inline
     // @cite renders, so a reader can match an in-text citation to its entry.
     const label = `[${esc(authorShort(e))} ${e.year}]`;
@@ -125,7 +136,11 @@ export function renderBibliography(bib: Bibliography, lang: Lang = "en"): string
     // One-sentence "what this paper is about", a TL;DR before clicking through.
     const tldrText = lang === "zh" ? e.tldrZh ?? e.tldr : e.tldr;
     const tldr = tldrText ? `<div class="rdr-ref-tldr">${esc(tldrText)}</div>` : "";
-    return `<div class="rdr-ref" id="ref-${e.key}"><span class="rdr-ref-key">${label}</span> ${meta}<span class="rdr-ref-title">${esc(e.title)}.</span>${pub}${url}${tldr}</div>`;
+    const aliases = keys
+      .filter((key) => key !== e.key)
+      .map((key) => `<span class="rdr-ref-alias" id="ref-${key}" aria-hidden="true"></span>`)
+      .join("");
+    return `<div class="rdr-ref" id="ref-${e.key}">${aliases}<span class="rdr-ref-key">${label}</span> ${meta}<span class="rdr-ref-title">${esc(e.title)}.</span>${pub}${url}${tldr}</div>`;
   });
   return `<div class="rdr-refs">${items.join("\n")}</div>`;
 }
