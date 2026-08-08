@@ -1957,8 +1957,9 @@
           broad: 'broad data', specialist: 'specialist data', final: 'final specialist share', run: 'whole-run specialist tokens',
           summary: 'linear mixture' };
     var start = 0.58, share = 0.26;
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); read.setAttribute('aria-live', 'polite'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 280);
+    cv.c.setAttribute('role', 'img');
     function ramp(t) {
       if (t < start) return 0;
       var u = (t - start) / Math.max(0.05, 1 - start);
@@ -2005,7 +2006,9 @@
       ctx.fillText(L.x, (left + W - right) / 2, H - 12 * cv.dpr);
       ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.y, 0, 0); ctx.restore();
       var runShare = 0.5 * share * (1 - start);
-      read.textContent = L.summary + ': ' + L.final + ' ' + Math.round(share * 100) + '% · ' + L.run + ' ' + (runShare * 100).toFixed(1) + '%';
+      var sep = zh ? '：' : ': ';
+      read.textContent = L.summary + sep + L.final + ' ' + Math.round(share * 100) + '% · ' + L.run + ' ' + (runShare * 100).toFixed(1) + '%';
+      cv.c.setAttribute('aria-label', read.textContent);
     }
     host.appendChild(slider(L.start, 0.25, 0.85, 0.01, start, function (v) { start = v; draw(); }).wrap);
     host.appendChild(slider(L.share, 0.05, 0.55, 0.01, share, function (v) { share = v; draw(); }).wrap);

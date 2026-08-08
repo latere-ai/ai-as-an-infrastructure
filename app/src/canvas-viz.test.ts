@@ -381,6 +381,18 @@ test("the viz runtime registers the mid-training bridge component", () => {
   expect(rt).not.toContain("function abruptRetention(t)");
 });
 
+test("the mid-training bridge exposes its changing token accounting", () => {
+  const start = rt.indexOf("R['midtraining-bridge']");
+  const end = rt.indexOf("R['preference-signal-mixer']", start);
+  const bridge = rt.slice(start, end);
+
+  expect(bridge).toContain("read.setAttribute('aria-live', 'polite')");
+  expect(bridge).toContain("cv.c.setAttribute('role', 'img')");
+  expect(bridge).toContain("cv.c.setAttribute('aria-label', read.textContent)");
+  expect(bridge).toContain("var sep = zh ? '：' : ': '");
+  expect(bridge).toContain("L.summary + sep + L.final");
+});
+
 test("mid-training uses the bridge visualization in both languages", () => {
   expect(src("en/foundations/07-mid-training.qmd")).toContain('data-viz="midtraining-bridge"');
   expect(src("zh/foundations/07-mid-training.qmd")).toContain('data-viz="midtraining-bridge"');
