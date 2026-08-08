@@ -32,7 +32,7 @@ test("zh viz blocks localize visible data-*label attributes", () => {
   // runtime, so zh pages should be able to translate them. Sample a localized
   // orientation curve.
   const zh = src("zh/orientation/02-field-map.qmd");
-  expect(zh).toContain('data-xlabel="训练算力（FLOPs）"');
-  expect(zh).toContain('data-ylabel="损失"');
+  expect(zh).toContain('data-xlabel="归一化训练算力"');
+  expect(zh).toContain('data-ylabel="归一化可约损失"');
   expect(zh).toContain('data-plabel="指数"');
 });

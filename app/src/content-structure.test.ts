@@ -349,7 +349,7 @@ test("early-book glossary first uses are readable without leaving the page", () 
     ["en/orientation/01-whole-stack.qmd", "with @gls-mla, an attention design that shrinks the inference-time cache"],
     ["zh/orientation/01-whole-stack.qmd", "结合@gls-mla，也就是一种能够缩小推断时缓存的注意力设计"],
     ["en/orientation/02-field-map.qmd", "@gls-scaling-law, an empirical formula that predicts loss from model size, data, and compute"],
-    ["zh/orientation/02-field-map.qmd", "@gls-scaling-law 给训练定规模，也就是用一条把损失同模型规模、数据量与算力联系起来的经验公式"],
+    ["zh/orientation/02-field-map.qmd", "@gls-scaling-law 是根据模型规模、数据量和算力预测损失的经验公式"],
     ["en/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding, which turns sequence probabilities into one near-optimal bit stream"],
     ["zh/orientation/03-borrowed-ideas.qmd", "@gls-arithmetic-coding把带小数概率的符号写成一条近似最优的比特码流"],
     ["en/orientation/03-borrowed-ideas.qmd", "@gls-two-part-code, an accounting that charges for the model description"],
