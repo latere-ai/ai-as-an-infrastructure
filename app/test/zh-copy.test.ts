@@ -540,7 +540,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/foundations/05-moe-ssm-hybrids.qmd",
-      ["路由器", "以很低的每词元计算成本增长", "专家不能长期拿不到训练信号"],
+      [
+        "路由器",
+        "模型可以存储多于单个词元实际执行的专家权重",
+        "使其他专家训练不足",
+      ],
     ],
     [
       "en/foundations/07-mid-training.qmd",
