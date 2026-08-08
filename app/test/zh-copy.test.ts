@@ -664,7 +664,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/adaptation/index.qmd",
-      ["能力还需要被指向、约束、排序、检验", "行为规格", "习得奖励与可核查奖励", "信号是否可靠"],
+      ["能力本身并不是可用的接口", "行为规格", "习得奖励与可核查奖励", "对训练信号的信任"],
     ],
     [
       "en/reasoning/01-eliciting-reasoning.qmd",
