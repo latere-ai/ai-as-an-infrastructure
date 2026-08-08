@@ -1,105 +1,230 @@
 # Transformer 架构及其变体 {#sec-transformer-architecture}
 
-分词之后，模型终于拿到一串整数 id。前沿稠密模型用一组几乎完全相同的 Transformer 块，把这些 id 变成预测，而这个块自 2023 年以来几乎没变过 [@touvron2023llama; @bai2023qwen]。它内部的大多数问题已经有稳定答案：怎么归一化、怎么激活、怎么编码位置。唯有一个问题仍在变化，而且它不在前向传播的数学里。这是一笔生成期间驻留在内存里的成本，也就是 KV 缓存的大小。它也是今天仍能推动架构师改动这个块的主要力量。因此，这一章分两层看：一层看已经定型的前向传播，一层看那项仍然开放的成本，正是它驱动了从 MHA 经 MQA、GQA 到 MLA 的注意力变体。
+@sec-tokenization 最终得到了一套稳定的文本到词元 ID 映射。本章继续追踪这些 ID 如何经过仅解码器 Transformer：先进入嵌入层，再穿过一叠残差块，经过最终归一化，最后投影到词表。2017 年提出的 Transformer 在编码器-解码器系统中引入了注意力与前馈网络组成的基本块 [@vaswani2017attention]。现代因果语言模型沿用这套结构，但在归一化、位置处理、前馈网络、注意力头和缓存表示上各有不同。
 
-## Transformer 块的两项职责
+这些差异并非表面风格。它们决定哪些位置可以交换信息、梯度怎样穿过深层网络、每个块包含多少参数，以及服务进程要为每条活跃序列保留多少状态。因此，一份有用的架构说明必须写明张量形状、掩码语义和内存单位，不能只画一个写着“Transformer”的方框。
 
-一个 Transformer 块要做两件不同的事，而且做的方式得经得起被堆叠上百层。它必须让词元之间交换信息，因为如果位置 $i$ 看不到位置 $j$，一个语言模型就毫无用处；它还必须变换每个词元的特征，模型的大部分知识主要存放在这里。把这两个操作朴素地堆起来行不通：深层残差网络很难保持可训练，激活与归一化的选择决定了梯度（也就是告诉每个参数该如何调整以降低损失的那个信号）能否存活到最底层，而注意力，这个唯一跨位置混合的操作，计算上花费 $O(n^2)$，还在生成期间留下一个无界增长的缓存。
+## 范围：因果解码器
 
-读懂一个块的正确方式，不是「先注意力，再 MLP」，而是两个子层，它们各自读取一条共享的残差流，算出一个增量，再把它写回去：
+这里设一个批次包含 $B$ 条长度为 $S$ 的序列，模型宽度为 $d$。分词器从大小为 $V$ 的词表中输出整数 ID：
+$T\in\{0,\ldots,V-1\}^{B\times S}$。嵌入表把它映射为初始残差流
+$X_0\in\mathbb{R}^{B\times S\times d}$。经过 $L$ 个块和最终归一化后，输出矩阵生成覆盖整个词表的 logits：
 
 $$
-x = x + \text{sublayer}(\text{norm}(x))
+\begin{aligned}
+\widehat{X}_L &= \operatorname{Norm}_{f}(X_L), \\
+Z &= \widehat{X}_LW_U, \\
+p(t_{i+1}=v\mid t_{\le i}) &= \operatorname{softmax}(Z_i)_v.
+\end{aligned}
 $$
 
-其中 $x$ 是进入子层前的残差流，$\text{norm}(x)$ 是先归一化后的副本，$\text{sublayer}(\cdot)$ 算出的不是新的状态，而是要加回原流的增量。这个式子把前置归一化块的设计直觉压缩成一行：保留一条不被破坏的恒等通路，同时允许每个子层向共享状态写入一小步修改。@gls-residual-stream是模型的工作记忆，一个宽度为 $d_{\text{model}}$ 的向量，从嵌入一路携带到最后一层。每个块都会读取它，并向它累加一次修改。深度就是这样的读取、修改和写回有多少趟；宽度则是这条流一次能容纳多少。这一框架让其余的设计自然推导出来。@fig-transformer-block 就以这种方式画出一个前置归一化块：残差流作为一条恒等路径笔直向下，每个子层从它分叉而出，经过一次归一化，算出一个增量，再把增量加回去。
+其中，$X_L$ 是最后一个块的输出，$\operatorname{Norm}_{f}$ 是最终归一化，$W_U\in\mathbb{R}^{d\times V}$ 是输出矩阵，也称反嵌入矩阵，$Z_i\in\mathbb{R}^{V}$ 是位置 $i$ 的 logits，$v$ 是候选的下一词元 ID。因果条件 $t_{\le i}$ 表示位置 $i$ 只能依赖位置 $i$ 及其之前的词元。编码器模型使用双向掩码，编码器-解码器模型还会加入交叉注意力。它们与这里的模型共享若干部件，但信息流契约并不相同。
+
+输入嵌入与 $W_U^\top$ 可以共享参数，这种设计叫作权重绑定 [@press2017tying]。绑定会省去一张 $Vd$ 矩阵，但也要求输入与输出两种用途共用同一组参数行。这是一项架构选择，不是由模型大小决定的规则。
+
+## 一个块会更新同一条残差流两次
+
+常见的前置归一化解码器块包含两次残差更新：
+
+$$
+\begin{aligned}
+A_\ell &= \operatorname{Attn}_\ell(\operatorname{Norm}_{\ell,1}(X_\ell)), \\
+U_\ell &= X_\ell+A_\ell, \\
+F_\ell &= \operatorname{FFN}_\ell(\operatorname{Norm}_{\ell,2}(U_\ell)), \\
+X_{\ell+1} &= U_\ell+F_\ell.
+\end{aligned}
+$$
+
+其中，$\ell\in\{0,\ldots,L-1\}$ 是块索引，$X_\ell$ 是块的输入，$A_\ell$ 和 $F_\ell$ 分别是注意力与前馈网络产生的更新，$U_\ell$ 是加入注意力更新后的状态，$X_{\ell+1}$ 是块的输出。注意力在掩码允许的位置之间混合信息，前馈网络（FFN）则独立变换每个位置。两者都返回与残差流形状相同的张量，残差相加才有定义。
+
+**@gls-residual-stream**是穿过整个堆叠的宽度为 $d$ 的状态。称它为“流”有助于理解信息怎样逐层更新，但它不是独立的记忆模块，只是每个子层都会读取和修改的一组隐藏向量。
 
 ```{dot}
 //| label: fig-transformer-block
-//| fig-cap: "把单个前置归一化 Transformer 块读作共享残差流上的两个读取/修改/写回子层。每个分支归一化残差流的一份副本，计算一个增量，再加回去，而正中央向下的恒等路径让梯度可以稳定传递。"
+//| fig-cap: "一个前置归一化解码器块。注意力与前馈网络读取残差流的归一化副本，生成形状相同的更新，再把更新加回恒等路径。"
 digraph block {
   bgcolor="transparent";
-  node [shape=box, fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280"];
   rankdir=TB;
+  nodesep=0.28; ranksep=0.34;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
 
-  xin   [label="残差流 x", shape=box, style=rounded];
-  add1  [label="+", shape=circle, width=0.3];
-  add2  [label="+", shape=circle, width=0.3];
-  xout  [label="残差流 x", shape=box, style=rounded];
+  x0 [label="残差 X_l"];
+  n1 [label="归一化"];
+  a  [label="因果自注意力\n混合允许的位置"];
+  p1 [label="+"];
+  u  [label="残差 U_l"];
+  n2 [label="归一化"];
+  f  [label="前馈网络\n逐位置变换"];
+  p2 [label="+"];
+  x1 [label="残差 X_(l+1)"];
 
-  n1    [label="归一化"];
-  attn  [label="注意力\n跨位置混合"];
-  n2    [label="归一化"];
-  mlp   [label="SwiGLU MLP\n逐词元变换"];
-
-  xin -> add1 [label="恒等路径"];
-  xin -> n1; n1 -> attn; attn -> add1 [label="增量"];
-  add1 -> add2 [label="恒等路径"];
-  add1 -> n2; n2 -> mlp; mlp -> add2 [label="增量"];
-  add2 -> xout;
+  x0 -> p1 [label="恒等路径"];
+  x0 -> n1 -> a -> p1 [label="更新"];
+  p1 -> u;
+  u -> p2 [label="恒等路径"];
+  u -> n2 -> f -> p2 [label="更新"];
+  p2 -> x1;
 }
 ```
 
-第一个子层是注意力，唯一让词元之间交换信息的地方，也是本章后半部分的主题。第二个是逐位置的 MLP（也称前馈网络或 FFN），对每个词元独立施加，它持有大部分参数：一个前馈层扩展到约 $d_{\text{model}}$ 的四倍再投影回来，每个块花费约 $8 \cdot d_{\text{model}}^2$，让注意力的投影相形见绌。知识主要存放在 MLP，混合则全部发生在注意力。
-
-## 已经定型的三项选择
-
-下面三项选择让这样一摞深层块保持可训练，而且都已经定型。它们不是活跃的争论，而是一份记录：共识堆叠如何由一系列代价很小的改进，一步步装配而成。
-
-**归一化**有两条正交的轴线。一条是形式。LayerNorm [@ba2016layernorm] 用可学习的增益与偏置做重新居中与重新缩放；@gls-rmsnorm [@zhang2019rmsnorm] 只做重新缩放，弃掉了均值减除与偏置。均值居中带来的收益很小，所以 RMSNorm 更便宜，如今成了默认。另一条是位置。后置归一化是原始设计，把归一化放在残差相加之后 [@vaswani2017attention]；前置归一化把归一化放进分支内部，让一条恒等路径笔直沿残差流而下。前置归一化保留了从堆叠顶端到底端的稳定梯度路径，正是它让深层模型无需精心设计的预热（在训练最初若干步里把学习率慢慢抬升上来）就能训练 [@xiong2020prenorm]。
-
-**激活函数**有一条清晰的演进路线：ReLU，简单但容易出死单元，然后是 GeLU [@hendrycks2016gelu]，平滑的 BERT 与 GPT-2 时代默认，再然后是门控线性单元，其中 @gls-swiglu 是现代的赢家 [@shazeer2020glu]。SwiGLU 计算 $(\text{Swish}(xW_1) \odot xV)\, W_2$，是三个矩阵而非两个。容易漏掉的细节是：隐藏维度被按约 $2/3$ 缩放，让门控@gls-ffn保持与普通 $4\times$ 前馈网络相同的参数量，这正是让同等条件比较公平的原因。
-
-**位置**是第三项。注意力本身对置换不变，所以块必须被告知词元位于何处。@gls-rope 把查询与键向量按与绝对位置成正比的角度旋转，在二维子空间里成对地进行，使得点积 $q \cdot k$ 只依赖于相对偏移 $i - j$ [@su2021roformer]。一个基础频率参数 theta，设定旋转转得多快，并悄然支配着上下文随后能扩展多远。ALiBi 走的是另一条路：在 softmax 之前的分数上加一个静态的、每个头各自的线性惩罚 $-m \cdot (i - j)$，完全不带可学习的位置参数 [@press2022alibi]。两者的对比，是向量上的旋转还是分数上的偏置。RoPE 成了稠密模型的默认。
-
-还有一个从外部把整个堆叠框住的选择。嵌入与反嵌入位于两端：输入嵌入把词元 id 映射为向量，LM 头把最终的残差状态映射为词表 logits（模型在 softmax 把它们变成概率之前，为每个词元产生的原始分数）。权重绑定让两者共享同一个矩阵 [@press2017tying]。这是一处真实的取舍，而非默认。绑定省下 $\text{vocab} \cdot d$ 个参数，并对小模型起正则化作用，但一旦词表很大，这点节省就微不足道，于是大多数现代大模型都让两者不绑定。
-
-这些选择装配起来，就是整个已定型的块。Vaswani 等交付的原始 Transformer 带后置归一化和普通前馈网络 [@vaswani2017attention]。后置归一化在深度上若无大量预热则会发散，于是前置归一化取而代之 [@xiong2020prenorm]。RMSNorm 弃掉了 LayerNorm 的均值减除，质量上没有可测代价 [@zhang2019rmsnorm]。SwiGLU 在 $2/3$ 重新缩放下略胜 GeLU [@shazeer2020glu]。RoPE 取代 ALiBi 成了位置默认 [@su2021roformer]。到 LLaMA 与 Qwen 之时，共识已经定型：前置归一化、RMSNorm、SwiGLU 前馈网络、RoPE，以及任何地方都不带偏置项 [@touvron2023llama; @bai2023qwen]。稠密块自 2023 年以来变化很少，主要变化转移到了数据、规模与后训练。
-
-## 那唯一不肯定型的成本
-
-现在轮到注意力本身，那个跨位置混合的子层，也是本章活跃约束的来源。缩放点积注意力把每个词元投影成一个查询、键与值，然后计算 [@vaswani2017attention]
+图中采用的是前置归一化。原始 Transformer 则在每次残差相加后做归一化 [@vaswani2017attention]：
 
 $$
-\text{Attention}(Q, K, V) = \text{softmax}\!\left(\frac{QK^\top}{\sqrt{d}}\right) V
+\begin{aligned}
+A_\ell &= \operatorname{Attn}_\ell(X_\ell), \\
+U_\ell &= \operatorname{Norm}_{\ell,1}(X_\ell+A_\ell), \\
+F_\ell &= \operatorname{FFN}_\ell(U_\ell), \\
+X_{\ell+1} &= \operatorname{Norm}_{\ell,2}(U_\ell+F_\ell).
+\end{aligned}
 $$
 
-其中 $Q$ 是查询，$K$ 是键，$V$ 是值，$QK^\top$ 给出每个位置对其他位置的相似度分数。softmax 把每行分数变成一组和为一的正权重，再对 $V$ 做加权求和，于是一个词元得到的是它从其他词元读回来的信息。$\sqrt{d}$ 这个除数防止 logit 随维度增长，免得 softmax 饱和。一个因果掩码把上三角清零，使一个词元只关注过去。成本在计算与分数矩阵两方面都是 $O(n^2)$，这正是下游每一个效率技巧背后的压力。
+这里各符号的形状与前置归一化块相同，只是归一化器移到了残差相加之后。Xiong 等人解释了为什么前置归一化在初始化时具有更平稳的梯度，并可能减少对学习率预热的依赖 [@xiong2020prenorm]。这不代表后置归一化无效，初始化、残差缩放、深度和优化器设置都会改变比较结果。应记录准确的块方程，而不能只写“前置归一化”或“后置归一化”。
+
+## 归一化控制尺度
+
+LayerNorm 会把隐藏向量居中，并除以其标准差 [@ba2016layernorm]。**@gls-rmsnorm**由 Zhang 和 Sennrich 于 2019 年提出，它省去均值减除，按均方根做归一化 [@zhang2019rmsnorm]：
+
+$$
+\begin{gathered}
+r(x)=\frac{x}{\sqrt{\frac{1}{d}\sum_{j=1}^{d}x_j^2+\varepsilon}}, \\
+\operatorname{RMSNorm}(x)=\gamma\odot r(x).
+\end{gathered}
+$$
+
+其中，$x\in\mathbb{R}^{d}$ 是一个词元的隐藏向量，$r(x)$ 是按均方根缩放后的向量，$x_j$ 是第 $j$ 个分量，$\gamma\in\mathbb{R}^{d}$ 是学到的逐元素缩放，$\varepsilon>0$ 用来防止除零，$\odot$ 表示逐元素乘法。实现必须固定 $\varepsilon$、累加精度，以及是否包含可学习偏置。这些细节会影响检查点兼容性和低精度稳定性。
+
+有些架构还会在查询与键做点积前分别归一化。QK 归一化解决的问题不同于残差流归一化，它限制的是注意力分数的尺度。模型清单应分别写明这两处归一化。
+
+## 前馈网络提供逐位置容量
+
+原始 Transformer 使用两张矩阵，并在中间放置 ReLU。常见的门控替代方案是 **@gls-swiglu** [@shazeer2020glu]：
+
+$$
+\begin{gathered}
+G(x)=\operatorname{SiLU}(xW_g)\odot(xW_u), \\
+\operatorname{SwiGLU}(x)=G(x)W_d.
+\end{gathered}
+$$
+
+其中，$x\in\mathbb{R}^{d}$ 是一个残差向量，$G(x)$ 是逐元素门控后的中间表示，$W_g,W_u\in\mathbb{R}^{d\times d_f}$ 分别是门控投影和值投影，$W_d\in\mathbb{R}^{d_f\times d}$ 把结果投影回模型宽度，$d_f$ 是 FFN 隐藏宽度，$\operatorname{SiLU}(z)=z/(1+e^{-z})$ 按元素计算。忽略偏置时，这种门控 FFN 有 $3dd_f$ 个参数，两矩阵前馈网络有 $2dd_f$ 个参数。
+
+这个计数解释了常说的“三分之二”调整。隐藏宽度为 $4d$ 的普通 FFN 有 $8d^2$ 个参数。要让三矩阵门控 FFN 与之匹配，需要在按硬件友好倍数取整前令 $d_f=8d/3$。这个比例是参数预算规则，不是 SwiGLU 的固有属性。实际模型会选择不同的扩展比例；矩阵参数量相同，也不保证不同内核或硬件上的运行时间相同。
+
+注意力与 FFN 的作用不同，但“一个负责存知识、另一个只负责路由”属于解释，不是张量不变量。消融实验可以定位行为，前向方程本身不能指定语义归属。
+
+## 带显式形状的因果自注意力
+
+对一条序列，设 $X\in\mathbb{R}^{S\times d}$，并假定查询头、键头和值头的宽度相同。令 $H_q$ 为查询头数，$H_{kv}$ 为不同的键值头数，$d_h$ 为单个头的宽度。学到的投影产生
+
+$$
+\begin{aligned}
+Q &\in \mathbb{R}^{S\times H_q\times d_h}, \\
+K,V &\in \mathbb{R}^{S\times H_{kv}\times d_h}.
+\end{aligned}
+$$
+
+每个查询头 $a$ 都会映射到一个键值头 $g(a)$。对查询位置 $i$，其输出为
+
+$$
+\begin{aligned}
+ s_{ij}^{(a)}
+&=\frac{q_i^{(a)\top}k_j^{(g(a))}}{\sqrt{d_h}} \\
+&\quad+M_{ij}, \\
+\alpha_{ij}^{(a)} &=\operatorname{softmax}_{j}\bigl(s_{ij}^{(a)}\bigr), \\
+z_i^{(a)}
+&=\sum_{j=1}^{S}\alpha_{ij}^{(a)}v_j^{(g(a))}.
+\end{aligned}
+$$
+
+其中，$q_i^{(a)}$ 是位置 $i$ 上查询头 $a$ 的查询，$k_j^{(g(a))}$ 和 $v_j^{(g(a))}$ 是位置 $j$ 上选中的键和值，$s_{ij}^{(a)}$ 是加入掩码后的分数，$\alpha_{ij}^{(a)}$ 是归一化后的注意力权重，$M$ 是掩码。普通因果注意力在 $j\le i$ 时取 $M_{ij}=0$，在 $j>i$ 时取 $M_{ij}=-\infty$。负无穷项经过 softmax 后概率为零。填充、打包文档、滑动窗口和前缀语言模型需要不同的掩码。
+
+在常见初始化假设下，除以 $\sqrt{d_h}$ 可以防止分数方差随头宽度增长 [@vaswani2017attention]。把 $H_q$ 个查询头的输出拼接起来，再经过输出投影，就得到宽度为 $d$ 的残差更新。
+
+当 $H_qd_h=d$ 且省略偏置时，查询投影和输出投影合计有 $2d^2$ 个参数，键投影和值投影合计有 $2dH_{kv}d_h$ 个参数。标准 MHA 因此使用 $4d^2$ 个投影参数。GQA 与 MQA 会减少 K/V 投影项和缓存，但稠密查询-键交互仍按 $S^2H_qd_h$ 扩展。
 
 <figure id="fig-transformer-architecture-stepper">
 <div class="viz" data-viz="stepper">
-<div data-chip="X" data-title="1 · 输入">词元嵌入 X 作为残差流进入，每个位置一个向量。</div>
-<div data-chip="Q K V" data-title="2 · 投影">三个学习到的投影把每个词元变成查询、键与值。</div>
-<div data-chip="QKᵀ" data-title="3 · 分数">每个查询与每个键做点积，得到一个 n×n 的分数矩阵 QKᵀ。</div>
-<div data-chip="softmax" data-title="4 · 权重">除以 √d 并对每行做 softmax，得到键上的概率分布，即下方的矩阵。</div>
-<div data-chip="Z" data-title="5 · 加权求和 · V">用这些权重对值向量求和，得到语境化输出 Z。</div>
+<div data-chip="X" data-title="1 · 输入">每个词元位置都有一个宽度为 d 的残差向量。</div>
+<div data-chip="Q K V" data-title="2 · 投影">学到的投影生成查询头，以及各不相同的键值头。</div>
+<div data-chip="QKᵀ + M" data-title="3 · 打分并掩码">每个查询为允许访问的键打分；因果掩码把未来位置设为负无穷。</div>
+<div data-chip="softmax" data-title="4 · 归一化">softmax 把每行未被掩码的分数变成非负且总和为一的权重。</div>
+<div data-chip="αV → Z" data-title="5 · 混合值向量">每个头对值向量加权求和，随后拼接所有查询头并完成输出投影。</div>
 </div>
-<figcaption>一次注意力前向，分五个阶段。逐步浏览，或让它自动播放，看一个张量如何从输入嵌入流向语境化输出 Z。</figcaption>
+<figcaption>因果自注意力的数学步骤。掩码是注意力运算的一部分，不是注意力结束后的清理。</figcaption>
 </figure>
 
 <figure id="fig-transformer-architecture-attention-heatmap">
 <div class="viz" data-viz="attention-heatmap" data-tokens="猫,坐,在,垫,子,上,。" data-cap-query="查询位置" data-hint="点击任意单元格或行标签来选择查询行。"></div>
-<figcaption>一个注意力权重矩阵（单个头）：行是查询、列是键，颜色越深、关注越多。点击任意查询行，右侧条形显示该查询在键上的归一化分布。QKᵀ 分数经 √d 除子与 softmax，正是变成这些逐行权重。示意性权重，并非来自训练好的模型。</figcaption>
+<figcaption>一个因果注意力头的示意权重。行表示查询，列表示键，每一行只在允许访问的键上归一化。点击单元格或行标签可以选择查询行。这些数值不是从训练模型中测得的，也不能单独解释模型为何作出某项决定。</figcaption>
 </figure>
 
-多头注意力把 $d$ 切成 $h$ 个头，让注意力能同时关注多个子空间，拼接它们的输出再投影一次 [@vaswani2017attention]。头在参数上成本很低，在推断时却有明确代价，因为每个头都携带自己的键和值，而这些必须保留下来。
+完整序列上的稠密注意力层会形成 $S^2$ 个查询-键关系，因此算术量随 $S$ 的平方增长。朴素实现还会显式生成 $S\times S$ 分数矩阵，但数学定义并不要求保留这块临时存储。
 
-保留它们不是细节，而是本章其余成本的来源。要看清原因，得弄清这个块到底如何把提示词变成文本：语言模型一次只生成一个词元，而且分两遍来做，两遍的形状大不相同。第一遍就是 **@gls-prefill** 阶段：它一次读完整个提示词，每个位置都关注所有更早的位置，并一起算出全部提示词词元的键和值。第二遍就是 **@gls-decode** 阶段：它一次发出一个词元，每一步都把刚生成的词元作为下一步输入，以产生后续词元。解码是自回归的：一步的输出就是下一步的输入，所以序列每步增长一个位置。
+## 位置信息通过查询和键进入注意力
 
-解码正是保留键和值得到回报的地方。一个词元的键和值一旦算出便不再改变，因此与其在每一步对整个序列重算注意力（那是为每个词元重复一遍的二次方计算量），模型把它们缓存下来，每一步只为那个新词元对所有过去词元的缓存做注意力计算。缓存就是不重算所付的代价。这正是这些向量必须保留的原因，也是为什么它们的成本以内存而非计算来衡量。这一预填充与解码拆分在服务期的后果，它设定的延迟与它强加的调度，正是 @sec-serving-problem 的主题；这里只需明白：是解码给了缓存存在的理由。
-
-这笔成本是本章的核心。缓存大小是
+不带掩码、只看内容的自注意力具有置换等变性，打乱输入位置只会同样打乱输出。因果掩码虽然规定了方向，却没有为相同内容向量显式表示距离。**@gls-rope**会按位置旋转查询和键中成对的坐标 [@su2021roformer]。设参与旋转的宽度 $d_R$ 为偶数，定义
 
 $$
-2 \cdot \text{layers} \cdot n_{\text{kv}} \cdot d_{\text{head}} \cdot \text{seq} \cdot \text{batch} \cdot \text{dtype}
+\begin{aligned}
+\omega_r &= \theta^{-2r/d_R}, \\
+R_p^{(r)} &=
+\begin{bmatrix}
+\cos(p\omega_r)&-\sin(p\omega_r)\\
+\sin(p\omega_r)&\cos(p\omega_r)
+\end{bmatrix}, \\
+&\hspace{3em}0\le r<d_R/2.
+\end{aligned}
 $$
 
-这里前面的 $2$ 分别对应键和值，$\text{layers}$ 与 $n_{\text{kv}}$ 表示每一层、每一个键值头都要存一份缓存，只有在普通多头注意力下 $n_{\text{kv}}$ 才等于 $h$，$d_{\text{head}}$ 是每个头的宽度，$\text{seq}$ 与 $\text{batch}$ 分别是上下文长度和批大小，$\text{dtype}$ 是每个数占用的字节数。这个乘积随上下文长度与批大小线性增长；它何时超过权重，取决于模型形状、批量以及缓存与权重精度。@fig-transformer-architecture-1 在明确假设下画出这项关系。
+其中，$\theta>0$ 是频率基数，$r$ 表示一对旋转坐标，$\omega_r$ 是该坐标对的角频率，$p$ 是词元位置。把所有 $R_p^{(r)}$ 组成分块对角矩阵 $R_p$，则
+
+$$
+\begin{aligned}
+q_i' &= R_iq_i, \\
+k_j' &= R_jk_j, \\
+q_i'{}^\top k_j' &= q_i^\top R_{j-i}k_j.
+\end{aligned}
+$$
+
+这里 $q_i$ 和 $k_j$ 是旋转前的查询与键，$R_i$ 和 $R_j$ 使用配置好的频率方案。最后一个恒等式表明，点积中的位置部分取决于相对偏移 $j-i$。这并不意味着完整注意力分数只由距离决定，内容向量仍然参与计算。
+
+频率基数、旋转维度占比，以及上下文扩展采用的任何缩放规则，都属于检查点契约。训练后更改它们属于适配实验，而不是元数据修改。@gls-rope 很常见，但不是唯一有效的位置方案。ALiBi 会对每个因果上有效的分数加入按头设置的线性距离惩罚 [@press2022alibi]：
+
+$$
+\begin{aligned}
+s_{ij}^{(a)} &=\frac{q_i^{(a)\top}k_j^{(a)}}{\sqrt{d_h}} \\
+&\quad-m_a(i-j)+M_{ij}.
+\end{aligned}
+$$
+
+其中，$m_a>0$ 是头 $a$ 的固定斜率，对允许访问的历史位置有 $i-j\ge0$，$M_{ij}$ 是前文定义的因果掩码。ALiBi 不引入可学习的位置向量。无论采用哪一种方法，长上下文表现都取决于训练长度、频率或斜率配置、后续适配和评估分布。
+
+## 预填充创建缓存，解码复用缓存
+
+自回归服务会显露出整序列训练图没有展示的两个阶段。第一遍就是 **@gls-prefill** 阶段：它一次读完整个提示词，在因果掩码下生成各位置的 logits，并把提示词的键和值写入缓存。最后一个提示词位置的 logits 用于预测第一个生成词元。不同位置可以并行计算，尽管服务系统可能把很长的预填充分块执行。第二阶段是 **@gls-decode**：每条序列一次处理一个新位置，让新查询读取已经保存的历史键和值，选择或采样一个词元，把该位置的键和值追加到缓存，再重复这个过程。
+
+在前缀固定的标准因果自注意力中，某一层过去位置的键和值不会因后续解码而改变。复用它们可以避免反复投影整个前缀。不过，稠密解码的每一步仍要读取保留的缓存，因此缓存既占容量，也消耗带宽。对长度不齐的批次，持久键值（KV）张量的有效载荷记作
+
+$$
+\begin{aligned}
+C_\ell &= H_{kv,\ell}(d_{k,\ell}+d_{v,\ell}), \\
+M_{\mathrm{KV}} &= b\sum_{r=1}^{B}S_r
+\sum_{\ell=1}^{L}C_\ell\quad\text{字节}.
+\end{aligned}
+$$
+
+其中，$C_\ell$ 是第 $\ell$ 层每个位置保存的键值元素数，$B$ 是驻留序列数，$S_r$ 是第 $r$ 条序列的缓存长度，$L$ 是注意力层数，$H_{kv,\ell}$ 是第 $\ell$ 层不同的 KV 头数，$d_{k,\ell}$ 和 $d_{v,\ell}$ 是每个头的键和值元素数，$b$ 是每个缓存元素占用的字节数。若所有序列长度都为 $S$，并且 $d_k=d_v=d_h$，公式可化为 $2LBSH_{kv}d_hb$。真实服务还会产生分配块、元数据、填充或碎片、量化尺度、推测解码或束搜索状态、前缀共享和卸载等开销。上式计算的是稠密张量的有效载荷，不是进程总内存。
+
+复用缓存后，每层为一个新词元执行稠密注意力的成本与历史长度 $S$ 线性相关，这里省略头数和维度因子。若提示词长度为 $P$，之后生成 $T$ 个词元，整个解码过程的注意力工作量与 $TP+T^2$ 成正比。缓存复用避免了重复投影前缀，却不会让长解码变成常数时间。
+
+缓存随驻留词元数线性增长。它是否超过模型权重，取决于上述所有变量，以及权重和缓存精度。因此，不能把某一个交叉点说成 Transformer 的普遍属性。
+
+@fig-transformer-architecture-1 采用明确假设：32 层、头宽度 128、每个 KV 元素两字节、批大小为一，以及 70 亿个两字节权重参数。MHA、GQA 与 MQA 三条线只改变 $H_{kv}$，图中每个数值都直接来自缓存公式。
 
 ![在一组明确的 7B 级配置下精确计算的 KV 有效载荷。MHA 使用 32 个 KV 头，GQA 使用 8 个，MQA 使用 1 个；水平线表示 70 亿个两字节权重参数。图中不含分配器开销与运行时工作区。](/figures/transformer-architecture-1.svg){#fig-transformer-architecture-1}
 
-下面的单元格用相同假设计算每词元 KV 有效载荷、128k 上下文的缓存量，以及缓存有效载荷等于权重字节数时的上下文长度。
+下面的可执行单元会输出每词元缓存有效载荷，以及缓存等于所述权重字节数时的上下文长度。可以修改批大小、精度或 KV 头数，测试不同的部署配置。
 
 :::: {.runnable}
 ```python
@@ -134,104 +259,120 @@ for name, kv_heads in [("MHA", 32), ("GQA", 8), ("MQA", 1)]:
 ```
 ::::
 
-第一种做法最激进。多查询注意力让所有查询头共享单个键/值头，把缓存削减 $h$ 倍 [@shazeer2019fast]。削减是巨大的，但压到单个 KV 头会破坏训练稳定性，并让质量非平滑地下降。第二种做法介于两端之间。分组查询注意力在 $g$ 个查询头组内共享 K 与 V，其中 $g$ 是 KV 头的组数：一端恢复成 MHA（$g = h$），另一端恢复成 MQA（$g = 1$），并能从一个现有的 MHA 检查点廉价地续训 [@ainslie2023gqa]。GQA 以多数节省换回多数质量，成了 LLaMA 与 Qwen 家族的默认 [@touvron2023llama; @bai2023qwen]。@fig-kv-sharing 展示了其机制：缓存为每个不同的 KV 头持有一份 K 与 V，所以节省完全来自让多少个查询头去共享同一个 KV 头。
+## MHA、GQA 与 MQA 改变 KV 头的共享方式
+
+其中，多头注意力（MHA）使用 $H_{kv}=H_q$，每个查询头都有自己的键头和值头 [@vaswani2017attention]。多查询注意力（MQA）使用 $H_{kv}=1$，所有查询头共享一组键和值 [@shazeer2019fast]。分组查询注意力（GQA）取中间值 $1<H_{kv}<H_q$，把多个查询头映射到同一个 KV 头 [@ainslie2023gqa]。
+
+在稠密有效载荷公式下，其他维度不变时，从 MHA 改为 GQA 会把缓存缩小 $H_q/H_{kv}$ 倍；改为 MQA 则缩小 $H_q$ 倍。这些是精确的存储比例，不是质量结论。Ainslie 等人报告称，可以把 MHA 检查点使用原始预训练算力的 5% 续训为 GQA，并在其实验中取得接近 MHA 的质量和接近 MQA 的速度 [@ainslie2023gqa]。这说明 GQA 是有用的设计点，但不能证明某个 KV 头数适合所有模型和上下文长度。
 
 ```{dot}
 //| label: fig-kv-sharing
-//| fig-cap: "MHA、GQA 与 MQA 如何把查询头对应到被缓存的键/值头。只有 KV 头位于缓存中，所以把多个查询头合并到一个 KV 头正是缓存缩小的原因。"
+//| fig-cap: "四个查询头在 MHA、两组 GQA 与 MQA 下的共享方式。缓存有效载荷与不同的蓝色 KV 框数量成正比，而不是与读取每个框的查询头数成正比。"
 digraph kv {
   bgcolor="transparent";
-  node [shape=box, fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", arrowsize=0.6];
   rankdir=TB;
-  nodesep=0.2;
+  nodesep=0.18; ranksep=0.32;
+  node [shape=box, style="rounded,filled", fixedsize=true, width=0.42, height=0.34, margin="0.05,0.03", fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.0];
+  edge [color="#6b7280", arrowsize=0.55];
 
   subgraph cluster_mha {
-    label="MHA：每个查询头一份 KV";
-    fontname="Helvetica"; fontcolor="#6b7280"; color="#6b7280";
-    q1 [label="Q1"]; q2 [label="Q2"]; q3 [label="Q3"]; q4 [label="Q4"];
-    k1 [label="KV1", style=filled, fillcolor="#dbe9ff", color="#3b82f6", fontcolor="#1f2937"];
-    k2 [label="KV2", style=filled, fillcolor="#dbe9ff", color="#3b82f6", fontcolor="#1f2937"];
-    k3 [label="KV3", style=filled, fillcolor="#dbe9ff", color="#3b82f6", fontcolor="#1f2937"];
-    k4 [label="KV4", style=filled, fillcolor="#dbe9ff", color="#3b82f6", fontcolor="#1f2937"];
-    q1 -> k1; q2 -> k2; q3 -> k3; q4 -> k4;
+    label="MHA：H_q=4，H_kv=4"; fontname="Helvetica"; fontcolor="#6b7280"; color="#6b7280";
+    mq1 [label="Q1"]; mq2 [label="Q2"]; mq3 [label="Q3"]; mq4 [label="Q4"];
+    mk1 [label="KV1", fillcolor="#dbe9ff", color="#3b82f6"];
+    mk2 [label="KV2", fillcolor="#dbe9ff", color="#3b82f6"];
+    mk3 [label="KV3", fillcolor="#dbe9ff", color="#3b82f6"];
+    mk4 [label="KV4", fillcolor="#dbe9ff", color="#3b82f6"];
+    mq1 -> mk1; mq2 -> mk2; mq3 -> mk3; mq4 -> mk4;
   }
 
   subgraph cluster_gqa {
-    label="GQA：每组一份 KV";
-    fontname="Helvetica"; fontcolor="#6b7280"; color="#6b7280";
-    g1 [label="Q1"]; g2 [label="Q2"]; g3 [label="Q3"]; g4 [label="Q4"];
-    gk1 [label="KV1", style=filled, fillcolor="#dbe9ff", color="#3b82f6", fontcolor="#1f2937"];
-    gk2 [label="KV2", style=filled, fillcolor="#dbe9ff", color="#3b82f6", fontcolor="#1f2937"];
-    g1 -> gk1; g2 -> gk1; g3 -> gk2; g4 -> gk2;
+    label="GQA：H_q=4，H_kv=2"; fontname="Helvetica"; fontcolor="#6b7280"; color="#6b7280";
+    gq1 [label="Q1"]; gq2 [label="Q2"]; gq3 [label="Q3"]; gq4 [label="Q4"];
+    gk1 [label="KV1", fillcolor="#dbe9ff", color="#3b82f6"];
+    gk2 [label="KV2", fillcolor="#dbe9ff", color="#3b82f6"];
+    gq1 -> gk1; gq2 -> gk1; gq3 -> gk2; gq4 -> gk2;
   }
 
   subgraph cluster_mqa {
-    label="MQA：所有头共享一份 KV";
-    fontname="Helvetica"; fontcolor="#6b7280"; color="#6b7280";
-    m1 [label="Q1"]; m2 [label="Q2"]; m3 [label="Q3"]; m4 [label="Q4"];
-    mk [label="KV1", style=filled, fillcolor="#dbe9ff", color="#3b82f6", fontcolor="#1f2937"];
-    m1 -> mk; m2 -> mk; m3 -> mk; m4 -> mk;
+    label="MQA：H_q=4，H_kv=1"; fontname="Helvetica"; fontcolor="#6b7280"; color="#6b7280";
+    qq1 [label="Q1"]; qq2 [label="Q2"]; qq3 [label="Q3"]; qq4 [label="Q4"];
+    kk1 [label="KV1", fillcolor="#dbe9ff", color="#3b82f6"];
+    qq1 -> kk1; qq2 -> kk1; qq3 -> kk1; qq4 -> kk1;
   }
+
+  mk1 -> gq1 [style=invis, weight=100];
+  gk1 -> qq1 [style=invis, weight=100];
 }
 ```
 
-多头潜在注意力在 DeepSeek-V2 中提出，从另一个角度处理同一笔成本 [@deepseek2024v2]。它不共享头，而是把 K 与 V 向下投影到一个低秩潜在向量，用它来缓存，替代完整的逐头 K 与 V，并在使用时即时解压，旁边还并行携带一个解耦的 RoPE 分量。它的卖点是以 MHA 级质量，实现 GQA 级、甚至更好的缓存节省。它是 @fig-cache-frontier 所勾勒的缓存压缩前沿上的第二条分支。
+## MLA 改变缓存表示
 
-```{dot}
-//| label: fig-cache-frontier
-//| fig-cap: "缓存压缩前沿。从 MHA 出发，GQA 与 MQA 沿一条分支用 KV 头换取更小的缓存，MLA 沿第二条分支把缓存压缩为一个低秩潜在表示，而可训练稀疏注意力（NSA、DSA）沿第三条分支直接裁剪要关注哪些词元。"
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+DeepSeek-V2 引入的多头潜在注意力（MLA）主要不是通过共享传统 KV 头来节省缓存 [@deepseek2024v2]。它把每个残差向量投影成低维潜在向量 $c_i^{KV}\in\mathbb{R}^{d_c}$，再从中生成内容键和值。系统还会保留一小段独立的 RoPE 键分量，因为位置相关的旋转使完整键投影无法全部吸收到后续矩阵乘法中。
 
-  MHA [label="MHA\nh 个 KV 头\n完整质量、完整缓存"];
-  GQA [label="GQA\ng 个 KV 组\n多数质量、缓存的一小部分"];
-  MQA [label="MQA\n1 个 KV 头\n最小缓存、质量风险"];
-  MLA [label="MLA\n低秩潜在\n压缩缓存、声称 MHA 质量"];
-  NSA [label="NSA / DSA\n可训练稀疏\n只关注被选中的词元"];
+在 DeepSeek-V2 的构造里，每个位置的有效载荷为
 
-  MHA -> GQA;
-  GQA -> MQA;
-  MHA -> MLA;
-  MHA -> NSA;
-}
-```
+$$
+M_{\mathrm{MLA}}=LBS(d_c+d_h^R)b\quad\text{字节}.
+$$
 
-第三条分支更年轻，针对的是另一项成本。共享与压缩缩小的都是每个缓存词元的开销，可每个过去词元仍然被关注，$O(n^2)$ 的分数计算原封不动。稀疏注意力放弃了这个前提：每个查询只关注过去词元中被选出的一个子集，而不是全部，于是注意力计算量与长上下文成本一并被削减。给一个用全注意力训练好的模型事后套上稀疏模式，历来要折损质量，所以当前的设计把选择本身放进训练里学。DeepSeek 的原生稀疏注意力（NSA）让层级化的词元选择与模型其余部分联合训练 [@yuan2025nsa]；它的后继者 DeepSeek 稀疏注意力（DSA）于 2025 年 9 月随生产模型 DeepSeek-V3.2-Exp 上线，用一个轻量索引器为每个查询挑出要读的词元 [@deepseek2025v32]。稀疏对服务与长上下文行为意味着什么，留到 @sec-structured-long-context 再谈；在这里，它是前沿的第三条分支，也是三者中第一条直接削减二次方计算本身的分支。
+其中，$d_c$ 是联合 KV 潜在宽度，$d_h^R$ 是解耦的 RoPE 键宽度，$L$、$B$、$S$ 和 $b$ 与稠密缓存公式中的含义相同。DeepSeek-V2 取 $d_c=4d_h$、$d_h^R=d_h/2$，即每个位置、每层缓存 $4.5d_h$ 个元素。传统等宽 MQA 缓存的是 $2d_h$ 个元素，所以 MLA 并非普遍比 MQA 更小。优化后的解码可以把上投影矩阵吸收到查询投影和输出投影中，无需显式重建完整的逐头 K 和 V。
 
-之所以在这里提到 @gls-flashattention，是为了说明这些变体没有解决的是什么。它让注意力保持精确，又靠从不把 $O(n^2)$ 的分数矩阵写进高带宽内存，让它变得可负担，但它并不缩小 KV 缓存，因为那是一种内存占用，不是计算核 [@dao2022flashattention]。该核以及缓存分页的服务期机制，留到 @sec-faster-decoding 与 @sec-memory-scheduling 再谈。
+DeepSeek 报告称，相比其 MHA 基线，MLA 所需缓存更少，并在受控消融列出的大多数指标上表现更好。这些结果支持论文中的架构和训练配方，但不是潜在注意力支配 GQA 的普遍定理。
 
-::: {.callout-tip}
-## 下层约束
-KV 缓存大小促成了一组注意力变体。MHA 的缓存随头数增长，在长上下文与大批量下超过权重，于是架构师用头的独立性换取更小的缓存：MQA 共享一个 KV 头，GQA 在组内共享，MLA 压缩成一个潜在表示。这些原则上都不改变注意力所计算的内容。它们之所以存在，是因为一笔下游成本，也就是解码服务器必须为每个序列持有的内存，反过来重塑了这个块。@sec-serving-problem 中的服务压力，正是让一个已经可用的块值得被改动的原因。
-:::
+## 区分算术量、临时内存与持久状态
+
+多种技术都被称为“高效注意力”，但它们改变的是不同资源：
+
+| 技术 | 是否改变注意力结果 | 主要改变的资源 | 仍然存在的成本 |
+|---|---|---|---|
+| FlashAttention | 不改变，在数值运算顺序差异范围内仍是精确稠密注意力 | HBM 传输与临时分数存储 | 稠密二次注意力算术和持久 KV 缓存 |
+| MQA / GQA | 改变，查询头共享 K/V 投影 | KV 参数、缓存有效载荷与解码带宽 | 每个查询仍读取所有允许访问的缓存位置 |
+| MLA | 改变，K/V 内容采用潜在分解 | 缓存表示及相关带宽 | 若不结合稀疏机制，仍覆盖所有位置 |
+| 训练式稀疏注意力 | 改变，主要注意力只读取选中的位置或块 | 主要打分与值聚合的算术量和内存传输 | 选择器开销和缓存占用取决于具体设计 |
+
+**@gls-flashattention**会分块计算精确注意力，因此无需把完整分数矩阵写入高带宽内存 [@dao2022flashattention]。它减少训练和预填充阶段的 IO 与临时激活内存，却不会自行改变解码时保留的历史键值元素数量。
+
+稀疏注意力会改变数学连接方式。Native Sparse Attention 同时训练三条带门控的分支：压缩的粗粒度词元、选中的细粒度块，以及局部滑动窗口 [@yuan2025nsa]。DeepSeek Sparse Attention（DSA）是另一种较晚的设计。它先用低维 lightning indexer 为历史词元排序，再让主 MLA 路径读取选出的 top-$k$ 子集 [@deepseek2025v32]。主要注意力从全部 $S$ 个历史位置转向 $k\ll S$ 个位置，但 DeepSeek-V3.2 报告的索引器仍以较小维度计算所有查询与键的分数，因此仍是二次复杂度。选择器错误、继续训练成本和保留的缓存状态也必须计入。稀疏选择不会自动删除完整缓存。
 
 ::: {.callout-important}
 ## 争议所在
-MLA 是否真的打破了质量与缓存之间的权衡，尚无定论。DeepSeek 的立场是，潜在压缩能以 MHA 级质量交付缓存节省，并在前沿上优于 GQA [@deepseek2024v2]。保守的立场是，GQA 更简单、能从现有 MHA 检查点续训、并已在众多上线模型中得到验证 [@ainslie2023gqa]，仍是安全的默认；而 MLA 的优势与 DeepSeek 配方的其余部分纠缠在一起，比单一比较所暗示的更难迁移。如今还有第三种立场：头数的加减根本不是正确的维度，可训练稀疏把二次方计算与缓存一并削减，而随着 DeepSeek-V3.2-Exp 上线，DSA 已经进入生产服务 [@deepseek2025v32]。三者今天在生产中并存：大多数开源模型用 GQA，DeepSeek 在 MLA 之上叠加 DSA。把这个选择当作开放的，而非任何一方已成定局的胜利。
+
+不存在脱离工作负载的单一效率前沿。GQA 使用简单的稠密计算，并有按头数精确计算的存储公式。MLA 改变分解方式，在匹配的训练配方下可能进一步减少缓存。学习式稀疏直接减少覆盖的位置数，却增加了需要测量召回率和硬件效率的选择器。训练损失、长上下文任务质量、预填充吞吐量、解码延迟、驻留批大小和实现成熟度，可能让同一组候选方案得到不同排序。
 :::
 
-## 承载成本的架构参数
+::: {.callout-tip}
+## 下层约束
 
-上面每个选择都是一个带拐点的平衡。并排摆开，它们就是架构师真正需要调整的架构参数。
+分词器决定词表规模 $V$，也决定送入架构的序列长度。本章进一步固定模型宽度、块数、头维度、掩码语义、位置方案和缓存表示。这些选择会变成 @sec-training-at-scale 与 @sec-serving-problem 面对的张量形状和内存需求。服务内核可以更高效地实现这些方程，却不能悄悄改变掩码、头映射或检查点参数行的含义。
+:::
 
-- **归一化位置，前置还是后置。** 后置归一化只要能训练起来，可以达到略好的最终损失，但在深度上若无大量预热与谨慎初始化就不稳定。前置归一化用一丝峰值质量，换来一条稳健可训练的梯度路径，在实践中胜出 [@xiong2020prenorm]。
-- **归一化形式，LayerNorm 还是 RMSNorm。** 均值居中带来的收益很小。RMSNorm 弃掉它，换来更低成本和少一组参数，几乎没有质量代价，如今为默认 [@zhang2019rmsnorm]。
-- **激活函数选择。** SwiGLU 的增益虽小但稳定，并且在 $2/3$ 隐藏维度重新缩放下几乎不增加参数量 [@shazeer2020glu]。代价是多了第三个权重矩阵，以及对核函数与并行而言略不规整的形状。
-- **位置方案是一道单向门。** 基础方案在运行起始时选定，事后更改代价高昂。它约束着上下文随后能扩展多远、模型外推得多好。RoPE 的 theta 基数是一个小参数，长上下文后果却很大，其机制见 @sec-structured-long-context。
-- **权重绑定。** 一处真实的取舍：参数节省与小模型正则化，对上规模时的边际成本和那份让大模型选择不绑定的自由 [@press2017tying]。
-- **深度还是宽度。** 在固定参数预算下，更深意味着更多的顺序组合，但训练与并行更难，伴随流水线气泡与串行延迟；更宽意味着每步更多算力，对张量并行更友好，也更易保持稳定。它在 @sec-training-at-scale 中与系统层协同设计，而非孤立求解，其中每 FLOP 质量的一面由 @sec-scaling-laws 设定。
-- **KV 缓存与质量，主导性的轴线。** MHA 以完整缓存给出完整质量，GQA 以缓存的一小部分给出多数质量，MQA 以质量与稳定性风险给出最小缓存，而 MLA 声称通过潜在压缩打破这一权衡。正确的取舍点取决于目标上下文长度与批量，因为缓存随两者一同扩展。
+## 把架构记录为一份契约
 
-## 装配这个块，以及它如何失效
+一份可复现的解码器规格至少应写明：
 
-一旦上述选择定下来，装配共识稠密块大体上只是核对账目：在每个子层的输入上用 RMSNorm 做前置归一化、一个隐藏维度按 $2/3$ 重新缩放的 SwiGLU 前馈网络、在点积之前对查询与键施加 RoPE、为 KV 头做 GQA 分组，以及任何地方都不带偏置项。自 LLaMA 以来，几乎每一个开源稠密模型都能看出这一形状 [@touvron2023llama]。
+- 词表规模、嵌入宽度、输出投影形状和权重绑定方式；
+- 块数、模型宽度、FFN 宽度、激活函数，以及所有偏置设置；
+- 残差顺序、归一化位置、类型、epsilon 与计算精度；
+- 查询头数、KV 头数、头宽度，以及查询到 KV 的映射；
+- 注意力掩码、文档边界行为，以及任何局部或稀疏模式；
+- 位置机制、RoPE 基数与旋转维度，以及缩放规则；
+- 缓存表示、元素类型、量化尺度粒度，以及每词元有效载荷字节数；
+- 最终归一化，以及任何 logit 缩放或裁剪。
 
-围绕这个块，有几处反复出现的具体失败：深度上的后置归一化会在训练早期发散或停滞，这正是前置归一化被发明出来要修复的经典症状 [@xiong2020prenorm]。为短上下文选定的位置方案，或过小的 RoPE theta，会限制日后的长上下文行为，代价只在第一次提升上下文窗口时浮现。切换到门控前馈网络时忘了 $2/3$ 重新缩放，会悄悄放大或缩小参数预算，并破坏同等条件的比较。不绑定、未正则化的输出 logits 可能无界漂移，这正是 z-loss 防护它们的原因，机制见 @sec-scaling-laws。而过度压缩到 MQA 会破坏训练稳定性、并让质量非平滑地下降，这正是 GQA 之所以存在的原因 [@ainslie2023gqa]：最便宜的缓存，并不一定等于最好的缓存。
+“类似 LLaMA”或“使用 GQA”都不足以确定这些字段。序列化模型配置、检查点张量、训练代码和服务引擎必须遵守同一份契约。
+
+## 在完整训练前完成验证
+
+1. **核对形状与参数量。** 推导每个投影的形状，并与序列化张量中的参数总量核对，其中包括共享参数。
+2. **测试因果性。** 改动未来词元，确认更早位置的 logits 不变；若模型使用填充、打包文档或前缀掩码，也要覆盖这些情况。
+3. **比较参考注意力实现。** 在小张量上，把优化内核与直观的高精度实现比较，并声明数值容差。
+4. **测试缓存等价性。** 在每个位置确认逐词元解码 logits 与完整前缀前向传播在容差内一致。
+5. **测量缓存字节数。** 在不同批大小和序列长度下，对照声明公式比较已分配内存与有效载荷。
+6. **覆盖位置边界。** 测试训练长度、部署上限，以及前缀缓存或序列打包使用的位置偏移。
+7. **消融架构选择。** 在参数量、词元数和算力预算匹配的条件下，比较归一化、FFN、头共享与位置方案。
+8. **做端到端基准测试。** 报告训练吞吐量、预填充延迟、解码延迟、最大驻留批大小，以及目标工作负载上的质量。
+
+Transformer 块可以压缩成一页图，但它的契约从词元 ID 一直延伸到服务内存。只有把数学运算、张量布局和运行时表示分开说明，才能得到真正精确的架构定义。
 
 ## 延伸阅读
 
