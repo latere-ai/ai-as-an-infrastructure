@@ -313,7 +313,7 @@ test("specialized practice terms get local definitions before use", () => {
   const required = [
     ["en/foundations/01-scaling-laws.qmd", "the @gls-compute-optimal $N$ and $D$: the pair with the lowest predicted loss"],
     ["zh/foundations/01-scaling-laws.qmd", "@gls-compute-optimal的 $N$ 与 $D$，也就是预测损失最低的那组参数量与词元数"],
-    ["zh/foundations/07-mid-training.qmd", "**相对 @gls-continued-pretraining。** 继续预训练是把已有模型继续拿下一词元目标训练"],
+    ["zh/foundations/07-mid-training.qmd", "继续预训练是一种方法，它让已有模型继续在自监督数据上训练"],
     ["en/practice/06-retrieval-and-documents.qmd", "@gls-ocr, optical character recognition, recognizes text from pixels"],
     ["zh/practice/06-retrieval-and-documents.qmd", "**经典 CV 与 @gls-ocr 流水线。** 这里的 OCR 是从像素里识别文字"],
     ["en/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong generalization asks whether weak labels can elicit stronger latent capability"],
@@ -358,7 +358,7 @@ test("early-book glossary first uses are readable without leaving the page", () 
     ["en/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp applies this full sharding idea to wrapped modules"],
     ["zh/foundations/06-training-at-scale.qmd", "PyTorch @gls-fsdp 则是同一全分片思路的原生版本"],
     ["en/foundations/07-mid-training.qmd", "@gls-sft on demonstrations, @gls-dpo from chosen-versus-rejected preferences"],
-    ["zh/foundations/07-mid-training.qmd", "在示范数据上做@gls-sft，从胜出与被拒回复的偏好里做@gls-dpo"],
+    ["zh/foundations/07-mid-training.qmd", "在示范数据上做 @gls-sft，从胜出与被拒回复的偏好中做 @gls-dpo"],
   ];
 
   for (const [path, snippet] of required) {
