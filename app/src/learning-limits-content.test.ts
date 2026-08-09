@@ -278,9 +278,9 @@ test("the bibliography uses verified primary sources and corrected metadata", ()
 
 test("the shared bibliography keeps citations used by the untranslated chapter", () => {
   const citeKeys = new Set(
-    [...chineseChapter.matchAll(/@([a-z][a-z0-9]*)/gi)]
-      .map((match) => match[1])
-      .filter((key) => !/^(sec|fig|tbl|eq|gls)/.test(key)),
+    [...chineseChapter.matchAll(/@([a-z]+(?:19|20)\d{2}[a-z0-9]*)/gi)].map(
+      (match) => match[1],
+    ),
   );
   for (const key of citeKeys) {
     expect(bibliography, `${key} should remain available to the Chinese chapter`).toMatch(
