@@ -853,7 +853,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/evaluation/03-human-evaluation-rubrics.qmd",
-      ["人类标签不是原子事实", "协议创造了标签", "评分准则是判断的界面", "一致性也要被测量"],
+      ["人做出的判断，并不会因此自动成为真值", "从主张出发，而不是先找标注者", "仲裁之前，先保留原始判断", "一致性衡量可靠性，而不是效度"],
     ],
     [
       "en/evaluation/04-judging-holistic.qmd",
