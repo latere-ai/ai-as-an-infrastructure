@@ -1067,7 +1067,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/05-the-compute-frontier.qmd",
-      ["稀缺的资源是字节，而不是算术", "小芯片封装", "NVLink 边界从机箱移到机架", "不断抬高的算术强度门槛"],
+      ["稀缺资源往往是字节搬运能力，而不是算术能力", "小芯片封装", "NVLink 边界已经从单个机箱扩展到多节点域", "不断抬高的算术强度门槛"],
     ],
     [
       "en/infrastructure/06-making-the-silicon.qmd",

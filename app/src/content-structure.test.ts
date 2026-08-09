@@ -818,8 +818,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, remote direct memory access, lets a network adapter transfer data"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-rdma，也就是远程直接内存访问，允许网络适配器直接在已注册的内存区域之间传输数据"],
     ["en/infrastructure/05-the-compute-frontier.qmd", "@gls-cowos package: an advanced package that places compute chiplets and HBM"],
-    // The zh twin introduces before use: the interposer is described, then named.
-    ["zh/infrastructure/05-the-compute-frontier.qmd", "并排铺在一块硅中介层上，这正是 @gls-cowos 这类先进封装"],
+    ["zh/infrastructure/05-the-compute-frontier.qmd", "这就是 @gls-cowos 封装，也就是把计算小芯片与 HBM 放在同一块硅中介层上的先进封装"],
     ["en/infrastructure/07-powering-it.qmd", "@gls-pue, the ratio of total facility power to IT equipment power"],
     ["zh/infrastructure/07-powering-it.qmd", "@gls-pue，也就是数据中心总耗电除以 IT 设备耗电的比值"],
     ["en/infrastructure/08-the-machine-that-breaks.qmd", "@gls-mtbf, the expected interval between failures for the whole job"],
@@ -1009,7 +1008,7 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
         expect(text, `${path} should include a contested/open-question section`).toMatch(contested);
       }
       if (!constraintExceptions.has(path)) {
-        const constraint = lang === "en" ? /^## .*(constraint arrow|lower-layer constraint)/im : /^## 下层约束/m;
+        const constraint = lang === "en" ? /^## .*(constraint arrow|lower-layer constraint)/im : /^## (下层约束|约束如何向上传导)/m;
         expect(text, `${path} should include a lower-layer constraint section`).toMatch(constraint);
       }
     }
