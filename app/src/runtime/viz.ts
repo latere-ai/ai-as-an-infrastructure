@@ -1101,9 +1101,20 @@
   // agreement stays high while kappa collapses, which is why "the judge agrees
   // 90% of the time" proves little. Sliders sweep the base rate and accuracy.
   R['judge-kappa'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
+    var L = zh ? {
+      agreement: '原始一致率', judgeA: '裁判 A', judgeB: '裁判 B',
+      base: '“好”标签的基率', accuracy: '每名裁判的准确率',
+      description: '裁判一致率与标签基率关系的示意图'
+    } : {
+      agreement: 'raw agreement', judgeA: 'judge A', judgeB: 'judge B',
+      base: 'base rate of “good”', accuracy: 'each judge’s accuracy',
+      description: 'Illustration of judge agreement as label prevalence changes'
+    };
     var base = 0.5, acc = 0.85, N = 1000;
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
+    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); read.setAttribute('aria-live', 'polite'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 250);
+    cv.c.setAttribute('role', 'img');
     function cells() {
       function p(labelGood, truthGood) { var pg = truthGood ? acc : (1 - acc); return labelGood ? pg : 1 - pg; }
       var c = {}; var g = base, b = 1 - base;
@@ -1131,12 +1142,14 @@
         ctx.fillText(Math.round(v * N), x + sz / 4, y + sz / 4 + 5 * cv.dpr);
       });
       ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('judge B', x0 + sz / 2, y0 - 2 * cv.dpr);
-      ctx.save(); ctx.translate(x0 - 8 * cv.dpr, y0 + sz / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('judge A', 0, 0); ctx.restore();
-      read.textContent = 'raw agreement ' + po.toFixed(2) + '  ·  Cohen’s κ ' + kappa.toFixed(2);
+      ctx.fillText(L.judgeB, x0 + sz / 2, y0 - 2 * cv.dpr);
+      ctx.save(); ctx.translate(x0 - 8 * cv.dpr, y0 + sz / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.judgeA, 0, 0); ctx.restore();
+      var summary = L.agreement + ' ' + po.toFixed(2) + '  ·  Cohen’s κ ' + kappa.toFixed(2);
+      read.textContent = summary;
+      cv.c.setAttribute('aria-label', L.description + '. ' + summary);
     }
-    host.appendChild(slider('base rate of “good”', 0.5, 0.97, 0.01, base, function (v) { base = v; draw(); }).wrap);
-    host.appendChild(slider('each judge’s accuracy', 0.6, 0.98, 0.01, acc, function (v) { acc = v; draw(); }).wrap);
+    host.appendChild(slider(L.base, 0.5, 0.97, 0.01, base, function (v) { base = v; draw(); }).wrap);
+    host.appendChild(slider(L.accuracy, 0.6, 0.98, 0.01, acc, function (v) { acc = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };

@@ -1194,7 +1194,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/07-evaluation-and-observability.qmd",
-      ["公开榜单", "特定", "检索上下文", "智能体循环", "正在运行的系统"],
+      ["评测发布", "系统指纹", "决策主张", "追踪契约", "回滚"],
     ],
     [
       "en/practice/08-wiring-a-2026-stack.qmd",

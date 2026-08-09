@@ -320,6 +320,24 @@ test("the viz runtime registers judge-kappa, outlier-quant, minhash-buckets, bla
   }
 });
 
+test("judge kappa localizes its controls and accessible summary", () => {
+  const start = rt.indexOf("R['judge-kappa']");
+  const end = rt.indexOf("R['outlier-quant']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("host.getAttribute('data-lang')");
+  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  for (const phrase of ["原始一致率", "裁判 A", "裁判 B", "标签的基率", "每名裁判的准确率"]) {
+    expect(component).toContain(phrase);
+  }
+  expect(component).toContain("read.setAttribute('aria-live', 'polite')");
+  expect(component).toContain("cv.c.setAttribute('role', 'img')");
+  expect(component).toContain("cv.c.setAttribute('aria-label'");
+  expect(src("zh/practice/07-evaluation-and-observability.qmd")).toContain(
+    'data-viz="judge-kappa" data-lang="zh"',
+  );
+});
+
 test("blast radius localizes its controls and accessible live summary", () => {
   const start = rt.indexOf("R['blast-radius']");
   const end = rt.indexOf("R['lora-lowrank']", start);
