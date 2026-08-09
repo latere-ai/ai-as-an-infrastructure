@@ -733,7 +733,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/06-reasoning-data-distillation.qmd",
-      ["推理样本", "自举与拒绝采样", "小数据", "长思考蒸馏"],
+      ["推理记录必须保留什么", "从采样池到验收后的分布", "自举推理轨迹，但别把答案核查当成证明", "蒸馏究竟在优化什么", "缩小模型与缩短输出是两个目标", "如何构建经得起检验的推理语料库"],
     ],
     [
       "en/reasoning/07-inference-time-scaling.qmd",
