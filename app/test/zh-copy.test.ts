@@ -941,7 +941,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/08-law-regulation-policy.qmd",
-      ["欧盟的风险分级", "发布如今在法律上要求哪些文档", "版权为什么仍是每一份预训练语料下面不稳定的基础", "监管者写下的规则改写"],
+      ["法律合规不是模型本身的一项属性", "特定系统", "预期用途", "司法辖区", "分析所依据的来源版本"],
     ],
     [
       "en/safety/index.qmd",
