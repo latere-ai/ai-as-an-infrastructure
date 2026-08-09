@@ -299,7 +299,7 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
     ["en/safety/01-mechanistic-interpretability.qmd", "The hypothesis is @gls-superposition: a model represents more features than it has dimensions"],
     ["zh/safety/01-mechanistic-interpretability.qmd", "这里的假说是 @gls-superposition：模型通过让非正交的特征方向共享激活空间，表示的特征数多于维度数"],
     ["en/safety/02-scalable-oversight-control.qmd", "The answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training"],
-    ["zh/safety/02-scalable-oversight-control.qmd", "答案是@gls-deceptive-alignment：模型可能在训练与评测下表现得像是对齐"],
+    ["zh/safety/02-scalable-oversight-control.qmd", "答案是 @gls-deceptive-alignment：模型可能在训练中表现得已经对齐"],
     ["en/practice/11-human-interface-oversight.qmd", "@gls-automation-bias is the tendency to over-accept automated advice"],
     ["zh/practice/11-human-interface-oversight.qmd", "它也可能制造 @gls-automation-bias：人会过度接受自动化建议"],
   ];
@@ -317,7 +317,7 @@ test("specialized practice terms get local definitions before use", () => {
     ["en/practice/06-retrieval-and-documents.qmd", "@gls-ocr, optical character recognition, recognizes text from pixels"],
     ["zh/practice/06-retrieval-and-documents.qmd", "**经典 CV 与 @gls-ocr 流水线。** 这里的 OCR 是从像素里识别文字"],
     ["en/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong generalization asks whether weak labels can elicit stronger latent capability"],
-    ["zh/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong泛化问的是：弱标注能否引出强模型里已经潜伏的能力"],
+    ["zh/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong 泛化研究弱标注能否引出更强的潜在能力"],
     ["en/practice/05-agents-and-sandboxes.qmd", "a @gls-virtual-key issued by a @gls-gateway"],
     ["zh/practice/05-agents-and-sandboxes.qmd", "模型走由@gls-gateway签发的@gls-virtual-key"],
   ];

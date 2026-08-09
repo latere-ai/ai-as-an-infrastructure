@@ -901,7 +901,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/02-scalable-oversight-control.qmd",
-      ["人类判断之上的对齐有一个有效期限", "弱教师", "强模型", "危害设定上界", "能力差距"],
+      ["能力较弱的监督者能否为能力更强的系统提供可靠的训练或评估信号", "衡量真实存在的差距", "三种任务，三类证据", "假设模型会蓄意颠覆", "监督证据的运行契约"],
     ],
     [
       "en/safety/03-security-authorization.qmd",
