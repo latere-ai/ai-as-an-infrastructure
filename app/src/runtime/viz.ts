@@ -852,6 +852,14 @@
   // dominates the gradient. Geometry mirrors the chapter's runnable demo, where
   // a negative is hardness*q + (1-hardness)*random.
   R['infonce-field'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
+    var L = zh ? {
+      query: '查询', positive: '正样本', loss: '损失', hardest: '最难负样本的相似度',
+      hardness: '负样本难度', temperature: '温度', description: '正样本与候选负样本的对比得分示意图'
+    } : {
+      query: 'query', positive: 'positive', loss: 'loss', hardest: 'hardest negative similarity',
+      hardness: 'negative hardness', temperature: 'temperature', description: 'Contrastive scores for a positive and candidate negatives'
+    };
     var q = { x: 0.28, y: 0.5 }, pos = { x: 0.46, y: 0.4 };
     var negs = [];
     for (var i = 0; i < 14; i++) {
@@ -889,12 +897,13 @@
       ctx.fillStyle = '#3dbd8a'; ctx.beginPath(); ctx.arc(X(pos.x), Y(pos.y), 7 * cv.dpr, 0, 7); ctx.fill();
       ctx.fillStyle = t.accent; ctx.beginPath(); ctx.arc(X(q.x), Y(q.y), 8 * cv.dpr, 0, 7); ctx.fill();
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('query', X(q.x), Y(q.y) - 13 * cv.dpr);
-      ctx.fillText('positive', X(pos.x), Y(pos.y) - 12 * cv.dpr);
-      read.textContent = 'loss ' + loss.toFixed(2) + '  ·  hardest negative similarity ' + maxs.toFixed(2);
+      ctx.fillText(L.query, X(q.x), Y(q.y) - 13 * cv.dpr);
+      ctx.fillText(L.positive, X(pos.x), Y(pos.y) - 12 * cv.dpr);
+      read.textContent = L.loss + ' ' + loss.toFixed(2) + '  ·  ' + L.hardest + ' ' + maxs.toFixed(2);
+      cv.c.setAttribute('aria-label', L.description + (zh ? '。' : '. ') + read.textContent);
     }
-    host.appendChild(slider('negative hardness', 0, 0.92, 0.01, hard, function (v) { hard = v; draw(); }).wrap);
-    host.appendChild(slider('temperature', 0.08, 0.6, 0.01, tau, function (v) { tau = v; draw(); }).wrap);
+    host.appendChild(slider(L.hardness, 0, 0.92, 0.01, hard, function (v) { hard = v; draw(); }).wrap);
+    host.appendChild(slider(L.temperature, 0.08, 0.6, 0.01, tau, function (v) { tau = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };

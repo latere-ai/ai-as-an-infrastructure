@@ -154,9 +154,18 @@ test("the viz runtime registers the infonce-field component", () => {
   expect(rt).toMatch(/R\['infonce-field'\]\s*=\s*function/);
 });
 
-test("ch27 embeddings-representation uses infonce-field in both languages", () => {
+test("Chapter 45 embeddings-representation uses infonce-field in both languages", () => {
   expect(src("en/orchestration/09-embeddings-representation.qmd")).toContain('data-viz="infonce-field"');
   expect(src("zh/orchestration/09-embeddings-representation.qmd")).toContain('data-viz="infonce-field"');
+  expect(src("zh/orchestration/09-embeddings-representation.qmd")).toContain('data-lang="zh"');
+});
+
+test("infonce-field localizes its labels, controls, and live summary", () => {
+  const body = rt.slice(rt.indexOf("R['infonce-field']"), rt.indexOf("R['comparison-explorer']"));
+  for (const label of ["查询", "正样本", "损失", "最难负样本的相似度", "负样本难度", "温度"]) {
+    expect(body).toContain(label);
+  }
+  expect(body).toContain("host.getAttribute('data-lang') === 'zh'");
 });
 
 test("the viz runtime registers the comparison-explorer component with both datasets", () => {

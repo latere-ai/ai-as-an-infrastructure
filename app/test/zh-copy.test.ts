@@ -805,7 +805,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/09-embeddings-representation.qmd",
-      ["生成器的隐藏状态不适合作为度量空间", "对齐与均匀", "查询与文档交互的位置", "负样本的选择是核心训练变量", "网上挖掘文本对", "解码器即嵌入器"],
+      ["带版本的评分接口", "距离近本身并不意味着", "训练数据定义何为相关", "困难错误负样本", "派生内容，不是匿名化内容", "模型选择取决于"],
     ],
     [
       "en/orchestration/10-context-engineering.qmd",
