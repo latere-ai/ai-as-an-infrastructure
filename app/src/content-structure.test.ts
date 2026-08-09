@@ -692,7 +692,7 @@ test("generative adaptation and reasoning first uses define the method locally",
     ["en/adaptation/04-dpo-variants.qmd", "@gls-kto drops the paired-data requirement by learning from good/bad labels"],
     ["zh/adaptation/04-dpo-variants.qmd", "@gls-kto改从好/坏标签学习，去掉成对数据要求"],
     ["en/reasoning/01-eliciting-reasoning.qmd", "@gls-cot, a written chain of intermediate reasoning steps"],
-    ["zh/reasoning/01-eliciting-reasoning.qmd", "@gls-cot，也就是写出来的一串中间推理步骤"],
+    ["zh/reasoning/01-eliciting-reasoning.qmd", "@gls-cot，即一条写出来的中间推理步骤链"],
     // The lock spans the nested gloss of "baseline" the readability pass added.
     ["en/reasoning/05-training-to-reason.qmd", "@gls-rloo, REINFORCE Leave-One-Out, treats each whole response as one sampled action"],
     ["zh/reasoning/05-training-to-reason.qmd", "@gls-rloo是两种策略梯度变体，它们从一组采样里计算基线（用来判断某个结果是否好于寻常的参照值）"],

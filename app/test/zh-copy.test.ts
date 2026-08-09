@@ -672,7 +672,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/01-eliciting-reasoning.qmd",
-      ["@gls-cot，也就是写出来的一串中间推理步骤，管用", "采样许多条链再投票更稳", "问题存在可探索分支", "验证器则是把 best-of-N"],
+      ["改变模型回答，不一定要改权重", "属于推断过程，而不是训练写入的新能力", "自一致性会采样多条链，再选择答案众数", "候选集必须先覆盖至少一个可接受的答案，选择器还必须认出它", "可见推理是工作产物，不是证明"],
     ],
     [
       "en/reasoning/02-structured-reasoning-search.qmd",
