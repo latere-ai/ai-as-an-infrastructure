@@ -877,7 +877,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/evaluation/06-evaluating-agents.qmd",
-      ["智能体分数衡量的是「模型加运行框架」", "按结果而非路径来评分", "与智能体保持对抗", "独立、可核查的信号，胜过一份自我报告"],
+      ["智能体不只会生成回答", "定义受测系统", "分开评测状态与约束", "一次尝试不代表可靠性"],
     ],
     [
       "en/evaluation/07-operational-evaluation.qmd",
