@@ -656,7 +656,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/adaptation/07-synthetic-data-self-improvement.qmd",
-      ["训练信号就必须来自别处", "数据飞轮", "每个回路都有自己的上限", "受判断者质量所界定"],
+      ["合成数据有用，是因为生成成本低", "什么证据足以让一条生成记录安全地进入训练", "这些列中的选择可以自由组合", "采样创造机会，不创造正确性", "独立留出集必须位于数据构造之外"],
     ],
     [
       "en/adaptation/index.qmd",
