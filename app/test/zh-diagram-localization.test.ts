@@ -123,8 +123,9 @@ test("hand-authored zh diagrams do not keep English explanatory labels", () => {
   expect(security).not.toContain("User identity");
 
   const rag = read("zh/orchestration/08-rag-retrieval.qmd");
-  expect(rag).toContain('naive [label="朴素 RAG');
-  expect(rag).toContain("双编码器（检索）");
-  expect(rag).not.toContain("naive RAG");
+  expect(rag).toContain('source [label="来源 + ACL"]');
+  expect(rag).toContain('scope [label="已授权范围"]');
+  expect(rag).toContain('answer [label="回答、引用或不作答"]');
+  expect(rag).not.toContain('label="authorized scope"');
   expect(rag).not.toContain("bi-encoder (retrieve)");
 });

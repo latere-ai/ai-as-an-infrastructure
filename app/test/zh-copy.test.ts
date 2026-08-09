@@ -797,7 +797,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/08-rag-retrieval.qmd",
-      ["把一个问题变成几百个证据词元", "分块并索引", "嵌入查询", "检索并融合候选", "不断增长的上下文窗口"],
+      ["证据供应链", "检索不能保证答案为真", "经过授权的候选集合", "不可信数据，不是指令", "明确选择不作答"],
     ],
     [
       "en/orchestration/09-embeddings-representation.qmd",

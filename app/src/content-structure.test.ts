@@ -792,7 +792,7 @@ test("serving retrieval and evaluation first uses explain operational terms loca
     ["en/inference/05-structured-long-context.qmd", "@gls-constrained-decoding, the grammar-checked decode loop"],
     ["zh/inference/05-structured-long-context.qmd", "@gls-constrained-decoding，也就是带语法检查的解码循环"],
     ["en/orchestration/08-rag-retrieval.qmd", "@gls-bm25 lexical baseline, a sparse keyword-scoring method"],
-    ["zh/orchestration/08-rag-retrieval.qmd", "@gls-bm25 词法基线，也就是一种稀疏关键词打分方法"],
+    ["zh/orchestration/08-rag-retrieval.qmd", "@gls-bm25 是一种稀疏关键词评分方法"],
     // @gls-held-out already renders as "held-out set"; the gloss follows the term.
     ["en/evaluation/01-benchmarks.qmd", "@gls-held-out is data deliberately kept out of every training stage"],
     ["zh/evaluation/01-benchmarks.qmd", "@gls-held-out 指从每个训练阶段都排除在外的数据集"],
@@ -826,7 +826,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["en/infrastructure/08-the-machine-that-breaks.qmd", "@gls-mtbf, the expected interval between failures for the whole job"],
     ["zh/infrastructure/08-the-machine-that-breaks.qmd", "@gls-mtbf，也就是平均故障间隔"],
     ["en/orchestration/08-rag-retrieval.qmd", "@gls-rag puts a live, queryable corpus next to the model"],
-    ["zh/orchestration/08-rag-retrieval.qmd", "@gls-rag的做法，就是在模型旁边放一份实时、可查询的语料"],
+    ["zh/orchestration/08-rag-retrieval.qmd", "@gls-rag 在模型旁边放置一套实时、可查询的语料库"],
     ["en/ecosystem/03-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model], a common protocol for connecting models to tool servers"],
     ["zh/ecosystem/03-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model] 这种连接模型与工具服务器的公共协议"],
     ["en/practice/01-choosing-a-model.qmd", "@gls-gateway, a routing and policy layer for model calls"],

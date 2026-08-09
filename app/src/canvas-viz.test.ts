@@ -604,6 +604,14 @@ test("verification frontier chapter uses the interactive visualization in both l
 // Regression: the RRF "constant k" slider re-ranked nothing because the synthetic
 // dense/sparse lists made the fused order invariant to k over the whole slider
 // range. The data must produce a fused top-1 flip inside the slider's k range.
+test("rrf-fusion localizes its controls, status, columns, and document labels", () => {
+  const body = rt.slice(rt.indexOf("R['rrf-fusion']"), rt.indexOf("R['decision-tree']"));
+  for (const label of ["打乱稀疏排名", "融合首位：文档", "稠密", "稀疏", "融合", "文档", "RRF 常数 k"]) {
+    expect(body).toContain(label);
+  }
+  expect(body).toContain("host.getAttribute('data-lang') === 'zh'");
+});
+
 test("rrf-fusion default data makes the fused top-1 flip as k moves in range", () => {
   // Mirror the component's scoring on its default (rot = 0) state.
   const names = ["A", "B", "C", "D", "E"];
@@ -613,7 +621,7 @@ test("rrf-fusion default data makes the fused top-1 flip as k moves in range", (
   expect(sbMatch).not.toBeNull();
   const sp = sbMatch![1].split(",").map((s) => Number(s.trim()));
   // The slider's min/max define the in-range k values the user can reach.
-  const slMatch = rt.match(/slider\('RRF constant k', (\d+), (\d+),/);
+  const slMatch = rt.match(/slider\(L\.slider, (\d+), (\d+),/);
   expect(slMatch).not.toBeNull();
   const kMin = Number(slMatch![1]);
   const kMax = Number(slMatch![2]);
