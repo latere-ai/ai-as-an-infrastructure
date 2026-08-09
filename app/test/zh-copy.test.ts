@@ -1027,7 +1027,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/05-structured-long-context.qmd",
-      ["用@gls-fsm给 logits 做掩码", "预计算索引和跳跃式前向", "滑动窗口、@gls-attention-sink 这种开头词元持续吸引注意力的现象，与重击者驱逐", "查询感知策略"],
+      ["提供的保证却不同", "语法有效不等于取值正确", "长上下文有四项彼此独立的限制", "驱逐不可逆"],
     ],
     [
       "en/inference/06-serving-multimodal.qmd",

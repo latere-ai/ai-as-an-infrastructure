@@ -786,9 +786,9 @@ test("serving retrieval and evaluation first uses explain operational terms loca
     // @gls-fsm already renders as "finite-state machine (FSM)", so the gloss names
     // the machine's job instead of repeating the expansion.
     ["en/inference/05-structured-long-context.qmd", "@gls-fsm, a machine that tracks which grammar state the partial output is in"],
-    ["zh/inference/05-structured-long-context.qmd", "@gls-fsm给 logits 做掩码，也就是让一台记录语法走到了哪个状态的机器来决定下一个词元能是什么"],
+    ["zh/inference/05-structured-long-context.qmd", "@gls-fsm，也就是记录部分输出当前所处语法状态的机器"],
     ["en/inference/05-structured-long-context.qmd", "@gls-attention-sink behavior where early tokens keep attracting attention"],
-    ["zh/inference/05-structured-long-context.qmd", "@gls-attention-sink 这种开头词元持续吸引注意力的现象"],
+    ["zh/inference/05-structured-long-context.qmd", "@gls-attention-sink，即开头词元即使没有明确语义作用也持续吸引注意力的现象"],
     ["en/inference/05-structured-long-context.qmd", "@gls-constrained-decoding, the grammar-checked decode loop"],
     ["zh/inference/05-structured-long-context.qmd", "@gls-constrained-decoding，也就是带语法检查的解码循环"],
     ["en/orchestration/08-rag-retrieval.qmd", "@gls-bm25 lexical baseline, a sparse keyword-scoring method"],
