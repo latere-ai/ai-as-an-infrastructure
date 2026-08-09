@@ -728,7 +728,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/index.qmd",
-      ["答案确定之前额外投入的计算", "额外计算投入在哪里", "谁在检查它"],
+      ["推理是在答案确定之前投入计算的一种方式", "额外工作的成本由哪一层承担", "由谁核查"],
     ],
     [
       "en/orchestration/01-training-agents-to-act.qmd",
