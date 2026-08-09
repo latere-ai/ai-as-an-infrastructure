@@ -332,7 +332,7 @@ test("abbreviations and decoding methods are defined at first use", () => {
     ["en/infrastructure/01-accelerators-networking.qmd", "The @gls-hbm, high-bandwidth memory packaged beside the accelerator"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "紧贴加速器裸片的@gls-hbm供给单块芯片"],
     ["en/inference/03-faster-decoding.qmd", "@gls-speculative-decoding is proposal-and-verification with a correction rule"],
-    ["zh/inference/03-faster-decoding.qmd", "@gls-speculative-decoding就是这个模式的精确版本"],
+    ["zh/inference/03-faster-decoding.qmd", "@gls-speculative-decoding是一种“提出候选、再验证候选”的方法，它通过修正规则保持目标模型的输出分布不变"],
     ["en/generative/03-speech-and-voice.qmd", "@gls-tts, the task of synthesizing speech from text"],
     ["zh/generative/03-speech-and-voice.qmd", "@gls-tts，也就是从文本合成语音的任务"],
   ];

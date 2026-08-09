@@ -1011,7 +1011,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/03-faster-decoding.qmd",
-      ["一次目标传播验证多个猜测", "@gls-speculative-decoding", "Medusa、Hydra、EAGLE 系列", "小批大小的内存受限场景"],
+      ["生成虽有顺序依赖，验证可以并行", "修正拒绝采样保持目标分布不变", "候选来源、候选结构与接受策略是三项独立选择", "加速必须用实际耗时衡量", "调度器必须规划推测工作"],
     ],
     [
       "en/inference/04-quantization-kernels.qmd",
