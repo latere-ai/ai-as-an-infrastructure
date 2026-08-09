@@ -1003,7 +1003,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/02-memory-scheduling.qmd",
-      ["连续批处理消除静态批的浪费", "@gls-pagedattention 消除缓存碎片化", "基数树前缀缓存", "阶段拆分"],
+      ["从保留词元到物理块", "分配是词元计划的一部分", "共享前缀会改变块的所有权", "内存压力需要明确策略", "只有数据路径划算时才移动 KV 状态"],
     ],
     [
       "en/inference/03-faster-decoding.qmd",
