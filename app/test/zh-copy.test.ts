@@ -909,7 +909,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/03-security-authorization.qmd",
-      ["带着某人的授权在世界里行动", "长期存在的宽泛令牌，加上一次@gls-prompt-injection，也就是藏在不可信内容里的指令，就等于一次入侵", "身份与治理", "经过验证的主体的下游"],
+      ["智能体可以提出动作", "身份验证确认调用方的声明", "有效权限是多项授权的交集", "运行契约"],
     ],
     [
       "en/safety/04-runtime-safety.qmd",

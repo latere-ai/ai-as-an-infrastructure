@@ -304,6 +304,21 @@ test("the viz runtime registers judge-kappa, outlier-quant, minhash-buckets, bla
   }
 });
 
+test("blast radius localizes its controls and accessible live summary", () => {
+  const start = rt.indexOf("R['blast-radius']");
+  const end = rt.indexOf("R['lora-lowrank']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("host.getAttribute('data-lang')");
+  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  for (const phrase of ["令牌", "长期令牌", "单次能力令牌", "可达", "个资源", "有效期", "范围宽度", "有效期（分钟）"]) {
+    expect(component).toContain(phrase);
+  }
+  expect(component).toContain("cv.c.setAttribute('role', 'img')");
+  expect(component).toContain("cv.c.setAttribute('aria-label'");
+  expect(src("zh/safety/03-security-authorization.qmd")).toContain('data-lang="zh"');
+});
+
 test("outlier quantization uses a correct signed INT4 range and explicit scale groups", () => {
   const start = rt.indexOf("R['outlier-quant']");
   const end = rt.indexOf("R['minhash-buckets']", start);

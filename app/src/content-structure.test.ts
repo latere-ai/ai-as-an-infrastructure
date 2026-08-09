@@ -810,7 +810,7 @@ test("serving retrieval and evaluation first uses explain operational terms loca
 test("safety infrastructure and practice first uses explain operational terms locally", () => {
   const required = [
     ["en/safety/03-security-authorization.qmd", "@gls-prompt-injection, an instruction hidden in untrusted content"],
-    ["zh/safety/03-security-authorization.qmd", "@gls-prompt-injection，也就是藏在不可信内容里的指令"],
+    ["zh/safety/03-security-authorization.qmd", "@gls-prompt-injection，即藏在不受信任内容中的指令"],
     ["en/safety/05-adversarial-robustness.qmd", "@gls-jailbreak attacks, prompts designed to bypass refusal"],
     ["zh/safety/04-runtime-safety.qmd", "用@gls-jailbreak，也就是绕过拒绝边界的提示"],
     ["zh/safety/05-adversarial-robustness.qmd", "@gls-jailbreak攻击，也就是绕过拒绝边界的提示"],

@@ -1247,10 +1247,16 @@
   // the scope and the reachable set fans out; a longer TTL brightens the exposure.
   // A short-lived capability token, minted per call, collapses the radius to one.
   R['blast-radius'] = function (host) {
+    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
+    var L = zh
+      ? { token: '令牌', standing: '长期令牌', capability: '单次能力令牌', reachable: '可达', of: '个资源，共', ttl: '有效期', min: '分钟', scope: '范围宽度', ttlSlider: '有效期（分钟）', description: '令牌可达资源范围的示意图' }
+      : { token: 'token', standing: 'standing token', capability: 'single-call capability token', reachable: 'reachable', of: 'of', ttl: 'TTL', min: 'min', scope: 'scope breadth', ttlSlider: 'TTL (minutes)', description: 'Diagram of resources reachable by a token' };
     var scope = 0.5, ttl = 30, mode = 'standing', N = 18, cols = 6, rows = 3;
     var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
+    read.setAttribute('aria-live', 'polite');
     bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 280);
+    cv.c.setAttribute('role', 'img');
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
       ctx.clearRect(0, 0, W, H);
@@ -1267,13 +1273,18 @@
       }
       ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(ax, ay, 11 * cv.dpr, 0, 7); ctx.fill();
       ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('token', ax, ay - 16 * cv.dpr);
-      btn.textContent = 'token: ' + mode;
-      read.textContent = 'reachable ' + reach + ' of ' + N + ' resources · TTL ' + Math.round(ttl) + ' min';
+      ctx.fillText(L.token, ax, ay - 16 * cv.dpr);
+      var modeLabel = mode === 'standing' ? L.standing : L.capability;
+      var summary = zh
+        ? L.reachable + ' ' + reach + ' ' + L.of + ' ' + N + ' 个资源 · ' + L.ttl + ' ' + Math.round(ttl) + ' ' + L.min
+        : L.reachable + ' ' + reach + ' ' + L.of + ' ' + N + ' resources · ' + L.ttl + ' ' + Math.round(ttl) + ' ' + L.min;
+      btn.textContent = L.token + ': ' + modeLabel;
+      read.textContent = summary;
+      cv.c.setAttribute('aria-label', zh ? L.description + '。' + modeLabel + '，' + summary : L.description + '. ' + modeLabel + '. ' + summary);
     }
     btn.addEventListener('click', function () { mode = (mode === 'standing') ? 'capability' : 'standing'; draw(); });
-    host.appendChild(slider('scope breadth', 0.05, 1, 0.05, scope, function (v) { scope = v; draw(); }).wrap);
-    host.appendChild(slider('TTL (minutes)', 1, 240, 1, ttl, function (v) { ttl = v; draw(); }).wrap);
+    host.appendChild(slider(L.scope, 0.05, 1, 0.05, scope, function (v) { scope = v; draw(); }).wrap);
+    host.appendChild(slider(L.ttlSlider, 1, 240, 1, ttl, function (v) { ttl = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };
