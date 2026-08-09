@@ -330,7 +330,7 @@ test("specialized practice terms get local definitions before use", () => {
 test("abbreviations and decoding methods are defined at first use", () => {
   const required = [
     ["en/infrastructure/01-accelerators-networking.qmd", "The @gls-hbm, high-bandwidth memory packaged beside the accelerator"],
-    ["zh/infrastructure/01-accelerators-networking.qmd", "紧贴加速器裸片的@gls-hbm供给单块芯片"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "封装在加速器旁的 @gls-hbm，也就是高带宽内存"],
     ["en/inference/03-faster-decoding.qmd", "@gls-speculative-decoding is proposal-and-verification with a correction rule"],
     ["zh/inference/03-faster-decoding.qmd", "@gls-speculative-decoding是一种“提出候选、再验证候选”的方法，它通过修正规则保持目标模型的输出分布不变"],
     ["en/generative/03-speech-and-voice.qmd", "@gls-tts, the task of synthesizing speech from text"],
@@ -816,7 +816,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["en/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning, a process that aims to remove the influence of specified training data from a trained model"],
     ["zh/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning，也就是试图从已训练模型中移除指定训练数据影响的过程"],
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, remote direct memory access, lets a network adapter transfer data"],
-    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-rdma，也就是绕过 CPU 直接读写远端内存"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-rdma，也就是远程直接内存访问，允许网络适配器直接在已注册的内存区域之间传输数据"],
     ["en/infrastructure/05-the-compute-frontier.qmd", "@gls-cowos package: an advanced package that places compute chiplets and HBM"],
     // The zh twin introduces before use: the interposer is described, then named.
     ["zh/infrastructure/05-the-compute-frontier.qmd", "并排铺在一块硅中介层上，这正是 @gls-cowos 这类先进封装"],
@@ -847,9 +847,9 @@ test("audited leftover first uses define the role of the term in place", () => {
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod, a cluster of Google tensor processing units"],
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-ici, the inter-chip interconnect joining TPU chips"],
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-gpu cluster, a cluster that uses graphics processors as accelerators"],
-    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod 是 Google 加速器集群一侧的对应物"],
-    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-ici，也就是 pod 内部的芯片间互连"],
-    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-gpu 集群，也就是用图形处理器作加速器的集群"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-tpu pod，也就是由 Google 张量处理单元组成的集群"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-ici，也就是连接 TPU 芯片的芯片间互连"],
+    ["zh/infrastructure/01-accelerators-networking.qmd", "@gls-gpu 集群，也就是使用图形处理器作为加速器的集群"],
     ["en/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc lets the run continue while producing subtly wrong numbers without an explicit crash"],
     ["zh/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc，也就是不崩溃却悄悄写出错误数字的静默数据损坏"],
     ["en/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped substitute for a provider key"],

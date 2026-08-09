@@ -1051,7 +1051,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/01-accelerators-networking.qmd",
-      ["带宽层级", "张量并行组几乎不越过 NVLink 边界", "模型 FLOPs 利用率"],
+      ["加速器规格不能预测应用性能", "瓶颈都可能转移", "测量完整系统"],
     ],
     [
       "en/infrastructure/04-orchestration-data-infra.qmd",

@@ -1,216 +1,216 @@
 # 加速器与网络 {#sec-accelerators-networking}
 
-一次训练运行的成败取决于带宽，而非峰值 FLOPs。更有用的视角是一套带宽层级：紧贴加速器裸片的@gls-hbm供给单块芯片，NVLink 与 NVSwitch 连接节点内加速器，InfiniBand 或 RoCE 在节点之间搬运字节。正是这套层级解释了为什么张量并行组几乎不越过 NVLink 边界，为什么数据并行与流水线并行可以跨节点，以及模型 FLOPs 利用率如何衡量硬件底座有没有被真正用上。
+加速器规格不能预测应用性能。峰值算力、内存容量和链路速率，只是特定约定下特定操作的上限。有意义的性能结论还必须说明工作负载、张量形状、精度、软件栈、拓扑和测量方法。任何一项发生变化，瓶颈都可能转移。
 
-## 一次规格表无法解释的运行
+本章建立一套用于分析这种转移的硬件模型。我们从一块加速器内部出发，沿着内存和互连追踪数据，最后说明如何测量完整系统。并行算法见 @sec-training-at-scale；集群控制、检查点和数据平面属于 @sec-orchestration-data-infra。
 
-设想一次前沿运行铺在数千张加速器上连续跑数周。规格表许诺了一个峰值算术速率，可这次运行只交付了其中一小部分。缺失的那一块，很少是矩阵乘法单元因为没有工作可做而闲置。缺失的是这些单元所等待的字节：一块芯片访问自身显存有多快、机箱内两块芯片交换数据有多快、跨机箱交换数据又有多快。这三个数字每往外走一步就相差一个数量级以上，而一个并行轴一旦需要的通信量超出其层级所能负担，就会拖住整个集合通信，也就是那种跨设备协同的通信操作。
+## 加速器究竟加速什么
 
-所以只看规格表上的峰值 FLOPs 会把问题看偏。更合适的起点是它下面那套带宽层级，因为每一个布局决策，本质上都在问某次交换应该落在哪一层。这里的硬件底座包括加速器、互连层级，以及说明这一底座有没有被用上的核心数字，MFU。建立在其上的并行算法属于 @sec-training-at-scale；集群编排、检查点与数据层则属于 @sec-orchestration-data-infra。
+加速器并不是一个巨大的算术单元。主机 CPU 启动程序、处理操作系统工作，并发起设备内核。设备内部则组合了通用并行执行单元、内存控制器、缓存和专用矩阵引擎。在 NVIDIA GPU 上，线程组按照单指令多线程（single-instruction, multiple-thread，SIMT）编程模型执行。其他厂商采用不同的名称与执行细节，因此不能把 SIMT 当成通用的加速器指令集 [@nvidia2026cuda]。
 
-## 三层带宽
+矩阵引擎执行分块矩阵乘加。不同架构的分块形状、接受的输入格式、累加精度和指令语义并不相同。脉动阵列是一种可能的数据流设计，其中数值按节拍在处理单元网格中传递。Google 第一代 TPU 使用了公开记录的脉动矩阵单元，但这个事实不能证明所有 GPU 矩阵引擎或后续加速器都采用相同的物理实现 [@kung1982systolic; @jouppi2017tpu]。
 
-这台机器是一套带宽层级。顺着一个字节从裸片一路向外，就能看清每一层为何存在、又能容纳什么。
+内核是把硬件变成实际工作的可执行单元。性能取决于张量维度是否适合可用的分块形状、内存访问是否合并、分支是否发散，以及是否有足够多彼此独立的工作占满设备。低精度输入可以减少存储与流量，原生低精度矩阵指令也可以提高峰值算力，但这些收益需要内核和形状与之匹配。精度转换、缩放、非矩阵运算和数值保护仍然会产生真实成本 [@micikevicius2022fp8]。同样，只有工作负载确实采用了规定的稀疏模式和受支持的指令路径，结构化稀疏峰值才有意义。稠密峰值与稀疏峰值不能互换。
 
-最内的一层是芯片及其显存。一块加速器把巨大的矩阵乘法吞吐能力，与紧贴裸片的@gls-hbm配在一起。前向与反向的矩阵乘法都从 HBM 读入数据，因此往往是 HBM 带宽、而非原始 FLOPs，决定了一个内核可达的速率。
+## 屋顶线是上界，不是诊断
 
-拖动曲线，看看为何一个每取一字节只做很少工作的内核会停在带宽受限处，达不到规格表许诺的峰值 FLOPs。
+屋顶线模型在一个明确指定的内存边界上，把算术运算与数据移动联系起来 [@williams2009roofline]。其中，$F$ 表示内核执行的浮点运算次数，$Q$ 表示跨越该边界传输的字节数。两者之比为
 
-```{=html}
-<figure id="fig-accelerators-networking-curve">
-<div class="viz" data-viz="curve" data-family="roofline" data-xlabel="每读取字节 FLOPs" data-ylabel="可达到 FLOPs" data-plabel="峰值 FLOPs 上限" data-pmin="2" data-pmax="12" data-p="6"></div>
-<figcaption>一个内核可达到的吞吐，随它每从 HBM 拉取一字节所做的算术量而上升，达到硬件峰值 FLOPs 后转为平台。</figcaption>
-</figure>
-```
+$$
+I=\frac{F}{Q}
+$$
 
-下一层是节点内：一个机箱里的那几块加速器。在 NVIDIA 硬件上，它们用 NVLink 这种专用芯片互连，再配上 NVSwitch 连接起来；NVSwitch 让节点内每块加速器都能以完整的 NVLink 带宽访问其他任一块，而不必走更慢的 PCIe 总线。这一层最适合安放通信需求最高的轴，因为 NVLink 带宽足够高，可以把一次集合通信藏在计算之下。一次集合通信究竟能不能藏住，取决于一个比值，正如 @fig-accelerators-networking-2 所勾画：只要一步的计算多于通信，集合通信就完全消失在计算之下；而节点间网络之所以力有不逮，恰恰是因为它的字节昂贵到足以留下一部分通信暴露在外。
+其中，$I$ 是以每字节 FLOPs 表示的算术强度。$P_{\mathrm{peak}}$ 表示所选指令和精度下的峰值算术吞吐量，$B_{\mathrm{mem}}$ 表示同一边界上的可持续带宽。由此得到上界
 
-![集合通信被计算隐藏的比例随计算与通信之比变化的示意图，取自 Shoeybi et al. (2019) 与 Narayanan et al. (2021) 的思路。NVLink 层处于比值高、集合通信完全消失之处；节点间网络处于字节更昂贵之处，因此一部分通信仍暴露在外。](/figures/accelerators-networking-2.svg){#fig-accelerators-networking-2}
+$$
+P_{\mathrm{achieved}} \le
+\min\!\left(P_{\mathrm{peak}},\;I B_{\mathrm{mem}}\right).
+$$
 
-最外的一层是节点间：机箱通过数据中心网络彼此通信。这里通常使用 InfiniBand 或 RoCE（RDMA over Converged Ethernet），以胖树或 rail-optimized 这样的拓扑连接，每块加速器配一张网卡（NIC）来设定每设备的注入带宽。这一层每字节比 NVLink 慢一个数量级，因此只有那些通信节俭的轴才负担得起跨越它。
+两个上限在屋脊点相交，其中 $I^*$ 表示算术强度的分界值：
 
-```{dot}
-//| label: fig-accelerators-networking-tiers
-//| fig-cap: "训练集群的三层带宽层级。每往外走一步，从 HBM 到 NVLink 再到节点间网络，每字节带宽大致下降一个数量级。"
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  compound=true;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+$$
+I^*=\frac{P_{\mathrm{peak}}}{B_{\mathrm{mem}}}.
+$$
 
-  subgraph cluster_chip {
-    label="芯片 + HBM";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    A [label="加速器裸片"];
-    M [label="高带宽显存"];
-    A -> M [label="HBM 带宽"];
-  }
-  subgraph cluster_node {
-    label="节点内（一个机箱）";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    G1 [label="GPU"];
-    G2 [label="GPU"];
-    G1 -> G2 [label="NVLink / NVSwitch", dir=none];
-  }
-  subgraph cluster_cluster {
-    label="节点间（跨大厅）";
-    style=rounded;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontsize=10;
-    N1 [label="节点"];
-    N2 [label="节点"];
-    N1 -> N2 [label="InfiniBand / RoCE", dir=none];
-  }
-  A -> G1 [ltail=cluster_chip, lhead=cluster_node];
-  G1 -> N1 [ltail=cluster_node, lhead=cluster_cluster];
-}
-```
+低于 $I^*$ 时，数据移动限制吞吐量；高于 $I^*$ 时，算术上限可能变得更严格。但这并不意味着运行时吞吐量就等于这个上界。内核启动成本、依赖关系、占用率、缓存未命中、负载不均、功耗限制和不受支持的分块形状，都会让实际吞吐量低于上界。
+
+字节数同样必须绑定到明确边界。若按高带宽内存（HBM）统计流量，一个内核可能具有很高的算术强度；若按某级缓存统计，强度却可能很低。报告中应说明 $Q$ 指的是 HBM 流量、主机与设备之间的流量，还是网络流量，并使用实测的可持续带宽，不能悄悄用厂商峰值代替。
+
+## 容量、带宽、延迟与流量
+
+在典型 GPU 内部，数据会在寄存器、由软件管理的共享内存、缓存和设备内存之间移动。封装在加速器旁的 @gls-hbm，也就是高带宽内存，提供大容量的设备内存池。这些层级承担不同职责：
+
+- **容量**决定权重、梯度、优化器状态、激活值、临时工作区、集合通信缓冲区和分配器余量能否全部容纳。服务还要加上 @sec-serving-problem 所述的 KV 缓存。
+- **带宽**限制在给定访问模式下，每秒有多少字节能够跨越某个边界。
+- **延迟**是依赖访问的结果可以使用之前需要等待的时间。并行性可以隐藏部分延迟，却无法绕过尚未满足的依赖。
+- **流量**是程序实际导致移动的字节数。内核融合、重计算、分片、缓存和数据布局都能改变流量，而链路的额定带宽可以保持不变。
+
+容量不等于带宽，二者也都不等于利用率。一项工作负载可能完全放得进 HBM，却因为反复流式读取数据而运行缓慢；另一项工作负载在同样的 HBM 配置上仍可能受算力限制。比较结果之前，必须明确流量在哪一层计数。
+
+数据继续向外移动时，也要保持同样的谨慎。下面的交互图展示的是概念层级，并非实测比例。不同系统的域大小、方向性、端点注入能力和可持续吞吐量各不相同。
 
 ```{=html}
 <figure id="fig-accelerators-networking-bandwidth-tiers">
 <div class="viz" data-viz="bandwidth-tiers"></div>
-<figcaption>同样这三层，这里显示每条通道上的一个字节。HBM 字节在封装内完成传输时，节点间字节仍在网络中前进；每往外一步就差一个数量级，正是它决定了哪种并行轴负担得起哪一层。相对速度，示意性。</figcaption>
+<figcaption>数据从矩阵引擎到另一块加速器，需要跨越多道边界。图中速率仅作示意；实际部署时应逐层测量。</figcaption>
 </figure>
 ```
 
-## 把并行映射到层级上
+## 互连是一套分层协议栈
 
-层级一旦固定，每个并行轴该放在哪里也就随之确定，而且取决于通信量，而非偏好。@gls-tp把单个矩阵乘法切分到各设备上，每层要用两次 all-reduce 交换激活；激活是设备间传递的中间值，all-reduce 则指每块设备把自己的部分结果与所有其他设备相加。因此它是对带宽需求最高的轴，通常受限于节点内的 NVLink 层 [@shoeybi2019megatron]。数据并行与流水线并行每步通信少得多：DP 每步只做一次梯度归约，PP 每个阶段边界只做一次激活交接，因此它们是被允许跨越节点间网络的轴 [@narayanan2021efficient]。MoE 的专家并行使用自己的 all-to-all 组，留到 @sec-moe-ssm-hybrids 再谈。由此得出的经验法则，TP 在节点内、DP/PP 跨节点，并不是一种约定，而是带宽鸿沟的必然后果，正如 @fig-accelerators-networking-axis-map 所展示。
+“网络”这个词掩盖了三个彼此独立的设计层：
 
-```{dot}
-//| label: fig-accelerators-networking-axis-map
-//| fig-cap: "并行轴按每步通信量排序，每个落到仍能把其集合通信隐藏在计算之下的最廉价层级。是带宽鸿沟而非约定，把 TP 指派给 NVLink、把 DP/PP 指派给节点间网络。"
-digraph axis_map {
-  bgcolor="transparent";
-  node [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
-  rankdir=LR;
-  node [shape=box, style=rounded, fontsize=11];
-  edge [fontsize=10];
+1. **物理拓扑。** 链路和交换机决定跳数、路径多样性、故障域、端点注入、对分带宽和超额订阅。即使端点链路很快，超额订阅的交换结构也不会因此变成无阻塞网络。
+2. **传输层。** PCIe 和 NVLink 在部分系统内部传输数据；InfiniBand 或采用 RoCE 的以太网则承担 scale-out 交换结构上的传输。每种传输覆盖的物理范围取决于具体产品。有些 NVSwitch 系统只连接一台小型服务器，新一代设计则能把 NVLink 域扩展到整个机架 [@nvidia2026nvl72]。
+3. **集合通信库。** NCCL 等软件把逻辑操作映射到现有路径与算法。它能感知拓扑，却无法凭空创造对分带宽，也无法修复糟糕的 rank 放置 [@nvidia2026nccl]。
 
-  subgraph cluster_axes {
-    label="并行轴（通信由重到轻）";
-    style=dashed;
-    color="#6b7280";
-    fontcolor="#6b7280";
-    fontname="Helvetica";
-    TP [label="TP\n每层两次 all-reduce"];
-    DP [label="DP\n每步一次梯度 all-reduce"];
-    PP [label="PP\n每阶段一次激活交接"];
-    TP -> DP -> PP [style=invis];
-  }
+@gls-rdma，也就是远程直接内存访问，允许网络适配器直接在已注册的内存区域之间传输数据，不让主机 CPU 进入数据路径。RoCE 在以太网上提供 RDMA 语义，InfiniBand 则在自己的网络协议栈中提供这些语义。GPU-direct 变体可以把 GPU 内存暴露给对端设备，但内存注册、PCIe 布局、驱动程序和同步仍然重要 [@nvidia2026gpudirect]。“绕过 CPU”描述的是数据路径，并不表示系统无需 CPU 完成设置或控制工作。
 
-  NVLink [label="NVLink 层\n节点内，带宽最高", style="rounded,filled", fillcolor="#f1ece1", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-  Network [label="节点间网络\nInfiniBand / RoCE，慢一个数量级", style="rounded,filled", fillcolor="#f1ece1"];
+因此，scale-up 和 scale-out 是有用的描述，却不是“节点内”和“节点外”的固定同义词。应记录真实的端点与交换机。不要把双向汇总的 NVLink 数字与单向 NIC 速率比较，也不要把交换机总带宽与单设备注入带宽混为一谈。
 
-  TP -> NVLink [label="必须留在内部"];
-  DP -> Network [label="可以跨越"];
-  PP -> Network [label="可以跨越"];
-}
+## 集合通信既有语义，也有算法
+
+集合通信的语义规定一组 rank 最终各自收到什么：
+
+- **广播（broadcast）：** 把一个根 rank 的缓冲区复制到所有 rank；
+- **全归约（all-reduce）：** 合并所有 rank 的数值，再把结果返回给每个 rank；
+- **全收集（all-gather）：** 在每个 rank 上拼接所有 rank 的分片；
+- **归约散布（reduce-scatter）：** 合并数值，并让每个 rank 保留一个结果分片；
+- **全交换（all-to-all）：** 每个 rank 都向其他每个 rank 发送不同的分片。
+
+这些语义并不决定算法。全归约可以使用环、树、分层组合或其他调度方式。集合通信库还可以把一项语义操作拆成多个阶段。在归约与布局一致时，归约散布后接全收集，等价于全归约 [@nvidia2026nccl]。
+
+一个简单的延迟与带宽模型可以显出其中的取舍。对于包含 $n$ 字节的消息，
+
+$$
+T_{\mathrm{msg}}(n)=\alpha+n\beta,
+$$
+
+其中，$\alpha$ 是每条消息的启动延迟，$\beta$ 是每字节所需秒数，也就是有效带宽的倒数。在由 $p$ 个 rank、等速链路组成，且没有争用和重叠的理想化环中，一次大消息全归约的时间近似为
+
+$$
+T_{\mathrm{ring}}(n,p)\approx
+2(p-1)\alpha+\frac{2(p-1)}{p}n\beta.
+$$
+
+对于大消息，环算法具有较高的带宽效率，因为每个 rank 大约传输 $2(p-1)n/p$ 字节；但它包含 $2(p-1)$ 个阶段，所以小消息的启动成本很高 [@patarasuk2009allreduce]。树算法会改变延迟项与流量模式。实际结果还会受到协议选择、分块、归约计算、路由、拥塞和链路不均的影响。
+
+只有依赖图暴露出独立工作，而且运行时成功地并发调度两者，通信才能与计算重叠。分桶大小、内核持续时间、流优先级、内存压力和并发流量都会改变可重叠窗口。这里，$T_{\mathrm{comp}}$ 表示独立测得的计算时间，$T_{\mathrm{comm}}$ 表示独立测得的通信时间，$T_{\mathrm{overlap}}$ 表示两者重叠的时间。核算恒等式
+
+$$
+T_{\mathrm{step}}=T_{\mathrm{comp}}+T_{\mathrm{comm}}-T_{\mathrm{overlap}},
+\qquad
+0\le T_{\mathrm{overlap}}\le
+\min(T_{\mathrm{comp}},T_{\mathrm{comm}})
+$$
+
+把条件明确写了出来。剖析结果可能显示，某次集合通信在一个模型形状中完全隐藏，却在批次大小、放置方式或软件改变后暴露出来。
+
+## 要放置的是通信图，不是缩写
+
+每种并行方法都会产生不同的通信图。下表列出的是常见模式，不是固定的操作次数。
+
+| <span style="white-space: nowrap">方法</span> | <span style="display: inline-block; min-width: 20em">常见流量</span> | <span style="display: inline-block; min-width: 24em">放置问题</span> |
+|---|---|---|
+| 张量并行 | 取决于具体形式，每层可能出现全归约、归约散布、全收集或点对点流量 | 频繁的激活流量能否放进实测的 scale-up 域，同时又不让小消息延迟成为主导因素？ |
+| 序列并行 | 在跨越序列维度的操作前后交换激活分片 | 节省的内存能否抵偿新增的集合通信和布局变化？ |
+| 上下文并行 | 在上下文分片间交换注意力键值或部分结果 | 序列长度、因果负载均衡，以及环或全交换流量应如何映射到拓扑？ |
+| 专家并行 | 用全交换完成分发与合并 | 放置与容量能否承受倾斜的专家负载和突发的对分带宽需求？ |
+| 数据并行 | 通常可与计算重叠的分桶梯度归约 | 能否负担一份完整模型副本？哪些分桶会暴露通信？ |
+| 完全分片数据并行 | 参数全收集与梯度归约散布，优化器状态也进行分片 | 更低的内存占用，是否足以补偿重复的参数流量和预取缓冲区？ |
+| 流水线并行 | 每个微批次都要在阶段边界传递前向激活和反向梯度 | 阶段平衡、边界张量大小与流水线气泡，是否足以支持增加更多阶段？ |
+
+Megatron 最初的张量并行布局是一个重要案例，不是普遍规律。在它采用的 Transformer 形式中，每一层的前向传播使用两次全归约，反向传播也包含相应的归约 [@shoeybi2019megatron]。后续组合会改变操作与重叠调度。数据并行系统可以使用全归约，也可以在 ZeRO 和完全分片设计下使用归约散布与全收集 [@rajbhandari2020zero]。流水线流量会随微批次重复出现，而不是每步只交接一次 [@narayanan2021efficient]。专家并行及其全交换行为见 @sec-moe-ssm-hybrids。
+
+实用的映射方法会测量或估算每条边的字节数、频率、延迟敏感度、节省的内存和可用重叠窗口，再把最重或对延迟最敏感的网格维度映射到足够快的物理维度。“TP 放在内部、DP 放在外部”只是一条常用的起始经验，并不是证明。面对机架级交换结构、非对称网络，或以上下文流量和专家流量为主的工作负载时，尤其不能把它当成定律。
+
+## TPU v4：一个边界明确的案例
+
+@gls-tpu pod，也就是由 Google 张量处理单元组成的集群，说明拓扑结论为什么必须标明硬件代际。TPU v4 使用 @gls-ici，也就是连接 TPU 芯片的芯片间互连，并借助光路交换机配置三维环面切片。扭转环面只是其中一种受支持的选择，交换机还能在部分组件不可用时重新配置路径 [@jouppi2023tpuv4]。这个结论只适用于 TPU v4，并不表示每一代 TPU pod 都使用同一种环面。
+
+GSPMD 是一套编译器分区系统。它把用户给出的分片注解传播到计算图中，并以逻辑设备网格为目标 [@xu2021gspmd]。它不会自行让物理拓扑变快，也无法消除多跳通信。同样，@gls-gpu 集群，也就是使用图形处理器作为加速器的集群，可以在 PCIe、NVLink、InfiniBand 或以太网上暴露多个逻辑网格。两种情况下，编译器和运行时都需要准确的物理映射。
+
+这里的结论只针对具体代际：必须把加速器架构、逻辑分片和物理拓扑放在一起理解。
+
+## 精度与可移植性是两份不同的契约
+
+精度改变的不只是一个数字。输入存储、乘法、累加精度、输出格式、缩放策略和归约精度都可能不同。例如，FP8 定义了 E4M3 和 E5M2 两种交换格式，但准确的训练方案还需要确定哪些张量采用这些格式，以及哪些位置需要更宽的累加精度或缩放 [@micikevicius2022fp8]。比较峰值时，必须采用同一种稠密或结构化稀疏约定，并确认工作负载实际使用了对应的指令路径。数值与内核方面的后果见 @sec-quantization-kernels。
+
+可移植性同样分为多层：源码兼容、数值正确、功能可用和性能可移植。一个框架后端也许能让同一模型在两类加速器上运行，但自定义内核、集合通信算法、受支持格式和最佳张量形状仍可能不同。应把模型与分片意图放在厂商适配层之上，隔离自定义内核，并在每个目标上重复同一套正确性与性能矩阵。
+
+## MFU 是一个核算比率
+
+模型 FLOPs 利用率（MFU）把有用模型工作的解析估算值，与所选硬件峰值进行比较 [@chowdhery2023palm]。其中，$F_{\mathrm{model}}$ 是每个全局步骤中有用模型 FLOPs 的估算值，$N_{\mathrm{device}}$ 是加速器数量，$P_{\mathrm{peak}}$ 是所声明精度及稠密或稀疏路径下的单设备理论峰值 FLOP/s，$t_{\mathrm{step}}$ 是实测的每步秒数。比率为
+
+$$
+\mathrm{MFU}=
+\frac{F_{\mathrm{model}}}
+{N_{\mathrm{device}}P_{\mathrm{peak}}t_{\mathrm{step}}}.
+$$
+
+发布 MFU 时，应同时公开 FLOP 计数约定、全局批次与序列形状、用于峰值计算的声明精度、加速器数量和计时边界。使用稠密峰值计算的 MFU，不能与使用结构化稀疏峰值计算的 MFU 直接比较。稀疏模型和混合专家模型还需要说明活跃参数和路由词元的明确约定。
+
+硬件 FLOPs 利用率（HFU）使用已执行算术量的估算值作为分子，其中可能包含重物化，也称为激活重计算。如果核算口径一致，重物化会让 HFU 高于 MFU，因为硬件重复执行了部分前向工作。二者都不是硬件计数器，MFU 也不是诊断结果。MFU 偏低可能源于内存流量、暴露的集合通信、流水线气泡、小内核、输入停顿、热降频、故障，或不一致的 FLOP 估算。应同时报告每秒词元数、步时分布、实际内存与集合通信带宽、内核时间线、功耗、时钟频率和错误遥测。
+
+## 从组件一直测到完整运行
+
+应按证据阶梯逐层测量。完整模型基准只能说明某处发生了变化，组件测量才能定位变化落在哪一道边界。
+
+<figure id="fig-accelerators-networking-stepper">
+<div class="viz" data-viz="stepper" data-lang="zh">
+<div data-chip="健康" data-title="1 · 确认系统健康">测量速度之前，先确认设备数量、内存容量、ECC 状态、链路状态、时钟频率、功耗上限和拓扑。</div>
+<div data-chip="内存" data-title="2 · 测量本地数据移动">用具有代表性的大小，测量可持续 HBM 带宽、缓存敏感内核、主机到设备复制和点对点路径。</div>
+<div data-chip="集合通信" data-title="3 · 扫描通信性能">针对不同消息大小、组形状、rank 放置和并发组，扫描全归约、归约散布、全收集和全交换。</div>
+<div data-chip="内核" data-title="4 · 分析算子">运行具有代表性的张量维度与精度，并保留内核、启动、内存和同步时间线。</div>
+<div data-chip="模型" data-title="5 · 运行端到端负载">测量真实的批次、序列分布、分片方案、每秒词元数、MFU 口径，以及收敛或质量边界。</div>
+<div data-chip="长测" data-title="6 · 检验长期运行">运行足够长的时间，以观察尾部、拥塞、功耗与温度漂移、链路降级、故障恢复和检查点开销。</div>
+</div>
+<figcaption>只有把组件上限与端到端行为和长期运行连接起来，性能结论才可信。</figcaption>
+</figure>
+
+每项基准都应记录硬件 SKU 与修订版本；驱动程序与固件；编译器、框架和集合通信库版本；精度与稀疏模式；张量维度；批次与序列分布；消息大小；物理拓扑与超额订阅；rank 放置；算法与协议；预热轮次和测量轮次；单向还是双向口径；p50、p95 和 p99；并发流；以及功耗与温度。单节点微基准不能证明集群扩展能力。
+
+运行记录应保留足够的上下文，以便复现与比较结果：
+
+```yaml
+accelerator_system:
+  hardware: {device: ..., count: ..., memory: ..., power_limit: ...}
+  software: {driver: ..., firmware: ..., compiler: ..., framework: ..., collective_library: ...}
+  workload: {model_revision: ..., batch: ..., sequence_distribution: ..., precision: ..., flop_convention: ...}
+  topology: {scale_up_domain: ..., scale_out_fabric: ..., oversubscription: ..., rank_placement: ...}
+  measurements: {window: ..., warmup: ..., repetitions: ..., throughput: ..., mfu: ..., latency_percentiles: ...}
+  health: {link_errors: ..., ecc: ..., device_errors: ..., clocks: ..., power: ..., temperature: ...}
 ```
 
-## TPU 的岔路：环面而非交换机
+应把这些记录与同步的作业、rank、节点、加速器、NIC、交换机、机架供电和冷却域标识符关联起来。集合通信超时可能源于软件排序错误、rank 失效、链路降级或拥塞，单一利用率计数器无法区分这些原因。可靠性和静默故障见 @sec-machine-breaks；设施供电与冷却约束见 @sec-powering-ai。
 
-@gls-tpu pod 是 Google 加速器集群一侧的对应物，成本模型基于另一套 JAX/XLA，恰好说明上述带宽层级只是一种设计选择，而非一条自然定律。这些芯片通过@gls-ici，也就是 pod 内部的芯片间互连，与一台光路交换（OCS）连成一个环面拓扑，而不是交换式胖树，于是邻居到邻居的带宽充裕，切分也是通过 GSPMD 风格的注解与环面形状协同设计出来的，而不是事后再映射到一棵胖树上 [@xu2021gspmd]。同一个字节，在 @gls-gpu 集群，也就是用图形处理器作加速器的集群上，会穿过一台交换机，在 TPU pod 上却走向一个物理邻居，这正是那里带宽随局部性扩展的原因。
+### 回归场景
 
-## MFU：究竟用上了多少硬件
-
-说明这一切有没有奏效的核心数字，是模型 FLOPs 利用率。MFU 是模型实际所需的 FLOPs，除以硬件在同一段实际耗时内本可交付的峰值 FLOPs：
-
-$$
-\mathrm{MFU} = \frac{\text{model FLOPs per step}}{\text{peak hardware FLOPs} \times \text{step time}}
-$$
-
-它只计入模型有用的那部分算术。相近的指标 @gls-hfu，还把硬件确实做了、但模型并非严格需要的工作也算进来，其中最显著的是激活重算带来的那些额外前向传播；这也正是为何只要开了重算，HFU 就会高于 MFU。MFU 回答的是预算关心的问题：已经购买和供电的算术能力中，有多少真正推动了模型训练。
-
-## 这些层级为何长成这样
-
-互连层级之所以演化成今天这样，是因为带宽鸿沟扩大的速度，超过了任何单一互连所能弥合的速度。早期的多 GPU 训练倚靠 PCIe，可它对切分一个矩阵乘法已经太慢，于是 NVLink、继而 NVSwitch 被引入，正是为了让节点内这一层快到足以容纳张量并行 [@shoeybi2019megatron]。加速器族系也在扩展原生精度集合：每一代都拓宽矩阵乘法单元可以直接执行的格式，Hopper 级及更新的硬件加入了 fp8，让同一块硅每搬运一字节交付更多矩阵乘法吞吐 [@micikevicius2022fp8]（其内核层面的后果在 @sec-quantization-kernels）。网络一侧，InfiniBand 与 RoCE 收敛到 @gls-rdma，也就是绕过 CPU 直接读写远端内存的远程直接内存访问，以及 rail-optimized 拓扑上，后者给每块加速器一条通往其它节点对端的专用路径，使节点间这一层得以增长，而不必让每条流争抢同一批交换端口。TPU pod 则沿一条完全不同的路线演化，选了环面而非交换式底座，使带宽随局部性扩展。
+- **小消息延迟：** 逐步减小消息，直到启动成本占据主导，并验证所选集合通信算法与 p99 仍然可以接受。
+- **大消息带宽：** 扫描超过缓存容量的消息，确认可持续带宽而不是峰值带宽，且不能假定集群会线性扩展。
+- **超额订阅上行链路：** 把相互通信的 rank 放在受限切面的两侧，并验证准入、路由和性能告警。
+- **链路降级：** 降低一条路径的速率或移除该路径，确认拓扑发现、重新路由行为及其造成的尾部延迟。
+- **rank 放置变化：** 在同一硬件上重新排列 rank，并检测通信切面变大造成的性能回归。
+- **集合通信超时：** 在测试作业中停止一个 rank 或故意违反集合通信顺序，并验证失败有界、能够诊断且完成清理。
+- **静默数据损坏：** 注入可检测的故障，确认端到端校验、隔离与恢复都生效，不能只依赖设备告警。
+- **热降频：** 运行长时间测试或采用受控功耗上限，确认时钟、功耗、温度、吞吐量和调度器证据始终保持关联。
+- **软件变更：** 修改一个驱动、编译器、内核或集合通信库版本，再以相同形状、放置和统计比较重跑测试。
+- **容量边界：** 逐步接近内存预算，并计入临时缓冲区和分配器余量，验证确定性的准入或失败行为。这个场景与 @sec-memory-scheduling 相连。
 
 ::: {.callout-important}
 ## 争议所在
-本章赖以建立的节点内与节点间之间的那条边界，本身正在移动。scale-up 域，即那组能以 NVLink 级带宽彼此通信的加速器，一直在越过单个机箱，朝机架级互连扩张。随着这个域增长，可负担的最大张量并行度也跟着增长，TP 留在一个小节点内的那条由来已久的法则随之削弱。未来到底是不断变大的 scale-up 域让 TP 横跨一个机架，还是继续倚靠更廉价的节点间网络、配以能容忍它的并行轴，目前尚无定论，而且取决于厂商。这条边界是今年硬件的一个属性，不是一条定律。
+
+scale-up 边界正在变化。机架级交换结构可以扩大频繁模型并行流量仍可承受的范围，但也会改变成本、功率密度、故障域和软件假设。scale-out 交换结构同样在进步，而并行方法也在减少、重塑或隐藏流量。不存在张量并行必须在某个固定设备数停止的永恒规则。答案是工作负载与实际部署系统的实测属性。
 :::
-
-## 每个轴各自的代价
-
-每个并行轴缓解一种不同约束，也支付一种不同成本；互连层级决定这些成本是否承受得起。
-
-- **张量并行对带宽。** TP 削减每设备的显存与延迟，代价是每层两次 all-reduce 消耗节点内带宽。这笔开销只有在 NVLink 上才承受得起，因此 TP 度以 NVLink 域为上限。一旦把它推过节点，all-reduce 就落到节点间网络上，在那里藏不进计算之下，只会表现为 MFU 损失。@fig-accelerators-networking-1 展示了这个临界点：TP 仍处在 NVLink 域之内时，MFU 维持一段平台；一旦其度溢出到节点间网络上，就立刻下降。
-
-![模型 FLOPs 利用率随张量并行度增长的示意图，取自 Shoeybi et al. (2019) 与 Narayanan et al. (2021) 的思路。当 TP 仍处在 NVLink 域之内时，MFU 维持一段平台；一旦 all-reduce 溢出到每字节慢一个数量级的节点间网络上，就快速下降。](/figures/accelerators-networking-1.svg){#fig-accelerators-networking-1}
-
-改动 `nvlink_size` 与 `slowdown`，观察平台在何处结束、下降有多快。
-
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
-nvlink_size = 8       # 以 NVLink 带宽可达的加速器数
-peak = 0.55           # 通信被计算隐藏时的 MFU 平台
-slowdown = 10.0       # 节点间字节比 NVLink 贵这么多倍
-tp = np.arange(1, 33)
-# 一旦 TP 溢出，每步因暴露（未隐藏）的 all-reduce 而损失的比例
-comm = np.where(tp <= nvlink_size, 0.0, (tp - nvlink_size) / tp * (1 - 1 / slowdown))
-mfu = peak * (1 - comm)
-plt.plot(tp, mfu, marker='o')
-plt.axvline(nvlink_size, ls='--', color='gray', label='NVLink 边界')
-plt.xlabel('张量并行度'); plt.ylabel('MFU')
-plt.ylim(0, 0.6); plt.legend(); plt.title('TP 跨出节点后陡降')
-print('TP=8 的 MFU:', round(mfu[7], 3), ' TP=16 的 MFU:', round(mfu[15], 3))
-plt.show()
-```
-::::
-- **流水线并行对气泡。** PP 在带宽上廉价，每个阶段边界只有一次激活交接，因此能从容跨越节点，但要在每步的填充与排空处付出一个流水线气泡。
-- **MFU 对显存。** 重算在反向传播里重做前向工作，让一个更大的模型或更长的序列能够放进显存，这会提高 HFU 却拉低 MFU。究竟优化哪个数字，取决于约束落在显存还是吞吐上。
 
 ::: {.callout-tip}
 ## 下层约束
-这是本书里下层支配上层最清晰的一例。互连带宽鸿沟，NVLink 每字节比 InfiniBand 或 RoCE 快一个数量级，正是这道鸿沟设定了 @sec-training-at-scale 所能选取的最大张量并行度。一个并行布局，并不是先在白板上选定、再映射到硬件。是硬件层级决定了哪个轴被允许放在何处，而 TP 留在 NVLink 边界之内，就是这一决定在其上方算法上的直接印记。
+
+硬件确实会限制上层算法，但它通过一组约束共同限制，而不是只靠一个带宽比率：可用内存、可持续本地流量、集合通信延迟、对分带宽、拓扑、功耗和故障域。@sec-training-at-scale 选择的映射必须同时满足这些条件。随后，操作系统和调度器还要按照 @sec-memory-scheduling 的要求，保留设备局部性和内存余量。在实测通信图能够放进物理机器之前，纸面上的并行方案只是一项假设。
 :::
 
-## MFU 如何出现在时间线里
-
-在这些层级之间搬运字节的集合通信，由 NVIDIA 硬件上的 NCCL（在 AMD 上为 RCCL）提供，它把每个集合通信映射到拓扑上，根据各 rank 所在之处选择环或树，再把它路由到 NVLink 或网络上 [@nvidia2024nccl]。从业者很少直接调用它，调用的是并行框架。真正要读的是每步的剖析，因为 MFU 是从时间线里诊断出来的，而不是从损失曲线。没能藏进计算之下的暴露通信、过大的流水线气泡、过多的重算，还有未融合的内核，各自在达成与峰值 FLOPs 之间的差距里占去一份，而时间线正是每一份可见之处。
-
-@fig-accelerators-networking-flops-gap 把时间线读作一次从峰值 FLOPs 下降到 MFU 的过程。空闲时间，即一块设备等待暴露通信、或停在流水线气泡里的那段，是纯粹的损失。在硬件随后实际跑出的 FLOPs 中，重算做了模型并非严格需要的工作：这些工作把 HFU 抬到 MFU 之上，但只有有用的算术才计入那个真实数字。
-
-```{dot}
-//| label: fig-accelerators-networking-flops-gap
-//| fig-cap: "每步时间线展示了从峰值 FLOPs 到 MFU 的下降。暴露通信与流水线气泡是空闲损失；重算与未融合内核是硬件确实运行的工作，这正是 HFU 高于 MFU 的原因。"
-digraph flops_gap {
-  bgcolor="transparent";
-  node [fontname="Helvetica", color="#6b7280", fontcolor="#6b7280", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280"];
-  rankdir=TB;
-  node [shape=box, fontsize=11];
-  edge [fontsize=10];
-
-  peak [label="硬件峰值 FLOPs", style="filled", fillcolor="#f1ece1"];
-  busy [label="忙碌 FLOPs\n（设备未空闲）"];
-  hfu  [label="HFU：硬件运行的全部 FLOPs", style="filled", fillcolor="#f1ece1"];
-  mfu  [label="MFU：仅有用的模型 FLOPs", style="filled", fillcolor="#f1ece1", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.4];
-
-  idle    [label="空闲损失\n暴露通信 + 流水线气泡", shape=note];
-  recomp  [label="重算 + 未融合内核\n运行了但并非严格需要", shape=note];
-
-  peak -> busy [label="减去空闲"];
-  busy -> hfu;
-  hfu  -> mfu [label="减去额外工作"];
-
-  peak -> idle [style=dashed, color="#6b7280", dir=none];
-  hfu  -> recomp [style=dashed, color="#6b7280", dir=none];
-}
-```
+这套方法可以浓缩成四步：指明边界、定义口径、测量真实形状，并保留上下文。只有完成这四步，峰值 FLOPs、链路速率和 MFU 才有明确含义。
 
 ## 延伸阅读
 
