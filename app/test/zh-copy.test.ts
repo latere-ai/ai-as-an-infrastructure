@@ -933,7 +933,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/06-privacy-provenance-unlearning.qmd",
-      ["训练集的一次有损压缩", "服务时泄露它在训练时吸收的内容", "上游或一次重训练里，而不是输出端", "@gls-machine-unlearning，也就是近似地从已训练权重里移除某个已学事实，能承诺什么、不能承诺什么", "记忆不是学习之外额外叠上的 bug"],
+      ["隐私、机器遗忘和来源回答的是三个不同的问题", "训练数据隐私关心的是", "机器遗忘关心的是", "来源关心的是", "这三种承诺不能相互推出"],
     ],
     [
       "en/safety/08-law-regulation-policy.qmd",
