@@ -703,7 +703,14 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/04-verifiers-process-supervision.qmd",
-      ["结果、过程", "验证器阶梯", "生成式验证器", "检查器变成目标"],
+      [
+        "只有当系统能够识别哪一份解答值得信任",
+        "三个彼此独立的问题",
+        "结果监督与过程监督",
+        "候选选择需要明确约定",
+        "如何评估验证器",
+        "当检查器成为优化目标",
+      ],
     ],
     [
       "en/reasoning/05-training-to-reason.qmd",
