@@ -765,7 +765,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/02-agent-architectures.qmd",
-      ["规划、记忆、工具使用", "把推理和行动交织起来", "上一步行动暴露出的事实", "让一个文本生成器真正改变世界"],
+      ["封闭的决策循环", "工具调用只是动作接口的一种", "状态 $s_t$ 与模型上下文 $x_t$ 不是同一个对象", "规划和记忆是循环中的设计选择", "终止规则"],
     ],
     [
       "en/orchestration/03-memory-systems.qmd",
