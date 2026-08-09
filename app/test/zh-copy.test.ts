@@ -624,7 +624,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/adaptation/03-rlhf-reward-modeling.qmd",
-      ["人类比较上训练一个奖励模型", "用 @gls-ppo 针对这个奖励优化策略", "宪法式方法与", "@gls-rlaif 变体", "习得奖励需要 KL 约束"],
+      ["先用人类比较训练奖励模型", "用 @gls-ppo 针对这项奖励优化*策略*", "宪法式方法和", "@gls-rlaif 变体", "习得奖励需要 KL 约束"],
     ],
     [
       "en/adaptation/04-dpo-variants.qmd",
