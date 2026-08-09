@@ -189,9 +189,9 @@ test("the viz runtime registers the comparison-explorer component with both data
   expect(rt).toContain("'agent-frameworks-zh':");
 });
 
-test("the Chinese chapter retains its localized comparison explorer", () => {
+test("the current agent chapter no longer carries the obsolete comparison explorer", () => {
   expect(src("en/practice/05-agents-and-sandboxes.qmd")).not.toContain('data-set="agent-frameworks"');
-  expect(src("zh/practice/05-agents-and-sandboxes.qmd")).toContain('data-set="agent-frameworks-zh"');
+  expect(src("zh/practice/05-agents-and-sandboxes.qmd")).not.toContain('data-set="agent-frameworks-zh"');
 });
 
 test("the viz runtime registers nested-loops and bandwidth-tiers", () => {

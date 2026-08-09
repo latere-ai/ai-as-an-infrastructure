@@ -1178,7 +1178,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/05-agents-and-sandboxes.qmd",
-      ["循环原型", "工具协议", "沙箱边界", "密钥和模型访问", "受治理的接缝"],
+      ["智能体发布", "智能体执行契约", "模型只是这个系统中的一个组件", "可逆的部署"],
     ],
     [
       "en/practice/06-retrieval-and-documents.qmd",

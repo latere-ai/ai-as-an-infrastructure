@@ -319,7 +319,7 @@ test("specialized practice terms get local definitions before use", () => {
     ["en/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong generalization asks whether weak labels can elicit stronger latent capability"],
     ["zh/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong 泛化研究弱标注能否引出更强的潜在能力"],
     ["en/practice/05-agents-and-sandboxes.qmd", "a @gls-virtual-key issued by a @gls-gateway"],
-    ["zh/practice/05-agents-and-sandboxes.qmd", "模型走由@gls-gateway签发的@gls-virtual-key"],
+    ["zh/practice/05-agents-and-sandboxes.qmd", "使用由 @gls-gateway 签发的 @gls-virtual-key"],
   ];
 
   for (const [path, snippet] of required) {
@@ -852,7 +852,7 @@ test("audited leftover first uses define the role of the term in place", () => {
     ["en/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc lets the run continue while producing subtly wrong numbers without an explicit crash"],
     ["zh/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc，也就是不崩溃却悄悄写出错误数字的静默数据损坏"],
     ["en/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped substitute for a provider key"],
-    ["zh/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key，也就是短时效、限范围的模型密钥替身"],
+    ["zh/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key，也就是有明确范围和短有效期的提供商密钥替代物"],
     ["en/practice/10-reliability-nondeterministic.qmd", "@gls-sli, a quantitative indicator of one service property"],
     ["zh/practice/10-reliability-nondeterministic.qmd", "@gls-sli，也就是判断服务事件是否有效的指标"],
   ];
