@@ -782,7 +782,7 @@ test("the non-autoregressive chapter separates factorization diffusion and servi
 
 test("serving retrieval and evaluation first uses explain operational terms locally", () => {
   const required = [
-    ["zh/inference/01-serving-problem.qmd", "@gls-mqa（多查询注意力，让多个查询头共享同一套键/值头）"],
+    ["zh/inference/01-serving-problem.qmd", "@gls-prefill 阶段处理提示词并创建注意力状态"],
     // @gls-fsm already renders as "finite-state machine (FSM)", so the gloss names
     // the machine's job instead of repeating the expansion.
     ["en/inference/05-structured-long-context.qmd", "@gls-fsm, a machine that tracks which grammar state the partial output is in"],

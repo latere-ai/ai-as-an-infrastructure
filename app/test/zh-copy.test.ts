@@ -995,7 +995,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/01-serving-problem.qmd",
-      ["@gls-prefill先读完整个提示词", "@gls-decode一次只发出一个词元", "真正的目标是@gls-goodput", "KV 缓存"],
+      ["测量请求的完整生命周期", "预填充与解码处于不同运行区间", "KV 状态让内存成为接纳约束", "五种机制分别消除不同的浪费", "在负载下评估服务策略"],
     ],
     [
       "en/inference/02-memory-scheduling.qmd",
