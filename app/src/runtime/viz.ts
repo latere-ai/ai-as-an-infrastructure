@@ -2054,7 +2054,8 @@
       ctx.clearRect(0, 0, W, H);
       var w = normWeights(), ta = total(scores[0], w), tb = total(scores[1], w);
       var rows = [[labels.a, scores[0], ta], [labels.b, scores[1], tb]];
-      var maxWidth = W - 2 * pd - 92 * cv.dpr, rowH = 52 * cv.dpr, startY = pd + 18 * cv.dpr;
+      var labelWidth = 150 * cv.dpr;
+      var maxWidth = W - 2 * pd - labelWidth, rowH = 52 * cv.dpr, startY = pd + 18 * cv.dpr;
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left';
       rows.forEach(function (r, ri) {
         var x = pd + 88 * cv.dpr, y = startY + ri * rowH, acc = 0;

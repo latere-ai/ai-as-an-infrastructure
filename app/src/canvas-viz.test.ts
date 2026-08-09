@@ -371,6 +371,15 @@ test("the viz runtime registers the post-training adaptation components", () => 
   }
 });
 
+test("preference signal mixer reserves space for its score labels", () => {
+  const start = rt.indexOf("R['preference-signal-mixer']");
+  const end = rt.indexOf("R['verifier-threshold']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("labelWidth = 150 * cv.dpr");
+  expect(component).toContain("maxWidth = W - 2 * pd - labelWidth");
+});
+
 test("the viz runtime registers the mid-training bridge component", () => {
   expect(rt).toMatch(/R\['midtraining-bridge'\]\s*=\s*function/);
   expect(rt).toContain("introduction point");
