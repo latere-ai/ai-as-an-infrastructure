@@ -813,7 +813,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/10-context-engineering.qmd",
-      ["从提示工程改名为上下文工程", "更长的上下文窗口并不能单凭自身解决问题", "词元预算", "工具协议", "智能体实际能做什么"],
+      ["上下文工程决定模型在一次推断中能看到什么", "有界且带版本的视图", "先授权，再选择", "有明确损失策略的状态转换", "模式校验通过，不等于获得了调用权限", "缓存复用是一种优化，不是持久记忆"],
     ],
     [
       "en/orchestration/index.qmd",
