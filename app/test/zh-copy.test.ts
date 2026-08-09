@@ -789,7 +789,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/07-multi-agent-systems.qmd",
-      ["相似智能体之间的投票", "结构化的分歧", "活性失败", "安全性失败", "升级那些可恢复", "阻断那些会静默发布"],
+      ["单智能体基线", "可衡量的边际价值", "不会凭空带来权限", "一致不等于证明", "安全性属性表示坏事不会发生", "活性属性表示好事最终会发生"],
     ],
     [
       "en/orchestration/08-rag-retrieval.qmd",
