@@ -265,7 +265,7 @@ test("the bibliography favors archival research and primary records", () => {
   }
 });
 
-test("the shared bibliography keeps citations used by the untranslated chapter", () => {
+test("the shared bibliography keeps citations used by the Chinese chapter", () => {
   const citeKeys = new Set(
     [...chineseChapter.matchAll(/@([a-z][a-z0-9]*)/gi)]
       .map((match) => match[1])

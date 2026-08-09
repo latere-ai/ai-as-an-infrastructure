@@ -295,7 +295,7 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
     ["zh/foundations/04-transformer-architecture.qmd", "第一遍就是 **@gls-prefill** 阶段：它一次读完整个提示词"],
     ["zh/foundations/06-training-at-scale.qmd", "张量并行（TP）会切分一层内部的矩阵乘法"],
     ["en/ecosystem/04-economics.qmd", "@gls-capex is cash committed to long-lived assets"],
-    ["zh/ecosystem/04-economics.qmd", "训练是一笔@gls-capex：像资本开支一样一次性付出"],
+    ["zh/ecosystem/04-economics.qmd", "@gls-capex 指投入自有加速器、数据中心设备等长期资产的现金"],
     ["en/safety/01-mechanistic-interpretability.qmd", "The hypothesis is @gls-superposition: a model represents more features than it has dimensions"],
     ["zh/safety/01-mechanistic-interpretability.qmd", "这里的假说是 @gls-superposition：模型通过让非正交的特征方向共享激活空间，表示的特征数多于维度数"],
     ["en/safety/02-scalable-oversight-control.qmd", "The answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training"],
@@ -927,8 +927,8 @@ test("serving cost references are anchored to the inference and serving part", (
   expect(zhEconomics).not.toContain("第六部分的手段");
   expect(zhEconomics).not.toContain("第六部分的优化为什么能直接回本");
   expect(zhEconomics).toContain("第五部分的服务章节");
-  expect(zhEconomics).toContain("第五部分的服务手段");
-  expect(zhEconomics).toContain("第五部分的服务优化为什么能直接回本");
+  expect(zhEconomics).toContain("第五部分的这些服务手段");
+  expect(zhEconomics).toContain("评估第五部分的服务优化时");
 });
 
 test("reasoning and test-time compute is a full seven-chapter part in both languages", () => {
@@ -1008,7 +1008,7 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
         expect(text, `${path} should include a contested/open-question section`).toMatch(contested);
       }
       if (!constraintExceptions.has(path)) {
-        const constraint = lang === "en" ? /^## .*(constraint arrow|lower-layer constraint)/im : /^## (下层约束|约束如何向上传导)/m;
+        const constraint = lang === "en" ? /^## .*(constraint arrow|lower-layer constraint)/im : /^## (下层约束|约束如何向上传导|约束如何传导)/m;
         expect(text, `${path} should include a lower-layer constraint section`).toMatch(constraint);
       }
     }
