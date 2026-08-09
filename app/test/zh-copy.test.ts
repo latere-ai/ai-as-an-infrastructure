@@ -1186,7 +1186,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/06-retrieval-and-documents.qmd",
-      ["从未训练过的数据", "文档智能", "结构化文本", "向量库里的嵌入", "重排器"],
+      ["检索发布", "证据服务", "语料边界", "源修订版本", "回滚"],
     ],
     [
       "en/practice/07-evaluation-and-observability.qmd",

@@ -315,7 +315,7 @@ test("specialized practice terms get local definitions before use", () => {
     ["zh/foundations/01-scaling-laws.qmd", "@gls-compute-optimal的 $N$ 与 $D$，也就是预测损失最低的那组参数量与词元数"],
     ["zh/foundations/07-mid-training.qmd", "继续预训练是一种方法，它让已有模型继续在自监督数据上训练"],
     ["en/practice/06-retrieval-and-documents.qmd", "@gls-ocr, optical character recognition, recognizes text from pixels"],
-    ["zh/practice/06-retrieval-and-documents.qmd", "**经典 CV 与 @gls-ocr 流水线。** 这里的 OCR 是从像素里识别文字"],
+    ["zh/practice/06-retrieval-and-documents.qmd", "@gls-ocr，也就是光学字符识别，从像素中识别文字"],
     ["en/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong generalization asks whether weak labels can elicit stronger latent capability"],
     ["zh/safety/02-scalable-oversight-control.qmd", "@gls-weak-to-strong 泛化研究弱标注能否引出更强的潜在能力"],
     ["en/practice/05-agents-and-sandboxes.qmd", "a @gls-virtual-key issued by a @gls-gateway"],
@@ -830,7 +830,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["en/practice/01-choosing-a-model.qmd", "@gls-gateway, a routing and policy layer for model calls"],
     ["zh/practice/01-choosing-a-model.qmd", "@gls-gateway，也就是模型调用的路由与策略层"],
     ["en/practice/06-retrieval-and-documents.qmd", "@gls-vlm, a vision-language model, reads page images and text together"],
-    ["zh/practice/06-retrieval-and-documents.qmd", "@gls-vlm（用图像和文本一起解析页面的模型）"],
+    ["zh/practice/06-retrieval-and-documents.qmd", "@gls-vlm，也就是视觉语言模型，同时读取页面图像和文本"],
   ];
 
   for (const [path, snippet] of required) {

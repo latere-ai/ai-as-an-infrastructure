@@ -1,296 +1,292 @@
 # 检索与文档智能 {#sec-retrieval-practice}
 
-模型要和它从未训练过的数据对话，靠的是检索；而决定哪些数据能到达模型面前的，是文档智能这道前门。实践层接在 @sec-rag-retrieval 与 @sec-context-engineering 之下：那两章讲检索为何有效、上下文窗口如何组装，这里处理 2026 年的工具选择与接线。这两半其实是同一条流水线：一份 PDF 变成结构化文本，结构化文本变成向量库里的嵌入，一次查询把对的分块取回来，重排器在它们进入提示词之前排好序。上游任何一处出错，都会悄无声息地污染下游的一切。
+检索不是附加在模型上的数据库功能，而是一项证据服务。它有两项职责：先为源材料发布可信的表示，再只返回调用方有权查看的证据。@sec-rag-retrieval 解释检索增强生成（RAG）的原理，@sec-context-engineering 解释如何把选中的证据放入模型上下文，本章则把二者变成一套可运营的系统。最终交付的是一项**检索发布**：带版本的语料库、经过测试的查询路径，以及支持部署或回滚的完整证据 [@lewis2020rag]。
 
-![文档智能流水线的示意图。解析、分块、嵌入、检索与引用每一步都会丢弃一些证据，因此早期结构很重要。理想化保留证据，非实测。](/figures/retrieval-and-documents-1.svg){#fig-retrieval-and-documents-1}
+先定义契约，再列产品候选。契约应记录**语料边界**、系统必须回答的查询类型、发布所需的**成功证据**，以及每项来源的使用权限。还要规定新鲜度与删除服务等级、延迟与成本预算，以及回滚窗口。缺少这些信息，再快的索引或再亮眼的基准分数也没有运营意义。
 
-::: {.callout-note}
-## 截至 2026 年中
+| 契约字段 | 发布必须回答的问题 |
+|---|---|
+| 语料边界 | 哪些代码库、格式、语言、日期和源修订版本属于范围内？ |
+| 查询类型 | 哪些精确查找、释义查询、表格问题、时序问题和无答案情况最重要？ |
+| 成功证据 | 哪些解析、检索、引用、回答、安全、延迟和成本测试必须通过？ |
+| 权限 | 每项内容受哪个主体、租户、用途、策略和保留规则约束？ |
+| 变更 | 新鲜度 SLA 与删除 SLA 分别是什么，在哪里测量？ |
+| 恢复 | 哪个上一已知正常发布版本仍然可用，回滚如何演练？ |
 
-这是一份带日期的快照（2026-06）。下文每一个排名、价格、版本号与基准分数都易变、都标了来源，其中许多出自厂商博文或混用多版本的聚合站点，彼此并不一致。请把它们当作方向性参考，先采纳那些更持久的判断（类别、权衡、如何选、如何接），引用具体数值之前对照一手来源核实当下的值。
-:::
-
-## 流水线，以及为何解析质量先决定上限
-
-这条流水线从摄取开始。@fig-retrieval-pipeline 画出了从原始文档到回答的整条路径。
+@fig-retrieval-pipeline 把离线发布路径与经过授权的在线路径分开。评估同时观察两条路径，不能只在生成答案后追加一次最终检查。
 
 ```{dot}
 //| label: fig-retrieval-pipeline
-//| fig-cap: "检索与文档智能流水线，从原始文档到有依据的回答。摄取在离线，查询在在线，评估观测两者。"
+//| fig-cap: "一项检索发布包含离线发布路径和经过授权的在线证据路径。"
 digraph {
   bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_Ingest {
-    label="摄取 离线"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    D [label="文档\nPDF 扫描件、Office 文件"];
-    P [label="解析与 OCR\nVLM 或流水线"];
-    X [label="结构化抽取\n符合模式的对象"];
-    C [label="分块与嵌入"];
-    VDB [label="向量库", shape=cylinder];
-    D -> P;
-    P -> X;
-    P -> C;
-    X -> VDB;
-    C -> VDB;
-  }
-  subgraph cluster_Query {
-    label="查询 在线"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    Q [label="用户或智能体查询"];
-    H [label="混合检索", shape=diamond];
-    F [label="RRF 融合"];
-    RR [label="重排"];
-    CTX [label="Top-k 上下文"];
-    LLM [label="生成器或智能体"];
-    A [label="回答"];
-    Q -> H;
-    H -> VDB;
-    VDB -> F;
-    F -> RR;
-    RR -> CTX;
-    CTX -> LLM;
-    LLM -> A;
-  }
-  EVAL [label="评估 RAGAS 或 LangSmith"];
-  EVAL -> H [style=dashed];
-  EVAL -> RR [style=dashed];
-  EVAL -> A [style=dashed];
+  rankdir=TB;
+  graph [nodesep=0.18, ranksep=0.28];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.0, margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  S [label="源修订版本"];
+  I [label="授权、解析、切分"];
+  P [label="暂存并发布世代"];
+  Q [label="已验证查询与策略"];
+  R [label="授权检索与重排"];
+  E [label="证据包"];
+  A [label="生成器与带引用答案"];
+  S -> I -> P -> Q -> R -> E -> A;
 }
 ```
 
-顺序之所以要紧，是因为最大的数据丢失和最安静的错误都发生在解析这一步，而不是检索那一步。双栏的一页若被压平成交错的行，财务表若被打碎成散文，下游再好的嵌入模型和重排器也救不回这些结构。到 2026 年中，向量库本身已接近通用商品：近似最近邻搜索（HNSW、IVF、DiskANN 的各种变体）随处可见，很少成为瓶颈。差异化已经转移到三处，前端的解析质量、中间的嵌入与重排质量，还有底层的成本架构（内存常驻还是对象存储）。我们就按流水线顺序处理这两半，先文档智能，再检索栈。
+## 保留证据谱系
+
+文档不只是一段字符串。PDF 可能同时包含数字文本层、页面图像、批注、字体、表单字段、标签和隐藏内容，而且这些视图之间可能互相矛盾 [@iso2020pdf]。在开始任何转换前，先保存原始**源对象**和内容摘要。字节序列只要发生变化，就创建新的**源修订版本**。渲染器生成页面渲染结果，解析器生成文档元素，切分器生成分块 ID 和精确的源位置，嵌入模型在指定空间中生成表示，索引快照再把它发布出去。从最终引用必须能够沿这条来源链一路追溯到源对象 [@w3c2013prov]。
+
+```{dot}
+//| label: fig-document-lineage
+//| fig-cap: "每个派生的检索对象都与不可变的源修订版本绑定。"
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  graph [nodesep=0.18, ranksep=0.25];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.0, margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  S [label="源对象\n修订版本 • 摘要"];
+  R [label="页面渲染结果\n页码 • 坐标"];
+  D [label="文档元素\n类型 • 阅读顺序"];
+  C [label="分块 ID\n源位置 • 父元素"];
+  V [label="嵌入\n模型 • 空间"];
+  I [label="索引快照\n世代 • 水位"];
+  E [label="证据 ID\n结论定位信息"];
+  S -> R -> D -> C -> V -> I -> E;
+}
+```
+
+一条有用的谱系记录至少包括：来源标识、修订版本与摘要；媒体类型与获取时间；租户、访问控制策略、权利与保留状态；渲染版本，以及解析器、Schema、规范化器和切分器的修订版本；页面坐标与阅读顺序；原始文本和规范化文本；父元素与标题路径；以及所有已发布的索引世代。原始证据与规范化检索文本分开保存，这样修改规范化方法时无需改写历史。
+
+### 以发布流程管理数据摄取
+
+应当像管理发布流水线一样管理数据摄取：
+
+1. **获取并授权。** 确定来源身份、字节内容、使用权、租户、保留规则和当前访问控制状态。
+2. **检查。** 不依赖文件名，单独验证媒体类型；扫描恶意软件；限制字节数、页数、像素数、压缩包和可执行内容。格式错误、加密、含活动内容或可疑的输入必须拒绝或隔离。
+3. **规范化并渲染。** 保留原始内容，再按明确的页面边界框、旋转角度、坐标原点和单位生成确定性的渲染结果。
+4. **解析。** 数字文本层可靠时直接读取；否则进行 OCR、版面分析、表格和公式识别，并恢复阅读顺序。
+5. **抽取并验证。** 生成文档元素和带证据定位信息的结构化抽取结果。保留不确定性，不得编造值。
+6. **切分并生成嵌入。** 在授权与保留边界内创建检索单元；模型输入超过上限时必须报错，不能悄悄截断。
+7. **暂存、核对并发布。** 核对数量、摘要、遗漏、墓碑标记和覆盖率。以原子方式发布完整世代，否则继续使用上一世代。不得悄悄晋升不完整的输出。
+
+重试必须具备幂等性。工作进程在第 17 页崩溃、同一任务重复交付，或同一个 URI 返回了不同字节时，系统都应核对并创建一致的新修订版本，不能得到一半新、一半旧的索引。
+
+## 测量文档理解质量
+
+@gls-ocr，也就是光学字符识别，从像素中识别文字。@gls-vlm，也就是视觉语言模型，同时读取页面图像和文本。这两个术语都不能涵盖所有文档任务：检测版面、恢复阅读顺序、重建表格、识别公式和映射坐标是彼此独立的操作；原生数字文档的文本抽取又是另一项操作。Docling 之类的工具包可以组合其中多项操作，端到端模型则可能直接输出结构化表示 [@auer2024docling]。
+
+不存在适用于所有文档的最佳解析器。应建立一份留出语料库，并按故障方式差异明显的文档分层：原生数字页面与扫描页面、多种文字系统、从右向左的文本、旋转页面、低分辨率、多栏版面、表单、表格、公式、手写内容、脱敏区域、隐藏文本和格式错误的文件。OmniDocBench 可以提供背景信息，却不能用公开平均分取代本地的**文档分层**评估 [@ouyang2025omnidocbench]。
+
+转写质量可用字符错误率（CER）表示：
+
+$$
+\mathrm{CER}=\frac{S_c+D_c+I_c}{N_c},
+$$
+
+其中，$S_c$、$D_c$ 和 $I_c$ 分别是字符替换、删除和插入的数量，$N_c$ 是参考文本的字符总数。CER 不能代替其他质量指标。元素检测的精确率与召回率、阅读顺序错误、表格结构相似度、公式识别、字段级精确率与召回率，以及来源定位准确率，都要分别测量。对于置信度低且影响重大的情况，应安排人工复核，并记录复核比例，不能把它隐藏在一个总分里。
+
+### 结构化抽取有两类有效性
+
+JSON Schema 可以证明输出的结构和类型符合 Schema，却无法证明内容在语义上正确。发票即使通过 Schema 验证，其中的总金额仍可能是错的。每个字段都应保留证据定位信息和明确的 `unknown` 状态；证据缺失或含义不明时，抽取器应选择不作答。还要执行领域后置条件，例如小计运算、日期范围、标识符校验和与跨字段一致性。自动重试不能把不确定性变成编造出来的确定性。
+
+### 视觉检索是一种需要评估的替代方案
+
+文本检索并不是唯一方案。ColPali 一类视觉检索方法对页面图像生成嵌入，并通过后期交互把页面与查询匹配 [@faysse2024colpali]。它能够保留文本转换时容易丢失的版面信息，对视觉内容丰富或多语言文档也可能更有效。但它同时改变了成本、存储、可访问性、可解释性和生成器要求。
+
+应在同一组带标注查询上比较文本检索、视觉检索和多模态组合。即使解析很少，系统仍需稳定的页面标识、授权、来源信息、可访问文本或等效适配；下游需要字段而不是像素时，也仍要进行结构化抽取。
+
+## 按检索和引用需求切分文档
+
+**检索单元**是排序器返回的内容，**引用单元**是读者能够核验的最小来源区域，两者不必相同。检索器可以先给命题或段落打分，再展开到父元素或章节来补足上下文。每个单元都应保留稳定的分块 ID、父元素、源修订版本与源位置、标题路径、语言、页面与坐标、内容摘要、策略和有效时间区间。
+
+分块大小不存在通用常量。应使用同一查询集比较结构感知元素、固定窗口、句子、命题和父子扩展，并对边界与重叠策略做版本管理。重叠可以保护跨边界证据，却会增加索引体积并产生重复结果。组装上下文时要识别重复内容，同时不能丢掉有用的相互印证。分块不能跨越授权或保留边界。
+
+## 对在线查询先授权
+
+**查询契约**包括查询内容、经过验证的主体和租户、已经校验的元数据过滤条件、查询时点、结果与上下文预算、排序策略，以及解析后的索引世代。访问控制是候选资格条件，不是相关性特征。授权必须发生在候选生成之前，并使用当前资源状态。先从全局 top-k 检索再过滤，既可能泄露数据，也可能使授权结果不足额。
+
+对于查询 $q$、主体 $s$、评估时间 $t$ 和不可变世代 $g$，授权集合定义为：
+
+$$
+\begin{gathered}
+U(q,s,t,g)=\\
+\{c\in I_g\mid\\
+P(s,\mathrm{read},c,t)=\mathrm{allow},\\
+c.\mathrm{valid\_from}\le t<c.\mathrm{valid\_to},\\
+\neg c.\mathrm{tombstone}\}.
+\end{gathered}
+$$
+
+其中，$I_g$ 是索引世代 $g$，$c$ 是候选项，$P$ 是主体 $s$ 在时间 $t$ 的策略判断。检索只能从 $U$ 中返回 top-k。策略元数据缺失或无效时必须关闭访问。错误租户的数据绝不能出现在候选项、重排器输入、调试输出、追踪或缓存中。这是检索系统对 @sec-security-authorization 的具体落实。
+
+```{dot}
+//| label: fig-retrieval-query
+//| fig-cap: "查询路径只从授权集合中生成候选项，并记录此后的每项决定。"
+digraph {
+  bgcolor="transparent";
+  rankdir=TB;
+  graph [nodesep=0.18, ranksep=0.25];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1",
+        penwidth=1.0, margin="0.12,0.08"];
+  edge [color="#6b7280", arrowsize=0.65];
+  Q [label="查询与主体\n策略 • 世代"];
+  U [label="授权集合"];
+  C [label="稀疏\n稠密\n视觉\n候选项"];
+  F [label="融合"];
+  R [label="重排与上下文预算"];
+  E [label="证据记录与引用"];
+  Q -> U -> C -> F -> R -> E;
+}
+```
+
+## 根据实测效果选择表示方式
+
+不同检索方法采用不同表示，也有不同成本：
+
+- **稀疏检索**（例如 BM25）根据分析后的词项打分。对于名称、标识符和罕见词，它是很强的词法基线，但分析器、语言规则、字段权重和参数都属于索引版本的一部分。
+- **稠密检索**使用双编码器。文档表示可以离线预计算，查询则在线编码。学习到的相似度能够关联释义表达，也可能模糊关键的词法差异 [@karpukhin2020dpr]。
+- **后期交互**保留词元级的文档表示，并在查询时合并匹配结果。ColBERT 把它用作第一阶段检索器，而不只是重排器 [@khattab2020colbert]。
+- **交叉编码器**联合计算每个查询与文档对的得分。它通常更昂贵，因此一般只应用于受限的候选并集。候选生成遗漏的证据，它无法找回。
+
+这些方法在不同数据集上的排序会变化。BEIR 和 MTEB 适合比较方法和筛选模型，但是否发布仍取决于本地查询分层 [@thakur2021beir; @muennighoff2023mteb]。从词法基线开始，再通过消融实验分别测量每种新增表示方法和重排器。
+
+### 固定嵌入兼容性契约
+
+嵌入是模型特有的表示，其相似度由训练目标决定。必须记录模型和分词器摘要、嵌入维度、归一化方式、距离度量、查询前缀、文档前缀、截断规则和输入上限。余弦相似度、内积和欧氏距离只有在归一化假设允许时才可以互换。
+
+查询向量和文档向量必须标明同一个嵌入空间修订版本。维度、前缀、归一化方式或空间不匹配时直接拒绝。更换模型通常需要创建新世代并**重新生成嵌入**；维度相等或模型名称相似都不能证明兼容。即使模型通过 @sec-serving-stack 所述的网关提供服务，也要以原子方式切换查询编码器和索引选择。
+
+### 融合排名，但不要假装分数可比
+
+稀疏、稠密和视觉检索分数通常没有相同的校准尺度。倒数排名融合（RRF）不直接比较这些分数，而是融合名次 [@cormack2009rrf]。给定排名列表集合 $\mathcal{L}$，定义：
+
+$$
+s_{\mathrm{rrf}}(d)=
+\sum_{L_j\in\mathcal{L}:d\in L_j}\frac{w_j}{k_0+r_j(d)},
+$$
+
+其中，$d$ 是候选项，$L_j$ 是第 $j$ 个排名列表，$r_j(d)$ 是候选项 $d$ 在该列表中从 1 开始计算的名次，$w_j\ge0$ 是列表权重，$k_0>0$ 是融合常数。某个列表没有返回某个候选项时，该列表的贡献为零。RRF 不会校准相关性分数，也不会使用分数大小。候选深度、权重、融合常数、缺失项处理方式和确定性的并列处理规则都属于排序策略，应该在验证数据上调优，并在留出评估前固定。
+
+下面这段简短实现把这些语义变成可以测试的代码：
+
+```python
+def reciprocal_rank_fusion(ranked_lists, k0, weights=None):
+    """Return (document, score) pairs in deterministic descending order."""
+    if k0 <= 0:
+        raise ValueError("k0 must be positive")
+    weights = weights or [1.0] * len(ranked_lists)
+    if len(weights) != len(ranked_lists):
+        raise ValueError("one weight is required for each ranked list")
+
+    scores = {}
+    for weight, ranked in zip(weights, ranked_lists):
+        if weight < 0:
+            raise ValueError("weights must be non-negative")
+        for rank, document_id in enumerate(dict.fromkeys(ranked), start=1):
+            scores[document_id] = scores.get(document_id, 0.0) + weight / (k0 + rank)
+    return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+```
+
+重排与上下文选择仍是两项独立决定。候选深度、重排深度、最终 top-k 和上下文预算都要分别测量。还要执行重排器的延迟预算和输入上限。最大边际相关性之类的多样性控制可以减少重复上下文，但它需要在相关性与多样性之间做权衡，也不能保证去重。
+
+## 发布新一代索引
+
+向量索引提供精确或近似邻居检索。生产存储还必须满足**索引契约**，覆盖持久性、元数据、过滤、数据一致性、备份、恢复、租户隔离和迁移。至少记录：
+
+- 语料水位与来源覆盖率；
+- 元数据 Schema、策略字段和过滤选择率分布；
+- 分析器、嵌入空间、距离与排序策略修订版本；
+- 向量数量、维度、摘要、墓碑标记和重复项策略；
+- 索引算法与参数、构建硬件、构建时长和恢复时间；
+- 精确检索基线、ANN 召回率、延迟百分位、并发和成本；
+- 支持的更新、删除、备份、恢复与回滚行为。
+
+HNSW 是一种基于图的近似邻居索引，其内存、构建、召回率和延迟取舍取决于工作负载 [@malkov2018hnsw]。DiskANN 一类方法通过面向 SSD 的图检索改变资源取舍 [@subramanya2019diskann]。这两个名称都不能替团队做出存储选择。应在真实的过滤、更新、并发、缓存状态和租户偏斜下，比较精确扫描、HNSW、DiskANN、IVF 或压缩变体。对于每个重要的过滤选择率，都要以精确检索得到的合格 top-k 为基准报告 ANN 召回率。
+
+发布清单不必很长，但必须防止不同版本意外混用：
+
+```yaml
+generation: corpus-2026-08-07-03
+source_watermark: "2026-08-07T08:00:00Z"
+parser: doc-parser@sha256:...
+segmenter: headings-v4
+embedding_space: embed-model-v7-d1024-cosine
+ranking_policy: hybrid-rrf-rerank-v5
+policy_schema: acl-v3
+deletion_watermark: "2026-08-07T08:05:00Z"
+```
+
+把新的不可变世代构建成**影子索引**。完成回填，核对来源数量、摘要和墓碑标记，再把变更追到明确水位。先运行影子查询，再对新旧世代进行双读；按查询类型比较质量、授权、新鲜度、延迟和成本。原子路由切换必须同时移动查询编码器和索引，并在回滚窗口内保留上一已知正常世代。不得使用来自不兼容新嵌入空间的向量查询旧索引。
+
+### 新鲜度与删除必须覆盖每一份副本
+
+新鲜度 SLA 从源变更提交时开始，到变更出现在合格结果中结束；删除 SLA 从撤销权限开始，到所有结果中都不再出现该内容为止。删除操作会创建墓碑标记，并传播到向量索引、词法索引、重排器和答案缓存、已发布快照、副本，以及迁移中的每个世代。逻辑屏蔽应尽快生效，物理清除则按声明的保留流程执行。缓存键必须包含租户、策略版本、索引世代和查询时点。陈旧结果需要明确标记，不能以回退为名悄悄扩大范围。
+
+测试内容插入、更新、ACL 变化、来源删除、回填中断、重复重放、部分索引故障、快照损坏和回滚。必须证明已删除文档不能从缓存、旧快照或影子索引重新出现。
+
+## 返回证据，而不是没有来源的文本
+
+检索响应是一份证据包。每个条目都包含不可变的证据 ID；源对象、源修订版本、摘要、源位置或页面坐标；索引和排序修订版本；各阶段排名；采用的策略和时间；以及截断、结果不足、超时、陈旧结果和回退标记。把不同类型的分数保留为不同类型，不能把它们伪装成一个已经校准的概率。
+
+每项重要结论都要绑定一个或多个检索到的证据 ID。测量引用精确率（引用证据是否支持对应结论）、引用召回率（有证据支持的结论是否都带引用）、定位有效性、蕴含或矛盾，以及答案正确性 [@gao2023citations]。模型生成的引用如果不在证据包中，一律无效。渲染已保存答案时要重新授权相关证据，因为曾经有效的来源可能已经撤销。
+
+### 检索到的文档不受信任
+
+文本、元数据、OCR 输出、图像文字和批注都属于**不受信任的数据**。检索页面中的间接提示注入只是内容，不是系统策略 [@greshake2023indirect]。它不能授予权限、变成工具指令、更改租户、关闭引用，也不能要求数据外泄。指令和证据应使用不同通道，只允许预先批准的工具操作，验证参数，并在每项外部副作用发生前再次授权。
+
+还要测试受污染的语料库：攻击者可能插入看似相关的分块，操纵答案或引用 [@poisonedrag2025]。限制摄取权限，记录来源可信度和谱系，审查异常的来源或排名变化，并保留干净的回滚世代。内容扫描器可以提供帮助，但核心保护仍然是检索文本本身没有任何权限。
+
+## 按层级和故障模式评估
+
+一个端到端分数无法说明证据在哪一层丢失。每一层都保留一个理想基准，并把部署阶段的结果与它比较。
+
+| 层级 | 发布所需证据 |
+|---|---|
+| 解析质量 | CER、元素检测、阅读顺序、表格结构、公式和字段级准确率，以及谱系有效性 |
+| 候选检索 | Recall@k、nDCG@k、MRR、带过滤召回率、精确检索对照和结果不足率 |
+| 融合与重排 | 重排前的候选召回率、重排后的 nDCG、截断、多样性和确定性回退 |
+| 上下文与回答 | 答案正确性、忠实度、引用精确率与召回率、矛盾和拒答校准 |
+| 系统 | 未授权暴露为零、新鲜度与删除 SLA、p95 延迟、可用性和每个合格答案的成本 |
+
+应按文档族划分数据，而不是把同源分块随机分入训练集和测试集。测试集应包括精确标识符、释义表达、否定、多语言问题、表格、时序问题、歧义实体、多跳证据、困难负样本和无答案情况。模型裁判需要使用稳定的人工复核样本校准；RAGAs 等框架可以帮助自动测量，却不能替产品规定阈值 [@es2024ragas]。
+
+验收套件必须覆盖负面情况：错误租户、已删除文档、陈旧修订版本、受污染分块、格式错误的表格、空检索结果、重复分块、选择性过滤导致结果不足、重排器超时、索引故障和无答案行为。每种相关故障都要演练降级策略和回滚。系统中断时，可以按照已命名的策略降低排序质量，但不得削弱授权或捏造证据。
+
+## 运营发布生命周期
+
+1. **固定契约。** 记录语料、查询类型、策略、服务等级、指标、阈值、延迟与成本预算，以及回滚条件。
+2. **构建带标注语料库。** 按文档、查询、相关性判断、引用、安全情况和预期拒答分层。
+3. **建立词法基线。** 在引入嵌入和 ANN 的复杂性之前，先暴露语料与标注问题。
+4. **评估候选方案。** 以受控消融实验比较解析、切分、稀疏检索、稠密检索、视觉检索、融合、重排和上下文策略。
+5. **构建并核对。** 只有带清单、谱系、策略和完整墓碑标记覆盖的不可变世代才能发布。
+6. **影子运行。** 重放形态接近生产的查询，但不向用户返回结果。
+7. **金丝雀发布。** 只路由一小部分已授权群组，监控质量、泄露、新鲜度、延迟、成本和回退。
+8. **晋升或回滚。** 以原子方式切换，并保留和演练上一已知正常世代。
+9. **监控漂移。** 按分层抽样查询和文档，调查变化并保存决定轨迹，默认不得记录敏感内容。
+10. **重新验证。** 解析器、切分器、嵌入空间、分析器、索引、重排器、策略 Schema、语料边界或工作负载发生重大变化时，都触发重新验证。
+
+最终产物是一份检索发布记录：不可变清单、评估结果、安全与故障证据、新鲜度与删除测量、金丝雀决定、负责人、审批、回滚目标和重新验证触发条件。这份记录是交给生成器或智能体团队的交接物，也是 @sec-eval-practice 中更广泛评估工作的输入。
 
 ::: {.callout-tip}
-## 下层约束
+## 约束如何传导
 
-无论生成器多强，检索器都为回答的忠实度封了顶，而解析器又为检索器封了顶。功夫花在这里，胜过其上几乎任何提示词或模型层面的改动。第二条约束来自下层：一旦智能体（@sec-agents-practice）把检索当工具用、每个任务里调用许多次，单次查询的延迟与成本就不再是事后才想的事，而成了设计约束，这正是对象存储那条成本曲线值得在意的原因。
+下层会限制上面的每一层：缺失的证据无法由重排器找回，未经授权的证据无法靠提示词变得安全，不兼容的索引也无法由网关路由修复。@sec-agents-practice 中的智能体会放大检索调用次数，因此质量、授权、延迟和成本既要在每次调用上成立，也要在完整任务上成立。完整系统的接线方式见 @sec-wiring-stack。
 :::
 
-## 文档智能：从凌乱文件到干净数据
+::: {.callout-note}
+## 争议所在
 
-文档智能把 PDF、扫描件、截图或 office 文件转成机器可读的结构：按阅读顺序排好的文本、按单元格拆开的表格、以 LaTeX 表示的公式、键值对，最终落成一个遵循模式的有类型对象。到 2026 年，这一领域分成了三个架构阵营，外加一个横切关注点。
-
-1. **经典 CV 与 @gls-ocr 流水线。** 这里的 OCR 是从像素里识别文字，再放进多阶段流程：版面检测、OCR、表格重建、阅读顺序组装。确定性强、可调试、快，但碰上异常版面就脆。Marker、MinerU、PaddleOCR、unstructured 与各家云 API 都属此类。
-2. **端到端文档 VLM。** 单个图文到文的模型一次性吐出整篇结构化文档（Markdown、HTML 表格、LaTeX）。它们主导着开放榜单，通常很小（sub-2B），还能和对话模型部署在同一套服务集群上（@sec-serving-stack）。跑起来更省事，但它丢掉一列时也更难查。
-3. **智能体文档平台。** 托管服务把 OCR、@gls-vlm（用图像和文本一起解析页面的模型）、纠错回路与结构化抽取一并封在 API 和 SLA 之后。用自托管，换来困难文档上的准确率与合规性。
-
-贯穿这些路径的关注点是**结构化抽取**：从解析后的文本，走到一个遵循 JSON Schema 的有类型对象。约束解码与校验库，正是在这里与解析交汇。
-
-下表是浓缩视图，版本与许可的细节放在*一手来源*里。
-
-| 工具 | 阵营 | 许可 / 部署 | 何时选它 |
-| --- | --- | --- | --- |
-| **Docling** (IBM) | 流水线工具包 | MIT 工具包，Apache-2.0 模型，自托管 | 想要一条许可宽松、开箱即用、输出对 RAG 友好、OCR 可替换的 OSS 流水线 |
-| **Granite-Docling-258M** | 端到端 VLM | Apache-2.0，自托管 | Docling 内成本高效的自托管转换；许可最宽松；可容忍边缘部署 |
-| **PaddleOCR-VL** (Baidu) | 端到端 VLM | Apache-2.0，自托管 | 当能部署 VLM 时，开源整页解析中同类最佳的准确率 |
-| **dots.ocr**、**DeepSeek-OCR**、**MinerU**、**GLM-OCR** | 端到端 VLM | Apache-2.0（核对权重），自托管 | 自托管的版面感知解析；DeepSeek-OCR 用于超高吞吐 |
-| **Mistral OCR 3** | 托管 OCR 模型 | 商业 API，可按需自托管 | 想要扁平的低单页价、一个欧盟厂商，外加一条自托管的逃生通道 |
-| **Reducto** | 智能体平台 | 商业 SaaS + 本地部署 | 对抗性强的企业文档（密集表格、手写、表单），且有 SOC 2 / HIPAA / 零留存需求 |
-| **LlamaParse / LlamaCloud** | 智能体平台 | 托管 SaaS，按额度计费 | 已在用 LlamaIndex，想要分级的解析质量（Fast 到 Agentic Plus）外加抽取 |
-| **Lectio**（latere.ai） | 智能体平台 | 作者自己的；托管 | Latere 技术栈的一个示范案例（@sec-tooling-ecosystem）：逐页实时解析，且每个元素都能回溯到原文出处。*已披露为作者自己的；仅作示范，并非中立推荐* |
-| **unstructured** | 流水线 + 托管 | Apache-2.0 + 托管 | 难点是格式繁杂（数百种来源类型），而非某一份最难的 PDF |
-| **Azure / AWS / Google doc-AI** | 云文档 AI | 托管，按页计费 | 深耕某朵云，想要预置抽取器与免费层，又不愿做模型运维 |
-| **Marker / Surya** (Datalab) | 流水线 | 代码 OSS，**权重 OpenRAIL-M 带营收上限** | 研究、个人或小创业用途；商用前先读权重许可 |
-
-表里刻意漏掉了一个选项。Gemini Flash 或 Pro 这类通用前沿 VLM，不搭任何流水线也能很好地解析页面，它是 2026 年多数对比里的基线。它的单页成本高于专用的小型 OCR VLM，碰上密集表格还可能产生幻觉或悄悄丢内容。所以「直接把页面发给前沿 VLM」是个真实而简单的选项，该拿它跟前述专家对标，而不是直接当默认。
-
-还有一种更彻底的设计，干脆跳过解析。ColPali 一路的视觉检索，用视觉语言检索器直接嵌入页面*图像*，再用后期交互匹配来打分（与下文检索一节针对文本描述的是同一种机制），最后把检索到的页面交给一个直接读像素的 VLM 生成器 [@faysse2024colpali]；Cohere Embed v4 的图像模式以单向量嵌入走的也是这条路。到 2026 年，这已是视觉密集语料的一条标准备选，它也给「解析质量领跑」加了一个限定：既然不解析，上游就没有环节能给检索器封顶。不过代价只是挪了位置，并没有消失：页面图像嵌入的存储与查询更贵，生成器必须是 VLM，而结构化抽取、带出处的引用，以及语料的任何纯文本复用，仍然离不开解析。
-
-### 结构化抽取
-
-页面一旦解析完，把它变成有类型对象就是一个正交的选择，只沿一条轴展开：解码器在不在自己手里？
-
-| 库 | 机制 | 何时选它 |
-| --- | --- | --- |
-| **Outlines / XGrammar** | 服务器内的约束解码（`guided_json`） | 在 vLLM/SGLang 上自托管，想要硬性的模式保证、零事后解析 |
-| **Instructor** | 在 provider SDK 之上做 Pydantic 校验与自动重试 | 调用托管模型，想要简单的校验与重试 |
-| **BAML** | 对近似 JSON 的输出做 Schema-Aligned Parsing | 模型返回畸形但接近的 JSON，想要提示词纪律加上宽容的解析 |
-
-### 选择解析器
-
-决策有四条轴：文档难度、自托管还是 API、体量与成本、合规。
-
-- **自托管文档 VLM**（PaddleOCR-VL、dots.ocr、DeepSeek-OCR、Granite-Docling、MinerU），当能跑 GPU、不想要按页账单、需要数据留在自己的 VPC、且文档属于「正常难度」时：学术论文、报告、图文混排。把它们部署在 vLLM/SGLang 上，约束解码也能一起接入。
-- **Docling 工具包**作为最稳的纯 OSS 默认：一条许可宽松、输出对 RAG 友好、可换入 Granite-Docling 的流水线。
-- **Mistral OCR 3**，当想要一个扁平低单页价（据 Mistral 2025 年 12 月，约每 1k 页 2 美元，批处理约半价）、又是欧盟厂商的托管 API 时。
-- **Reducto 或 LlamaParse Agentic**，当文档确实对抗性强、准确率比单页成本更要紧、且想要现成的纠错回路、SLA 与合规而不必自建时。
-- **unstructured**，当问题出在格式繁杂，而非某一份最难的 PDF。
-- **云文档 AI**（Azure、AWS、Google），当已在某朵云内，或需要某个特定的预置抽取器（发票、收据、证件、信贷）时。
-
-当约束解码就在服务器内部时，一次自托管的解析加上符合模式的抽取，就是一个请求：
-
-```python
-# vLLM / SGLang 兼容 OpenAI 的调用：模式约束抽取
-resp = client.chat.completions.create(
-    model="paddleocr-vl",                 # 本地部署在 vLLM 上
-    messages=[{"role": "user", "content": [
-        {"type": "image_url", "image_url": {"url": page_png_data_uri}},
-        {"type": "text", "text": "Extract the invoice as JSON."}]}],
-    extra_body={"guided_json": Invoice.model_json_schema()},  # Outlines / XGrammar
-)
-```
-
-## 检索栈：向量库、嵌入、重排、混合检索
-
-嵌入（或者说向量）就是一串数字，用来抓住一段文本的语义，于是语义相近的文本在这个数字空间里彼此靠近，整套栈都搭在这一个想法之上。向量库的周围还坐着另外三块：把文本（以及越来越多的图像与 PDF）转成向量的嵌入模型、为求精度而给候选集重新打分的重排器，以及把摄取、分块、检索、融合与提示词组装接到一起的 RAG 框架。
-
-### 向量库
-
-第一个问题几乎总是：是不是已经在跑 Postgres？下表是浓缩的，基准与定价的细节放在*一手来源*里，且这些数据全是厂商自报、对版本敏感。
-
-| 库 | 是什么 | 许可 | 何时选它 |
-| --- | --- | --- | --- |
-| **pgvector (+ pgvectorscale)** | 带 HNSW/IVFFlat 的 Postgres 扩展；pgvectorscale 加上磁盘常驻的 StreamingDiskANN 与标签过滤 | OSS (PostgreSQL) | 已在跑 Postgres，语料在数千万向量以内。多数 RAG 的正确默认 |
-| **Qdrant** | Rust 原生向量库；强过滤、量化、ACORN | Apache-2.0 + 云 | 不在 Postgres 上，想要快速的自托管引擎，还需要大量元数据过滤与数据驻留 |
-| **Weaviate** | 原生向量库，自带原生混合检索（BM25 + 向量）与内建向量化模块 | BSD-3 + 云 | 想要内建的混合检索与嵌入生成，少写胶水代码 |
-| **Milvus / Zilliz** | 分布式、存算分离、十亿级；Zilliz 是托管云 | Apache-2.0 + 托管 | 确实身处数亿到数十亿向量，且有运维能力 |
-| **Pinecone** | 托管 serverless；为重读负载提供 Dedicated Read Nodes | 专有 SaaS | 想要全托管、愿为零运维付费、看重可预测的扩展 |
-| **Turbopuffer** | 基于对象存储、带缓存的托管向量 + 搜索 | 专有 SaaS | 规模成本主导，数据多为冷且突发，或租户/命名空间数量很大 |
-| **LanceDB** | 基于 Lance 列式格式的进程内嵌入式库；多模态 | Apache-2.0 + 云 | 边缘、桌面、notebook，或那些运行服务器属于负担的多模态流水线 |
-| **Chroma** | 轻量 OSS 库，开发体验优先 | Apache-2.0 + 云 | 原型或小型 RAG，简单比规模更要紧（先验证上限） |
-| **Vespa / Elasticsearch / OpenSearch** | 带向量支持的完整搜索引擎 | Apache-2.0 / Elastic | 检索其实是搜索（复杂排序、推荐），或已在运营其中之一 |
-
-这些选型背后的权衡，即便产品本身一直在迭代也仍然持久。**单一系统还是原生向量库：**带向量的 Postgres 少了一个活动部件（运维、备份、一致性、连接），代价是峰值 ANN 吞吐有所损失，对多数团队这笔交易是划算的。**内存还是对象存储：**经典向量库把工作集放在内存（快、贵），对象存储优先的设计（Turbopuffer，以及 pgvectorscale 与 Milvus 里磁盘常驻的 DiskANN）则以一点延迟，换来大型或冷语料上低得多的成本。**托管还是自托管：**托管换来零运维与可预测的扩展，自托管换来成本掌控、数据驻留，以及没有单次查询的加价。**规模下的过滤：**如果多数查询是「向量搜索，但只限于这个租户、这个日期范围或这个权限集」，那么带过滤的召回与带过滤的延迟，就比原始 ANN 速度更要紧，Qdrant（ACORN）和 pgvectorscale（标签过滤）正是为此而造。
-
-### 嵌入与重排
-
-数据库返回的，是嵌入模型当初编码下的内容，而重排器负责修正顺序。功夫花在这里，通常胜过换数据库。把嵌入模型当作一等的、带版本的依赖来看：换它，就意味着对整个语料重新嵌入。
-
-下文的 MTEB 与 MMTEB 分数，在不同榜单或版本间不可直接比较（英文榜、多语榜，以及旧版与现版的任务集，用的是不同的任务数），所以更高的数字未必就更适合自己的用例。这里的备注是方向性的。
-
-| 模型 | 厂商 | 开源 / API | 备注（截至 2026） |
-| --- | --- | --- | --- |
-| **OpenAI text-embedding-3-large / -small** | OpenAI | API | 无聊但安全的默认；支持广泛，Matryoshka 维度截断（嵌入经过专门训练，只留前 k 个数字也仍能检索得很好）；-small 便宜，对许多应用够用 |
-| **Cohere Embed v4** | Cohere | API | 多模态（文本 + 图像），约 128K 上下文，100+ 语言，Matryoshka 维度；强力的企业默认 |
-| **Voyage 4 家族** | Voyage AI (MongoDB) | API；nano 开放权重 | 2026 年 1 月；跨模型共享嵌入空间，有领域变体（代码/法律/金融）；MongoDB Atlas 上的默认 |
-| **Gemini Embedding 2** | Google | API（预览） | 2026 年 3 月起原生多模态：文本、图像、视频、音频、PDF 共享一个嵌入空间；接替 gemini-embedding-001（据聚合站点曾位于英文 MTEB 榜前列）。引用前核实榜单位置 |
-| **Qwen3-Embedding** | Alibaba | 开源 (Apache-2.0) | 非英文与自托管的最佳开源默认；长上下文；据称位于 MMTEB 前列 |
-| **BGE-M3** | BAAI | 开源 (MIT) | 多语且多功能（dense/sparse/ColBERT 合一）；可靠的自托管基线 |
-| **Cohere Rerank 4** (Fast / Pro) | Cohere | API | 重排器；32K 上下文，多语，最广的生产履历；在 Bedrock/Azure/OCI 上 |
-| **Voyage rerank-2.5** | Voyage AI | API | 重排器；大免费层；在 MongoDB Atlas 上的自然搭配 |
-| **mxbai-rerank v2** | Mixedbread | 开源 (Apache-2.0) | 最佳开源自托管重排器；基于 Qwen2.5 的交叉编码器 |
-
-### 混合检索与重排：2026 年的共识
-
-2026 年的默认检索策略是**混合加重排**。
-
-- **混合检索**并行跑 BM25（稀疏、精确词）与稠密向量搜索，再把两份排序列表融合，通常用**倒数排名融合**：`score = sum 1 / (k + rank)`，按惯例取 `k = 60`。BM25 抓住稠密向量会模糊掉的精确匹配（代码、名称、罕见词），稠密则抓住 BM25 会错过的释义与概念。按排名来融合，绕开了分数尺度不兼容的问题。
-- **重排**取融合后的前 50 至 100 个候选，用一个同时读查询和文档的交叉编码器重新打分，把前 5 至 10 个送进提示词。**后期交互**模型（ColBERT 风格、MaxSim）夹在稠密检索与交叉编码器重排之间：做词元级匹配，文档表示又可以预先算好，给一篇文档打分时，是把每个查询词元与文档词元的最佳匹配逐一相加。
-- 可以在重排前用 MMR（Maximal Marginal Relevance，最大边际相关，每次挑下一个分块时看的是相关度减去与已选分块的重叠）去一遍重，免得上下文窗口被几近相同的分块占掉。
-
-一个最小的 pgvector 混合检索，嵌入与重排的调用都走网关（见*连接*）：
-
-```sql
--- chunks(id, doc_id, content, embedding vector(1024), tsv tsvector)
-WITH dense AS (                          -- 稠密候选 (HNSW / DiskANN)
-  SELECT id, RANK() OVER (ORDER BY embedding <=> :query_vec) AS r
-  FROM chunks ORDER BY embedding <=> :query_vec LIMIT 100
-),
-sparse AS (                              -- 稀疏候选 (BM25 式)
-  SELECT id, RANK() OVER (ORDER BY ts_rank_cd(tsv, plainto_tsquery(:q)) DESC) AS r
-  FROM chunks WHERE tsv @@ plainto_tsquery(:q) LIMIT 100
-)
-SELECT c.id, c.content,                  -- 倒数排名融合, k = 60
-       COALESCE(1.0/(60+dense.r),0) + COALESCE(1.0/(60+sparse.r),0) AS rrf
-FROM chunks c
-LEFT JOIN dense  ON dense.id  = c.id
-LEFT JOIN sparse ON sparse.id = c.id
-WHERE dense.id IS NOT NULL OR sparse.id IS NOT NULL
-ORDER BY rrf DESC
-LIMIT 50;  -- 把这 50 个交给重排器, 为提示词保留前 5-10 个
-```
-
-RRF 中的 `k` 会改变合并行为：小 `k` 让每份列表的头部占主导，大 `k` 抹平权重，使两份列表的一致程度变得更要紧。
-
-:::: {.runnable}
-```python
-# 倒数排名融合：score = sum 1 / (k + rank)，rank 从 1 开始。
-bm25  = ["d3", "d1", "d7", "d2"]   # 稀疏，精确词排序
-dense = ["d2", "d3", "d5", "d1"]   # 稠密，语义排序
-k = 60
-
-def rrf(lists, k):
-    score = {}
-    for ranked in lists:
-        for rank, doc in enumerate(ranked, start=1):
-            score[doc] = score.get(doc, 0.0) + 1.0 / (k + rank)
-    return sorted(score.items(), key=lambda kv: kv[1], reverse=True)
-
-for doc, s in rrf([bm25, dense], k):
-    in_both = doc in bm25 and doc in dense
-    print(f"{doc}  rrf={s:.5f}  {'(in both lists)' if in_both else ''}")
-# d3 领先：在两份列表里都不是第 1，但都稳居前列。
-```
-::::
-
-### 框架
-
-在编排层，2026 年常见的搭法是：**LlamaIndex**（MIT）做摄取与检索，应用一旦带智能体性，就用 **LangGraph**（MIT）做编排与智能体；想要显式、可测试的生产流水线时用 **Haystack**（Apache-2.0）；想把检索加提示词编译并优化、而不是手工调参时用 **DSPy**。从第一天起就接入 **RAGAS** 或 **LangSmith**。没有评估的检索只是在猜，这正是评估实践那一章（@sec-eval-practice）所主张的。
-
-::: {.callout-important}
-## 尚有争议
-
-给这些工具排名的基准，可靠性低得反常。主要的 OCR 基准 OmniDocBench，在 2026 年被广泛认为已经饱和（Jerry Liu / LlamaIndex），而公开的 OCR 榜单并不能预测它在财务、法律或保险文档上的表现。MTEB 分数在其英文、多语与旧版榜单间互不可比。几乎每一项向量库的延迟、吞吐与成本声明，都是厂商自报、未经独立验证的。实践上的后果是：用一小份带标注的集合，在*自己的*文档上验证任何解析器或嵌入选择，把榜单位置当作入围信号，永远别当作决策。
+团队往往还没有代表性语料库或精确检索基线，就先争论产品。顺序应该反过来。只有当存储、解析器、嵌入模型或重排器的完整发布记录满足本地契约时，它才是可接受的选择。不存在站得住脚的通用分块大小、候选深度、融合常数、向量数量门槛或产品默认值。
 :::
-
-## 一个合理的默认（2026）
-
-对一个在 2026 年中开始搭这套栈的典型团队来说（带观点，日期 2026-06）：
-
-- **文档智能：两层结构。** 默认层是自托管 OSS：**Docling** 当流水线，配一个小型开源文档 VLM（**PaddleOCR-VL**，或者要最宽松许可就用 **Granite-Docling**）部署在 **vLLM** 上，搭配 **Outlines/XGrammar** 的 `guided_json` 做符合模式的抽取。升级层把评估标记为低置信度的页面（密集表格、手写、糟糕扫描件）路由到 **Reducto** 或 **LlamaParse Agentic**，或者用 **Mistral OCR 3** 当便宜的托管兜底。要是根本跑不了 GPU，就把 Mistral OCR 3 当默认，跳过 OSS 层。
-- **向量库：在现有的 Postgres 上用 pgvector**，跨入数千万向量时加上 **pgvectorscale**。要是不在 Postgres 上，**Qdrant** 是默认的原生向量替代；要是拒绝运行任何基础设施，就选 **Pinecone** 或 **Turbopuffer**（后者用在规模成本或多租户主导时）。
-- **嵌入：从一个强力的 API 模型起步**（text-embedding-3-large 走安全路线，Cohere Embed v4 走多模态/长上下文，Voyage 4 在 MongoDB Atlas 上），等到需要自托管、数据驻留或非英文深度时，再改用开源权重（Qwen3-Embedding 或 BGE-M3）。
-- **检索策略：混合（BM25 + 稠密）配 RRF，然后重排。** 在调任何奇技淫巧之前，先把重排器加上（托管的 Cohere Rerank 4，或自托管的 mxbai-rerank v2）。它往往是单项 ROI 最高的改动。
-- **框架：LlamaIndex** 做摄取与检索，带智能体性就用 **LangGraph** 做编排，**RAGAS 或 LangSmith** 从第一天起接入。
-
-理由是：尽量少上新基础设施，把质量预算花在见效的地方（解析质量、嵌入、混合、重排），同时留一条干净的升级路径。以后可以换库而不用重写流水线，但没法给一个从未度量过的解析器和检索器去毒。
-
-## 连接
-
-检索位于智能体或生成器之下、模型@gls-gateway之旁，文档智能则在摄取边缘再往外一步。统一的接缝是网关。嵌入模型、重排器与自托管文档 VLM，都不过是被服务的模型（@sec-serving-stack），所以理想情况下应当**通过模型网关**去调它们，与对话流量并列。这样一来，嵌入、重排与解析的调用就和对话调用一样，被打上密钥、做了预算、受到观测，而把 `text-embedding-3-large` 换成自托管的 `bge-m3`，或在困难页面上把 PaddleOCR-VL 换成 Mistral OCR，就是一次路由改动，而非代码改动。整条栈端到端的连接，@sec-wiring-stack 会专门展开，本章只强调其中一处接缝。解析输出进入抽取与分块，两者都进入向量库，库供检索使用，检索再把上下文交给生成器或智能体，评估则观测检索与最终回答。一次糟糕的解析会破坏它之上的每一层，正因如此，解析质量是检索与智能体要操心的事，而不是预处理时才想起的环节。
-
-## 一手来源
-
-向量库：
-
-- pgvector: <https://github.com/pgvector/pgvector>
-- pgvectorscale / StreamingDiskANN: <https://github.com/timescale/pgvectorscale>; Tiger Data 基准（厂商自报）<https://www.tigerdata.com/blog/pgvector-is-now-as-fast-as-pinecone-at-75-less-cost>
-- Qdrant: <https://qdrant.tech/documentation/>; 混合检索 <https://qdrant.tech/articles/hybrid-search/>
-- Weaviate: <https://weaviate.io/blog/hybrid-search-explained>
-- Milvus / Zilliz: <https://milvus.io/docs>
-- Pinecone 成本模型: <https://docs.pinecone.io/guides/manage-cost/understanding-cost>; Dedicated Read Nodes <https://www.pinecone.io/blog/dedicated-read-nodes/>
-- Turbopuffer: <https://turbopuffer.com/blog/turbopuffer>; pricing log <https://turbopuffer.com/docs/pricing-log>
-- LanceDB: <https://lancedb.github.io/lancedb/>; Chroma: <https://docs.trychroma.com/>; Vespa: <https://docs.vespa.ai/>
-
-嵌入与重排：
-
-- MTEB leaderboard: <https://huggingface.co/spaces/mteb/leaderboard>（不同榜单与版本分数不同，不可直接比较）
-- Voyage 4 家族: <https://blog.voyageai.com/2026/01/15/voyage-4/>
-- Cohere Rerank: <https://docs.cohere.com/docs/rerank-overview>; Rerank 4 (VentureBeat) <https://venturebeat.com/ai/coheres-rerank-4-quadruples-the-context-window-to-cut-agent-errors-and-boost>
-- Cohere Embed: <https://docs.cohere.com/docs/cohere-embed>; OpenAI embeddings: <https://platform.openai.com/docs/guides/embeddings>
-- Gemini Embedding 2（原生多模态，2026 年 3 月）: <https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-embedding-2/>
-- BGE-M3: <https://huggingface.co/BAAI/bge-m3>; Qwen3-Embedding: <https://huggingface.co/Qwen>; mxbai-rerank v2: <https://www.mixedbread.com/>
-
-混合检索与 RAG 框架：
-
-- 混合检索 / RRF / 重排概述: <https://www.digitalapplied.com/blog/hybrid-search-bm25-vector-reranking-reference-2026>
-- ColBERT / 后期交互（综述）: <https://arxiv.org/pdf/2502.14822>; 智能体 RAG 综述: <https://arxiv.org/pdf/2501.09136>
-- LlamaIndex: <https://docs.llamaindex.ai/>; LangGraph: <https://langchain-ai.github.io/langgraph/>; Haystack: <https://docs.haystack.deepset.ai/>; DSPy: <https://dspy.ai/>; RAGAS: <https://docs.ragas.io/>
-
-文档智能：
-
-- Docling / Granite-Docling: <https://www.ibm.com/new/announcements/granite-docling-end-to-end-document-conversion>, <https://huggingface.co/ibm-granite/granite-docling-258M/blob/main/README.md>
-- unstructured: <https://docs.unstructured.io/open-source/introduction/overview>
-- LlamaParse / LlamaCloud 定价: <https://www.llamaindex.ai/pricing>
-- Reducto: <https://reducto.ai/pricing>, <https://reducto.ai/blog/reducto-series-b-funding>
-- Mistral OCR 3: <https://mistral.ai/news/mistral-ocr-3/>, <https://mistral.ai/pricing/>
-- OmniDocBench: <https://github.com/opendatalab/OmniDocBench>; "OmniDocBench is saturated" (Jerry Liu): <https://www.llamaindex.ai/blog/omnidocbench-is-saturated-what-s-next-for-ocr-benchmarks>
-- PaddleOCR-VL / GLM-OCR 分数: <https://huggingface.co/PaddlePaddle/PaddleOCR-VL/discussions/29>, <https://arxiv.org/html/2603.10910v1>
-- Marker / Surya (Datalab) 许可: <https://github.com/datalab-to/surya>
-- 云文档 AI 定价: <https://aiproductivity.ai/blog/document-ai-cost-comparison/>
-- 结构化抽取 (Instructor / BAML / Outlines / XGrammar): <https://techsy.io/en/blog/best-llm-structured-output-libraries>
 
 ## 延伸阅读
 
