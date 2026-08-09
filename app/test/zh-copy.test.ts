@@ -773,7 +773,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/03-memory-systems.qmd",
-      ["一次会话的持久记录", "会话日志必须把意图和结果分开记", "给对话开分支便宜", "共享向量存储是数据泄露风险"],
+      ["不同状态有不同的所有者、恢复规则和权限边界", "执行历史、可变工作区、长期记忆和外部系统", "无法保证外部副作用恰好发生一次", "检索索引可以找回旧记录", "首先要把这些边界说清楚"],
     ],
     [
       "en/orchestration/05-the-harness.qmd",
