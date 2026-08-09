@@ -640,7 +640,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/adaptation/05-verifiable-rewards-reasoning.qmd",
-      ["可验证奖励", "单元测试", "RLVR", "结果奖励", "过程奖励"],
+      ["检查器是已经实现的任务规格", "不能凭空创造覆盖率", "GRPO 是优化器，不是 RLVR 的同义词", "结果与过程是一条轴线", "不能只根据 pass@1 就断言能力范围已经扩大"],
     ],
     [
       "en/adaptation/06-safety-tuning-instruction-hierarchy.qmd",
