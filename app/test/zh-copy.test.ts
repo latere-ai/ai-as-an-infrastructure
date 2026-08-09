@@ -861,7 +861,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/evaluation/04-judging-holistic.qmd",
-      ["@gls-llm-as-judge，也就是用模型当评分器，会产生偏差", "竞技场式的偏好排名", "@gls-pairwise-comparison，也就是两两回答的偏好票，汇成单一数字", "私有测试集也因此比公开排行榜更有价值"],
+      ["@gls-llm-as-judge，也就是用模型担任评分器", "选择刚好够用的最窄评分器", "把成对投票变成有条件的排名", "把确认集守成一道信息边界"],
     ],
     [
       "en/evaluation/05-factuality-grounding.qmd",

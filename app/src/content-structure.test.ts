@@ -799,7 +799,7 @@ test("serving retrieval and evaluation first uses explain operational terms loca
     ["en/evaluation/01-benchmarks.qmd", "@gls-membership-inference, tests that ask whether a specific example was in the training data"],
     ["zh/evaluation/01-benchmarks.qmd", "@gls-membership-inference，也就是成员推断测试，会在无法查看语料时，通过模型权重推测某个具体样本是否用于训练"],
     ["en/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge, a model used as the grader"],
-    ["zh/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge，也就是用模型当评分器"],
+    ["zh/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge，也就是用模型担任评分器"],
   ];
 
   for (const [path, snippet] of required) {
