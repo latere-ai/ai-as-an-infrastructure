@@ -1035,7 +1035,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/06-serving-multimodal.qmd",
-      ["视觉编码器决定视觉 token 数", "分辨率设置就是服务成本决策", "编码器放在哪里也是服务决策", "图像前缀缓存"],
+      ["从融合契约算起", "容量核算取决于架构", "调度资源向量，而不是提示词长度", "媒体生成是另一条服务路径"],
     ],
     [
       "en/inference/index.qmd",
