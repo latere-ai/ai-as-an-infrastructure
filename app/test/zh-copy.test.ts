@@ -1083,7 +1083,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/07-powering-it.qmd",
-      ["不是发电容量，而是通电时间", "选择自发电，而不再等电网", "新的散热默认值", "电网运营商必须主动管理"],
+      ["不是发电容量，而是通电时间", "选择自发电，而不是等待电网", "把液冷作为默认方案", "电网运营商必须主动管理"],
     ],
     [
       "en/infrastructure/08-the-machine-that-breaks.qmd",

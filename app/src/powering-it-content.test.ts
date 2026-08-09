@@ -219,7 +219,7 @@ test("the bibliography favors primary operators, regulators, and vendors", () =>
   }
 });
 
-test("the shared bibliography keeps citations used by the untranslated chapter", () => {
+test("the shared bibliography keeps citations used by the Chinese chapter", () => {
   const citeKeys = new Set(
     [...chineseChapter.matchAll(/@([a-z][a-z0-9]*)/gi)]
       .map((match) => match[1])
