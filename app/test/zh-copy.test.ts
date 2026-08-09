@@ -1146,7 +1146,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/01-choosing-a-model.qmd",
-      ["从闭源到开源的坐标轴", "许可证", "三个排行榜", "小规模评测", "每周一次的小版本更新"],
+      ["带版本的线上服务系统", "工作负载契约", "硬约束", "配对评测", "决策记录"],
     ],
     [
       "en/practice/02-serving-and-compute.qmd",

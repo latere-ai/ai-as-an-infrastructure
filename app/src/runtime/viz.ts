@@ -1615,12 +1615,13 @@
     watchTheme(host, draw);
   };
 
-  // Decision tree: the English chapter uses a product-neutral selection
-  // contract. The legacy tree remains the default for the untranslated Chinese
-  // chapter until that chapter is revised.
+  // Decision tree: the current model-selection chapter uses a product-neutral
+  // contract. The legacy tree remains available for older embeds.
   R['decision-tree'] = function (host) {
     var mode = host.getAttribute('data-mode');
-    var SELECTION = { q: 'Satisfies every hard constraint?', opts: [
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var zh = lang === 'zh';
+    var SELECTION_EN = { q: 'Satisfies every hard constraint?', opts: [
       { a: 'No', r: 'Reject or use the explicit exception process' },
       { a: 'Yes', next: { q: 'Supports the required interface and capacity?', opts: [
         { a: 'No', r: 'Reject or complete a production-shaped capacity test' },
@@ -1629,6 +1630,19 @@
           { a: 'Yes', next: { q: 'Pareto-efficient on cost, latency, availability, and risk?', opts: [
             { a: 'No', r: 'Remove as dominated or document the exceptional value' },
             { a: 'Yes', r: 'Shortlist for shadow and canary rollout' }
+          ] } }
+        ] } }
+      ] } }
+    ] };
+    var SELECTION_ZH = { q: '满足所有硬约束？', opts: [
+      { a: '否', r: '淘汰，或进入明确的例外流程' },
+      { a: '是', next: { q: '支持所需接口和容量？', opts: [
+        { a: '否', r: '淘汰，或先完成符合生产形态的容量测试' },
+        { a: '是', next: { q: '通过已经声明的质量门？', opts: [
+          { a: '否', r: '淘汰；检查失败，只能在开发集上修改方案' },
+          { a: '是', next: { q: '在成本、延迟、可用性和风险上处于帕累托前沿？', opts: [
+            { a: '否', r: '作为被支配方案删除，或记录其特殊价值' },
+            { a: '是', r: '进入影子流量和金丝雀发布候选名单' }
           ] } }
         ] } }
       ] } }
@@ -1655,9 +1669,9 @@
         ] } }
       ] } }
     ] };
-    var TREE = mode === 'selection-contract' ? SELECTION : LEGACY;
+    var TREE = mode === 'selection-contract' ? (zh ? SELECTION_ZH : SELECTION_EN) : LEGACY;
     var wrap = el('div', 'viz-dt'), path = el('div', 'viz-dt-path'), qEl = el('div', 'viz-dt-q'), opts = el('div', 'viz-ce-chips');
-    var resetBtn = el('button', 'viz-pa-toggle'); resetBtn.type = 'button'; resetBtn.textContent = 'start over';
+    var resetBtn = el('button', 'viz-pa-toggle'); resetBtn.type = 'button'; resetBtn.textContent = zh ? '重新开始' : 'start over';
     wrap.appendChild(path); wrap.appendChild(qEl); wrap.appendChild(opts); host.appendChild(wrap); host.appendChild(resetBtn);
     var crumbs = [];
     function show(node) {
@@ -1666,7 +1680,7 @@
         var b = el('button', 'viz-ce-chip'); b.type = 'button'; b.textContent = o.a;
         b.addEventListener('click', function () {
           crumbs.push(o.a); path.textContent = crumbs.join('  ›  ');
-          if (o.r) { qEl.textContent = mode === 'selection-contract' ? 'Outcome' : 'Recommended'; opts.textContent = ''; var res = el('div', 'viz-dt-result'); res.textContent = o.r; opts.appendChild(res); }
+          if (o.r) { qEl.textContent = mode === 'selection-contract' ? (zh ? '结果' : 'Outcome') : 'Recommended'; opts.textContent = ''; var res = el('div', 'viz-dt-result'); res.textContent = o.r; opts.appendChild(res); }
           else show(o.next);
         });
         opts.appendChild(b);
