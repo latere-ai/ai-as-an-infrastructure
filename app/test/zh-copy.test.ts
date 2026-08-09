@@ -1075,7 +1075,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/06-making-the-silicon.qmd",
-      ["从晶体管移到了封装和内存堆栈", "硅中介层就能限速整个领域", "内存短缺如今一路波及", "出口管制和主权算力计划"],
+      ["瓶颈已经从晶体管下移到封装和内存堆栈", "一款产品可能受硅中介层限制", "内存短缺也只有在共享设备、产品组合、库存与合同把压力传递出去时", "出口管制与主权算力项目同样会改变获取条件"],
     ],
     [
       "en/infrastructure/07-powering-it.qmd",
