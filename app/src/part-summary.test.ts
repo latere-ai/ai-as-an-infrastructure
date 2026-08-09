@@ -45,7 +45,7 @@ const handoffs: Array<[string, string[], string[]]> = [
   // sentences are prose.
   ["infrastructure", ["Part X"], ["第十部分"]],
   ["frontiers", ["Part XI"], ["第十一部分"]],
-  ["ecosystem", ["Part XII turns those market constraints into operating contracts"], ["第十二部分会把这些市场约束变成运营契约"]],
+  ["ecosystem", ["Part XII turns those market constraints into operating contracts"], ["第十二部分把这些市场约束落实为运营契约"]],
 ];
 
 test("part summaries are standalone narrative pages, not intro checklists", () => {
