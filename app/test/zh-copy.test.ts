@@ -869,7 +869,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/evaluation/05-factuality-grounding.qmd",
-      ["四个词不能混成一个", "从回答到 claim", "短答案与弃答", "检索系统里的 grounding"],
+      ["回答可能真实，却没有依据", "指标之前，先定义主张", "把弃答当作决策策略", "把引用评成主张与来源之间的连接"],
     ],
     [
       "en/evaluation/06-evaluating-agents.qmd",
