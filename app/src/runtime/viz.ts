@@ -1723,8 +1723,21 @@
   // a paired A/B interval, or a release rule.
   R['eval-power'] = function (host) {
     var n = 500, gap = 2.0, p = 0.72;
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var L = lang === 'zh' ? {
+      screen: '独立同分布粗略检查', reference: '参考效应', half: 'Wald 半宽',
+      below: '半宽小于参考效应', above: '半宽大于参考效应', unit: ' 个百分点',
+      xAxis: '留出样本数（对数刻度）', yAxis: '95% 半宽（百分点）',
+      sampleSlider: '样本量 n', effectSlider: '参考效应（百分点）'
+    } : {
+      screen: 'rough iid screen', reference: 'reference effect', half: 'Wald half-width',
+      below: 'half-width below reference', above: 'half-width above reference', unit: ' pp',
+      xAxis: 'held-out examples (log)', yAxis: '95% half-width, percentage points',
+      sampleSlider: 'sample size n', effectSlider: 'reference effect (pp)'
+    };
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 250);
+    cv.c.setAttribute('role', 'img');
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
@@ -1743,12 +1756,13 @@
       ctx.strokeStyle = t.accent2; ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); ctx.beginPath(); ctx.moveTo(pd, Y(gap)); ctx.lineTo(W - pd, Y(gap)); ctx.stroke(); ctx.setLineDash([]);
       ctx.fillStyle = half < gap ? t.accent : t.accent2; ctx.beginPath(); ctx.arc(X(n), Y(half), 5 * cv.dpr, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('held-out examples (log)', W / 2, H - 12 * cv.dpr);
-      ctx.save(); ctx.translate(13 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('95% half-width, percentage points', 0, 0); ctx.restore();
-      read.textContent = 'rough iid screen · n=' + Math.round(n) + ' · reference effect=' + gap.toFixed(1) + ' pp · Wald half-width=' + half.toFixed(1) + ' pp · ' + (half < gap ? 'half-width below reference' : 'half-width above reference');
+      ctx.fillText(L.xAxis, W / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(13 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.yAxis, 0, 0); ctx.restore();
+      read.textContent = L.screen + ' · n=' + Math.round(n) + ' · ' + L.reference + '=' + gap.toFixed(1) + L.unit + ' · ' + L.half + '=' + half.toFixed(1) + L.unit + ' · ' + (half < gap ? L.below : L.above);
+      cv.c.setAttribute('aria-label', read.textContent);
     }
-    host.appendChild(slider('sample size n', 50, 10000, 50, n, function (v) { n = v; draw(); }).wrap);
-    host.appendChild(slider('reference effect (pp)', 0.5, 8, 0.1, gap, function (v) { gap = v; draw(); }).wrap);
+    host.appendChild(slider(L.sampleSlider, 50, 10000, 50, n, function (v) { n = v; draw(); }).wrap);
+    host.appendChild(slider(L.effectSlider, 0.5, 8, 0.1, gap, function (v) { gap = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };

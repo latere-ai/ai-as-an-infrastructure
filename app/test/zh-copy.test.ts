@@ -845,7 +845,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/evaluation/02-statistical-reliability.qmd",
-      ["一个基准分数是估计值，不是事实", "在同一批项目上比较", "看得越多，假胜利越多", "偏差不是噪声"],
+      ["只有评测设计说明了它在估计什么", "先明确估计目标，再讨论区间", "预先说明什么结果会改变决策", "精确无法弥补偏差"],
     ],
     [
       "en/evaluation/03-human-evaluation-rubrics.qmd",

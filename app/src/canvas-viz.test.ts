@@ -546,6 +546,24 @@ test("evaluation precision visual does not present a Wald half-width as a power 
   expect(component).not.toContain("investigate only");
 });
 
+test("evaluation precision visual localizes every visible label in Chinese", () => {
+  const start = rt.indexOf("R['eval-power']");
+  const end = rt.indexOf("R['eval-frontier']", start);
+  const component = rt.slice(start, end);
+
+  for (const label of [
+    "独立同分布粗略检查",
+    "参考效应",
+    "Wald 半宽",
+    "留出样本数（对数刻度）",
+    "95% 半宽（百分点）",
+    "样本量 n",
+  ]) expect(component).toContain(label);
+  expect(component).toContain("document.documentElement.lang.indexOf('zh')");
+  expect(component).toContain("setAttribute('aria-label'");
+  expect(src("zh/evaluation/02-statistical-reliability.qmd")).toContain('data-lang="zh"');
+});
+
 test("the viz runtime registers expanded reasoning components", () => {
   for (const name of ["reasoning-search-budget", "rlvr-boundary", "ttc-budget"]) {
     expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
