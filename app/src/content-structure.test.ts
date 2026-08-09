@@ -826,7 +826,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["en/orchestration/08-rag-retrieval.qmd", "@gls-rag puts a live, queryable corpus next to the model"],
     ["zh/orchestration/08-rag-retrieval.qmd", "@gls-rag 在模型旁边放置一套实时、可查询的语料库"],
     ["en/ecosystem/03-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model], a common protocol for connecting models to tool servers"],
-    ["zh/ecosystem/03-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model] 这种连接模型与工具服务器的公共协议"],
+    ["zh/ecosystem/03-tooling-ecosystem.qmd", "@gls-mcp [@anthropic2024model] 常被称为连接模型与工具服务器的协议"],
     ["en/practice/01-choosing-a-model.qmd", "@gls-gateway, a routing and policy layer for model calls"],
     ["zh/practice/01-choosing-a-model.qmd", "@gls-gateway，也就是模型调用的路由与策略层"],
     ["en/practice/06-retrieval-and-documents.qmd", "@gls-vlm, a vision-language model, reads page images and text together"],

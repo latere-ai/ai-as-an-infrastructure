@@ -977,7 +977,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/ecosystem/03-tooling-ecosystem.qmd",
-      ["训练框架、服务引擎、智能体框架", "彼此互通的标准", "控制点", "调用方不再是一个应用，而变成一个智能体", "拉回到该层自身"],
+      ["工具栈是一组带版本的契约，不是框架清单", "训练框架、服务引擎、智能体框架", "帮助它们互操作的标准", "每条边界在什么版本和工作负载下承诺什么", "显式兼容性、故障隔离、可替换性，以及实际运行产生的证据"],
     ],
     [
       "en/ecosystem/04-economics.qmd",
