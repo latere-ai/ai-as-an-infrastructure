@@ -1170,7 +1170,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/04-training-finetuning-practice.qmd",
-      ["该用哪些工具改变模型权重", "把它接进剩下的技术栈", "到底该不该训练"],
+      ["适配发布", "适配契约", "固定基线", "带版本的模型制品"],
     ],
     [
       "en/practice/05-agents-and-sandboxes.qmd",

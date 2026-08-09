@@ -1,291 +1,414 @@
 # 训练与微调实践 {#sec-training-practice}
 
-权重如何变化的理论在 @sec-sft-peft（监督微调与参数高效方法）与
-@sec-training-at-scale（把优化器分片到众多加速器上）讲。落到实践里，问题更窄也更直接：现在是
-2026 年年中，手上有一个任务和一笔预算，该用哪些工具改变模型权重，怎样把它接进剩下的技术栈，
-以及到底该不该训练。答案既有立场，也有时效。先立住那些经久耐用的大类和权衡，
-至于每一个版本号、价格、排名，都当成一张快照，用时再核实。
+改变权重不是定制模型的第一步，训练任务完成也不等于工作结束。只有当可测量的行为变化必须写入权重时，微调才有理由存在。只有得到的制品能够复现、评估、服务、监控和回滚，这次微调才真正产生价值。
 
-![任务数据效率的示意图。微调可以用少量样本快速移动，而从头训练需要多得多的数据才会追上。理想化曲线，非实测。](/figures/training-finetuning-practice-1.svg){#fig-training-finetuning-practice-1}
-
-::: {.callout-note}
-## 截至 2026 年年中
-下文的框架、价格、GitHub star 数和营收数字是 2026 年 6 月的快照，各自标注了来源。每词元
-价格展示的是定价形态，而非权威报价。凡是标为不确定的，投入预算前要重新核实。大类与选择逻辑
-变化慢；具体数字以月为单位老化。
-:::
-
-## 这一层及其内容
-
-训练与微调是改变权重的那一层。它有别于只做前向传播的服务层（@sec-serving-stack），也不同于用
-上下文引导冻结模型的智能体和检索层（@sec-agents-practice、@sec-retrieval-practice），尽管冻结模型本身也可以被训练去行动、而不只是去回答（@sec-training-agents）。在实际的 2026 年技术栈里，它分成三个子层，这三层容易搞混，工作方式却很不一样。
+因此，实践中的基本单位是一项**适配发布**，而不是一次训练任务。它包括适配契约、固定基线、受治理的数据集、训练运行、评估报告和带版本的模型制品。@sec-sft-peft 介绍监督微调和参数高效方法，@sec-training-at-scale 介绍分布式训练。本章把这些机制连接成一套产品团队可以执行的运营流程。
 
 ```{dot}
 //| label: fig-training-layers
-//| fig-cap: "2026 年训练与微调栈的三个子层。多数团队只接触中间一行；引擎在其下，托管服务则替换全部三层。"
-digraph layers {
+//| fig-cap: "一项适配发布从行为契约走向可回退的生产制品。训练只是其中一个阶段，并不是交付单位。"
+digraph adaptation {
   rankdir=TB;
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=11, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280"];
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", penwidth=1.0];
 
-  toolkit [label="后训练工具包\nTRL, Axolotl, Unsloth, LLaMA-Factory\n(SFT, DPO, GRPO)", color="#3b82f6", fontcolor="#3b82f6", penwidth=1.6];
-  peft [label="参数高效方法\nPEFT: LoRA, QLoRA, DoRA"];
-  engine [label="分布式引擎\nFSDP2 / TorchTitan, Megatron-Core,\nDeepSpeed, JAX / MaxText"];
-  managed [label="托管服务\nTogether, Fireworks, Bedrock,\nAzure, Vertex"];
+  contract [label="适配契约\n目标 • 基线 • 限制"];
+  data [label="受治理的数据\n谱系 • 划分 • 模板"];
+  run [label="可复现的运行\n方法 • 配置 • 检查点"];
+  gate [label="晋升门\n目标 • 保留 • 安全"];
+  artifact [label="带版本的制品\n服务 • 金丝雀 • 回滚"];
 
-  toolkit -> peft [label="使用"];
-  toolkit -> engine [label="运行在"];
-  managed -> toolkit [label="隐藏这一切", style=dashed];
+  contract -> data -> run -> gate -> artifact;
 }
 ```
 
-1. **分布式引擎。** 把模型和优化器状态分片到许多加速器上的底层系统：PyTorch FSDP2 和
-   TorchTitan、NVIDIA Megatron-Core、Microsoft DeepSpeed（ZeRO），还有 TPU 上的
-   JAX/XLA（MaxText）。4D 和 5D 并行、FP8 训练、万亿级参数规模都在这儿。
-   @sec-training-at-scale 会讲解机制。
-2. **后训练工具包。** 封装这些引擎的高层库，用于@gls-sft、偏好优化（DPO，即直接在「优选与落选」答案对上调参，以及 ORPO）和强化学习（GRPO，即对一组采样答案打分，以及 GSPO、PPO）：Hugging Face TRL、Axolotl、Unsloth、
-   LLaMA-Factory。这是大多数团队实际接触的层。
-3. **参数高效方法与托管服务。** PEFT 库实现的 @gls-lora、@gls-qlora、DoRA，加上完全隐藏加速器的
-   托管微调 API。
+## 固定适配契约
 
-有两个 2026 年的主题把这层和全书串起来。一是 FP8 训练已经主流化：Google 的 Ironwood TPU 在矩阵单元里原生支持 FP8，Megatron-Core 提供 FP8 训练，Unsloth 做 FP8 强化学习（[Google Cloud, 2026](https://cloud.google.com/blog/products/compute/training-large-models-on-ironwood-tpus)）。二是与基础设施视角更相关的变化：RL 后训练已把训练和推断服务融合在一起。现代 RL 工具包内嵌一个推断引擎（几乎总是 vLLM）来生成 rollout（模型对任务采样得到的尝试），于是训练的盒子里就装着一个服务的盒子；后面的工具链接线，正是从这个事实展开。
+先写清楚必须改变什么、绝不能改变什么，然后再选择训练方法。**适配契约**是一份可以审查的边界声明。它能避免团队把不断下降的损失曲线误当成产品问题已经解决的证据。
 
-## 第一个岔路：到底要不要训练？
+| 契约字段 | 需要记录的证据 |
+|---|---|
+| 任务边界 | 接受的输入、预期输出、语言、领域和明确排除的用途 |
+| 目标行为 | 在已命名任务切片上的可测量改进 |
+| 固定基线 | 基座模型、提示词、检索、工具、解码设置和当前得分 |
+| 不得退化的要求 | 必须保持的通用能力、安全行为、校准和格式 |
+| 数据边界 | 允许使用的来源、权利、保留期限、敏感类别和删除义务 |
+| 部署目标 | 服务运行时、延迟与内存限制、适配器支持和数据驻留要求 |
+| 预算上限 | 数据、算力、工程、评估和服务成本上限 |
+| 晋升门 | 指标、不确定性规则、失败预算、审批人和证据期限 |
+| 回滚 | 上一已知正常制品、回滚触发条件、负责人和最长恢复时间 |
 
-挑工具之前，先回答更难的问题。在 2026 年，对很多任务而言，现实的默认是「别训练权重」。提示工程、少样本示例、检索（@sec-retrieval-practice）和结构化输出，已经覆盖了过去人们经常靠微调才能解决的大部分需求。OpenAI 一边收缩自助微调产品，一边引导用户改用提示缓存、更小的基座模型和 RAG（[explainx.ai，二手](https://explainx.ai/blog/openai-gpt-55-pricing-fine-tuning-api-wind-down-2026)）。
+训练开始前，目标行为就应当能在具体样本中观察到。“了解我们的产品”不是契约。“在固定测试集至少 98% 的样本上返回有效的客服分类对象，且拒绝准确率和通用帮助能力保留集的退化均不超过各自的失败预算”才更接近契约。实际阈值应由应用决定，本书不能替它规定。
 
-只有当需要一种上下文窗口无法以低成本承载的「持久行为改变」时，才去微调：
+固定基线必须包括用户看到的完整路径。更换对话模板、检索索引、工具 Schema 或解码器，即使不更新权重，也可能改变得分。如果遗漏这些环节，实验就无法把结果归因于微调。
 
-- 提示总是偏离的一致输出格式或固定文风，
-- 基座模型里缺少的某个狭窄领域的词汇或约定，
-- 把大模型的行为蒸馏成一个小型专用模型，换来延迟或成本上的收益（这对应下层约束），
-- 靠强化学习对着一个可验证的奖励塑造出来的能力，即 @sec-training-to-reason 讲的推理和智能体情形。
+## 判断行为是否应该写入权重
 
-如果这些都不成立，就把这一周花在把提示和检索做得更好上，别去跑训练。
+让固定基线和成本最低的可行替代方案在**同一套评估集**上运行。这是决定是否训练的关口。
 
-::: {.callout-tip}
-## 下层约束
-服务层向上伸手，支撑起微调最常见的理由。一个已经专化过的小模型，每词元的服务成本远低于
-API 背后的大型通用模型（@sec-serving-stack）。当服务量很大，这次训练的成本就会从推断节省里赚回来，这和 @sec-scaling-laws 里「为推断而过度训练」的逻辑是一回事，只是上移了一层。所以这里的微调，本质上是一个穿着「训练」外衣的「服务成本」决策。
-:::
+- 把变化的事实和需要来源支撑的回答放进**检索系统**，这样内容可以更新，也可以引用来源。
+- 把严格语法放进**工具 Schema**、语法约束、验证器或结构化解码器。更新权重无法保证输出一定有效。
+- 把简短且便于检查的策略写进**提示词**或应用代码。
+- 当任务需要当前状态或外部副作用时，使用工具。
+- 只有高频且长期稳定的行为必须写入权重，而且实测收益能够穿过完整服务路径时，才进行微调。
 
-一次微调成本和两个服务价格会决定两条成本线的交叉点；这些数字只是示意。盈亏平衡点以下，大型 API 模型便宜；以上，微调过的小模型赢。
+不能因为手里有示例就直接训练。训练无法替代缺失的数据库、授权检查或确定性解析器，也不适合直接处理尚未查明原因的评估失败。
+
+接下来，应由现有监督信号决定采用哪条路径：
+
+| 需求与现有证据 | 可行干预 | 需要重点测试的风险 |
+|---|---|---|
+| 已有正确的示范数据 | 监督微调（SFT） | 模仿标注缺陷或格式噪声 |
+| 已有优选和落选答案 | 直接偏好优化（DPO）或其他偏好目标 | 偏好不一致、长度偏差和过拟合 |
+| 已有可靠的程序化奖励或学习到的奖励 | 强化学习或强化微调 | 奖励可能被钻空子，或被优化到超出其有效范围 |
+| 基座缺少某种领域分布、词汇或模态 | 继续预训练，再做任务适配 | 遗忘、数据成本和污染 |
+| 更大的系统质量足够，但服务成本过高 | 把教师模型的输出蒸馏到更小的学生模型 | 复制教师错误并丢失长尾行为 |
+| 上下文、检索或工具已经满足契约 | 不改权重 | 非训练路径带来的运营复杂度 |
+
+SFT 从示范中学习。DPO 不需要在线采样循环，而是从成对偏好中学习 [@rafailov2023dpo]。经典 RLHF 先用示范拟合行为，再从排序数据学习奖励，最后针对该奖励优化策略 [@ouyang2022training]。这些目标消耗的证据不同，失败方式也不同。方法名称无法修复不能表达契约的标签。
+
+## 构建经得起审查的数据
+
+训练样本不只是一段文本。它还包括来源记录、使用该记录的许可、转换历史、数据划分、模板修订版本，以及哪些词元参与损失计算的决定。
+
+生成样本前，先建立数据来源记录。至少要包含稳定的来源 ID、来源位置、收集时间、负责人、许可证或其他法律依据、适用时的同意限制、允许用途、保留期限、敏感等级和删除机制。个人身份信息、凭据、客户机密和受版权保护的材料必须删除或接受明确治理。模型检查点不会让删除义务消失。数据聚合平台提供的标签不能单独充当证据。一项大型审计发现，许可证信息经常缺失或分类错误，因此数据必须保留指向原始来源的谱系 [@longpre2024licensing]。
+
+结构化的数据文档可以让这些决定保持可见。Data Cards 会记录来源、收集与标注过程、预期用途和生命周期维护方式 [@pushkarna2022datacards]。在团队内部，可以用带版本的数据集清单达到同样目的，其中每一行都指回来源 ID。来源被撤回时，谱系应能找出所有需要审查的派生样本、数据集版本、训练运行和制品。
+
+### 按可能泄漏的单位划分数据集
+
+随机拆分数据行通常并不正确。应选择一种**分组单位**，确保相关材料始终留在一起，例如客户、对话、文档、代码仓库、事故、作者或时间窗口。每个分组只分配一次，进入训练集、开发集或测试集中的一个；随后既要在每个划分内部去重，也要**跨数据划分去重**。近似重复项会虚高评估结果，并增加记忆风险，语言模型实验已经观察到这两种影响 [@lee2022deduplicating]。
+
+只要可能，应在划分前把完全重复和近似重复项聚类，让整个重复项簇作为一个分组移动。数据划分完成后，再拟合数据过滤器、根据模型评分挑选样本、生成合成变体，或针对语料调整模板。把最终训练清单与内部评估集和公开基准进行比对，其中也包括生成教师数据时使用的提示词，并在污染报告中公开仍未排除的重合。
+
+方法选型开始前，测试集就进入**测试集隔离**。训练代码不得读取，提示词作者不得针对它调参，合成数据生成也不得把它当作种子。只能在运行清单中保存测试集摘要和访问策略。开发集用于迭代，隔离的测试集只用于晋升决策。
+
+```{dot}
+//| label: fig-training-data
+//| fig-cap: "降低泄漏风险的数据路径。先核对使用权，让相关记录和重复项簇始终留在一起，并在生成训练转换结果前封存测试集。"
+digraph data_path {
+  rankdir=TB;
+  bgcolor="transparent";
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [color="#6b7280", penwidth=1.0];
+
+  sources [label="来源清单\nID • 权利 • 敏感度"];
+  groups [label="合并相关记录和重复项"];
+  split [label="分配一个数据划分\n训练 • 开发 • 测试"];
+  seal [label="封存测试集\n摘要 • 访问策略"];
+  render [label="生成训练数据\n模板 • 工具 • 掩码"];
+
+  sources -> groups -> split -> seal -> render;
+}
+```
+
+### 把格式视为制品的一部分
+
+训练和服务必须采用完全相同的分词器和对话模板。验证角色顺序、起止词元、工具调用序列化、截断和最大长度。不要只相信配置开关，应当把实际批次解码后逐项检查。对提示词补全或对话式 SFT，如果契约要求只对助手输出计算损失，就要使用**损失掩码**。否则，优化器可能把容量耗在预测用户文本或系统框架上。以当前 TRL 文档为例，它会明确区分完整序列、仅补全和仅助手输出三种损失行为 [@hf2026trl]。
+
+对编号为 $i$ 的样本，只计算助手输出的 SFT 目标可以写成：
+
+$$
+\mathcal{L}_{\mathrm{SFT}}(\theta)
+=
+-\frac{1}{Z}
+\sum_{i=1}^{N}
+\sum_{t=1}^{T_i}
+m_{i,t}
+\log p_{\theta}(y_{i,t}\mid x_i,y_{i,<t}),
+\qquad
+Z=\sum_{i=1}^{N}\sum_{t=1}^{T_i}m_{i,t}.
+$$
+
+其中：
+
+- $N$ 是样本数量，$T_i$ 是第 $i$ 个样本的词元长度；
+- $x_i$ 是提示词和其他条件输入；
+- $y_{i,t}$ 是第 $t$ 个输出词元，$y_{i,<t}$ 是此前的输出前缀；
+- $p_{\theta}$ 是参数 $\theta$ 可训练时的模型分布；
+- $m_{i,t}\in\{0,1\}$ 是损失掩码。助手答案词元通常取一，排除的提示词、填充或框架词元取零；
+- $Z$ 是参与计算的词元数，用于归一化损失。
+
+用少量固定样本为格式化器编写单元测试。测试应断言词元 ID、标签、掩码位置、截断行为和往返解码结果。模板变化既是数据变化，也是服务接口变化。
+
+### 测量记忆，而不是假定隐私
+
+在少量、重复或敏感的数据上微调，可能让模型暴露罕见字符串。训练前扫描密钥和完全重复项。评估时探测留出的金丝雀样本和合理前缀，并记录敏感片段是否能够复现。普通损失和准确率无法揭示意外记忆，这正是暴露度测试最初要解决的问题 [@carlini2019secret]。这些测试不能证明隐私，但可以把模糊风险变成发布门。
+
+## 选择满足契约的最小权重改动
+
+方法选择包含两个彼此独立的维度：目标函数决定模型从什么信号中学习，参数范围决定模型有多少部分可以变化。
+
+设 $W\in\mathbb{R}^{d_{\mathrm{out}}\times d_{\mathrm{in}}}$ 为一个权重矩阵。LoRA 冻结该矩阵，只学习一个低秩更新 [@hu2021lora]：
+
+$$
+W' = W + \Delta W,
+\qquad
+\Delta W = BA,
+$$
+
+其中：
+
+- $W'$ 是适配后的矩阵；
+- $A\in\mathbb{R}^{r\times d_{\mathrm{in}}}$ 和 $B\in\mathbb{R}^{d_{\mathrm{out}}\times r}$ 是可训练因子；
+- $d_{\mathrm{in}}$ 和 $d_{\mathrm{out}}$ 分别是输入与输出宽度；
+- $r$ 是适配器秩，通常远小于两个宽度。
+
+对这个矩阵，两项因子合计带来的可训练参数量是：
+
+$$
+N_{\mathrm{LoRA}} = r(d_{\mathrm{in}} + d_{\mathrm{out}})
+$$
+
+这个式子只计算两项低秩因子，不包括偏置和框架特有的缩放参数。适配器秩、目标模块、缩放、丢弃率，以及哪些非适配器模块仍可训练，都属于实验变量，不是通用默认值。
+
+| 参数范围 | 哪些部分会变化 | 可能带来的收益 | 必须测量什么 |
+|---|---|---|---|
+| LoRA | 选定模块上的低秩因子 | 可训练状态小，任务制品可以单独保存 | 秩与目标模块敏感性、服务运行时的适配器支持、能力保留 |
+| QLoRA | 基座是冻结的量化基座，只更新 LoRA 因子 | 适配期间占用更少的基座权重内存 | 量化后端、计算数据类型、峰值内存、相对非量化 LoRA 的质量 |
+| DoRA | 分别更新幅值和低秩方向 | 获得不同于 LoRA 的容量与优化权衡 | 额外状态、运行时支持和目标任务上的实测收益 |
+| 全量微调 | 所有选定的基座参数 | 最大的模型改动自由度 | 优化器内存、遗忘、检查点大小和完整回归测试集 |
+
+QLoRA 让梯度穿过冻结的四比特基座，更新更高精度的适配器。论文方案结合了 NF4、双重量化和分页优化器 [@dettmers2023qlora]。DoRA 将幅值和方向分解，更新几何与 LoRA 不同 [@liu2024dora]。两篇论文都没有给出适用于所有任务的样本数量门槛。应当在同一份契约上，通过**实证比较**在 LoRA、QLoRA、DoRA 和全量微调之间选择，并从最小可行试验开始。如果目的是比较参数范围，就固定数据、词元预算和评估方法。
+
+## 启动前估算训练规模
+
+检查点大小不等于训练所需内存。可以先用下面的恒等式核算：
+
+$$
+M_{\mathrm{peak}}
+= M_{\mathrm{params}}
++ M_{\mathrm{grads}}
++ M_{\mathrm{opt}}
++ M_{\mathrm{acts}}
++ M_{\mathrm{workspace}},
+$$
+
+其中：
+
+- $M_{\mathrm{params}}$ 是所选精度下常驻内存中的参数和适配器；
+- $M_{\mathrm{grads}}$ 是可训练参数的梯度存储；
+- $M_{\mathrm{opt}}$ 是优化器状态和可能存在的主权重状态；
+- $M_{\mathrm{acts}}$ 是保存的激活内存，取决于批量、序列长度、模型形状和激活检查点策略；
+- $M_{\mathrm{workspace}}$ 包括内核、通信缓冲区、临时张量、运行时和内存碎片。
+
+设 $n_{\mathrm{shard}}$ 为数据并行工作进程数。全分片方法可能把参数、梯度和优化器状态在每个进程上的占用压低到：
+
+$$
+M_{\mathrm{local}}
+\gtrsim
+\frac{M_{\mathrm{params}}+M_{\mathrm{grads}}+M_{\mathrm{opt}}}
+{n_{\mathrm{shard}}}
++ M_{\mathrm{acts}} + M_{\mathrm{workspace}},
+$$
+
+但这只是规划下界，不是保证。逐层全收集、未分片模块、激活放置、通信重叠和优化器选择都会改变峰值。ZeRO 确立了训练状态分片的分解方式 [@rajbhandari2020zero]；当前的 FSDP2 同样会分片参数、梯度和优化器状态，并调度全收集与归约分散操作 [@pytorch2026fsdp2]。先用目标模型和实际的序列分布、批量大小、精度、检查点策略及后端做一次短时试跑，测出真实峰值。租用大规模集群前，再完成一次保存检查点、中断并恢复的测试。
+
+### 核算整个项目，而不只是 GPU 时间
+
+适配项目的固定成本是：
+
+$$
+C_{\mathrm{adapt}}
+= C_{\mathrm{data}}
++ C_{\mathrm{train}}
++ C_{\mathrm{eval}}
++ C_{\mathrm{engineering}}
++ C_{\mathrm{deploy}},
+$$
+
+其中五项分别包括数据准备和审查、训练算力、评估、工程时间和部署工作。如果两个系统达到**等价的质量和运营要求**，服务量达到 $V$ 百万合格词元时的总成本可以写成：
+
+$$
+C_{\mathrm{base}}(V)=F_{\mathrm{base}}+Vc_{\mathrm{base}},
+\qquad
+C_{\mathrm{tuned}}(V)=F_{\mathrm{tuned}}+Vc_{\mathrm{tuned}}.
+$$
+
+盈亏平衡服务量为：
+
+$$
+V^*=
+\frac{F_{\mathrm{tuned}}-F_{\mathrm{base}}}
+{c_{\mathrm{base}}-c_{\mathrm{tuned}}},
+$$
+
+前提是 $c_{\mathrm{base}}>c_{\mathrm{tuned}}$。这里，$F_{\mathrm{tuned}}$ 包含 $C_{\mathrm{adapt}}$；两项 $F$ 是以美元计的固定成本；两项 $c$ 是每百万合格词元的美元成本。如果质量、安全或可靠性不同，或者适配后的路径在每个合格词元上并不更便宜，就没有有意义的盈亏平衡点。
 
 <figure id="fig-training-finetuning-practice-cost-crossover">
-<div class="viz" data-viz="cost-crossover" data-x-label="服务词元数（百万）" data-y-label="总成本（美元）" data-x-max="40" data-a-label="大型 API 模型" data-a-fixed="0" data-a-rate="5" data-a-rate-min="2" data-a-rate-max="10" data-a-rate-label="大模型 API 价格（美元/百万词元）" data-b-label="微调小模型" data-b-fixed="50" data-b-rate="0.5" data-b-fixed-min="10" data-b-fixed-max="100" data-b-fixed-label="一次性微调成本（美元）" data-b-rate-min="0.1" data-b-rate-max="3" data-b-rate-label="小模型价格（美元/百万词元）"></div>
-<figcaption>两条「总成本对服务词元数」的线。大型 API 模型固定成本为 0，加上它的每词元价格，是一条过原点的直线。微调过的小模型先付出一次性微调成本，之后每词元价格低得多。两线交叉处就是盈亏平衡点：在它以下，API 更便宜；在它以上，这次微调已经赚回成本。拖动三个滑块，看交叉点移动。这是一个穿着「训练」外衣的「服务成本」决策。数字仅作示意，并非报价。</figcaption>
+<div class="viz" data-viz="cost-crossover" data-x-label="已服务的合格词元（百万）" data-y-label="总成本（美元）" data-x-max="40" data-a-label="固定基线" data-a-fixed="0" data-a-rate="5" data-a-rate-min="2" data-a-rate-max="10" data-a-rate-label="基线成本（美元/百万合格词元）" data-b-label="适配模型" data-b-fixed="50" data-b-rate="0.5" data-b-fixed-min="10" data-b-fixed-max="100" data-b-fixed-label="适配项目成本（美元）" data-b-rate-min="0.1" data-b-rate-max="3" data-b-rate-label="适配后成本（美元/百万合格词元）"></div>
+<figcaption>示意性的盈亏平衡模型。适配路径先承担完整项目成本，再按每百万合格词元累加服务成本。拖动固定成本和变动成本，可以观察交点如何移动。只有两条路径满足相同的质量与运营契约时才能比较，这些数字不是供应商报价。</figcaption>
 </figure>
 
 :::: {.runnable}
 ```python
-import numpy as np
-import matplotlib.pyplot as plt
+# 仅作示意。成本单位为美元，服务量单位为百万合格词元。
+base_fixed = 0.0
+adaptation_program = 50.0
+tuned_fixed = adaptation_program
+base_rate = 5.0
+tuned_rate = 0.5
 
-# 仅作示意：展示权衡的形态，并非报价。
-finetune_cost = 50.0      # 一次性微调运行，美元
-big_price = 5.0           # 大型 API 模型，美元/百万词元（服务）
-small_price = 0.5         # 微调小模型，美元/百万词元（服务）
-
-vol = np.linspace(0, 40, 200)            # 服务词元数（百万）
-big_total = big_price * vol              # 不训练，按词元付费
-small_total = finetune_cost + small_price * vol
-
-break_even = finetune_cost / (big_price - small_price)
-print(f"服务 {break_even:.1f}M token 时盈亏平衡")
-
-plt.plot(vol, big_total, label="大型 API 模型")
-plt.plot(vol, small_total, label="微调小模型")
-plt.axvline(break_even, ls="--", color="gray")
-plt.xlabel("服务 token 数（百万）"); plt.ylabel("总成本（美元）")
-plt.legend(); plt.title("微调何时回本？")
-plt.show()
+if base_rate <= tuned_rate:
+    print("不存在正的盈亏平衡服务量")
+else:
+    break_even = (tuned_fixed - base_fixed) / (base_rate - tuned_rate)
+    print(f"盈亏平衡服务量：{break_even:.1f}M 合格词元")
 ```
 ::::
 
-## 主要参与者（2026 年年中）
+## 按能力选择工具
 
-这些表格有时效，也标注了来源。
+框架名称不是架构。应当根据契约建立一张**能力矩阵**，再用项目的**官方支持矩阵**、冒烟测试和目标模型修订版本逐项验证。
 
-### 分布式引擎
+| 能力 | 选型前需要回答的问题 |
+|---|---|
+| 目标与模型 | 目标模型、分词器、模板、SFT 或偏好目标，以及适配器方法能否组合工作？ |
+| 规模与恢复 | 单台设备能否容纳，是否需要分片，能否承受抢占，是否保存优化器状态，恢复后能否达到契约要求的确定性？ |
+| 制品控制 | 检查点可移植性、适配器格式、可导出性和合并行为是否有文档并经过测试？ |
+| 治理 | 样本、日志、检查点和指标会流向哪里？数据驻留、访问、删除和审计要求能否满足？ |
+| 评估 | 训练器能否在训练期间评估，同时不读取隔离的测试集，也不通过提前停止泄漏测试信息？ |
+| 运营 | 版本固定、可观测性、故障处理、成本归属和供应商退出方案是否齐备？ |
 
-| 名称 | 是什么 | 许可 | 最适合 | 备注（2026 年年中） |
-|------|--------|------|--------|---------------------|
-| **PyTorch FSDP2** | 原生全分片数据并行；把参数、梯度、优化器状态作为 DTensor 分片 | BSD | 不上重型框架的 PyTorch 原生分片训练 | FSDP2 是当前版本；FSDP1 自 PyTorch 2.11+ 起弃用。新增逐参数冻结、FP8/BF16 混合（[PyTorch 教程](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html)） |
-| **TorchTitan** | 基于 FSDP2 的 PyTorch 原生预训练平台；可组合 4D 并行 | BSD | PyTorch 上的生产级预训练 / 继续预训练 | 在 128 到 512 GPU 规模的 Llama 3.1 配方上报告了加速（[arXiv 2410.06511](https://arxiv.org/pdf/2410.06511)）；torchforge 之下的基座 |
-| **NVIDIA Megatron-Core** | GPU 优化的张量/流水线/专家/上下文并行；有产品支持 | Apache-2.0 风格 + NVIDIA 支持 | NVIDIA GPU 上的大型稠密、MoE 与多模态训练 | 2026 年 1 月新增动态上下文并行（在变长序列上报告至多约 1.48 倍）；FP8 训练（[文档](https://docs.nvidia.com/megatron-core/index.html)、[路线图](https://github.com/NVIDIA/Megatron-LM/issues/4003)） |
-| **NeMo / Megatron Bridge** | Megatron-Core 之上的更高层编排；配方、导出、对齐 | 开源 + NVIDIA 支持 | 端到端标准化在 NVIDIA 栈上的团队 | Bridge 0.4.0（2026 年 4 月）新增 Kimi 2.5、Nemotron 3、Qwen 3.5 VL、FP8 导出（[文档](https://docs.nvidia.com/nemo/megatron-bridge/latest/)） |
-| **DeepSpeed (ZeRO)** | ZeRO 分片、CPU/NVMe 卸载、训练优化 | Apache-2.0 / MIT | 内存受限训练、卸载、超大模型 | 最新发布 v0.19.2（2026 年 6 月）；v0.19.x 包含与 ZeRO-3 相关的 Muon 更新（[发布](https://github.com/deepspeedai/DeepSpeed/releases)） |
-| **JAX + MaxText** | JAX/XLA 上、为 TPU 调优的纯解码器 LLM 参考实现 | Apache-2.0 | Cloud TPU 上的基础模型训练 | Ironwood TPU FP8；Qwen3-Next 与 DeepSeek 特性（2026 年 3 月）。配合 Tunix 做 RL（[文档](https://maxtext.readthedocs.io/)、[Cloud TPU + JAX](https://docs.cloud.google.com/tpu/docs/jax-ai-stack)） |
+高层后训练工具包通常提供 SFT、偏好、奖励模型和强化学习训练器，TRL 是目前的一个例子 [@hf2026trl]。PEFT 等适配器库实现 LoRA 系列方法和检查点操作 [@hf2026peft]。如果团队希望用一份经过审查的配置文件描述训练任务，Axolotl 这类配置驱动项目可能很有用 [@axolotl2026]。当模型和优化器状态无法装入目标拓扑时，才需要 FSDP2 或 ZeRO 之类的原生分布式引擎。托管服务可以替代一部分基础设施工作，却不能替代数据契约、评估门、导出决策或回滚计划。
 
-### 后训练工具包（多数团队接触的层）
+不能根据 GitHub 星标、供应商价格快照或某个工具永远最快的说法来选型。先对最小的代表性训练运行做基准测试，固定版本和容器镜像。扩大规模前，主动让一个工作进程失败，从检查点恢复，导出制品，并通过目标运行时提供服务。
 
-| 名称 | 是什么 | 许可 | 最适合 | 备注（2026 年年中） |
-|------|--------|------|--------|---------------------|
-| **Hugging Face TRL** | 官方 HF 后训练：SFT、DPO、GRPO、奖励建模 | Apache-2.0 | 参考实现；别人封装的基础构件 | 事实标准的训练器；集成 PEFT、accelerate、FSDP/DeepSpeed（[文档](https://huggingface.co/docs/trl)） |
-| **Axolotl** | 基于 TRL/PEFT 的配置驱动（YAML）封装；LoRA、QLoRA、全量微调、多模态 | Apache-2.0 | 几块 GPU 上可复现的配置即代码运行 | 自 2025 年起支持多模态；「改个 YAML，得到一次运行」（[仓库](https://github.com/axolotl-ai-cloud/axolotl)） |
-| **Unsloth** | 自定义 Triton kernel，在 1 到 2 块 GPU 上更快、更省显存的 SFT 与 RL | Apache-2.0 核心；付费 Pro | 单 GPU 效率；长上下文 GRPO | 开源版实质上是单 GPU；稳健的多 GPU 在 Pro（**不确定**，状态在演变）。24GB GPU 上的 GRPO；FP8 RL 约为 BF16 的 1.4 倍（[文档](https://unsloth.ai/docs)） |
-| **LLaMA-Factory** | 广覆盖工具包 + Web UI（LlamaBoard）；模型支持最广 | Apache-2.0 | 众多模型家族、低代码 UI，重广度而非峰值速度 | 约 68k GitHub star；据报可用 Unsloth 后端、与原生速度相差约 6%（[二手](https://theaiengineer.substack.com/p/unsloth-vs-axolotl-vs-llama-factory)） |
-| **torchtune** | PyTorch 原生后训练（SFT/DPO/PPO/GRPO/QAT），抽象极少 | BSD | PyTorch 上可改写的配方 | **仅维护：** 2025 年 7 月 15 日停止活跃开发；一个未命名的 PyTorch 原生后继者正在开发中（[issue #2883](https://github.com/meta-pytorch/torchtune/issues/2883)） |
-| **torchforge** | Monarch + TorchTitan + vLLM 之上的 PyTorch 原生 RL 与智能体后训练 | 开源，**实验性** | 不写分布式基础设施的可扩展 RL 后训练 | 2025 年 10 月发布。并非 torchtune 后继者；建于 TorchTitan（训练）与 vLLM（rollout）之上（[PyTorch 博客](https://pytorch.org/blog/introducing-torchforge/)） |
-| **verl** | 混合控制器式 RL 后训练（HybridFlow 设计，EuroSys'25）：PPO/GRPO/GSPO/DAPO/REINFORCE++，训练走 FSDP 或 Megatron，rollout 走 vLLM/SGLang | Apache-2.0 | 生产级多节点 RL 后训练 | 字节跳动发起、社区维护；事实上的多节点 RL 框架。vLLM 自家的 vime（2026 年 6 月）沿用同一模式，把 Megatron 与 vLLM 接成一条 RL 流水线（[repo](https://github.com/verl-project/verl)、[vime](https://vllm.ai/blog/2026-06-09-announcing-vime)） |
-| **HF PEFT** | 实现 LoRA、QLoRA、DoRA、rsLoRA 的库 | Apache-2.0 | TRL/Axolotl/LLaMA-Factory 之下的适配器层 | LoRA 家族方法真正所在之处（[文档](https://huggingface.co/docs/peft)） |
+## 让训练过程可复现
 
-### 托管服务（无需自有加速器）
+提交给训练器的配置只是**运行清单**的一部分。运行清单把数据、代码、模型、环境和评估绑定成同一个身份。这是代码、数据、配置和实验条件可复现性报告在生产环境中的对应形式 [@pineau2021reproducibility]。
 
-| 名称 | 是什么 | 最适合 | 备注（2026 年年中） |
-|------|--------|--------|---------------------|
-| **OpenAI fine-tuning** | GPT 模型上的托管 SFT/RFT | （正在收缩） | **自助微调正在收缩。** 自 2026 年 5 月 7 日起不再接纳新组织；所有新任务于 2027 年 1 月 6 日终止（[弃用](https://developers.openai.com/api/docs/deprecations)） |
-| **Tinker**（Thinking Machines） | 开放权重上的托管 LoRA SFT 与 RL，含大型 MoE（如 Qwen 235B-A22B）；训练循环用 Python 自己写，分布式 GPU 由对方运行 | 不做 GPU 运维、又要研究级控制 | 2025 年 10 月上线；与 OpenAI 自助微调收缩相对照：托管微调是在整合，不是在消亡（[Tinker](https://thinkingmachines.ai/tinker/)） |
-| **Together AI** | 开放权重上的托管 SFT、DPO、LoRA；按训练词元计费 | 开放权重上低成本的 LoRA/SFT + 专用服务 | 例如 LoRA SFT 约 $0.48/M 词元（16B）、全量微调约 $3.20/M（70 到 100B）、DPO 约 $8/M；服务端点另行计费（[二手](https://www.cloudzero.com/blog/together-ai-pricing/)） |
-| **Fireworks AI** | 自助后训练 + 快速服务一处搞定 | 调优与服务合一 | 据报约 $800M ARR（2026 年 5 月），自约 $305M（2025 年底）上升（[二手](https://sacra.com/c/fireworks-ai/)） |
-| **AWS Bedrock** | 托管 SFT + RFT，含开放权重，OpenAI 兼容 API | AWS 原生团队；开放权重上的 RFT | 开放权重的 RFT 与 OpenAI 兼容 FT 于 2026 年 2 月加入（[新功能](https://aws.amazon.com/about-aws/whats-new/2026/02/amazon-bedrock-reinforcement-fine-tuning-openai)） |
-| **Modal** | 无服务器 GPU 算力；自行运行 torchtune/Unsloth/Axolotl | 在按需 GPU 上自带配方 | 并非完全托管的 FT；训练代码要自己写（[参考](https://www.spheron.network/blog/fireworks-ai-alternatives/)） |
-| **Azure AI Foundry / Google Vertex** | 云原生托管微调（Azure OpenAI、Gemini 调优） | 标准化在 Azure/GCP 上的企业 | Azure 有 FT 成本管理工具（[Microsoft Learn](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/fine-tuning-cost-management)） |
+除了机器字段，正文也应明确列出每项内容：代码修订版本、容器摘要、基座检查点摘要、分词器修订版本、数据集清单、划分规则、随机种子、优化器、学习率调度器和检查点间隔。
 
-### 参数高效方法
+```yaml
+run_id: support-sft-0042
+code_revision: <git-commit>
+container_digest: <sha256>
+package_lock_digest: <sha256>
+driver_and_runtime: <versions>
+hardware_topology: <device-and-interconnect-description>
+base_checkpoint: <model-id-and-revision>
+base_checkpoint_digest: <sha256>
+tokenizer_revision: <revision>
+prompt_template_revision: <revision>
+dataset_manifest: <uri-and-sha256>
+split_rule: <grouping-unit-and-assignment-version>
+test_set_digest: <sha256-only-no-training-access>
+objective: sft
+parameter_scope: lora
+target_modules: <explicit-list>
+adapter_rank: <measured-candidate>
+optimizer: <name-and-all-parameters>
+scheduler: <name-and-all-parameters>
+random_seed: <integer>
+determinism_flags: <explicit-values>
+precision: <parameter-gradient-optimizer-dtypes>
+batching: <microbatch-accumulation-sequence-policy>
+checkpoint_interval: <steps-or-tokens>
+resume_state: <optimizer-scheduler-scaler-rng-sampler-cursor>
+evaluation_plan: <version>
+```
 
-这些是技术，不是产品；它们活在 PEFT、Unsloth 和 TRL 里。低秩更新为什么够用，理论见
-@sec-sft-peft。
+运行前解析所有占位符。记录应用默认值并叠加环境变量后真正生效的配置，不能只保留操作人员原本打算提交的文件。保存数据加载顺序、打包策略、词元计数、学习率历史、梯度范数、跳过的更新、吞吐、峰值内存和检查点保存事件。可恢复状态包括模型或适配器、优化器、调度器、精度缩放器、随机数生成器、采样器或数据加载器游标、全局词元计数器和分片元数据。以原子方式保存最后一个完整检查点，并在干净进程中测试恢复。
 
-- **LoRA。** 低秩适配器，默认选。合并进基座权重后，推断没有额外延迟。
-- **QLoRA。** 4-bit NF4（一种权重数值格式）冻结基座加 LoRA；约 1K 到 50K 样本时单 GPU 的甜区。
-- **DoRA。** 权重分解 LoRA（幅度加方向）；收敛更好，数据量大时值得，约 50K 到 500K 样本。
-- **rsLoRA。** 高秩用的秩稳定 LoRA。
-- 更新的 arXiv 变体（RandLoRA、激活空间方法）有，但还不是默认。**视为前沿、生产未验证**
-  （[AppScale 2026](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026)）。
+跨加速器和内核不一定能逐比特重放，但运营要求仍然必须严格。运行清单必须准确复现数据和目标，能够恢复训练，并在声明的统计容差内得到结果。如果数据集很小或目标不稳定，使随机种子方差不可忽略，就要运行多个随机种子，并把这种不确定性带入晋升报告。
 
-## 如何选择
+## 评估行为变化，而不是损失曲线
 
-一旦确定真的需要训练权重，四个问题就能定下工具。
+**训练损失不是发布指标。** 它衡量的是模型对训练目标的拟合，其中也包括标签和模板中的所有缺陷。晋升评估必须让候选方案与固定基线在未用于选择检查点的证据上比较。
 
-**运行规模。** 一块消费级或单块 GPU 指向 **Unsloth**，因为它有专用 kernel 和低显存。几块 GPU 加配置即代码指向 **Axolotl** 或 **LLaMA-Factory**。多节点预训练或继续预训练指向 **TorchTitan/FSDP2**、**Megatron-Core**，或 TPU 上的 **MaxText**。
+至少覆盖五类评估：
 
-**身处什么生态。** NVIDIA GPU 加想要厂商支持，指向 **Megatron-Core/NeMo**。PyTorch 原生且能改，指向 **FSDP2/TorchTitan + TRL**。TPU 指向 **JAX/MaxText**。纯 Hugging Face 肌肉记忆，直接上 **TRL**。
+1. **目标任务质量。** 评测已命名的成功标准和所有重要任务切片，包括少见但代价高昂的情况。
+2. **能力保留。** 重新运行不变要求中列出的通用能力和产品行为。微调可能造成灾难性遗忘，语言模型微调研究已经直接观察到这一现象 [@li2024forgetting]。
+3. **安全与策略。** 测试拒绝、提示注入、工具边界、人口群体或语言切片，以及应用特有的危害。
+4. **隐私与记忆。** 根据数据威胁模型执行密钥扫描、金丝雀样本暴露度测试和抽取探测。
+5. **运营表现。** 通过服务运行时测量输出长度、结构有效率、工具调用正确性、首词元时间、总延迟、内存、吞吐和成本。
 
-**方法。** 文风或格式加小数据指向 **QLoRA**。更深的领域迁移加更多数据指向 **DoRA** 或高秩 LoRA。结构性的领域变化加 500K 以上样本指向 **全量微调**。针对奖励的推理或智能体行为，指向 **GRPO/GSPO**：单 GPU 用 Unsloth，多节点生产运行用 **verl**，纯 PyTorch 路线用 TRL 或实验性的 torchforge（@sec-training-to-reason）。
+基线与候选方案应使用配对提示词和相同的解码设置。报告配对差异、置信区间、样本数量和失败案例，不能只给平均值。如果训练了多个随机种子，要把训练方差与评估抽样不确定性分开。只有目标收益超过预先声明的阈值，而且每个能力保留、安全、隐私和运营切片都处于失败预算内，候选方案才算通过。@sec-eval-practice 进一步介绍这道评估门背后的测试框架和统计规范。
 
-**自托管还是托管。** 托管赢在首次运行的时间、无需 GPU 运维、弹性成本，以及按训练词元的可预测定价。自托管赢在数据驻留、IP 控制、不常见训练配方、可摊销硬件的重复或大型运行，以及避免厂商锁定或突然弃用。注意便利税：Together 按训练词元给 LoRA 计费，还要再加一个单独的按小时专用端点来服务结果，所以便宜的标价并不是全部账单。
+如果契约包含自动指标无法捕捉的性质，仍然需要人工审查。固定评分规则，并在可行时向评审人员隐藏模型身份。先检查分歧和具体失败，再把生产轨迹转入下一版训练集。
 
-具体怎么选：
+## 打包并部署完整制品
 
-- **Unsloth**，当在一块 24 到 80GB GPU 上、要最快最省显存的 SFT 或长上下文 GRPO 时。
-- **Axolotl**，当想要几块 GPU 上可复现的 YAML 配置运行、并且看重 CI 里的配置即代码时。
-- **LLaMA-Factory**，当需要模型支持的广度，或给非专家用的低代码 UI 时。
-- **TRL**，当在编写自定义后训练逻辑、要权威训练器时直接选它。
-- **TorchTitan/FSDP2 或 Megatron-Core**，当在做真正的多节点预训练或继续预训练时。
-- **MaxText**，当在 TPU 上时。
-- **一个托管服务**，当没有 GPU 运维意愿、且是标准的 SFT/LoRA/DPO/RFT 工作负载时；但考虑 2026 年的弃用先例，要设计好导出路径。
+发布包不只有 `adapter.safetensors`。应当打包或引用：
 
-## 一个合理的默认（2026 年年中）
+- 基座模型 ID、**基座模型摘要**和许可证；
+- **适配器摘要**或完整检查点摘要，以及对应的参数范围；
+- 分词器文件和修订版本、提示词模板、工具 Schema 和生成默认值；
+- 运行清单、数据集清单、代码与容器摘要和训练日志；
+- 晋升报告、预期用途、排除用途、已测切片和已知限制；
+- 兼容的服务运行时、精度、硬件类别和回滚说明。
 
-对一个已确定真的需要微调开放权重模型的典型产品团队，截至 2026 年 6 月：
+只有这些身份和兼容性约束全部经过检查，发布包才能进入 @sec-serving-stack 所述的服务路径。
 
-**默认：在 TRL + PEFT 之上用 Axolotl（YAML 配置）做 QLoRA**，跑在租用的 GPU 上（Modal、
-Runpod 或自有的云）。它可复现，配置即代码契合 CI 与评估（@sec-eval-practice），QLoRA
-让微调停在单块或几块 GPU，权重和数据都还在自己手里。起步配方是 `r=16`、开启 DoRA、
-`target_modules="all-linear"`，难一点的任务再加秩
-（[AppScale 2026](https://appscale.blog/en/blog/llm-fine-tuning-lora-qlora-full-fine-tuning-compared-2026)）。
+Model Cards 为预期用途、评估条件、限制和按切片拆分的结果提供了一套实用结构 [@mitchell2019modelcards]。使用与 @sec-deployment-lifecycle 相同的生命周期规范，为清单签名，并把它与制品摘要绑定。
 
-- **备选 A，最大单 GPU 效率或 RL：** Unsloth，尤其适合消费级 GPU 或长上下文 GRPO。
-- **备选 B，完全没有 GPU 运维：** 托管服务。Together 用于低成本的开放权重 LoRA/SFT，
-  Fireworks 用于调优与服务合一，Bedrock 用于 AWS 原生，Tinker 用于训练循环仍要自己写、
-  只向对方租用分布式 GPU 的场合。设计好导出和可移植路径；别以为
-  托管 FT 产品会永远存在。OpenAI 在 2026 年 5 月宣布的自助收缩，就是个教训。
-
-如果是多节点预训练而非微调，默认就转向 **TorchTitan/FSDP2** 或 **Megatron-Core**，或 TPU 上的
-**MaxText**。
-
-## 接进技术栈
-
-2026 年最有标志性的接线事实是：**RL 后训练如今内嵌了推断层。** 一个 GRPO 或 PPO 循环从当前策略生成 rollout，用奖励打分，然后更新权重。生成是瓶颈，工具包就把它交给一个快速推断引擎，几乎都是 **vLLM**。Unsloth 驱动 vLLM 做 rollout；torchforge 用 vLLM 做生成、TorchTitan 做训练，通过一个 RDMA 张量存储在两者之间搬运权重（[PyTorch 博客](https://pytorch.org/blog/introducing-torchforge/)）；verl 则是生产级多节点的情形，在一个混合控制器下调度 vLLM 或 SGLang 的 rollout worker 与 FSDP 或 Megatron 的训练器，vLLM 自家 2026 年 6 月推出的 vime 沿用的正是这个模式。所以架构图里的训练盒子，里面就装着一个服务盒子。这正是 @sec-serving-stack 里同一个 vLLM，如今被当作训练的一个子组件来用，恰好印证本书的论点：这些层本是一套基础设施。切分训练回路的架构模式（同址还是分离），以及异步对同策略的取舍，是 @sec-training-agents 的主题。
+适配器可以保持独立，也可以合并到基座。独立适配器节省存储，并能让多个任务共用一个基座，但服务运行时必须加载正确的基座与适配器组合，还要核算切换适配器的延迟和容量。合并检查点更适合不支持适配器的运行时，却会复制基座，并需要单独审查许可证和摘要。发布前要在固定提示词上运行**合并一致性**测试：在相同分词器、精度和服务运行时下，对比独立适配器与合并制品的输出或 logits。序列化或量化后，代数上等价的合并不一定产生完全相同的运行时行为。
 
 ```{dot}
 //| label: fig-training-wiring
-//| fig-cap: "端到端接线。一个工具包驱动 PEFT 与一个分布式引擎产出权重，权重随后流经服务、网关、评估，以及智能体与检索层。在 RL 情形里，服务引擎（vLLM）坐在训练循环内部。"
-digraph {
-  bgcolor="transparent";
+//| fig-cap: "晋升和部署都可回退。候选制品通过服务运行时评估，先进入金丝雀群组，然后晋升或退回上一已知正常制品。"
+digraph release {
   rankdir=TB;
-  nodesep=0.4; ranksep=0.5;
+  bgcolor="transparent";
   node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
 
-  data [label="数据\n(SFT / 偏好 / 奖励)"];
-  toolkit [label="工具包\nTRL / Axolotl / Unsloth"];
-  peft [label="PEFT\nLoRA / QLoRA / DoRA"];
-  engine [label="引擎\nFSDP2 / DeepSpeed / Megatron"];
-  weights [label="适配器或合并后的权重"];
-  vllm [label="vLLM 生成样本"];
-  serving [label="服务引擎\nvLLM / TGI"];
-  gateway [label="网关"];
-  eval [label="评测装置\n（提升前把关）"];
-  agents [label="智能体 / 检索"];
+  manifest [label="运行清单与检查点"];
+  package [label="打包完整制品\n基座 • 适配器 • 模板"];
+  offline [label="离线晋升门\n配对目标 • 回归测试"];
+  canary [label="经服务运行时进入金丝雀"];
+  promote [label="晋升或回滚\n保留上一已知正常版本"];
 
-  data -> toolkit;
-  toolkit -> peft [label="使用"];
-  toolkit -> engine [label="运行在"];
-  peft -> weights;
-  engine -> weights;
-  toolkit -> vllm [style=dashed, label="RL 循环"];
-  vllm -> toolkit [label="奖励"];
-  weights -> serving;
-  serving -> gateway;
-  gateway -> eval;
-  eval -> agents;
+  manifest -> package -> offline -> canary -> promote;
+  promote -> package [label="下一版本", style=dashed];
 }
 ```
 
-训练完成后，合并适配器，或用一个适配器感知的引擎直接服务它，把权重交给@gls-gateway背后的服务层
-（@sec-serving-stack），并在晋升之前对它跑一遍评估 harness（@sec-eval-practice）。检索与
-智能体层随后消费这个已由服务层托管的模型。适配器感知的服务，也就是一个基座上挂众多 LoRA，正是托管适配器
-平台历来契合的地方。整个流程汇入 @sec-wiring-stack 的端到端技术栈。
+先部署到金丝雀群组，并设定明确的回滚触发条件。将质量代理指标、错误、拒绝、延迟、词元用量和任务完成率与上一已知正常版本比较。保留每次推理的完整溯源信息，使事故可以追溯到具体的基座、适配器、模板和运行时。分阶段发布不能放宽离线晋升门，它只负责测试离线数据无法复现的生产条件。线上回滚可以恢复服务行为，却无法从已经训练好的权重中删除被撤回记录的影响。后者需要重新训练、经过验证的机器遗忘，或按照删除策略退役制品。
 
-## 一份可改写的配置与启动
+### 强化学习会在训练内部引入一套服务系统
 
-一份最小的 Axolotl QLoRA 配置可以这样写；它只是示意：
+在线强化学习后训练既有训练工作进程，也有**轨迹生成器**。生成阶段产生轨迹，奖励路径负责评分，学习器随后更新策略。因此，每个批次都必须记录权重版本。如果生成工作进程落后于训练工作进程，应记录并限制**策略陈旧度**，不能默默把旧轨迹当作当前策略产生的数据。
 
-```yaml
-# qlora.yml
-base_model: Qwen/Qwen3-8B
-load_in_4bit: true          # QLoRA: 4-bit NF4 frozen base
-adapter: lora
-lora_r: 16
-lora_alpha: 32
-lora_target_modules: all-linear
-datasets:
-  - path: ./data/sft.jsonl
-    type: chat_template
-gradient_checkpointing: true
-sequence_len: 4096
-micro_batch_size: 2
-num_epochs: 3
-# distributed backend (FSDP2 or DeepSpeed) configured via accelerate
-```
+**共置拓扑**把生成和训练放在同一个加速器池中，不需要专用的生成资源池，却可能承担内存争用、休眠或卸载切换、重新分片和阶段切换的成本。**分离拓扑**为生成端和学习端配置独立资源池，可以分别扩缩容，却会增加数据传输和调度开销，也更难保证轨迹足够新。HybridFlow 形式化描述了一种分布式 RLHF 数据流，以及在生成拓扑与训练拓扑之间重新分布 actor 状态的机制 [@sheng2024hybridflow]。@sec-training-agents 会深入讨论这些选择。这里的关键是保持制品身份可追溯：每条轨迹都必须记录策略、奖励、分词器、环境和采样版本，保证每次更新都可以审计。
 
-启动它，然后为服务合并适配器：
+## 运营适配生命周期
 
-```bash
-# train (single or few GPUs via accelerate)
-accelerate launch -m axolotl.cli.train qlora.yml
+一套可执行流程如下：
 
-# merge the LoRA adapter back into the base for adapter-free serving
-python -m axolotl.cli.merge_lora qlora.yml --lora_model_dir ./out
-```
+1. **固定契约。** 写明目标行为、固定基线、不得退化的要求、预算、晋升门、负责人和回滚路径。
+2. **测试不训练的替代方案。** 在同一套评估集上运行提示词、检索、工具 Schema 和结构化解码器改动。
+3. **盘点并治理数据。** 记录数据来源、权利、同意限制、敏感度、保留期限和删除谱系。
+4. **一次性划分数据集。** 选择分组单位，跨数据划分去重，并在实验前隔离测试集。
+5. **选择最小可行试验。** 根据监督信号选择 SFT、偏好学习、强化学习、继续预训练或蒸馏，再比较最小的可行参数范围。
+6. **估算并演练。** 测量峰值内存、吞吐、检查点耗时和成本；注入故障并通过恢复测试。
+7. **根据封存的清单运行。** 记录有效配置、数据与代码摘要、遥测、检查点和随机种子。
+8. **编写晋升报告。** 在目标任务、能力保留、安全、记忆、运营和人工审查切片上，带着不确定性比较候选方案与基线。
+9. **打包并进行金丝雀发布。** 验证摘要、合并一致性、服务兼容性和回滚能力，再分阶段发布，同时保留上一已知正常制品。
+10. **监控并重新验证。** 把经过审查的失败案例写入新的数据集版本，不得直接写入隔离的测试集。沿着已记录的谱系，对原始记录、派生数据集、日志、缓存、检查点和模型注册表执行保留与删除任务。
 
-合并后的权重再交给服务栈。把配置放进版本控制，让一次训练成为一个可审的 diff，和对技术栈其余部分的纪律一样。
+**重新验证触发条件**包括基座模型变化、分词器或模板变化、数据集或划分规则变化、目标函数或参数范围变化、服务运行时变化、精度或合并方式变化、新设备类别、流量结构显著变化、策略变化，或新发现的数据权利问题。每项触发条件都要创建新的制品身份，并重新运行受影响的评估门。
 
-## 微调实际改变什么
+最终产物是一份适配决策记录，把契约、数据谱系、运行清单、候选制品、晋升报告、服务版本和回滚结果连接起来。正是这份记录把训练实验变成基础设施中可以运营的一部分。
 
-微调首先是一种「能力」手段，即提示承载不了的持久行为改变。它也越来越是一种「效率」手段，把大模型蒸馏成服务成本低的小模型，这正是服务成本频繁向上塑造设计的原因。它还是一个「信任」问题：微调后的模型吸收了训练所用的数据，所以数据驻留、可复现的配置即代码、晋升前的评估关口，都不是锦上添花，而是让权重可以进入生产的控制条件。2026 年现实的默认，仍然是先去做好提示和检索，只有当行为改变必须活在权重里时，才去训练。
+## 下层约束
+
+微调无法弥补服务栈不能加载的制品、分词器或模板不匹配、加速器内存不足、无法恢复的检查点，或组织无权使用的数据。适配发布会继承存储、算力、分布式执行、制品打包和服务层的约束。这些下层必须保留契约中记录的身份和限制，否则已经评估的候选方案和实际部署的系统就不是同一个系统。
+
+容量规划也会向下传导。序列长度和批处理策略决定激活内存，参数范围决定优化器与检查点状态，轨迹生成拓扑决定通信和新鲜度成本。只有下层满足发布所需的恢复、延迟、驻留和成本要求，方法才真正可行。
 
 ::: {.callout-important}
 ## 争议所在
-真正悬而未决的，是微调到底算一项能力投资，还是把脆弱工作流写进权重里的昂贵做法。小适配器便宜、可逆，但也可能隐藏数据泄漏、削弱通用行为，或把策略搬进更难检查的权重里。完整训练给出更多控制，也带来更多风险。因此，运维检验应该很窄：只有当目标行为高频、可测、难以靠上下文承载，并且价值足以支付单独评测与回滚路径时，才训练。
+
+权重更新是否适合长期承载产品行为，仍然没有统一答案。适配器存储成本低，也可能改善重复任务，但它同样可能编码过时的策略、记住隐私样本、削弱通用行为，或形成一大批互相依赖的基座与适配器。全量微调和强化学习提供更多改动自由，也扩大了故障面。决策应当始终可逆：选择经过测量的最小干预，保留固定基线，只晋升能够通过完整发布路径的证据。
 :::
 
 ## 延伸阅读
 
-一手来源放前面。
+一手论文界定适配方法及其实测范围，系统论文和官方文档则说明如何运营最终结果。
 
 ::: {#further-reading}
 :::
