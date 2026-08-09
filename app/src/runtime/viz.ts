@@ -43,13 +43,25 @@
   function canvas(host, h) {
     var c = el('canvas', 'viz-canvas');
     var dpr = Math.max(1, window.devicePixelRatio || 1);
+    var resizeRaf = 0, lastWidth = 0;
     function size() {
       var w = host.clientWidth || 600;
       c.width = w * dpr; c.height = (h || 300) * dpr;
       c.style.width = w + 'px'; c.style.height = (h || 300) + 'px';
     }
+    function scheduleSize() {
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      lastWidth = 0;
+      function settle() {
+        var width = host.clientWidth || 600;
+        if (width === lastWidth) { resizeRaf = 0; size(); return; }
+        lastWidth = width;
+        resizeRaf = requestAnimationFrame(settle);
+      }
+      resizeRaf = requestAnimationFrame(settle);
+    }
     size(); host.appendChild(c);
-    window.addEventListener('resize', size);
+    window.addEventListener('resize', scheduleSize);
     return { c: c, ctx: c.getContext('2d'), dpr: dpr };
   }
   function watchTheme(host, draw) {
@@ -67,17 +79,22 @@
     function schedule() {
       if (!host.isConnected) {
         if (obs) obs.disconnect();
+        if (resizeObs) resizeObs.disconnect();
         window.removeEventListener('resize', schedule);
         return;
       }
       if (raf) cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(function () { raf = 0; resizeCanvas(); draw(); });
+      raf = requestAnimationFrame(function () {
+        raf = requestAnimationFrame(function () { raf = 0; resizeCanvas(); draw(); });
+      });
     }
-    // The resize event can fire before the responsive layout has settled.
-    // Re-measure on the next frame, then redraw the cleared backing buffer.
+    // Responsive React layout can settle one frame after the resize event.
+    // Re-measure after two frames, then redraw the cleared backing buffer.
     window.addEventListener('resize', schedule);
     var obs = window.MutationObserver ? new MutationObserver(schedule) : null;
     if (obs) obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-palette'] });
+    var resizeObs = window.ResizeObserver ? new ResizeObserver(schedule) : null;
+    if (resizeObs) resizeObs.observe(host);
   }
 
   var R = {};
@@ -1075,6 +1092,7 @@
     function tick() { timer = requestAnimationFrame(tick); tiers.forEach(function (tier, i) { pos[i] += tier.speed * 0.013; if (pos[i] > 1) pos[i] = 0; }); draw(); }
     host.addEventListener('mouseenter', function () { if (timer) { cancelAnimationFrame(timer); timer = null; } });
     host.addEventListener('mouseleave', function () { if (!timer) tick(); });
+    watchTheme(host, draw);
     tick();
   };
 

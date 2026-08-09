@@ -207,6 +207,20 @@ test("bandwidth-tiers does not present illustrative lanes as universal ratios", 
   expect(rt).not.toContain("≈100× slower");
 });
 
+test("bandwidth-tiers redraws after a responsive resize while animation is paused", () => {
+  const start = rt.indexOf("R['bandwidth-tiers']");
+  const end = rt.indexOf("R['judge-kappa']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("watchTheme(host, draw);");
+  expect(rt).toContain("new ResizeObserver(schedule)");
+  expect(rt).toContain("resizeObs.observe(host)");
+  expect(rt).toContain("raf = requestAnimationFrame(function () {\n        raf = requestAnimationFrame(function ()");
+  expect(rt).toContain("function scheduleSize()");
+  expect(rt).toContain("if (width === lastWidth)");
+  expect(rt).toContain("window.addEventListener('resize', scheduleSize)");
+});
+
 test("the three-cadence viz does not present training as a nested runtime cost", () => {
   expect(rt).toContain("agent loop · per task step");
   expect(rt).toContain("decoding · per token");
