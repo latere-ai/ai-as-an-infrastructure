@@ -1250,7 +1250,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/index.qmd",
-      ["期限、预算、许可证", "生产 AI 系统看成一组契约", "租户边界", "可以运营的系统"],
+      ["交付期限、预算、许可证", "生产级 AI 系统", "必须始终成立的运营契约", "租户边界必须隔离", "团队能够持续运营的系统"],
     ],
     [
       "en/summary.qmd",

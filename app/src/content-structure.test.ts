@@ -1103,5 +1103,5 @@ test("the frontier arc explicitly hands off to ecosystem and practice", () => {
   expect(zhPractice).toContain("第九部分");
   expect(zhPractice).toContain("第十部分");
   expect(zhPractice).toContain("第十一部分");
-  expect(zhPractice).toContain("到了这一部分，要问的是另一类问题");
+  expect(zhPractice).toContain("本部分转而讨论团队如何组合整套技术栈");
 });
