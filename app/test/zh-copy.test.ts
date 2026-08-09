@@ -632,7 +632,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/adaptation/04-dpo-variants.qmd",
-      ["化约为一个分类损失", "语言模型隐式地就是一个奖励模型", "没有哪个变体能可靠地胜过", "基础 DPO 损失", "流水线与数据约束"],
+      ["归结为静态数据集上的分类损失", "语言模型才构成隐式奖励模型", "没有任何变体能可靠地超过基础损失", "目前没有得到公认的普适胜者", "数据与流水线条件"],
     ],
     [
       "en/adaptation/05-verifiable-rewards-reasoning.qmd",

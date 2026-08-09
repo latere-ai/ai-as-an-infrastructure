@@ -1,190 +1,451 @@
 # 直接偏好优化及其变体 {#sec-dpo-variants}
 
-对齐流水线里有这样一个反复出现的场景：一支团队有一份静态的偏好样本对文件，每个提示词配一个胜出回复与一个被拒回复，并希望用它训练出一个对齐好的模型。传统做法是 RLHF，而 RLHF 成本高。直接偏好这一条线追问这份成本是否必要，并把整套机制化约为一个分类损失；随后，一组变体在这个损失之上展开。受控比较给出的结果是：没有哪个变体能可靠地胜过它们共同继承的基础 DPO 损失。
+假设团队已经收集了一批提示，每条提示都有两个候选回答，并记录了哪一个更好。经典 RLHF 会先拟合显式奖励模型，再生成新的回答，并针对这项奖励优化策略。直接偏好优化（@gls-dpo）走的是一条更短的路径。DPO 不显式训练奖励模型，而是直接拟合偏好分类器。在一组明确的偏好建模假设下，这个损失会直接训练语言模型 [@rafailov2023dpo]。
 
-## 一份静态的偏好文件
+这项简化很重要。DPO 把奖励建模与策略优化归结为静态数据集上的分类损失，但并没有把对齐变成普通的监督微调，也没有让 RLHF 背后的假设消失。它仍然需要成对判断、冻结的参考策略、关于偏好如何产生的建模假设，以及训练样本对之外的评测。
 
-RLHF（见 @sec-rlhf）分三阶段对齐一个模型：监督微调、拟合人类偏好的奖励模型，然后用 @gls-ppo 做一次策略梯度训练 [@schulman2017proximal]，在对参考模型的@gls-kl约束下针对该奖励优化策略。这套机制成本高。PPO 要同时驻留四个模型：策略、一个冻结的参考、奖励模型与评论家；结果又对奖励模型质量以及少数几个脆弱超参数都很敏感。对一份静态偏好样本对而言，问题在于：这整套机制是否必要，偏好信号能不能被直接优化。
+## DPO 去掉了什么，又保留了什么
 
-## 关键化简：语言模型隐式地就是一个奖励模型
-
-这一化简依赖关于 RLHF 目标的一个事实。在对参考策略的 KL 惩罚下最大化奖励，
+设偏好数据集为
 
 $$
-\max_{\pi_\theta}\; \mathbb{E}_{x,\,y\sim\pi_\theta}\big[r(x,y)\big]
-\;-\; \beta\, \mathrm{KL}\!\left(\pi_\theta(\cdot\mid x)\,\|\,\pi_{\text{ref}}(\cdot\mid x)\right),
+\mathcal{D}=\{(x_i,y_{w,i},y_{l,i})\}_{i=1}^{N},
 $$
 
-这里 $\pi_\theta$ 是要优化的策略，$r(x,y)$ 是奖励，第一项让策略偏向高奖励回复，KL 项则把它拉回参考策略 $\pi_{\text{ref}}$ 附近，$\beta$ 调节约束强度。这个目标的设计直觉是：奖励会拉着模型改变行为，但 KL 约束防止它为了奖励跑到语言模型分布之外。它存在一个闭式最优策略（也就是说，这个目标所隐含的那个唯一最优策略可以直接写成一个公式，而不必靠搜索去找）：它是被指数化奖励重新加权的参考策略，$\pi^*(y\mid x) \propto \pi_{\text{ref}}(y\mid x)\exp(r(x,y)/\beta)$。Rafailov 等把这个关系反转了过来 [@rafailov2023dpo]：用最优策略反解奖励，$r$ 就写成了一个对数比值，于是任一策略所隐含的奖励为
+其中，$x_i$ 是提示，$y_{w,i}$ 是标注者选中的回答，$y_{l,i}$ 是被拒回答，$N$ 是比较总数。DPO 通常从经过指令微调的模型开始，训练策略 $\pi_\theta$，并将它与冻结的参考策略 $\pi_{\mathrm{ref}}$ 比较。参考策略一般就是起始模型的一份副本。
 
-$$
-r_\theta(x,y) \;=\; \beta\,\log\frac{\pi_\theta(y\mid x)}{\pi_{\text{ref}}(y\mid x)} \;+\; \beta\log Z(x).
-$$
+与 @sec-rlhf 中基于 PPO 的 RLHF 相比，DPO 从训练回路中去掉了三个组成部分：
 
-这里 $\pi_{\text{ref}}$ 是冻结参考策略，$\beta$ 是 KL 约束强度，$Z(x)$ 是配分项，也就是对模型可能产生的每一个回复求和、把重新加权后的参考策略归一化回一个概率分布的那个量；它只依赖提示词，却难以处理，因为这个和要遍历所有可能的序列，数量太大，根本算不出来。
-把这个隐式奖励代入成对偏好的 Bradley-Terry 模型，$Z(x)$ 会在胜出回复 $y_w$ 与被拒回复 $y_l$ 之间相消。剩下的，是偏好样本对上的一个监督损失，
+- 不再单独训练标量奖励模型；
+- 偏好训练阶段不再从持续变化的策略采样回答；
+- 不再需要评论家或策略梯度优化器。
 
-$$
-\mathcal{L}_{\text{DPO}} = -\,\mathbb{E}_{(x,y_w,y_l)}\,\log \sigma\!\left(
-\beta\log\frac{\pi_\theta(y_w\mid x)}{\pi_{\text{ref}}(y_w\mid x)}
-- \beta\log\frac{\pi_\theta(y_l\mid x)}{\pi_{\text{ref}}(y_l\mid x)}\right).
-$$
-
-这个式子只比较胜出回复与被拒回复各自相对参考策略的对数比值，因此不再需要单独训练奖励模型。
-<figure id="fig-dpo-variants-stepper">
-<div class="viz" data-viz="stepper">
-<div data-chip="RLHF 目标" data-title="1 · 目标">在 KL 惩罚下最大化奖励，让策略贴近一个冻结的参考模型。</div>
-<div data-chip="最优 π" data-title="2 · 闭式解">这个目标有唯一的闭式最优策略，即被指数化奖励重新加权的参考策略，π* ∝ π_ref · exp(r/β)。</div>
-<div data-chip="解出 r" data-title="3 · 隐式奖励">把这个关系反转过来解奖励，奖励就写成 β 乘以策略对参考的对数比值，再加上一项 β log Z(x)。</div>
-<div data-chip="B-T" data-title="4 · 代入">把这个隐式奖励代入判断哪个回复更被偏好的 Bradley-Terry 模型。</div>
-<div data-chip="Z 相消" data-title="5 · Z(x) 相消">β log Z(x) 这一项对两个回复都一样，于是在胜出回复与被拒回复之间相消，只剩下两者对数比值之差上的一个 log-σ。</div>
-<div data-chip="一个损失" data-title="6 · 剩下什么">奖励模型、评论家、PPO 这套 RLHF 机制都没了，剩下的是一个损失。</div>
-</div>
-<figcaption>这次化简是从 RLHF 目标到单个分类损失的六步代数变换。可以逐行步进，也可以让它自动播放。</figcaption>
-</figure>
-
-奖励模型与 RL 回路都没了。策略被训练为给被偏好的回复赋予更高的隐式奖励，而隐式奖励就是策略相对于一个冻结参考模型的对数比值，也就是微调后的模型把这个回答变得比冻结的初始模型更可能多少。论文的标题道出了这一点：语言模型隐式地就是一个奖励模型。@fig-dpo-variants-reduction 展示了这次代入所删去的那套机制。
+但保留下来的部分同样重要。参考策略定义了怎样的变化才算偏移，数据只覆盖采集时出现过的候选回答，成对损失则规定一次观测到的比较应如何约束策略。只有在下面推导出的严格意义上，语言模型才构成隐式奖励模型。它不能脱离参考模型单独充当通用评判者。
 
 ```{dot}
 //| label: fig-dpo-variants-reduction
-//| fig-cap: "RLHF 在四个模型上运行一个奖励模型与一个 PPO 回路；DPO 把隐式奖励代入 Bradley-Terry 模型，配分项相消，剩下的是偏好样本对上的一个分类损失。据 Rafailov et al.（2023）。"
+//| fig-cap: "基于 PPO 的 RLHF 先学习奖励，再针对奖励优化策略。DPO 把策略与参考模型的对数比代入偏好似然，直接在保存下来的样本对上训练。"
 digraph {
   bgcolor="transparent";
   rankdir=TB;
-  nodesep=0.4; ranksep=0.85;
-  compound=true;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+  size="3.1,12"; ratio=compress;
+  nodesep=0.28; ranksep=0.48;
+  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
+        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
+  edge [fontsize=8, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+
+  pairs [label="偏好样本对"];
 
   subgraph cluster_rlhf {
-    label="RLHF（PPO）";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    pref1 [label="偏好样本对"];
-    rm [label="奖励模型\n拟合偏好", fillcolor="#f2c2c2"];
-    ppo [label="PPO 回路", fillcolor="#f2c2c2"];
-    pol1 [label="策略"];
-    ref1 [label="冻结参考"];
-    crit [label="评论家", fillcolor="#f2c2c2"];
-    aligned1 [label="对齐后的策略"];
-    pref1 -> rm;
-    rm -> ppo;
-    pol1 -> ppo;
-    ref1 -> ppo;
-    crit -> ppo;
-    ppo -> aligned1;
+    label="基于 PPO 的 RLHF";
+    style=rounded; color="#6b7280"; fontcolor="#6b7280";
+    rm [label="拟合奖励模型", fillcolor="#f2c2c2"];
+    roll [label="采样策略回答"];
+    ppo [label="用 PPO 与评论家\n优化奖励", fillcolor="#f2c2c2"];
+    out1 [label="更新后的策略", fillcolor="#bfe3c0"];
+    rm -> roll -> ppo -> out1;
   }
+
   subgraph cluster_dpo {
     label="DPO";
-    style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    pref2 [label="偏好样本对"];
-    loss [label="在隐式奖励差距上的\nlog-sigmoid 损失", fillcolor="#bfe3c0"];
-    pol2 [label="策略"];
-    ref2 [label="冻结参考"];
-    aligned2 [label="对齐后的策略"];
-    pref2 -> loss;
-    pol2 -> loss;
-    ref2 -> loss;
-    loss -> aligned2;
+    style=rounded; color="#6b7280"; fontcolor="#6b7280";
+    score [label="策略/参考模型\n对数比"];
+    loss [label="成对 log-sigmoid 损失"];
+    out2 [label="更新后的策略", fillcolor="#bfe3c0"];
+    score -> loss -> out2;
   }
-  aligned1 -> pref2 [ltail=cluster_rlhf, lhead=cluster_dpo, label="隐式奖励\nZ(x) 相消"];
+
+  pairs -> rm;
+  pairs -> score;
 }
 ```
 
-## 对一个损失的四处改动
+## 推导过程及其假设
 
-有了这个损失之后，后来的每个方法都是对它的一次改动。每个变体都移除原始 DPO 损失中的一个假设，或删掉其中一块机制。@fig-dpo-variants-map 列出了每个变体改动了哪一部分。
+推导从带 KL 正则项的奖励目标开始。对一个提示 $x$，考虑所有可能回答上的概率分布 $\pi(\cdot\mid x)$：
+
+$$
+\max_{\pi}\;
+\mathbb{E}_{y\sim\pi(\cdot\mid x)}[r(x,y)]
+-\beta\,\mathrm{KL}\!\left(
+\pi(\cdot\mid x)\,\|\,\pi_{\mathrm{ref}}(\cdot\mid x)
+\right),
+$$
+
+其中，$r(x,y)$ 是标量奖励，$\beta>0$ 是 KL 系数，$\pi_{\mathrm{ref}}$ 是参考策略。如果奖励为有限值、归一化常数存在，而且策略只在参考策略的支持集上分配概率，最优分布为
+
+$$
+\pi^*(y\mid x)
+=\frac{1}{Z(x)}\,\pi_{\mathrm{ref}}(y\mid x)
+\exp\!\left(\frac{r(x,y)}{\beta}\right),
+$$
+
+其中的归一化常数是
+
+$$
+Z(x)=\sum_y \pi_{\mathrm{ref}}(y\mid x)
+\exp\!\left(\frac{r(x,y)}{\beta}\right).
+$$
+
+这个闭式解针对的是概率分布，而不是神经网络参数。有限容量的语言模型 $\pi_\theta$ 未必能精确表示 $\pi^*$，梯度下降也未必能找到全局最优点。这个公式只给出了理想 KL 正则化解的形式，并没有直接解出 $\theta$。
+
+重新排列最优策略的公式，可以得到
+
+$$
+r(x,y)=\beta\log\frac{\pi^*(y\mid x)}
+{\pi_{\mathrm{ref}}(y\mid x)}+\beta\log Z(x).
+$$
+
+最后一项依赖提示，却不依赖回答。更一般地说，奖励只能确定到一个仅依赖提示的常数：对于同一个提示，在每个回答的奖励上加上任意 $c(x)$，既不会改变成对奖励差，也不会改变归一化后的最优策略。因此，策略与参考策略的对数比只是这一等价类中的一种表示，并不是唯一恢复出来的人类效用。
+
+DPO 接着假设偏好服从 Bradley-Terry 模型：
+
+$$
+p(y_w\succ y_l\mid x)=
+\sigma\!\left(r(x,y_w)-r(x,y_l)\right),
+\qquad
+\sigma(z)=\frac{1}{1+e^{-z}}.
+$$
+
+这里，$y_w\succ y_l$ 表示 $y_w$ 比 $y_l$ 更受偏好。Bradley-Terry 假设用一个标量表示每个回答，再通过 Sigmoid 函数把分数差变成选择概率。它不能直接表示平局、循环偏好、不同标注者群体，也无法表示依赖于未记录情境的判断。
+
+把隐式奖励代入 Bradley-Terry 模型。仅依赖提示的常数会在 $y_w$ 与 $y_l$ 之间相消，得到 DPO 损失：
+
+$$
+\mathcal{L}_{\mathrm{DPO}}(\theta)=
+-\mathbb{E}_{(x,y_w,y_l)\sim\mathcal{D}}
+\log\sigma\!\left(\beta A_\theta(x,y_w,y_l)\right),
+$$
+
+其中，
+
+$$
+A_\theta=
+\underbrace{\left[\log\pi_\theta(y_w\mid x)-\log\pi_{\mathrm{ref}}(y_w\mid x)\right]}_{\text{选中回答的变化}}
+-\underbrace{\left[\log\pi_\theta(y_l\mid x)-\log\pi_{\mathrm{ref}}(y_l\mid x)\right]}_{\text{被拒回答的变化}}.
+$$
+
+$A_\theta$ 表示选中回答相对参考模型的变化，减去被拒回答相对参考模型的变化。要精确等价于理想化 RLHF 解，必须满足偏好模型设定正确、数据覆盖充分、参考策略与行为策略的支持集兼容，而且优化成功。DPO 在这些假设下去掉显式奖励模型与 PPO 回路，但并不对任意神经网络、设定错误的偏好模型或有限的支持集外数据严格等价。
+
+<figure id="fig-dpo-variants-stepper">
+<div class="viz" data-viz="stepper">
+<div data-chip="目标" data-title="1 · 从 KL 正则化奖励出发">对每个提示，在最大化期望奖励的同时，惩罚策略偏离参考分布。</div>
+<div data-chip="分布" data-title="2 · 在分布空间求解">不受参数化限制的最优解会按 exp(r/β) 重新加权参考分布。这个结论针对概率分布，并不是神经网络参数向量的闭式解。</div>
+<div data-chip="对数比" data-title="3 · 反解奖励关系">奖励可以表示为 β 乘以策略与参考策略的对数比，再加上一个仅依赖提示的归一化项。</div>
+<div data-chip="偏好" data-title="4 · 选择比较模型">Bradley-Terry 模型把两个标量奖励之差送入 Sigmoid 函数，用来表示哪一个回答胜出。</div>
+<div data-chip="相消" data-title="5 · 消去未知归一化项">两个回答对应同一个提示，因此奖励中的提示专属项会从分数差中相消。</div>
+<div data-chip="拟合" data-title="6 · 直接优化策略">最终的 log-sigmoid 损失直接拟合保存下来的比较，冻结的参考模型则定义相对变化。</div>
+</div>
+<figcaption>DPO 是代数化简与建模假设共同得到的结果。最终损失依赖其中的每一步。</figcaption>
+</figure>
+
+## 如何理解相对变化
+
+间隔公式很容易被误读。DPO 并不只是要求选中回答的概率高于被拒回答，而是要求训练使选中回答相对参考模型的上升幅度，大于被拒回答相对参考模型的上升幅度。这里的关键是，正的 DPO 间隔并不能保证 $\pi_\theta(y_w\mid x)>\pi_\theta(y_l\mid x)$。如果某个回答在参考模型下原本就很不可能，它可以在相对比较中胜出，却仍然拥有很低的绝对概率。
+
+单个样本的梯度可以更清楚地说明更新方式：
+
+$$
+\nabla_\theta\mathcal{L}_{\mathrm{DPO}}
+=-\beta\,\mathbb{E}_{\mathcal{D}}
+\left[
+\sigma(-\beta A_\theta)
+\left(
+\nabla_\theta\log\pi_\theta(y_w\mid x)
+-\nabla_\theta\log\pi_\theta(y_l\mid x)
+\right)
+\right].
+$$
+
+这里，间隔为负或较小时，样本对获得的权重最大。间隔变大后，Sigmoid 函数趋于饱和，这个样本对的贡献也会减小。两个序列共享同一组模型参数，因此这种对比更新不能保证选中回答的对数概率在每个检查点都单调上升。应当直接记录这项指标，而不是从训练损失推断它。
+
+序列对数概率是各词元对数概率之和：
+
+$$
+\log\pi_\theta(y\mid x)=
+\sum_{t=1}^{|y|}\log\pi_\theta(y_t\mid x,y_{<t}),
+$$
+
+其中，$|y|$ 是回答的词元数，$y_{<t}$ 是第 $t$ 个词元之前的前缀。因此，DPO 间隔会累加回答中所有词元相对参考模型的变化。如果数据中的回答长度存在系统性差异，长度可能混入间隔，但每个词元的对数比既可能为正，也可能为负。DPO 奖励并不在数学上保证随回答长度增长。
+
+$\beta$ 的作用也分为两层。在 KL 正则化目标中，更大的 $\beta$ 意味着理论上对参考策略施加更强的正则约束。在实际 DPO 损失中，$\beta$ 同时决定对数几率的温度，并缩放梯度。有限步训练不能保证 $\beta$ 与测得的策略偏移之间呈单调关系。调参之后，应报告实际达到的策略与参考模型偏差以及任务质量，而不能把配置值当成已经实现的约束。
+
+## 四种变体解决的是不同约束
+
+IPO、KTO、ORPO 与 SimPO 经常被排成一串逐步升级的方法，但这种说法掩盖了各自的用途。它们改变的是不同问题：损失形状、标签格式、是否加入 SFT 项，或如何定义回答分数。所需的数据与训练资源也不同。它们是针对不同数据和流水线约束的替代方案，不是同一种算法依次升级后的版本。
 
 ```{dot}
 //| label: fig-dpo-variants-map
-//| fig-cap: "每个变体改动 DPO 损失的某一部分。IPO 把目标变得有界；KTO 去掉成对数据要求；ORPO 把对齐折叠进 SFT 并移除参考；SimPO 移除参考并按长度归一化。"
+//| fig-cap: "四种变体改变的是不同设计选择。它们针对不同的数据与流水线约束，并不是同一种算法的连续升级。"
 digraph {
-  rankdir=TB;
+  rankdir=LR;
   bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fillcolor="#f1ece1", color="#6b7280", fontcolor="#6b7280", fontname="Helvetica", penwidth=1.1];
-  edge [color="#6b7280", fontcolor="#6b7280", fontname="Helvetica", fontsize=10];
+  size="3.1,12"; ratio=compress;
+  nodesep=0.18; ranksep=0.42;
+  node [shape=box, style="rounded,filled", fillcolor="#f1ece1", color="#6b7280",
+        fontcolor="#6b7280", fontname="Helvetica", fontsize=9, penwidth=1.1];
+  edge [color="#6b7280", fontcolor="#6b7280", fontname="Helvetica", fontsize=8];
 
-  dpo [label="DPO\n对数比值奖励上的 log-sigmoid\n成对数据，冻结参考"];
+  dpo [label="DPO\n成对标签 · 参考模型\n对数比间隔\nlog-sigmoid"];
+  ipo [label="IPO\n成对标签 · 参考模型\n有限目标\n平方损失"];
+  kto [label="KTO\n二元标签 · 参考模型\n围绕 KL 基线\n计算效用"];
+  orpo [label="ORPO\n成对标签 · 无参考模型\n选中回答 SFT\n+ 优势比惩罚"];
+  simpo [label="SimPO\n成对标签 · 无参考模型\n平均对数概率\n+ 目标间隔"];
 
-  ipo [label="IPO\n有界平方损失\n将奖励差距回归\n到一个固定目标"];
-  kto [label="KTO\n非成对好/坏标签\n前景理论效用"];
-  orpo [label="ORPO\n优势比惩罚\n加入 SFT\n无参考模型"];
-  simpo [label="SimPO\n无参考奖励\n按长度归一化\n目标边际"];
-
-  dpo -> ipo [label="使目标\n有界"];
-  dpo -> kto [label="去掉\n成对数据"];
-  dpo -> orpo [label="并入 SFT，\n去掉参考"];
-  dpo -> simpo [label="去掉参考，\n归一化长度"];
+  dpo -> ipo [label="损失形状"];
+  dpo -> kto [label="标签格式"];
+  dpo -> orpo [label="合并 SFT"];
+  dpo -> simpo [label="回答分数"];
 }
 ```
 
-**@gls-ipo用平方目标让奖励差距有界。** Azar 等瞄准推导中的一个弱点 [@azar2023ipo]：Bradley-Terry 代入假定成对偏好可以用逐点的标量奖励替代；当采样到的偏好是确定或近乎确定的，log-sigmoid 损失会驱使策略把隐式奖励差距推向无穷，对偏好集过拟合，代价是 KL 正则项被忽略。IPO 用一个有界的平方目标替换 log-sigmoid，把隐式奖励差距回归到一个固定目标，于是即便偏好很干净，最优解也保持有限。@fig-dpo-variants-1 对照了这两种损失的形状。
+### IPO：保留样本对与参考模型，改变损失形状
 
-![有界的 IPO 目标与无界的 DPO log-sigmoid 损失随隐式奖励差距变化的示意图，据 Azar et al.（2023）。log-sigmoid 随差距增大持续下降，故其最优解把差距推向无穷；平方损失在一个固定目标处取得最小值，故其最优解保持有限。](/figures/dpo-variants-1.svg){#fig-dpo-variants-1}
+身份偏好优化（@gls-ipo）从 DPO 的 Bradley-Terry 化简所带来的一个理论问题出发。如果观测到的偏好是确定或近乎确定的，负 log-sigmoid 损失会在偏好间隔不断增大时继续逼近下界。损失本身的下界是零，趋向无穷的是可分样本上的最优间隔 [@azar2023ipo]。
 
-在每种损失下对单个奖励差距跑几步梯度，看着 @gls-dpo 的差距无界上升，而 IPO 的差距稳定在它的目标上。
+IPO 绕过逐点 Bradley-Terry 奖励假设，转而把策略与参考模型的对数比间隔回归到一个有限目标。定义
+
+$$
+h_\theta(x,y_w,y_l)=
+\log\frac{
+\pi_\theta(y_w\mid x)\,\pi_{\mathrm{ref}}(y_l\mid x)
+}{
+\pi_\theta(y_l\mid x)\,\pi_{\mathrm{ref}}(y_w\mid x)
+},
+$$
+
+其中，$h_\theta$ 是选中回答与被拒回答之间的策略/参考模型对数比间隔。采样形式的 IPO 目标为
+
+$$
+\mathcal{L}_{\mathrm{IPO}}(\theta)=
+\mathbb{E}_{\mathcal{D}}
+\left[
+\left(h_\theta(x,y_w,y_l)-\frac{1}{2\beta}\right)^2
+\right].
+$$
+
+这里用 $\beta$ 表示原论文中记作 $\tau$ 的正 KL 正则化参数。因此，目标由理论固定为 $1/(2\beta)$，并不是独立选择的超参数。IPO 仍然需要成对回答与冻结参考模型。原论文主要用示意性的多臂老虎机问题展示这种行为，不能据此断言 IPO 在语言模型任务上普遍更好。
+
+![对于可分的比较，DPO 的负 log-sigmoid 会随着间隔增大而趋近于零，IPO 的平方损失则在有限间隔处达到最小值。两条曲线都是示意，IPO 目标由正则化系数决定。](/figures/dpo-variants-1.svg){#fig-dpo-variants-1}
+
+下面的可运行示例只优化一个标量间隔，而不是语言模型。它展示的是损失几何形状，并不能预测模型质量。
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 
-def sigmoid(z): return 1.0 / (1.0 + np.exp(-z))
+def sigmoid(z):
+    return 1.0 / (1.0 + np.exp(-z))
 
-beta, lr, target, steps = 1.0, 0.5, 5.0, 60
-gd, gi = [0.0], [0.0]
-for t in range(steps):
-    # DPO 在差距上的梯度永不归零，于是差距持续增大
-    gd.append(gd[-1] + lr * beta * sigmoid(-beta * gd[-1]))
-    # IPO 把差距回归到一个固定目标，于是它在那里稳定下来
-    gi.append(gi[-1] - lr * 2.0 * beta * (beta * gi[-1] - target))
-print(f"{steps} 步后的 DPO 差距: {gd[-1]:.2f}，仍在上升")
-print(f"IPO 差距收敛到目标: {gi[-1]:.2f}")
-plt.plot(gd, label="DPO log-sigmoid"); plt.plot(gi, label="IPO 有界")
-plt.axhline(target, ls="--", c="gray"); plt.xlabel("步数"); plt.ylabel("隐式奖励差距")
-plt.legend(); plt.show()
+beta = 0.2
+learning_rate = 0.1
+steps = 100
+ipo_target = 1.0 / (2.0 * beta)
+
+dpo_gap = [0.0]
+ipo_gap = [0.0]
+for _ in range(steps):
+    # d[-log sigmoid(beta*h)]/dh = -beta*sigmoid(-beta*h)
+    dpo_gradient = -beta * sigmoid(-beta * dpo_gap[-1])
+    dpo_gap.append(dpo_gap[-1] - learning_rate * dpo_gradient)
+
+    # d[(h - 1/(2*beta))**2]/dh = 2*(h - target)
+    ipo_gradient = 2.0 * (ipo_gap[-1] - ipo_target)
+    ipo_gap.append(ipo_gap[-1] - learning_rate * ipo_gradient)
+
+print(f"IPO 目标：{ipo_target:.2f}")
+print(f"DPO 间隔（100 步后）：{dpo_gap[-1]:.2f}")
+print(f"IPO 间隔（100 步后）：{ipo_gap[-1]:.2f}")
+
+plt.plot(dpo_gap, label="DPO 间隔")
+plt.plot(ipo_gap, label="IPO 间隔")
+plt.axhline(ipo_target, color="gray", linestyle="--", label="IPO 目标")
+plt.xlabel("梯度步")
+plt.ylabel("策略/参考模型对数比间隔")
+plt.legend()
+plt.show()
 ```
 ::::
 
-**@gls-kto改从好/坏标签学习，去掉成对数据要求。** DPO 需要同一个提示词下的一个胜出回复与一个被拒回复；KTO 则从非成对的二元好/坏标签中学习，用一个前景理论效用把每条回复对照一个参考点打分 [@ethayarajh2024kto]，正是 Kahneman 与 Tversky 所用的那种「人对收益与损失的价值」形态。这是拿一个效用模型换下成对数据约束，其要紧之处在于：点赞与点踩的日志，远比精选样本对丰富。
+### KTO：用合意与不合意样本取代成对比较
 
-**@gls-orpo用优势比惩罚把对齐折叠进 SFT。** 它不设带参考模型的单独对齐阶段，而是由 Hong 等给 SFT 交叉熵加上一个优势比惩罚 [@hong2024orpo]（SFT 阶段本身见 @sec-sft-peft），于是一次训练既教会格式，又压低被拒回复的权重。它完全不携带参考模型。
+**@gls-kto改从好/坏标签学习，去掉成对数据要求。** Kahneman-Tversky 优化改变了数据要求。每个样本是三元组 $(x,y,d)$，其中 $d$ 表示回答 $y$ 是合意还是不合意。同一提示不必同时提供一个正例和一个负例 [@ethayarajh2024kto]。因此，KTO 可以使用由赞成、拒绝或经过阈值化的评分构成的日志，但这些标签的含义与校准方式仍然重要。
 
-**@gls-simpo移除参考，并把奖励按长度归一化。** Meng 等从隐式奖励中去掉参考策略 [@meng2024simpo]，用一条序列的平均对数概率作为奖励，并加上胜出与被拒之间的一个目标边际。长度归一化是其刻意之处：DPO 的对数比值奖励与序列长度相关，这让策略能靠变得更啰嗦来抬高分数，而除以长度便移除了这一路径。@fig-dpo-variants-2 展示了两种奖励下，奖励随回复长度的变化。
+KTO 保留参考模型，并定义
 
-![SimPO 的长度归一化如何把隐式奖励对回复长度抹平的示意图，据 Meng et al.（2024）。DPO 的对数比值奖励把逐词元项求和，因而随长度增长，策略可借变啰嗦加以利用；按长度归一化的 SimPO 奖励是逐词元平均，保持平直。](/figures/dpo-variants-2.svg){#fig-dpo-variants-2}
+$$
+r_\theta(x,y)=\log\frac{\pi_\theta(y\mid x)}{\pi_{\mathrm{ref}}(y\mid x)},
+\qquad
+z_0(x)=\mathrm{KL}\!\left(
+\pi_\theta(\cdot\mid x)\,\|\,\pi_{\mathrm{ref}}(\cdot\mid x)
+\right),
+$$
 
-## 受控比较
+其中，$r_\theta$ 是回答的策略/参考模型对数比，$z_0$ 是 KL 参考点。KTO 再根据回答相对这个参考点的位置计算效用：
 
-表面上，这四处改动像一架不断改进的阶梯，每个变体都修补了上一个所遗漏的。一项受控比较瓦解了这种读法。
+$$
+v(x,y)=
+\begin{cases}
+\lambda_D\,\sigma\!\left(\beta(r_\theta(x,y)-z_0(x))\right),
+& d=\text{合意},\\
+\lambda_U\,\sigma\!\left(\beta(z_0(x)-r_\theta(x,y))\right),
+& d=\text{不合意}.
+\end{cases}
+$$
+
+损失为 $\mathcal{L}_{\mathrm{KTO}}=\mathbb{E}[\lambda_d-v(x,y)]$，其中 $\lambda_D$ 与 $\lambda_U$ 分别控制合意类和不合意类的权重。精确计算 $z_0$ 很昂贵，原论文使用由错配提示与回答构造出的停止梯度且有偏的微批次估计。因此，类别不平衡既会影响类别权重，也会影响基线估计的质量。
+
+前景理论的联系提供了一种归纳偏置：相对于参考点衡量收益与损失，并使用会饱和的价值函数。但这并不能证明这个公式忠实刻画了人们如何评价文本。KTO 更直接也更实际的优势是，它可以从独立标注的回答学习，而不必假装这些标签构成同一提示下的样本对。
+
+### ORPO：把选中回答的 SFT 与偏好惩罚合并
+
+优势比偏好优化（@gls-orpo）移除冻结参考模型，也不再设置单独的偏好训练阶段。它仍然使用成对数据，以选中回答作为 SFT 目标，再加入一项拉开选中与被拒序列分数的损失 [@hong2024orpo]。对于包含 $m$ 个词元的回答，ORPO 首先定义词元概率的几何平均：
+
+$$
+P_\theta(y\mid x)=
+\exp\!\left(
+\frac{1}{m}\sum_{t=1}^{m}
+\log P_\theta(y_t\mid x,y_{<t})
+\right),
+$$
+
+其中，$P_\theta(y\mid x)$ 是各词元概率的几何平均。对应的优势为 $\operatorname{odds}_\theta(y\mid x)=P_\theta(y\mid x)/(1-P_\theta(y\mid x))$。完整目标是
+
+$$
+\mathcal{L}_{\mathrm{ORPO}}=
+\mathbb{E}_{\mathcal{D}}
+\left[
+\mathcal{L}_{\mathrm{SFT}}(x,y_w)
++\lambda\mathcal{L}_{\mathrm{OR}}(x,y_w,y_l)
+\right],
+$$
+
+其中，$\mathcal{L}_{\mathrm{SFT}}$ 是选中回答的负对数似然，$\lambda$ 控制优势比项的权重。优势比项定义为
+
+$$
+\mathcal{L}_{\mathrm{OR}}=
+-\log\sigma\!\left(
+\log\frac{
+\operatorname{odds}_\theta(y_w\mid x)
+}{
+\operatorname{odds}_\theta(y_l\mid x)
+}
+\right).
+$$
+
+最小化 $\mathcal{L}_{\mathrm{OR}}$，会提高选中回答相对于被拒回答的优势。这里的 $\lambda>0$ 在示范学习与偏好分离之间取舍。ORPO 属于单阶段训练，但单阶段并不等于只把数据训练一遍。它省去了参考模型推理或缓存参考分数的工作，却通过 $\lambda$ 把 SFT 与偏好学习耦合起来，无法像分阶段的 SFT 后接 DPO 那样独立调节和审计这两种信号。
+
+### SimPO：使用平均对数概率与目标间隔
+
+简单偏好优化（@gls-simpo）同样移除参考模型，但保留纯粹的成对目标。它用策略的平均词元对数概率为回答评分：
+
+$$
+r_{\mathrm{SimPO}}(x,y)=
+\frac{\beta}{|y|}\log\pi_\theta(y\mid x)
+=\frac{\beta}{|y|}\sum_{t=1}^{|y|}
+\log\pi_\theta(y_t\mid x,y_{<t}).
+$$
+
+其中，$|y|$ 是回答长度，$\beta$ 缩放平均对数概率。训练损失为
+
+$$
+\mathcal{L}_{\mathrm{SimPO}}(\theta)=
+-\mathbb{E}_{\mathcal{D}}
+\log\sigma\!\left(
+\frac{\beta}{|y_w|}\log\pi_\theta(y_w\mid x)
+-\frac{\beta}{|y_l|}\log\pi_\theta(y_l\mid x)
+-\gamma
+\right),
+$$
+
+其中，$\beta>0$ 缩放分数差，$\gamma>0$ 是目标间隔 [@meng2024simpo]。SimPO 没有参考策略 KL 项，所以 $\beta$ 在这里不是 KL 系数。
+
+对词元取平均，可以在回答长度与数据偏好相关时降低回答长度带来的敏感性，但并不能消除所有长度偏差。SimPO 论文也指出，DPO 中的策略/参考模型比本身可能抵消一部分长度效应。原始实验还发现，$\gamma$ 过大可能降低生成质量。无参考模型并不等于没有正则约束，初始化、学习率、数据覆盖与早停仍然会限制策略偏移。
+
+## 现有比较能说明什么
+
+几篇原始论文都在各自的实验设置中报告了改进：KTO 使用非成对标签得到有竞争力的结果，ORPO 展示了联合目标的收益，SimPO 则在对话评测中超过其 DPO 基线。但这些实验使用的起始模型、数据集、超参数搜索与评测器都不相同，并不构成一场采用统一条件的竞赛。
 
 ::: {.callout-important}
 ## 争议所在
-这些变体通常被呈现为一架不断改进的阶梯，但一项受控的多尺度研究（arXiv:2603.19335）发现，一旦校正了混杂因素，没有任何一个变体能可靠地胜过基础 DPO。当调参预算、数据与模型被持平时，各方法之间的差距缩进了噪声之中，而表观排名会随模型尺度发生反转：在某一尺寸领先的变体，到另一尺寸却落后。务实的读法是，一个新目标所报告的胜出，往往反映的是一次调得更好的基线对变体比较，而非该损失的某种属性；这些方法之间该选哪个，应由流水线与数据约束来定，而不是由所声称的精度优势来定。
+
+一篇 2026 年预印本在 1.5B 参数模型与合成 GSM8K 偏好数据上测试了 20 种 DPO 变体。经过 Bonferroni 校正后，没有任何变体能可靠地超过基础损失 [@li2026posttraining]。在这项实验中，SimPO 是唯一达到统计显著差异的方法，但表现更差。不过，同一论文在更广的规模实验中又发现 SimPO 在 7B 规模上领先 DPO。该论文的变体扫描只采用一个模型家族和一个主要训练领域，沿用公开默认参数，而没有为每种方法提供相同的调参预算；最初还出现过随机种子传播错误，作者后来只在部分方法上重新检查。
+
+这些结果并不能证明 DPO 在所有场景下都最好。它说明，目标函数层面的胜负取决于模型规模、数据、初始化、调参和评测。其他更广泛的实证比较同样发现，方法排名会随实验设置变化 [@spangher2025rlhf; @saeidi2025systematic]。
 :::
 
-如果精度无法把这些变体区分开，就要看别的因素；真正起决定作用的，通常是流水线与数据的形状。
+稳妥的结论不是所有损失都可以互换，而是目前没有得到公认的普适胜者。比较时应固定起始检查点、数据、优化预算、解码设置与外部评测器。如果这个选择关系重大，还应报告不同随机种子下的不确定性。
 
-## 真正决定取舍的是什么
+## 根据数据与流水线约束选择
 
-精度优势既已消失，真正起作用的，就是这些变体据以彼此权衡的那些工程维度。其中四条反复出现。
+数据与流水线条件往往会在比较基准分数之前缩小选择范围：
 
-- **有参考模型与无参考模型。** 保留冻结参考（DPO、IPO）会锚定策略，并让 KL 约束有意义，代价是多一个常驻模型与一次前向传播。去掉它（ORPO、SimPO）把对齐阶段的内存减半并简化流水线，但移除了那个限制偏离起始策略的显式锚点。
-- **成对数据与非成对数据。** DPO、IPO、ORPO 与 SimPO 都需要每个提示词一个胜出回复与一个被拒回复。KTO 接受非成对的二元信号，这契合生产环境的反馈日志，却以一个效用模型替换了其余方法所优化的成对比较。
-- **有界目标与无界目标。** IPO 的有界回归抵抗 DPO 的 log-sigmoid 在干净、近乎确定的偏好上所招致的过拟合。代价是损失不再精确匹配 Bradley-Terry，且要设定一个目标边际。
-- **两阶段与单阶段。** ORPO 把对齐并入 SFT，省下一个阶段与一个参考模型，代价是把格式学习与偏好学习纠缠在一起，使它们再也无法被分别调参或审计。
+| 方法 | 反馈格式 | 训练时使用冻结参考模型 | 选中回答的 SFT 项 | 回答分数 | 主要额外控制项 |
+|---|---|---:|---:|---|---|
+| DPO | 成对比较 | 是 | 否 | 策略/参考模型对数比之和 | $\beta$ |
+| IPO | 成对比较 | 是 | 否 | 策略/参考模型对数比间隔 | $\beta$ 与有限目标 $1/(2\beta)$ |
+| KTO | 合意/不合意 | 是 | 否 | 相对 KL 基线的对数比 | $\beta,\lambda_D,\lambda_U$ |
+| ORPO | 成对比较 | 否 | 是 | 词元概率几何平均的优势 | $\lambda$ |
+| SimPO | 成对比较 | 否 | 否 | 策略平均对数概率 | $\beta,\gamma$ |
 
-这四条轴线中的第一条，不只是一个建模选择，它是被自下而上地强加的。
+把这张表当作筛选条件，而不是排行榜：
+
+- 如果已有同一提示下的成对回答和合适的参考模型，可以先从 DPO 开始。它是最清楚的基线，也能把 SFT 与偏好学习分开。
+- 如果可分样本使间隔持续上升，同时又希望保留参考模型锚点，可以考虑 IPO。但应在实际模型环境中验证理论给出的目标。
+- 如果反馈确实是逐条标注的，可以考虑 KTO。与成对方法比较质量之前，应审计标签语义、类别平衡与微批次 KL 估计。
+- 如果在一个阶段内完成 SFT 与偏好学习有明显的运维价值，可以考虑 ORPO。应测量 $\lambda$ 所表示的权重如何平衡选中回答的模仿学习与拒绝学习，而不能假设两者一定相互促进。
+- 如果流水线适合省去参考模型推理，并使用逐词元平均分数，可以考虑 SimPO。由于没有显式参考锚点，这里需要同时调节 $\beta$ 与 $\gamma$，并直接测量策略偏移。
+
+无参考方法省去的是参考模型推理与存储开销，并不一定让峰值内存减半。实际节省取决于优化器状态、激活值、分片、卸载，以及参考分数是否预先计算。DPO 与 IPO 可以在训练前计算冻结参考模型对每个样本对的两个标量分数，以磁盘空间和预处理时间换取更低的训练期内存与算力开销。
 
 ::: {.callout-tip}
 ## 下层约束
-@sec-training-at-scale 的内存预算会向上影响损失设计。DPO 与 IPO 让一个冻结参考模型与策略一同常驻，并在每一步对它多付一次前向传播。在大模型尺寸下，这翻倍的占用正是 ORPO（无参考）与 SimPO（无参考）要消除的成本。无参考设计首先并不是一个精度主张，而是对「持有两个模型」这一系统成本的回应。
+
+@sec-training-at-scale 中的系统设计会直接影响目标函数的选择。如果能预先计算参考分数，DPO 训练时就不必让额外模型常驻内存。重新生成样本对后，缓存分数会过期，参考模型推理也会重新进入回路。在把「无参考」作为系统优势之前，应先决定数据刷新周期、存储格式、分片方案与精度策略。
 :::
 
-## 运行起来
+## 一次实际的 DPO 训练
 
-DPO 是这个家族里运行起来最小的：一个损失、一份作为参考的冻结 SFT 模型副本，以及一个静态的偏好三元组文件。其核心是 log-sigmoid 内部的对数比值之差，由策略与参考下胜出与被拒回复的逐词元对数概率算出；损失的推导参见 `DPO loss, Rafailov et al. (arXiv:2305.18290), Sec. 4` [@rafailov2023dpo]。由于参考从不更新，参考前向传播可以一次性预先计算，这是标准的内存优化。
+可靠的第一次训练应当尽量朴素。它先验证偏好数据是否含有有效信号，再考虑加入其他变体。
 
-整个家族中唯一要紧的超参数是 $\beta$，即同时缩放隐式奖励的那个 KL 约束强度。太小则策略偏离参考并退化；太大则它几乎不动。由于基础 DPO 是离策略（off-policy）的，是在一份固定数据上训练、而非用来自实时策略的样本，它的上限就是那份固定数据，常见的补救是迭代或在线 DPO，在各轮之间用当前模型重新生成样本对。那个同策略变体，以及它所逼近的更广义的 RLHF 机制，都留到 @sec-rlhf 再谈。
+1. **固定起点。** 这里把 SFT 或指令微调检查点保存为 $\pi_{\mathrm{ref}}$，并用同一组权重初始化 $\pi_\theta$。记录分词器、对话模板、截断规则与序列结束符处理方式。
+2. **验证每个三元组。** 每条数据必须包含一个提示、一个选中回答和一个被拒回答。移除完全重复的数据、标签互相矛盾的重复数据、空回答，以及被截断后变得完全相同的样本对。按提示或来源组划分数据，避免近重复内容泄漏到留出集。
+3. **检查偏好信号。** 测量回答长度、标签来源、主题分布、可用的标注者一致率，以及起始模型给出的间隔。如果选中回答几乎总是更长，模型可能只学会把长度当作偏好捷径。
+4. **正确计算序列分数。** 屏蔽提示词元和填充词元，只对回答词元求和。策略模型与参考模型必须使用相同的分词与截断方式。只有在这些选择固定后，才能预先计算参考分数。
+5. **进行小规模参数扫描。** 改变学习率、$\beta$ 与训练轮数。学习率和停止时间可能与具体采用哪种目标函数同样重要。比较不同方法时，保持数据顺序与评测流程不变。
+6. **评测每个检查点，而不只看最后一步。** 训练集偏好准确率可能在留出任务质量达到峰值之后继续上升。应使用扫描前就定义好的外部评测来选择检查点。
+
+一个批次所需的最小计算为
+
+$$
+\begin{aligned}
+\ell_w &= \log\pi_\theta(y_w\mid x)-\log\pi_{\mathrm{ref}}(y_w\mid x),\\
+\ell_l &= \log\pi_\theta(y_l\mid x)-\log\pi_{\mathrm{ref}}(y_l\mid x),\\
+\mathcal{L}_{\mathrm{batch}} &= -\operatorname{mean}\!\left[
+\log\sigma\!\left(\beta(\ell_w-\ell_l)\right)
+\right].
+\end{aligned}
+$$
+
+这里，$\ell_w$ 与 $\ell_l$ 都只对回答词元求和。分别记录这两个诊断量，可以暴露只看一条损失曲线时会被掩盖的多种问题。
+
+## 失效方式与检查项
+
+偏好优化是离线过程，只会约束静态比较中出现过的回答。随着策略改变，它可能进入标签几乎没有覆盖的区域。任何损失变体都无法从缺失的数据中推断未被记录的行为要求。
+
+至少要在留出数据和模型新生成的回答上记录以下指标：
+
+- **留出集偏好准确率与间隔。** 两者能说明损失是否泛化到未见过的样本对，却不能单独衡量开放式生成质量。
+- **选中回答与被拒回答的对数概率。** 相对间隔扩大时，两种回答的似然仍可能同时下降。这未必不可接受，但应被直接观测，而不是假定不会发生。
+- **策略与参考模型的偏差。** 在新生成的回答上估计词元级 KL 或策略/参考模型对数比。配置中的 $\beta$ 不是实际偏移的测量结果。
+- **回答长度与格式合规性。** 比较完整分布，而不只比较均值。长度、拒绝率和格式都可能成为偏好标签的捷径。
+- **留出任务质量。** 使用人工评测、可核验任务，或局限性已经明确的评判协议。还应覆盖训练样本对没有涉及的安全与能力回退。
+- **分组结果。** 按提示来源、语言、难度、回答长度差与标签来源拆分。总体胜率可能掩盖某个群体上的严重回退。
+
+如果训练准确率接近一，而外部质量却下降，应先缩短训练或降低学习率，再检查数据泄漏、矛盾标签、长度捷径与策略偏移。切换目标函数之前不先诊断这些原因，只会把同一种失效搬到另一个损失上。
+
+静态偏好优化的价值恰恰来自简单，它的局限也来自同一个地方：模型在发生变化时从不请求新的比较。迭代式或在线方法会用当前策略刷新候选回答，再收集或生成新的判断，从而改善覆盖范围，代价是重新把采样与反馈基础设施带回训练回路。这也正是 @sec-rlhf 讨论在线 RLHF 系统时面对的取舍。
 
 ## 延伸阅读
 
