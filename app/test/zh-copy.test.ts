@@ -688,7 +688,14 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/03-programs-solvers-symbolic.qmd",
-      ["翻译才是学习到的部分", "由构造得到的忠实性", "运行时成为推理器的一部分", "失败移动到了接口处"],
+      [
+        "可执行推理把这些工作分开",
+        "可执行产物需要明确约定",
+        "执行成功不等于答案正确",
+        "各类运行时究竟能证明什么",
+        "忠实性有三层含义",
+        "执行器是一道安全边界",
+      ],
     ],
     [
       "en/reasoning/04-verifiers-process-supervision.qmd",
