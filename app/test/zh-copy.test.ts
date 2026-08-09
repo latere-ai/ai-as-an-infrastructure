@@ -741,7 +741,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/07-inference-time-scaling.qmd",
-      ["重复采样提高的是覆盖率，而不是答案质量", "串行修订与并行搜索", "计算最优分配按问题难度调度预算", "选择器并不完美"],
+      ["模型只是这个过程中的一个组件", "扩展的究竟是什么", "重复采样换来的是覆盖率", "选择规则决定最终准确率", "分配预算，而不是把预算拉满", "在成本实际发生处记账"],
     ],
     [
       "en/reasoning/index.qmd",
