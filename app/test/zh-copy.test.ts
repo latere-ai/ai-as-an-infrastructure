@@ -718,7 +718,14 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/05-training-to-reason.qmd",
-      ["可核查的真值", "移除了习得代理缺口", "丢掉评论者", "没有步级监督也能产出长程推理", "重加权了基座模型本来就能采样到的路径"],
+      [
+        "不需要为每道训练题准备一份完整解答",
+        "奖励约定",
+        "组内相对学习如何获得信号",
+        "无需步骤级标签",
+        "经验覆盖面",
+        "如何构建经得起检验的训练运行",
+      ],
     ],
     [
       "en/reasoning/06-reasoning-data-distillation.qmd",
