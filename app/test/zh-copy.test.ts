@@ -917,7 +917,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/04-runtime-safety.qmd",
-      ["已对齐模型自己的拒绝必要但不充分", "输入与输出要分开筛", "以策略为条件的分类器", "间接@gls-prompt-injection", "流式决策会反过来约束护栏设计"],
+      ["运行时安全是请求处理时的契约", "模型可以提出动作，只有可信代码可以授权并提交", "分数不是决定", "注入成功还不等于利用成功", "正文可以流式传输，可执行输出必须缓冲"],
     ],
     [
       "en/safety/05-adversarial-robustness.qmd",
