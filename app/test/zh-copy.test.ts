@@ -1107,7 +1107,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/frontiers/02-the-capability-horizon.qmd",
-      ["不再是一个排行榜数字", "移动的地平线", "测量仪器饱和得比新仪器造出来还快", "可持续的进步", "由算力支撑的短期表象"],
+      ["不再是排行榜上的一个数字", "移动的地平线", "测量工具饱和得比新工具建成还快", "经得起复测的进步", "算力堆出来的表象", "头条数字"],
     ],
     [
       "en/frontiers/03-verification-frontier.qmd",
