@@ -534,6 +534,29 @@ test("expanded evaluation chapters use the new interactive visualizations in bot
   }
 });
 
+test("the operational frontier localizes every visible label in Chinese", () => {
+  const start = rt.indexOf("R['eval-frontier']");
+  const end = rt.indexOf("R['reasoning-search-budget']", start);
+  const component = rt.slice(start, end);
+
+  for (const label of [
+    "小模型",
+    "路由组合",
+    "前沿点",
+    "慢速大模型",
+    "低价弱模型",
+    "每项任务的相对成本",
+    "任务质量",
+    "成本权重",
+    "延迟权重",
+    "当前选择",
+  ]) expect(component).toContain(label);
+  expect(component).toContain("host.getAttribute('data-lang')");
+  expect(component).toContain("document.documentElement.lang.indexOf('zh')");
+  expect(component).toContain("setAttribute('aria-label'");
+  expect(src("zh/evaluation/07-operational-evaluation.qmd")).toContain('data-lang="zh"');
+});
+
 test("evaluation precision visual does not present a Wald half-width as a power or release rule", () => {
   const start = rt.indexOf("R['eval-power']");
   const end = rt.indexOf("R['eval-frontier']", start);

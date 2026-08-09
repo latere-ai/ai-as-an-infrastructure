@@ -885,7 +885,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/evaluation/07-operational-evaluation.qmd",
-      ["发布门禁是一条策略", "私有套件是一项资产", "漂移不止一种", "质量不是唯一轴"],
+      ["离线评测止于一个结果", "运行前先写好发布政策", "分阶段收集不同证据", "调整门禁前先诊断漂移"],
     ],
     [
       "en/safety/01-mechanistic-interpretability.qmd",

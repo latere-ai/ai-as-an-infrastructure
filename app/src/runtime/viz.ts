@@ -1772,15 +1772,27 @@
   // and see which point survives as the operating choice.
   R['eval-frontier'] = function (host) {
     var cw = 0.25, lw = 0.15;
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var L = lang === 'zh' ? {
+      small: '小模型', routed: '路由组合', frontier: '前沿点', slow: '慢速大模型', cheap: '低价弱模型',
+      xAxis: '每项任务的相对成本', yAxis: '任务质量',
+      costWeight: '成本权重', latencyWeight: '延迟权重', chosen: '当前选择'
+    } : {
+      small: 'small', routed: 'routed', frontier: 'frontier', slow: 'slow giant', cheap: 'cheap weak',
+      xAxis: 'relative cost per task', yAxis: 'task quality',
+      costWeight: 'cost weight', latencyWeight: 'latency weight', chosen: 'chosen'
+    };
     var pts = [
-      { n: 'small', q: 0.68, c: 0.22, l: 0.18 },
-      { n: 'routed', q: 0.80, c: 0.55, l: 0.32 },
-      { n: 'frontier', q: 0.87, c: 1.35, l: 0.72 },
-      { n: 'slow giant', q: 0.875, c: 2.25, l: 1.2 },
-      { n: 'cheap weak', q: 0.55, c: 0.12, l: 0.12 }
+      { n: L.small, q: 0.68, c: 0.22, l: 0.18 },
+      { n: L.routed, q: 0.80, c: 0.55, l: 0.32 },
+      { n: L.frontier, q: 0.87, c: 1.35, l: 0.72 },
+      { n: L.slow, q: 0.875, c: 2.25, l: 1.2 },
+      { n: L.cheap, q: 0.55, c: 0.12, l: 0.12 }
     ];
     var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
     var cv = canvas(host, 260);
+    cv.c.setAttribute('role', 'img');
+    read.setAttribute('aria-live', 'polite');
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
       ctx.clearRect(0, 0, W, H);
@@ -1798,12 +1810,13 @@
         ctx.fillText(p.n, X(p.c), Y(p.q) + 3 * cv.dpr);
       });
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText('relative cost per task', W / 2, H - 12 * cv.dpr);
-      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('task quality', 0, 0); ctx.restore();
-      read.textContent = 'cost weight=' + cw.toFixed(2) + ' · latency weight=' + lw.toFixed(2) + ' · chosen: ' + pts[best].n;
+      ctx.fillText(L.xAxis, W / 2, H - 12 * cv.dpr);
+      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.yAxis, 0, 0); ctx.restore();
+      read.textContent = L.costWeight + '=' + cw.toFixed(2) + ' · ' + L.latencyWeight + '=' + lw.toFixed(2) + ' · ' + L.chosen + ': ' + pts[best].n;
+      cv.c.setAttribute('aria-label', read.textContent);
     }
-    host.appendChild(slider('cost weight', 0, 0.8, 0.01, cw, function (v) { cw = v; draw(); }).wrap);
-    host.appendChild(slider('latency weight', 0, 0.8, 0.01, lw, function (v) { lw = v; draw(); }).wrap);
+    host.appendChild(slider(L.costWeight, 0, 0.8, 0.01, cw, function (v) { cw = v; draw(); }).wrap);
+    host.appendChild(slider(L.latencyWeight, 0, 0.8, 0.01, lw, function (v) { lw = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };
