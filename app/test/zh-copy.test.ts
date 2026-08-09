@@ -1162,7 +1162,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/03-edge-on-device.qmd",
-      ["设计得小", "过度训练", "int4 底线", "2 比特乃至更低", "三元权重", "云与边缘的切分"],
+      ["带版本的设备部署", "设备支持范围", "离线路径", "更窄的数据边界", "质量、内存、能耗、散热", "异构设备群"],
     ],
     [
       "en/practice/04-training-finetuning-practice.qmd",
