@@ -757,7 +757,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/01-training-agents-to-act.qmd",
-      ["rollout 如今是智能体与环境的完整交互", "把环境的词元从损失中屏蔽出去", "长轨迹上的信用分配", "环境本身成了一项训练资产", "内含一个服务引擎"],
+      ["答案可以在一次补全后评分", "学习单位变成交互轨迹", "掩码是一条所有权规则", "奖励设计、信用估计与探索是三项独立选择", "版本化的数据基础设施", "资源布局与策略新鲜度彼此独立"],
     ],
     [
       "en/orchestration/02-agent-architectures.qmd",
