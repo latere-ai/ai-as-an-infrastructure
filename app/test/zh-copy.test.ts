@@ -1059,7 +1059,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/infrastructure/04-orchestration-data-infra.qmd",
-      ["检查点、数据层与可观测性", "多久保存一次", "数据顺序如何跨过重启"],
+      ["检查点、数据平面与可观测性", "多久保存一次", "如何定义数据顺序与覆盖范围", "哪些状态能跨过重启"],
     ],
     [
       "en/infrastructure/05-the-compute-frontier.qmd",
