@@ -1154,7 +1154,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/02-serving-and-compute.qmd",
-      ["自托管端点", "@gls-gateway", "密钥与成本", "解码 token 的服务引擎", "下方的 GPU"],
+      ["版本化的服务契约", "完整路径", "选择引擎", "@gls-gateway", "手段，不是架构起点"],
     ],
     [
       "en/practice/03-edge-on-device.qmd",
