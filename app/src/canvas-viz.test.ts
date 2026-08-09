@@ -292,7 +292,9 @@ test("ch03 scaling-laws adds a u-shape compute-optimal curve in both languages",
 test("ch36 adversarial-robustness adds swiss-cheese stepper + many-shot power-law, both languages", () => {
   for (const lang of ["en", "zh"]) {
     const t = src(`${lang}/safety/05-adversarial-robustness.qmd`);
-    expect(t).toContain('data-chip="CIRCUIT BREAKERS"');
+    expect(t).toContain(
+      lang === "en" ? 'data-chip="CIRCUIT BREAKERS"' : 'data-chip="断路器"',
+    );
     expect(t).toContain('data-viz="curve" data-family="power-grow"');
   }
 });

@@ -812,7 +812,7 @@ test("safety infrastructure and practice first uses explain operational terms lo
     ["en/safety/03-security-authorization.qmd", "@gls-prompt-injection, an instruction hidden in untrusted content"],
     ["zh/safety/03-security-authorization.qmd", "@gls-prompt-injection，即藏在不受信任内容中的指令"],
     ["en/safety/05-adversarial-robustness.qmd", "@gls-jailbreak attacks, prompts designed to bypass refusal"],
-    ["zh/safety/05-adversarial-robustness.qmd", "@gls-jailbreak攻击，也就是绕过拒绝边界的提示"],
+    ["zh/safety/05-adversarial-robustness.qmd", "@gls-jailbreak 攻击，也就是试图绕过拒绝或其他学习得到的策略行为的提示"],
     ["en/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning, a process that aims to remove the influence of specified training data from a trained model"],
     ["zh/safety/06-privacy-provenance-unlearning.qmd", "@gls-machine-unlearning，也就是近似地从已训练权重里移除某个已学事实"],
     ["en/infrastructure/01-accelerators-networking.qmd", "@gls-rdma, remote direct memory access, lets a network adapter transfer data"],

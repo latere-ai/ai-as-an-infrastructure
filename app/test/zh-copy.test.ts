@@ -925,7 +925,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/05-adversarial-robustness.qmd",
-      ["@gls-jailbreak攻击，也就是绕过拒绝边界的提示，已经分出四个家族", "@gls-red-teaming是一项度量工作", "每一种已知防御都是局部的", "@gls-adversarial-robustness从结构上说是系统的属性"],
+      ["对抗鲁棒性考察的是", "越狱试图让模型输出违反策略的内容", "这些失效彼此相关，却不能混为一谈", "红队测试会在明确的威胁模型下寻找这些失效"],
     ],
     [
       "en/safety/06-privacy-provenance-unlearning.qmd",
