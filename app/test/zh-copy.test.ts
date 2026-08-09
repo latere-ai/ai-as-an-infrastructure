@@ -781,7 +781,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/orchestration/05-the-harness.qmd",
-      ["模型周围的运行时层", "暂停、重定向、分叉", "评估分数的影响也不亚于一次模型更换"],
+      ["把建议变成有边界、可观察的工作", "模型负责提出建议，运行框架负责排序并记录", "模型、运行框架、工具和环境的共同性质"],
     ],
     [
       "en/orchestration/07-multi-agent-systems.qmd",
