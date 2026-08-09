@@ -14,7 +14,10 @@ import { loadGlossary } from "./glossary.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 const graphviz = await loadGraphviz();
-const wholeBookTimeout = 90_000;
+// A whole-book pass competes with 200+ test files in the full CI suite. Keep
+// the timeout above the observed parallel-load runtime; isolated runs are much
+// faster, but the old 90-second limit made this deterministic regression flaky.
+const wholeBookTimeout = 180_000;
 
 function ctxFor(): CompileContext {
   return {

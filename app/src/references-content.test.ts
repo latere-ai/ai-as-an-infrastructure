@@ -13,7 +13,9 @@ const repoRoot = join(import.meta.dir, "../..");
 const source = readFileSync(join(repoRoot, "en/references.qmd"), "utf8");
 const summaryOverlay = readFileSync(join(repoRoot, "refs/00-references-summaries.bib"), "utf8");
 const graphviz = await loadGraphviz();
-const wholeBookTimeout = 90_000;
+// This compiles the entire English book while the CI runner executes up to 20
+// test files concurrently. Preserve the full audit and allow for that load.
+const wholeBookTimeout = 240_000;
 
 test("the English References page explains its order, labels, notes, and links", () => {
   const prose = source.replace(/\s+/g, " ");
