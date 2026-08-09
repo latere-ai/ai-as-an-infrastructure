@@ -1019,7 +1019,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/04-quantization-kernels.qmd",
-      ["量化把权重或激活表示得更小", "融合算子把注意力中间结果留在高带宽内存之外", "GPTQ、AWQ 与 SmoothQuant", "FlashAttention"],
+      ["从字节数算起", "量化是一份数值契约", "格式不等于执行路径", "FlashAttention 不再物化中间结果", "选择并验证部署方案"],
     ],
     [
       "en/inference/05-structured-long-context.qmd",
