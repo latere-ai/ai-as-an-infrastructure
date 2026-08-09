@@ -34,7 +34,7 @@ const handoffs: Array<[string, string[], string[]]> = [
   ["foundations", ["Part II steps sideways", "do not arrive as natural strings"], ["第二部分转向另一类生成问题", "不天然以字符串形式出现的对象"]],
   ["generative", ["Part III returns to behavior"], ["第三部分会回到行为本身"]],
   ["adaptation", ["Part IV asks what can be left to inference time"], ["第四部分将问题转向推断时"]],
-  ["reasoning", ["Part V turns that routing problem into serving machinery"], ["第五部分会把这个路由问题落到服务机器上"]],
+  ["reasoning", ["Part V turns that routing problem into serving machinery"], ["第五部分会把这个路由问题转化为服务系统中的具体机制"]],
   ["inference", ["Part VI begins when a served model is asked to do work"], ["第六部分从这里开始"]],
   ["orchestration", ["Part VII supplies that instrument layer"], ["第七部分补上的就是这层仪器"]],
   ["evaluation", ["Part VIII starts from that dependency on evidence"], ["第八部分接着问"]],
