@@ -10,6 +10,21 @@ test("the viz runtime registers the superposition component", () => {
   expect(rt).toMatch(/R\['superposition'\]\s*=\s*function/);
 });
 
+test("superposition localizes its control and accessible live summary", () => {
+  const start = rt.indexOf("R['superposition']");
+  const end = rt.indexOf("R['paged-attention']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("host.getAttribute('data-lang')");
+  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
+  for (const phrase of ["二维空间中的特征数", "干扰", "稀疏度"]) {
+    expect(component).toContain(phrase);
+  }
+  expect(component).toContain("cv.c.setAttribute('role', 'img')");
+  expect(component).toContain("cv.c.setAttribute('aria-label'");
+  expect(src("zh/safety/01-mechanistic-interpretability.qmd")).toContain('data-lang="zh"');
+});
+
 test("the attention heatmap exposes keyboard row controls without 64 tab stops", () => {
   const start = rt.indexOf("R['attention-heatmap']");
   const end = rt.indexOf("R['stepper']", start);

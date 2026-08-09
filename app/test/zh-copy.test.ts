@@ -893,7 +893,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/safety/01-mechanistic-interpretability.qmd",
-      ["几千亿个数字", "单个神经元很少只意味一件事", "稀疏字典", "拆开特征", "工具是否正确"],
+      ["解释固定模型如何产生某项明确行为", "从解释性主张出发", "把特征与叠加视为假说", "SAE 拟合是一种测量模型", "让研究可复现"],
     ],
     [
       "en/safety/02-scalable-oversight-control.qmd",

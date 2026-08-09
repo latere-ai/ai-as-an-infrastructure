@@ -1,195 +1,188 @@
 # 机械可解释性 {#sec-interpretability}
 
-一个训练好的 Transformer 是几千亿个数字，它们产出无人写下的行为。@gls-mechanistic-interpretability试图把这些数字读作计算：找出模型所表示的特征，以及连接它们的电路，就像有人把一个二进制反编译回源代码那样。这个尝试马上遇到三件事实：单个神经元很少只意味一件事，稀疏字典成了这个领域拆开特征的主要工具，而这个工具是否正确，至今仍未定论。
+@gls-mechanistic-interpretability 试图解释固定模型如何产生某项明确行为。它会针对模型的内部计算提出人类可读的假说，再用模型本身检验这些假说。因此，一项有用的主张必须说明模型版本、输入群体、行为或输出，以及所研究的内部位置。它不是隐藏思维的逐字记录，本身也不是安全保证。
 
-## 一个神经元为什么很少只意味一件事
+限定范围很重要，因为同一种内部模式可以支持强弱不同的主张。它可能只是与某项行为相关，可能在新输入上预测该行为，可能在被修改后改变行为，也可能真正参与模型的日常计算。这些主张对证据的要求依次提高。本章建立一套把它们分开的流程：提出候选特征，用留出数据和干预检验它们，把它们组合成电路假说，并报告解释遗漏了什么。结果可以为 @sec-oversight-control 的监督方法提供信息，但不能取代行为证据或明确的安全论证。
 
-我们先从最直观的起点入手：打开一个 Transformer，看一个神经元。神经网络的基本单位是神经元，人们自然希望每个神经元都对应某种含义：这个对 Python 代码激活，那个对红色激活。早期的视觉工作确实找到了几个这样的神经元。语言模型里很少如此。探测 Transformer 里的一个神经元，它会对一组互不相关的东西激活，同时像是一个曲线检测器、一个车轮检测器，又像是一行法语的特征。这就是@gls-polysemanticity，它阻止了直接解释。如果能读到的最小单位本身就没有单一含义，那么读它也说明不了模型在算什么。
+## 从解释性主张出发
 
-障碍不在于模型没有概念，而在于模型拥有的概念远多于它的神经元，却照样把它们存了下来。一条宽度为 $d$ 的残差流（每一层都从中读取、又写回的共享向量通道）只有 $d$ 个正交方向，而模型似乎在追踪数以万计的不同特征。这些特征无法各得一个私有方向，于是只能共享。要做的事，是解开这种共享：从把概念混在一起的激活（模型处理一个词元时在内部形成的向量）中，把模型所用的概念恢复出来，再展示这些概念如何相互作用并产出一个输出。它的回报，是 @sec-oversight-control 的输入：只能观察行为的监督，对一个一直表现正常、直到不再如此的模型是盲目的，而能读特征的监督，则有机会在一个计划执行之前就抓住它。
+机械可解释性研究应区分四个证据等级：**描述、预测、干预和中介**。
 
-这个障碍决定了后面的顺序。先是两个想法，它们解释多义性为何存在，又说明如何处理它。然后是电路，它把恢复出的特征变成对行为的解释。再往后，是十年来的方法演进，它把方法从手工追踪的视觉滤波器，带到一个生产级模型的因果图。到这里，领域才开始正面处理一个公开问题：主要工具是否正确。最后留下的，是对这个工具仍然缺什么的一份克制清点。
+1. **描述**为内部单元或方向赋予可读模式。能激活某个潜变量的案例可以帮助命名，但连贯的标签不等于因果解释。
+2. **预测**检验该标签能否在留出输入上预测激活或行为，从而判断它能否推广到命名时所用案例之外。
+3. **干预**改变一个内部变量并测量输出。它只能证明所述干预下的必要性或充分性，不能直接推广为对模型的无限定结论。
+4. **中介**检验候选变量及其连接，能否复现模型自然计算中的相关干预效应。这是证明候选电路确实捕捉到日常行为生成机制的最强证据 [@geiger2025causal]。
 
-## 处理多义性的两个想法
+@fig-interpretability-evidence 展示了这条递进路径。研究标题能提出的最强结论，取决于整条证据链中最薄弱的证据环节。
 
-脱离多义性靠的是两个想法，一个关于模型如何存储特征的假说，一个恢复它们的方法。
+```{dot}
+//| label: fig-interpretability-evidence
+//| fig-cap: "一项有范围的机制主张需要逐级积累证据。每一级都要经过新的验证，因此，一个易懂的标签本身不能证明机制。"
+digraph evidence {
+  rankdir=TB;
+  bgcolor="transparent";
+  graph [nodesep=0.16, ranksep=0.22, pad=0.04];
+  node [shape=box, style="rounded,filled", width=2.35, height=0.42, fixedsize=true, fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#374151", fillcolor="#f1ece1", penwidth=1.0];
+  edge [color="#6b7280", arrowsize=0.58, penwidth=1.0];
 
-这个假说叫@gls-superposition：模型之所以能表示多于自身维度的特征，靠的是给每个特征指派激活空间里的一个方向，再让这些方向彼此重叠。这之所以可行，是因为特征是稀疏的：在任一给定词元上，数千个可能特征里只有少数几个激活，于是模型能容忍那些很少同时开启的方向之间的干扰。Elhage 等在 「Toy Models of Superposition」 里给出了最清楚的演示 [@elhage2022superposition]：一个被迫把 $n$ 个稀疏特征放进少于 $n$ 个维度的微型自编码器（一种训练来压缩输入、再把它重构出来的网络），正是这样做的。它把特征方向排布成规则的几何结构，并把重构误差与干扰之间的权衡，作为稀疏度的函数来取舍。在这幅图景里，多义性不是缺陷，而是模型用叠加去容纳多于神经元数量的特征所留下的可见现象。
+  scope [label="明确行为与\n内部位置"];
+  describe [label="描述一个\n候选模式"];
+  predict [label="在留出输入上\n检验预测"];
+  intervene [label="干预一个\n内部变量"];
+  mediate [label="检验自然计算的\n中介作用"];
+  claim [label="陈述有边界的主张\n与已知失效", color="#3b82f6", fontcolor="#2563eb"];
+
+  scope -> describe -> predict -> intervene -> mediate -> claim;
+}
+```
+
+这条阶梯也能避免一种常见的类别错误。如果干预幅度远超模型的正常激活范围，它也许能证明某个内部方向可以引导输出，却不能证明模型平时会以同样的幅度或含义使用这个方向。因此，干预协议、取值范围和受检验的对照，都必须写进主张本身。
+
+## 把特征与叠加视为假说
+
+@sec-transformer-architecture 介绍的架构会暴露神经元、注意力头输出和残差流向量等张量。它们是实现单元，不保证就是意义单元。一个神经元可能对多种可识别模式作出响应，一种有用模式也可能分布在许多神经元上。多义神经元仍可携带预测信息或因果信息，只是不能据此采用简单的一神经元一概念解释。
+
+本章所说的**特征**，是分析者提出的变量，用来解释模型的某项行为。它可以是神经元、激活空间中的方向、稀疏自编码器的潜变量，或更复杂的函数。证据决定它是否成立，而不是名称或生成它的方法。
+
+这里的假说是 @gls-superposition：模型通过让非正交的特征方向共享激活空间，表示的特征数多于维度数。一个简单的稀疏线性模型把激活写成
+
+$$
+x = \sum_{i=1}^m a_i v_i + \varepsilon .
+$$
+
+其中，$x \in \mathbb{R}^d$ 是指定内部位置上的激活向量，$v_i \in \mathbb{R}^d$ 是第 $i$ 个候选特征方向，$a_i$ 是对应的特征系数，$\varepsilon$ 是未解释残差。稀疏性假设是：对一个典型案例而言，$m$ 个系数中只有少量 $k = \lVert a \rVert_0$ 不为零，即使 $m>d$ 也是如此。由于 $\mathbb{R}^d$ 中容不下超过 $d$ 个彼此正交的方向，这些方向必然会有重叠。
+
+玩具模型证明这种压缩可以实现，并预测特征稀疏度与重要性变化时，几何结构会如何改变 [@elhage2022superposition]。但它们不能证明每个 Transformer 激活都存在唯一的线性稀疏分解，也不能证明每个人类可识别的概念都是一个方向。因此，叠加是一种富有成效的证据模型，却不能让人直接假定学到的字典已经恢复模型自身的本体结构。
 
 <figure id="fig-mechanistic-interpretability-superposition">
-<div class="viz" data-viz="superposition"></div>
-<figcaption>那套几何在二维里的一个理想化版本。把稀疏度往上拖，平面便容纳更多特征方向，它们排布成一个规则多边形，代价是干扰，也就是方向之间的平均重叠。示意性，并非来自训练好的模型。</figcaption>
+<div class="viz" data-viz="superposition" data-lang="zh"></div>
+<figcaption>特征方向共享低维空间的理想化示意。互动几何只用于说明叠加假说，不是训练语言模型的实测证据。</figcaption>
 </figure>
 
-如果特征沿方向存在，而非落在神经元上，那么正确的分析单位就是方向，正确的工具就是能找出方向的那个。这个工具是字典学习，以@gls-sae实现 [@cunningham2023sparse]。一个 SAE 取一个模型激活 $x \in \mathbb{R}^{d}$，其中 $d$ 是原模型激活宽度；它学习一个由 $m \gg d$ 个特征方向组成的过完备字典，其中 $m$ 是 SAE 暴露出的特征槽位数。它把 $x$ 编码为一个稀疏的特征激活向量，再解码回去：
+## 用稀疏自编码器学习候选特征
+
+稀疏自编码器（SAE）会从一个明确模型位置采集的激活中，学习一部过完备字典。令 $x \in \mathbb{R}^d$ 为一次激活，字典包含 $m$ 个潜变量，并设目标稀疏度 $k$。一种 TopK 形式为
 
 $$
-f = \sigma(W_{\text{enc}} x + b_{\text{enc}}), \qquad
-\hat{x} = W_{\text{dec}} f + b_{\text{dec}}
+\begin{aligned}
+z &= W_{\mathrm{enc}}(x-b_{\mathrm{dec}})+b_{\mathrm{enc}}, \\
+f &= \operatorname{TopK}_k(z), \\
+\hat{x} &= W_{\mathrm{dec}}f+b_{\mathrm{dec}} .
+\end{aligned}
 $$
 
-其中 $x$ 是原始激活，$f$ 是稀疏特征激活，$\hat{x}$ 是重构回来的激活。编码矩阵 $W_{\text{enc}}$ 把残差流投到许多候选特征上，非线性 $\sigma$ 和稀疏惩罚只允许少数特征点亮；解码矩阵 $W_{\text{dec}}$ 再把这些特征组合回原空间。训练目标是最小化重构误差加上一个稀疏惩罚，使得任一输入上只有少数 $m$ 个特征激活。$W_{\text{dec}}$ 的各列就是恢复出的特征方向。因为 $m$ 超过 $d$，字典是过完备的：它有空间给每个底层特征一个独立的槽位，尽管模型不得不把它们挤进 $d$ 个拥挤的维度。SAE 恢复出的特征，远比原始神经元更常是单义的，这正是要点所在。
+其中，编码器矩阵为 $W_{\mathrm{enc}} \in \mathbb{R}^{m \times d}$，解码器矩阵为 $W_{\mathrm{dec}} \in \mathbb{R}^{d \times m}$，$b_{\mathrm{enc}} \in \mathbb{R}^m$ 是编码器偏置，$b_{\mathrm{dec}} \in \mathbb{R}^d$ 是解码器偏置和中心化项。向量 $f \in \mathbb{R}^m$ 至多有 $k$ 个非零元素。根据具体实现，TopK 可以选择最大的正预激活值，也可以选择经过非线性变换后的最大值，研究必须说明采用哪条规则。
 
-@fig-interpretability-superposition 展示了让这一切奏效的双向数字张力。模型把许多稀疏的真实特征压进残差流的 $d$ 个共享方向，容忍那些很少同时激活的方向之间的干扰。SAE 把这个压缩反向运行，将那个 $d$ 维向量展开到 $m \gg d$ 个槽位，使每个特征重新落到自己的方向上。
+基本的 TopK 目标会最小化均方重构误差：
 
-```{dot}
-//| label: fig-interpretability-superposition
-//| fig-cap: "叠加把许多稀疏特征装进狭窄的残差流，过完备的 SAE 再把它们展开回单义的槽位。改编自 Elhage 等（2022）与 Bricken 等（2023）。"
-digraph {
-  bgcolor="transparent";
-  rankdir=LR;
-  nodesep=0.4; ranksep=0.5;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=10, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
+$$
+\begin{aligned}
+\mathcal{L}_{\mathrm{TopK}}
+  &= \mathbb{E}_{x \sim \mathcal{D}}
+     \left[\lVert x-\hat{x}\rVert_2^2\right], \\
+\lVert W_{\mathrm{dec}}[:,i]\rVert_2 &= 1.
+\end{aligned}
+$$
 
-  subgraph cluster_world {
-    label="真实特征\n（众多、稀疏）"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    f1 [label="曲线"];
-    f2 [label="法语"];
-    f3 [label="DNA"];
-    f4 [label="车轮"];
-  }
-  subgraph cluster_stream {
-    label="残差流：\nd 个方向，共享"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    s [label="方向相互重叠\n可容忍的干扰\n多义的神经元"];
-  }
-  subgraph cluster_dict {
-    label="SAE 字典：\nm >> d 个槽位"; style=rounded; color="#6b7280"; fontcolor="#6b7280"; fontsize=10;
-    d1 [label="曲线"];
-    d2 [label="法语"];
-    d3 [label="DNA"];
-    d4 [label="车轮"];
-  }
-  f1 -> s [label="叠加\n压缩"];
-  s -> d1 [label="稀疏自编码器\n展开"];
-}
+其中，第二行把解码器的每一列约束为单位范数。如果没有这个约束，把一列解码向量乘以常数，同时把对应潜变量除以同一常数，并不会改变重构结果。这种尺度退化会让潜变量大小和稀疏惩罚难以比较。较早的 L1 SAE 会在重构损失上再加 $\lambda\lVert f\rVert_1$。TopK 直接控制活跃潜变量数量，也不会产生 L1 收缩；但死潜变量比例和优化质量仍取决于完整训练方案，而不只取决于 TopK 操作 [@gao2024scaling]。
+
+SAE 拟合是一种测量模型，不是发现证书。它的解码器列只是候选特征方向，必须经过多项相互独立的检查：
+
+- **重构保真度：**用留出激活上的归一化重构误差或解释方差来衡量。
+- **下游保真度：**用 $\hat{x}$ 替换原始激活，再测量任务损失或行为变化。
+- **激活稀疏度：**报告活跃潜变量的分布，而不只报告配置值 $k$。
+- **潜变量使用情况：**统计死潜变量和异常频繁的潜变量。
+- **跨随机种子的稳定性：**对齐不同随机种子学到的字典，报告哪些模式会重复出现。
+- **语义有效性：**用留出特征标签和对抗性反例，评估自动标签或人工标签。
+- **因果效用：**把潜变量干预与神经元、随机方向、主成分分析和监督探针等基线比较。
+
+没有任何单项指标可以认证一部字典。低重构误差可以与不可读的潜变量并存，清晰标签可以与低覆盖率并存，强干预也可能偏离模型的日常激活分布。早期 SAE 研究提出了有用的候选特征 [@cunningham2023sparse; @bricken2023monosemanticity]。后续研究把方法扩展到 Claude 3 Sonnet [@templeton2024scaling]，但字典宽度不能保证恢复出的特征具备原子性、完备性或唯一的标准形式。
+
+![重构误差与稀疏度之间权衡的示意。更多活跃潜变量通常会改善重构，更大的字典则可能移动整条前沿。这些曲线是概念示意，不是实测数据。](/figures/mechanistic-interpretability-1.svg){#fig-interpretability-tradeoff}
+
+## 通过干预检验因果相关性
+
+激活补丁通过比较干净运行和受扰运行来定位信息。先选择一个能产生目标行为的输入，再设计一个会改变该行为的受控扰动。然后，从干净运行中取出一个内部组件，补入受扰运行，并测量预先声明的输出指标恢复了多少。
+
+设 $x_b$ 为基础输入、$x_s$ 为来源输入、$j$ 为组件、$F$ 为模型、$s$ 为标量得分，则补丁效应定义为
+
+$$
+\begin{aligned}
+\Delta_j(x_b,x_s) &= \\
+&s\!\left(F_{\operatorname{do}(h_j \leftarrow h_j(x_s))}(x_b)\right) \\
+&-s\!\left(F(x_b)\right).
+\end{aligned}
+$$
+
+其中，$h_j(x_s)$ 是来源激活，$F_{\operatorname{do}(h_j \leftarrow h_j(x_s))}$ 是接受干预后的模型。较大的 $\Delta_j$ 表明这个组件对这一组对照具有因果相关性，但不能识别唯一机制，因为相关组件、非线性交互或不合适的扰动都可能产生相近的恢复分数。
+
+因此，每项补丁结果都要报告扰动方法、输出指标、补丁位置与粒度、来源案例与基础案例，以及效应如何归一化。这些选择的变化可能显著改变结果 [@zhang2024patching]。必要性检验、充分性检验、路径补丁和消融回答的是不同问题，多个方法给出一致结论，比一张热力图更有说服力。
+
+特征引导也要遵循同样的规范。在 Claude 3 Sonnet 中增强金门大桥潜变量，会让模型的输出转向这一主题 [@templeton2024scaling]。这证明该方向可以在这项干预下影响行为，却不能仅凭这一结果证明该方向唯一、标准，或是与桥梁相关行为的完整自然中介变量。
+
+## 把特征重新组合成电路假说
+
+**电路**是相对于某项行为和输入分布定义的因果子图。节点可以是注意力头、MLP、神经元或学到的特征，边则假定信息如何在节点之间流动。电路是一种解释性抽象，其质量同时取决于预测覆盖率和干预保真度。
+
+Transformer 电路研究为残差流写入、注意力的 QK 选择和 OV 变换提供了有用的代数 [@elhage2021framework]。归纳头是一个具体例子：前序词元头与归纳头可以组合起来，延续重复的词元模式。训练动态、消融证据和跨模型观察共同构成归纳机制的证据 [@olsson2022induction]，却不能证明归纳头解释了所有上下文学习，尤其是更大模型以及超出词元序列续写的任务。
+
+近期的电路追踪方法通过拟合替代模型来扩大搜索范围。替代模型使用稀疏跨层转码器近似 MLP 计算，再为特定提示构建归因图 [@ameisen2025circuit; @lindsey2025biology]。这种方法会在被追踪的前向运行中固定注意力模式，并加入误差修正项来提高保真度。因此，每张图只是替代模型中一次计算的局部假说，不是原模型的完整轨迹；大边权不自动等于经过独立验证的因果效应。
+
+如果研究者会扰动候选节点和路径、比较替代模型与原模型，并在相关提示上检验机制，归因图就更有说服力。开放工具让选定的开放权重模型更容易复现这些检查 [@anthropic2025opencircuit]。同时还应比较其他替代架构：在受测模型和自动指标上，转码器相对可比的 MLP 输出 SAE 改善了重构与可解释性之间的权衡 [@paulo2025transcoders]。
+
+## 测量方法遗漏了什么
+
+可解释性错误不只一条轴。负责任的报告应保留下列失效模式：
+
+- **重构误差**是 SAE 或替代模型遗漏的激活信号。它未必对行为重要，但不能在没有下游检验和干预检验时称其无害。
+- **特征分裂**把一个宽泛模式分配给多个较窄潜变量。它可能代表有用的粒度，也可能代表不稳定分解，不能仅凭分裂本身判定为错误。
+- **特征吸收**是指较具体的潜变量捕捉到案例后，较宽泛的潜变量不再激活，从而让特征检测出现召回缺口 [@chanin2024absorption]。
+- **不可辨识性**意味着字典并不唯一。不同随机种子、宽度或目标可能从同一批激活中学到不同分解，因此不能把一部 SAE 当作唯一的标准单元体系 [@leask2025canonical]。
+- **薄弱基线**会让新表示显得更有用。监督式神经元探针、普通主成分方向、随机字典和任务专用探针，能够检验 SAE 是否增加了价值。稀疏探针目前给出的负面证据只适用于这个用途，不能推广到 SAE 的所有用途 [@kantamneni2025useful]。
+- **分布迁移**可能同时使标签和干预失效。根据最高激活案例命名的潜变量，在另一个输入群体上可能表现不同；强烈引导还可能把模型推离日常激活分布。
+- **标签错误**来自自动特征标签对精选案例的概括。标签可能漏掉例外、带入标注者自己的概念，或把连续模式写成分类名称。
+- **覆盖范围有限**意味着每张归因图都只是局部解释。针对一个提示的说明，不能悄悄变成关于整个模型、任务或训练过程的全局结论。
+
+这些限制并不会让方法失去价值，它们决定证据能支持哪些主张。与一组直觉上好看的特征标签相比，同时报告重构、下游保真度、基线、稳定性和干预结果的研究能提供更多信息。
+
+## 让研究可复现
+
+工作单位应是一项 `InterpretabilityStudy`，不是一张孤立的特征截图。最小留存记录如下：
+
+```yaml
+study_id: stable identifier
+model_and_tokenizer_hashes: immutable revisions
+behavior_and_output_metric: operational definition
+input_population_and_splits: train, validation, and held-out sets
+activation_sites: tensors, layers, positions, and preprocessing
+method_and_code_revision: implementation and configuration
+dictionary_width_and_sparsity: m, k or lambda, and selection rule
+training_data_and_seeds: activation corpus and random seeds
+baselines_and_validity_metrics: reconstruction, fidelity, stability, labels
+intervention_protocol: corruption, patch, ablation, and steering ranges
+retained_artifacts: dictionaries, activations, graphs, and evaluation outputs
+claim_scope_and_known_failures: supported level and explicit exclusions
 ```
 
-## 从特征到电路
+记录必须包含足够信息，使他人能够重新运行特征提取、复现汇总指标，并检查支持主张和不支持主张的案例。对于与安全相关的研究，独立审查者应能修改输入样本、随机种子、基线、干预幅度和输出指标，而不必依靠文字说明重建整条流水线。
 
-特征本身只说明模型表示了什么。要解释行为，还需要知道激活如何从一个特征传到另一个特征。这就是电路。电路是模型计算的一个子图，一小组特征加上它们之间的权重，共同实现一个可辨认的算法。视觉之外最早被完整做出的例子是归纳头（induction head），一个由两个注意力头组成的电路，实现这条规则：「如果词元 $A$ 在上下文中较早处后面跟着 $B$，而我刚又看到 $A$，就预测 $B$。」Olsson 等追踪了这个电路，并把它的形成与训练中一次相变联系起来，那次相变恰与上下文学习的出现同步 [@olsson2022induction]。这个领域的纲领，是把归纳头对复制所做的事，对任意行为也做一遍：给特征命名，给连线命名，通过干预来检验这个解释。
-
-有两件事让这个纲领变得困难，而它们朝相反方向拉扯。给特征命名需要一个只意味一件事的单位，而叠加把这个单位从神经元手里夺走，字典学习则试图把它还回来。给连线命名需要一个关于这些单位如何组合的模型，那就是电路。这个领域的历史，正是这两种需求彼此推动向前的故事。
-
-## 从手工电路到因果图
-
-这一路径从手工追踪的电路，走到学习出的特征，再到因果图，每一步都被上一步的极限所逼出。
-
-它始于视觉。Olah 等在 Distill 线上的 「Zoom In: An Introduction to Circuits」 主张特征是真实的、连接它们的电路也是真实的，并在卷积网络里手工把两者都展示了出来 [@olah2020zoomin]。把这一点带到 Transformer 需要一套关于该架构的代数。Elhage 等的 「A Mathematical Framework for Transformer Circuits」 提供了它 [@elhage2021framework]：残差流作为每层都从中读取、又向其写入的共享通信通道，注意力头作为在位置之间搬运信息的操作，以及让头组成多步电路的组合规则。归纳头是那个框架解释的第一个大结果。
-
-随后遇到同一个障碍：手工追踪无法扩展，而叠加意味着想追踪的神经元本来就是多义的。「Toy Models of Superposition」 给这个障碍命了名 [@elhage2022superposition]。处理办法是不再读神经元，转而学习特征。Cunningham 等的 「Sparse Autoencoders Find Highly Interpretable Features in Language Models」 [@cunningham2023sparse]，以及 Anthropic 的 「Towards Monosemanticity」 [@bricken2023monosemanticity]，在同一时间得出同一个想法：在一个模型的激活上训练一个 SAE，恢复出的字典远比神经元基底更可解释。Bricken 等在一个带 512 神经元 MLP（多层感知机，即逐词元的前馈网络）的单层 Transformer 上工作，展示了字典特征挑出了清晰的概念，比如阿拉伯文字或 DNA 序列，而没有任何单个神经元能清楚地持有它们。
-
-悬而未决的问题是这是否能扩展到大模型。「Scaling Monosemanticity」 把 SAE 推到了 Claude 3 Sonnet 这个生产级模型，在其中间层残差流上训练字典，恢复出抽象、多语言、多模态的特征 [@templeton2024scaling]，其中包括金门大桥特征：把它钳制在开启状态，就产出了那个把每段对话都引向大桥的 「Golden Gate Claude」。比演示更重要的是干预：它表明这些特征是因果的，而非仅仅相关。与此同时，SAE 的工程也在收紧。Gao 等的 「Scaling and Evaluating Sparse Autoencoders」 [@gao2024scaling] 用一个 top-$k$ 激活替换了软 L1 惩罚，直接固定激活特征的数量，这消除了一个调参上的麻烦，削减了死潜元（dead latent）的数量，并产出了把字典规模与稀疏度同重构联系起来的清楚扩展律。@fig-interpretability-tradeoff 勾勒出这个关系：每个词元上更多的活跃潜元换来更低的重构误差，更大的字典把整条前沿往下推，而稀疏度轴的两端则承载着后面会回到的失效模式。
-
-![稀疏自编码器在重构误差与稀疏度之间权衡的示意图。每个词元上更多的活跃潜元会降低误差，更大的字典把前沿往下推。这些合成曲线仅用于说明这一关系，并非实测数据，改编自 Gao 等（2024）。](/figures/mechanistic-interpretability-1.svg){#fig-interpretability-tradeoff}
-
-在下面扫一遍 top-$k$ 稀疏度，看重构误差先下降，再在 $k$ 达到真实活跃特征数之后变平，留下一个任何额外潜元都消不掉的非零残余。
-
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
-
-rng = np.random.default_rng(0)
-d, m, n_true = 32, 96, 6        # 残差宽度 d，字典槽位 m，真实活跃特征数
-D = rng.standard_normal((m, d))
-D /= np.linalg.norm(D, axis=1, keepdims=True)
-
-codes = np.zeros((300, m))      # 每个 token 只用 m 个特征中的 n_true 个
-for c in codes:
-    idx = rng.choice(m, n_true, replace=False)
-    c[idx] = rng.standard_normal(n_true)
-X = codes @ D + 0.15 * rng.standard_normal((300, d))   # 激活只是近似稀疏
-base = np.mean(X ** 2)
-
-ks, frac = list(range(0, 13)), []
-for k in ks:
-    f = codes.copy()
-    if k == 0:
-        f[:] = 0
-    else:
-        thr = np.sort(np.abs(f), axis=1)[:, -k][:, None]
-        f = np.where(np.abs(f) >= thr, f, 0.0)         # 只保留最大的 k 个潜变量
-    frac.append(np.mean((X - f @ D) ** 2) / base)
-
-plt.plot(ks, frac, "o-")
-plt.axvline(n_true, ls="--", color="gray", label=f"真实稀疏度 = {n_true}")
-plt.xlabel("每个 token 的活跃潜变量 k")
-plt.ylabel("未解释方差比例")
-plt.legend(); plt.title("Top-k 重建：先下降，随后在残差上平台")
-plt.show()
-print("k=0,3,6,12 时未解释比例:", [round(frac[i], 3) for i in (0, 3, 6, 12)])
-```
-::::
-
-最新的一步把特征与电路重新连接起来。Anthropic 2025 年的工作，「Circuit Tracing」 [@ameisen2025circuit] 与 「On the Biology of a Large Language Model」 [@lindsey2025biology]，构建归因图（attribution graph）：它把模型的 MLP 替换为跨层转码器（cross-layer transcoder），即从某一层读取、向其后所有层写入的稀疏可解释特征，然后为单个提示追踪穿过这些特征的线性因果通路。结果是一张图，其节点是特征，其边是因果影响，是针对一个输入的局部电路图。在 Claude 3.5 Haiku 上研究时，这些图呈现出多步推理、在押韵中提前规划，以及跨语言共享的机制 [@lindsey2025biology]。2025 年 5 月这套工具开源，社区在 Neuronpedia 上的复现把归因图追进了 Gemma-2-2b、Llama-3.2-1b 等开放权重模型，这个方法由此从一家实验室的演示，向整个领域共用的研究工具迈进 [@anthropic2025opencircuit]。
-
-@fig-interpretability-lineage 追踪了这一进展，其中每一步都被它前一步的极限所逼出。
-
-```{dot}
-//| label: fig-interpretability-lineage
-//| fig-cap: "机械可解释性的路线，从手工追踪的电路，经学习出的特征，到因果归因图。每个箭头标出逼出下一步的那个极限。"
-digraph lineage {
-  rankdir=LR;
-  bgcolor="transparent";
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontname="Helvetica", fontsize=9, color="#6b7280", fontcolor="#6b7280"];
-
-  zoomin [label="Zoom In 2020\n手工追踪视觉电路"];
-  framework [label="Transformer Circuits 2021\n残差流代数"];
-  induction [label="Induction Heads 2022\n首个 LM 电路"];
-  toymodels [label="Toy Models 2022\n叠加被命名"];
-  sae [label="Monosemanticity 2023\nSAE 恢复特征"];
-  scaling [label="Scaling Monosemanticity 2024\nSAE 用于 Claude 3 Sonnet"];
-  topk [label="top-k SAE 2024\n固定稀疏度"];
-  attrib [label="Attribution Graphs 2025\n转码器，因果图", color="#3b82f6", fontcolor="#3b82f6"];
-
-  zoomin -> framework -> induction;
-  induction -> toymodels [label="手工追踪\n无法扩展"];
-  toymodels -> sae [label="读方向，\n不读神经元"];
-  sae -> scaling [label="在规模上幸存？"];
-  scaling -> topk [label="调稀疏度"];
-  topk -> attrib [label="连接特征\n与电路"];
-  sae -> attrib [style=dashed];
-}
-```
-
-这个回路在实践中如何运转是机械的，值得看个轮廓。在模型的某一处采集一大批激活，即某个选定层之后的残差流，或一个 MLP 的隐藏激活。在它们上面训练字典。用一个 top-$k$ 编码器，前向过程很小：
-
-```python
-# x: 模型激活，形状 (batch, d)
-pre = x @ W_enc + b_enc            # (batch, m), m >> d
-f   = topk(pre, k)                  # 保留最大的 k 个，其余置零
-x_hat = f @ W_dec + b_dec           # 重构
-loss = mse(x_hat, x)                # 没有单独的 L1 项：k 固定了稀疏度
-```
-
-固定的 $k$ 消除了 L1 形式逼着去调的那个稀疏系数，这正是 top-$k$ SAE 取代旧的软惩罚的实际原因 [@gao2024scaling]。训练之后，字典的每一列都是一个候选特征。通过收集最能激活它的输入来解释它，读出那个模式，并且关键地，通过把特征钳制为开或关、观察输出移动，来检验这个解读。一个无法用来操控的特征，就是一个尚未理解的特征。归因图把同样的纪律扩展到整个计算：把 MLP 换成训练好的转码器，跑一个提示，读出活跃特征之间的因果图，再通过扰动节点、确认下游效果来验证边 [@ameisen2025circuit]。
-
-## 稀疏自编码器正在接受检验
-
-这些方法已经把这个领域带到了一个生产级模型和一张因果图，但它并未了结那个核心的方法论问题。处理多义性的整套办法都依赖一个判断：字典学习就是读取叠加的方式。这个判断如今正在接受检验。
+`InterpretabilityStudy` 只是更大决策流程中的一项证据，不能单独授权安全决策。发布或部署决策仍需行为评测、威胁模型、监控、访问控制，以及对不确定性的书面说明。
 
 ::: {.callout-important}
 ## 争议所在
-稀疏自编码器究竟是正确的可解释性原语，还是一条易生伪影的弯路，正被激烈争论。反方有若干具名的结果。Kantamneni 等的 「Are Sparse Autoencoders Useful? A Case Study in Sparse Probing」 [@kantamneni2025useful] 发现，在下游探测任务上，一旦把简单基线做强，SAE 特征就很少胜过它们，这让其实际回报受到质疑。Chanin 等记录了特征吸收（feature absorption）：一个像 「以 L 开头」 这样的一般特征，会在像 「lion」 这样的特定词元上不再激活，因为一个更特定的特征把它吞了，于是字典表面上的清楚性，部分是训练目标造成的伪影 [@chanin2024absorption]。另一些人主张 L1 稀疏惩罚把 SAE 推向去学习高频组合，而非真正中介计算的原子特征，并且转码器在可解释性上胜过 SAE（arXiv:2501.18823）。辩护方以 Anthropic 的可解释性团队，以及扩展与归因工作的作者们为中心，反驳说 SAE 是可改进的工程，而非不可行路线，像 Golden Gate Claude 那样的因果干预表明这些特征是真实的，而归因图已经产出了裸探测无法给出的机械解释。分歧不在于叠加是否真实，而在于字典学习是不是我们读取它的方式。还有第三种立场，干脆拒绝去读：OpenAI 的权重稀疏 Transformer 把模型的权重训练成大部分为零，电路从构造上就可解释，而无需事后恢复，目前的代价是只在玩具规模上可行，还要牺牲一部分能力 [@gao2025weightsparse]。
+
+核心争议不是 SAE 能否偶尔产生可读且具有因果效用的方向，而是这些方向意味着什么，以及何时值得付出方法成本。在受测数据集上，稀疏探针并未持续胜过强而简单的基线 [@kantamneni2025useful]。特征吸收会造成悄无声息的召回失败 [@chanin2024absorption]，跨随机种子的比较也使“SAE 找到了标准单元”的说法受到质疑 [@leask2025canonical]。转码器占优的结果还说明，替代架构本身也会影响结论 [@paulo2025transcoders]。
+
+建设性的回应是用实验比较方法，包括留出预测、重构与下游保真度、干预效用、稳定性和人工审计成本。权重稀疏 Transformer 提供了另一条路径，让许多电路在构造上更容易检查；但现有证据来自小型简单任务，扩展到数千万个非零参数以上仍然困难 [@gao2025weightsparse]。没有任何现有方法足以证明模型已被完全理解。
 :::
 
 ::: {.callout-tip}
 ## 下层约束
-叠加是关于 @sec-transformer-architecture 中那个架构的事实，它支配着这里每一件工具的形状。因为残差流装进的特征多于它的维度，任何直接读神经元的方法都行不通，这个领域便被逼向过完备的字典学习。模型如何存储信息的一个性质，设定了我们如何读取它的整个方法栈。
+
+@sec-transformer-architecture 定义的张量限制了能够测量和干预的对象，却不能决定正确的解释单元。残差流方向、注意力头输出、SAE 潜变量和转码器特征，都是对同一计算的不同抽象。它们的价值取决于主张所针对的行为、输入分布和证据等级。架构访问使机制检验成为可能，验证过程才决定哪一种抽象值得信任。
 :::
 
-## 字典留下了什么
-
-这里每一份收益都以一份对应的代价换来，而点清这些代价，正是理解这场检验的关键。
-
-- **单义性与完备性。** 稀疏性换来清楚、单一含义的特征，但字典只恢复它被赋予的规模与训练所能找到的特征。把稀疏性推得太狠，特征就会分裂或被彼此吸收；推得太软，它们又会回到多义。SAE 对激活的重构并不完美，而那个差距，即重构误差，恰是字典未能解释的那部分模型计算。
-- **忠实性与可解释性。** 一个替换模型部分的转码器或 SAE，只在它对原模型所计算的东西保持忠实的程度上才可解释。归因图把这种取舍摆明了：它冻结注意力、近似 MLP，于是图是一个关于某个模型的可读故事，而那个模型并不完全是部署的那个。
-- **局部与全局。** 一张归因图解释一个提示。一部特征字典描述一个模型在一个训练检查点上的样子。两者都还没有给出关于模型在未曾追踪的输入上做什么的全局、可复用的说明，而这正是监督最终想要的。
-- **投入与覆盖。** 读一个电路是缓慢的人力工作。自动解释，即用一个模型给特征打标签，把劳力规模化，却也引入了打标者的错误，而这个领域对于一个特征何时被正确理解还没有一个稳定的度量。
-
-失效模式是具体的，每一种都会让字典显得比实际更清楚。死潜元是从不激活、也学不到任何东西的字典特征，浪费容量。死潜元与过度激活的潜元一起，把人推向 top-$k$ 与谨慎的初始化 [@gao2024scaling]。特征分裂给出几个狭窄特征，而模型本只有一个；吸收把一个一般特征藏进一个特定特征里，于是字典看起来比模型更清楚 [@chanin2024absorption]。而重构误差不是可以忽略的噪声：它是未被解释的残余，是字典没有捕获的那部分计算，一个在留下大量误差的同时还报告高可解释性的方法，解释的东西比它声称的要少。多义性这个障碍并没有被完全处理掉。这里给出的，是对方法已经走到哪里、还剩哪些距离的克制说明。
+机械可解释性提出的问题可以比“模型是否产生了不良输出”更深入：在明确的输入群体上，某个经过检验的内部机制是否存在、是否活跃、是否具有因果相关性。只要证据始终附带适用范围和失效模式，这种补充信息就有价值。下一层的 @sec-oversight-control 必须把它与其他控制结合起来，确保解释不完整或错误时，控制仍然有效。
 
 ## 延伸阅读
 

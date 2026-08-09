@@ -612,6 +612,16 @@
   // interference (the mean pairwise overlap, shown live). Illustrative.
   R['superposition'] = function (host) {
     var cv = canvas(host, 300), sparsity = 0.5;
+    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
+    var zh = lang === 'zh';
+    var L = zh ? {
+      features: '二维空间中的特征数', interference: '干扰', sparsity: '稀疏度',
+      description: '特征方向共享二维空间的示意图'
+    } : {
+      features: 'features in 2 dimensions', interference: 'interference', sparsity: 'sparsity',
+      description: 'Illustration of feature directions sharing a two-dimensional space'
+    };
+    cv.c.setAttribute('role', 'img');
     function draw() {
       var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, cx = W / 2, cy = (H - 26 * cv.dpr) / 2, R = Math.min(W, H) * 0.3;
       ctx.clearRect(0, 0, W, H);
@@ -629,10 +639,14 @@
       var sum = 0, n = 0;
       for (var p = 0; p < k; p++) for (var q = p + 1; q < k; q++) { sum += Math.abs(Math.cos(ang[p] - ang[q])); n++; }
       var overlap = n ? sum / n : 0;
+      var summary = zh
+        ? L.features + '：' + k + '   ·   ' + L.interference + '：' + overlap.toFixed(2)
+        : k + ' ' + L.features + '   ·   ' + L.interference + ' ' + overlap.toFixed(2);
       ctx.fillStyle = t.ink; ctx.font = (13 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(k + ' features in 2 dimensions   ·   interference ' + overlap.toFixed(2), cx, H - 8 * cv.dpr);
+      ctx.fillText(summary, cx, H - 8 * cv.dpr);
+      cv.c.setAttribute('aria-label', L.description + (zh ? '。' : '. ') + summary);
     }
-    host.appendChild(slider('sparsity', 0, 1, 0.01, sparsity, function (v) { sparsity = v; draw(); }).wrap);
+    host.appendChild(slider(L.sparsity, 0, 1, 0.01, sparsity, function (v) { sparsity = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
   };
