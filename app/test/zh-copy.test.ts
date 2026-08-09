@@ -680,7 +680,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/reasoning/02-structured-reasoning-search.qmd",
-      ["状态空间", "链、束、树与图", "价值引导", "搜索层"],
+      ["搜索会在模型外加一层控制器", "搜索问题需要明确接口", "分支会迅速耗尽预算", "被剪掉的分支无法挽回", "已发表的系统不能混为一谈", "预算匹配的评估"],
     ],
     [
       "en/reasoning/03-programs-solvers-symbolic.qmd",
