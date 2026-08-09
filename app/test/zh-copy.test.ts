@@ -963,7 +963,13 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/ecosystem/01-model-landscape.qmd",
-      ["从开放到封闭的连续区间", "一次发布可以披露哪五样东西", "权重许可证", "已公开的训练实践", "开放实验室"],
+      [
+        "模型名称并不等于部署选项",
+        "发布契约",
+        "这些是彼此独立的问题",
+        "分类对象应是具体发布，而不是实验室",
+        "不断变化的发布契约",
+      ],
     ],
     [
       "en/ecosystem/03-tooling-ecosystem.qmd",
