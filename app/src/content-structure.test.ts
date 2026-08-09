@@ -795,9 +795,9 @@ test("serving retrieval and evaluation first uses explain operational terms loca
     ["zh/orchestration/08-rag-retrieval.qmd", "@gls-bm25 是一种稀疏关键词评分方法"],
     // @gls-held-out already renders as "held-out set"; the gloss follows the term.
     ["en/evaluation/01-benchmarks.qmd", "@gls-held-out is data deliberately kept out of every training stage"],
-    ["zh/evaluation/01-benchmarks.qmd", "@gls-held-out 指从每个训练阶段都排除在外的数据集"],
+    ["zh/evaluation/01-benchmarks.qmd", "@gls-held-out 是刻意排除在所有训练阶段之外的数据"],
     ["en/evaluation/01-benchmarks.qmd", "@gls-membership-inference, tests that ask whether a specific example was in the training data"],
-    ["zh/evaluation/01-benchmarks.qmd", "@gls-membership-inference，也就是判断某个具体样本是否出现在训练数据里的测试"],
+    ["zh/evaluation/01-benchmarks.qmd", "@gls-membership-inference，也就是成员推断测试，会在无法查看语料时，通过模型权重推测某个具体样本是否用于训练"],
     ["en/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge, a model used as the grader"],
     ["zh/evaluation/04-judging-holistic.qmd", "@gls-llm-as-judge，也就是用模型当评分器"],
   ];

@@ -837,7 +837,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/evaluation/01-benchmarks.qmd",
-      ["基准分数，从来不是关于模型本身的事实", "@gls-held-out 指从每个训练阶段都排除在外的数据集，它是一份流水线契约", "@gls-contamination会不声不响地推高数字", "框架、数据契约与不确定性"],
+      ["基准分数并不只是模型权重的属性", "@gls-held-out 是刻意排除在所有训练阶段之外的数据", "审计只能提供是否暴露的证据，不能证明从未暴露", "运行框架也是受测系统的一部分"],
     ],
     [
       "en/evaluation/02-statistical-reliability.qmd",
