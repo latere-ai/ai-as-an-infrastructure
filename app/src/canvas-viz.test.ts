@@ -262,7 +262,7 @@ test("human-interface oversight adds an approval stepper in both languages", () 
   expect(src("en/practice/11-human-interface-oversight.qmd")).toContain('data-viz="stepper"');
   expect(src("en/practice/11-human-interface-oversight.qmd")).toContain('data-chip="APPROVE"');
   expect(src("zh/practice/11-human-interface-oversight.qmd")).toContain('data-viz="stepper"');
-  expect(src("zh/practice/11-human-interface-oversight.qmd")).toContain('data-chip="批准"');
+  expect(src("zh/practice/11-human-interface-oversight.qmd")).toContain('data-chip="决定"');
 });
 
 test("the stepper exposes localized controls and current-step state", () => {

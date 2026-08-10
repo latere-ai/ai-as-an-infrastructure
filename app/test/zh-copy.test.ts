@@ -1226,7 +1226,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/11-human-interface-oversight.qmd",
-      ["本身就是控制面", "校准后的依赖", "批准门", "修正回路", "@gls-automation-bias"],
+      ["可执行的决策边界", "校准后的依赖取决于人机共同决策", "将批准与提交绑定", "修正事件是证据，不是真值", "@gls-automation-bias", "监督发布记录"],
     ],
     [
       "en/practice/12-production-data-engine.qmd",

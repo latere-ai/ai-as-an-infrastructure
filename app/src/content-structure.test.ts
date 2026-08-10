@@ -301,7 +301,7 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
     ["en/safety/02-scalable-oversight-control.qmd", "The answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training"],
     ["zh/safety/02-scalable-oversight-control.qmd", "答案是 @gls-deceptive-alignment：模型可能在训练中表现得已经对齐"],
     ["en/practice/11-human-interface-oversight.qmd", "@gls-automation-bias is the tendency to over-accept automated advice"],
-    ["zh/practice/11-human-interface-oversight.qmd", "它也可能制造 @gls-automation-bias：人会过度接受自动化建议"],
+    ["zh/practice/11-human-interface-oversight.qmd", "@gls-automation-bias，是指人们过度接受自动化建议的倾向"],
   ];
 
   for (const [path, snippet] of required) {
