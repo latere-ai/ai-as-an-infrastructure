@@ -100,10 +100,10 @@ test("final part summary closes the book instead of handing off", () => {
   expect(enSummary).not.toContain("Part XIII");
 
   const zhSummary = src("zh/practice/summary.qmd");
-  expect(zhSummary).toContain("最后的判断");
-  // The zh summary names its own part, so a part renumbering that misses this
-  // file leaves it claiming to be the previous part. That is how the Part IX
-  // split first shipped: 第十一部分 now means Ecosystem.
-  expect(zhSummary).toContain("第十二部分");
+  expect(zhSummary).toContain("实践从用户承诺开始");
+  expect(zhSummary).toContain("可靠基础设施");
+  expect(zhSummary).toContain("运营契约发布记录");
+  expect(zhSummary).toContain("即便系统已经发生变化或经历故障");
   expect(zhSummary).not.toContain("第十三部分");
+  expect(zhSummary).not.toContain("下一部分");
 });

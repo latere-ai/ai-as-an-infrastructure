@@ -1245,6 +1245,14 @@ test("polished chapter openings preserve key source theses", () => {
       ["带版本的运营契约", "把契约写成可执行 Schema", "区分 SLI、SLO 与 SLA", "逐个边界落实租户隔离", "运营契约发布记录"],
     ],
     [
+      "en/practice/summary.qmd",
+      ["user promise", "versioned served system", "system fingerprint", "user-visible outcome", "operating contract"],
+    ],
+    [
+      "zh/practice/summary.qmd",
+      ["用户承诺", "带版本的在线服务系统", "系统指纹", "用户可见结果", "运营契约发布记录"],
+    ],
+    [
       "en/practice/index.qmd",
       ["deadlines, budgets, licenses", "production AI system as a set of contracts", "tenant boundary", "something a team can operate"],
     ],
