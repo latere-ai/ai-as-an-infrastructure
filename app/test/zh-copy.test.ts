@@ -1234,7 +1234,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/12-production-data-engine.qmd",
-      ["真实用户提出真实问题", "常设装置", "训练信号", "稀缺标注预算", "下一轮循环的入口"],
+      ["受治理的证据流水线", "数据接入契约", "按问题选择抽样方法", "查看内容之前先分配数据分区", "生产数据发布记录"],
     ],
     [
       "en/practice/13-operating-contracts.qmd",
