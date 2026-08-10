@@ -854,7 +854,7 @@ test("audited leftover first uses define the role of the term in place", () => {
     ["en/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped substitute for a provider key"],
     ["zh/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key，也就是有明确范围和短有效期的提供商密钥替代物"],
     ["en/practice/10-reliability-nondeterministic.qmd", "@gls-sli, a quantitative indicator of one service property"],
-    ["zh/practice/10-reliability-nondeterministic.qmd", "@gls-sli，也就是判断服务事件是否有效的指标"],
+    ["zh/practice/10-reliability-nondeterministic.qmd", "@gls-sli，也就是对某项服务属性的量化指标"],
   ];
 
   for (const [path, snippet] of required) {

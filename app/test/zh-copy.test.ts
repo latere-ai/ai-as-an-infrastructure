@@ -1218,7 +1218,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/10-reliability-nondeterministic.qmd",
-      ["永远不会两次相同的输出", "@gls-sli，也就是判断服务事件是否有效的指标，必须度量分布，而不是度量字节串", "每一步都可靠的智能体", "追求确定性", "接纳采样并校验"],
+      ["可靠的模型服务", "面向用户的结果", "抽样标签是关于合格服务事件的证据", "按故障类别重试", "不是在确定性与验证之间二选一", "可靠性发布记录"],
     ],
     [
       "en/practice/11-human-interface-oversight.qmd",
