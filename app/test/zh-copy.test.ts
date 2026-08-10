@@ -1210,7 +1210,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/09-deployment-lifecycle.qmd",
-      ["可部署的产物是一个捆绑包", "统计意义上的提升流水线", "回滚必须把模型、提示、检索索引、工具与护栏配置一起恢复"],
+      ["受控状态转换", "部署发布契约", "发布清单", "兼容性边界", "部署发布记录"],
     ],
     [
       "en/practice/10-reliability-nondeterministic.qmd",
