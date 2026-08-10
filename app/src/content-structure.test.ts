@@ -87,7 +87,7 @@ test("operating contracts are tracked in top-level book surfaces", () => {
   expect(src("en/index.qmd")).toContain("SLOs, cost governance, incidents");
   expect(src("zh/index.qmd")).toContain("SLO、成本治理、事故");
   expect(src("en/summary.qmd")).toContain("versioned operating record");
-  expect(src("zh/summary.qmd")).toContain("运营契约把 SLO");
+  expect(src("zh/summary.qmd")).toContain("带版本的运营记录");
 });
 
 test("ecosystem and economics is a full six-chapter part in both languages", () => {
@@ -892,7 +892,7 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("en/foundations/summary.qmd")).toContain("Base-model formation is infrastructure, not background");
   expect(src("zh/foundations/summary.qmd")).toContain("基座模型的形成本身就是基础设施，而非背景知识");
   expect(flat("en/summary.qmd")).toContain("The training loop changes a model artifact");
-  expect(src("zh/summary.qmd")).toContain("我们从基座模型的形成开始");
+  expect(src("zh/summary.qmd")).toContain("训练循环把受治理的数据");
 });
 
 test("the English field map separates process, dependency, evidence, and reading order", () => {
