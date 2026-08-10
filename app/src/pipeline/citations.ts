@@ -14,6 +14,8 @@ export interface BibEntry {
   title: string;
   publisher?: string;
   url?: string;
+  note?: string; // short reader-facing gloss, en
+  noteZh?: string; // the zh twin
   tldr?: string; // one-sentence "what this paper is about", en
   tldrZh?: string; // the zh twin
   raw: Record<string, string>;
@@ -56,6 +58,8 @@ function addEntries(entries: Map<string, BibEntry>, content: string): void {
       title: String(f.title ?? "").replace(/[{}]/g, ""),
       publisher: f.publisher ? String(f.publisher) : f.journal ? String(f.journal) : undefined,
       url: f.url ? String(f.url) : f.eprint ? `https://arxiv.org/abs/${f.eprint}` : undefined,
+      note: (f.note ? String(f.note) : undefined) ?? prev?.note,
+      noteZh: (f["note-zh"] ? String(f["note-zh"]) : undefined) ?? prev?.noteZh,
       tldr: (f.tldr ? String(f.tldr) : undefined) ?? prev?.tldr,
       tldrZh: (f["tldr-zh"] ? String(f["tldr-zh"]) : undefined) ?? prev?.tldrZh,
       raw: Object.fromEntries(Object.entries(f).map(([k, v]) => [k, flat(v)])),

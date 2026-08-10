@@ -13,6 +13,7 @@ import { parse as parseBib } from "@retorquere/bibtex-parser";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Lang } from "../types.ts";
+import type { Bibliography } from "./citations.ts";
 import { resolveXrefsInText, type CrossrefMap } from "./crossref.ts";
 
 export interface FurtherReadingEntry {
@@ -123,8 +124,16 @@ function renderEntry(e: FurtherReadingEntry, lang: Lang, xref: CrossrefMap, curr
 }
 
 // HTML <ul> that fills the ::: {#further-reading} slot for a chapter.
-export function renderFurtherReading(refsDir: string, slug: string, lang: Lang, xref: CrossrefMap, currentHref: string, prefix: string): string {
+export function renderFurtherReading(refsDir: string, slug: string, lang: Lang, xref: CrossrefMap, currentHref: string, prefix: string, summaries?: Bibliography): string {
   const entries = furtherReadingEntries(refsDir, slug).filter((e) => e.inFurther);
   if (entries.length === 0) return "";
-  return `<ul class="rdr-further-reading">\n${entries.map((e) => renderEntry(e, lang, xref, currentHref, prefix)).join("\n")}\n</ul>`;
+  return `<ul class="rdr-further-reading">\n${entries.map((e) => {
+    const merged = summaries?.entries.get(e.key);
+    return renderEntry({
+      ...e,
+      noteZh: merged?.noteZh ?? e.noteZh,
+      tldr: merged?.tldr ?? e.tldr,
+      tldrZh: merged?.tldrZh ?? e.tldrZh,
+    }, lang, xref, currentHref, prefix);
+  }).join("\n")}\n</ul>`;
 }

@@ -126,7 +126,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   // refs/<slug>.bib (the per-chapter literature store).
   if (html.includes('id="further-reading"')) {
     const slug = ch.href.split("/").pop()!.replace(/\.html$/, "");
-    html = fillSlot(html, "further-reading", () => renderFurtherReading(ctx.refsDir, slug, book.lang, ctx.xref, ch.href, prefix));
+    html = fillSlot(html, "further-reading", () => renderFurtherReading(ctx.refsDir, slug, book.lang, ctx.xref, ch.href, prefix, ctx.bib));
   }
   const { prev, next } = prevNext(book, ch.href);
   const isPartIntro = ch.role === "part";

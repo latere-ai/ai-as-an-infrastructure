@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { renderFurtherReading } from "./further-reading.ts";
 import type { CrossrefMap } from "./crossref.ts";
+import type { Bibliography } from "./citations.ts";
 
 const xref: CrossrefMap = new Map();
 
@@ -36,6 +37,23 @@ test("zh falls back to the en tldr until translated", () => {
   tldr   = {English summary only.},
 }\n`);
   expect(renderFurtherReading(dir, "ch", "zh", xref, "x", "")).toContain("English summary only.");
+});
+
+test("zh uses the merged translation overlay before falling back to English", () => {
+  const dir = refsDirWith("ch", `@article{a2020,
+  author = {Author, A},
+  title  = {T},
+  year   = {2020},
+  tldr   = {English summary only.},
+}\n`);
+  const summaries = {
+    entries: new Map([["a2020", { tldrZh: "中文摘要。" }]]),
+    cited: new Set(),
+  } as unknown as Bibliography;
+
+  const html = renderFurtherReading(dir, "ch", "zh", xref, "x", "", summaries);
+  expect(html).toContain("中文摘要。");
+  expect(html).not.toContain("English summary only.");
 });
 
 test("an entry without a tldr renders no tldr block", () => {
