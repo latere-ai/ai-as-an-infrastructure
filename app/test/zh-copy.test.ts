@@ -1242,7 +1242,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/13-operating-contracts.qmd",
-      ["承诺什么、花费什么", "运营契约", "成本治理", "租户边界", "证据库"],
+      ["带版本的运营契约", "把契约写成可执行 Schema", "区分 SLI、SLO 与 SLA", "逐个边界落实租户隔离", "运营契约发布记录"],
     ],
     [
       "en/practice/index.qmd",
