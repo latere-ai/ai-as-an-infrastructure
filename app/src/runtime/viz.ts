@@ -484,6 +484,7 @@
     function num(n, d) { var v = host.getAttribute(n); return v == null ? d : parseFloat(v); }
     var xMax = num('data-x-max', 100);
     var xLabel = attr('data-x-label', 'volume'), yLabel = attr('data-y-label', 'cost');
+    var crossoverLabel = attr('data-crossover-label', 'break-even');
     var L = [
       { label: attr('data-a-label', 'A'), fixed: num('data-a-fixed', 0), rate: num('data-a-rate', 1) },
       { label: attr('data-b-label', 'B'), fixed: num('data-b-fixed', 0), rate: num('data-b-rate', 1) }
@@ -516,7 +517,7 @@
         var a = Math.abs(xc), fmt = a >= 1e6 ? (xc / 1e6).toFixed(a >= 1e7 ? 0 : 1) + 'M'
           : a >= 1e3 ? (xc / 1e3).toFixed(a >= 1e4 ? 0 : 1) + 'k'
           : a >= 10 ? Math.round(xc) : xc.toFixed(1);
-        ctx.fillText('break-even ≈ ' + fmt, X(xc), Y(0) + 17 * cv.dpr);
+        ctx.fillText(crossoverLabel + ' ≈ ' + fmt, X(xc), Y(0) + 17 * cv.dpr);
       }
       ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
       ctx.fillText(xLabel, W / 2, H - 7 * cv.dpr);

@@ -16,6 +16,19 @@ test("the viz runtime registers the cost-crossover component", () => {
   expect(rt).toMatch(/R\['cost-crossover'\]\s*=\s*function/);
 });
 
+test("the cost crossover can localize its crossover label", () => {
+  const start = rt.indexOf("R['cost-crossover']");
+  const end = rt.indexOf("R['roi-balance']", start);
+  const component = rt.slice(start, end);
+
+  expect(component).toContain("data-crossover-label");
+  const zh = readFileSync(
+    new URL("../../zh/practice/08-wiring-a-2026-stack.qmd", import.meta.url),
+    "utf8",
+  );
+  expect(zh).toContain('data-crossover-label="交叉点"');
+});
+
 test("each economics/practical home uses cost-crossover in both languages", () => {
   for (const en of homes) {
     const zh = en.replace(/^en\//, "zh/");

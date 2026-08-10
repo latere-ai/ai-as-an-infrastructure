@@ -1202,7 +1202,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/practice/08-wiring-a-2026-stack.qmd",
-      ["能力是有生命周期", "端到端的参考架构", "接缝能否说清", "虚拟密钥托管", "三份传输格式契约"],
+      ["集成发布", "系统指纹", "边界契约", "能力说明", "回滚"],
     ],
     [
       "en/practice/09-deployment-lifecycle.qmd",
