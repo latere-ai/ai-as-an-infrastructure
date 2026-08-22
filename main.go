@@ -17,6 +17,7 @@
 package main
 
 import (
+	"cmp"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -375,17 +376,10 @@ func main() {
 
 	addr := cfg.ListenAddr
 	if addr == "" {
-		addr = ":" + getenv("PORT", "8080")
+		addr = ":" + cmp.Or(os.Getenv("PORT"), "8080")
 	}
 	log.Printf("aaai-web serving embedded _book on %s", addr)
 	if err := http.ListenAndServe(addr, http.HandlerFunc(serve)); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func getenv(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }

@@ -3,6 +3,7 @@
 package authn
 
 import (
+	"cmp"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -34,15 +35,12 @@ func (i *Identity) User(w http.ResponseWriter, r *http.Request) *api.User {
 	if u == nil {
 		return nil
 	}
-	name := u.DisplayName
-	if name == "" {
-		name = u.Name
+	return &api.User{
+		Sub:          u.Sub,
+		Name:         cmp.Or(u.DisplayName, u.Name),
+		Avatar:       cmp.Or(u.AvatarURL, u.Picture),
+		IsSuperadmin: u.IsSuperadmin,
 	}
-	avatar := u.AvatarURL
-	if avatar == "" {
-		avatar = u.Picture
-	}
-	return &api.User{Sub: u.Sub, Name: name, Avatar: avatar, IsSuperadmin: u.IsSuperadmin}
 }
 
 // EnsureCSRF issues the double-submit token cookie if absent and returns it so

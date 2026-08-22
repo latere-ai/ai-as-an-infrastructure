@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,7 @@ func (f *fakeStore) ListByPage(_ context.Context, lang, path, _ string) ([]*stor
 }
 func (f *fakeStore) Create(_ context.Context, c *store.Comment) (*store.Comment, error) {
 	f.seq++
-	c.ID = "id" + itoa(f.seq)
+	c.ID = "id" + strconv.Itoa(f.seq)
 	cp := *c
 	f.byID[c.ID] = &cp
 	return c, nil
@@ -82,8 +83,6 @@ func (f *fakeStore) RecordView(_ context.Context, _, _, _ string) error { return
 func (f *fakeStore) PageStats(_ context.Context, _, _ string) (store.Stats, error) {
 	return store.Stats{}, nil
 }
-
-func itoa(n int) string { return string(rune('0' + n)) }
 
 // fakeID is a configurable Identity.
 type fakeID struct {

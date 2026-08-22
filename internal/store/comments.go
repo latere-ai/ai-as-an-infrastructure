@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -160,10 +162,7 @@ func (s *Store) attachReactions(ctx context.Context, byID map[string]*Comment, v
 	if len(byID) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(byID))
-	for id := range byID {
-		ids = append(ids, id)
-	}
+	ids := slices.Collect(maps.Keys(byID))
 	rows, err := s.db.Query(ctx, `select comment_id, emoji, count(*),
 		bool_or(author_sub = $1) from reactions where comment_id = any($2)
 		group by comment_id, emoji order by emoji`, viewerSub, ids)

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -57,7 +58,7 @@ func (s *Store) IsBookmarked(ctx context.Context, sub, lang, path string) (bool,
 	var one int
 	err := s.db.QueryRow(ctx, `select 1 from bookmarks
 		where user_sub = $1 and lang = $2 and path = $3`, sub, lang, path).Scan(&one)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	return err == nil, err

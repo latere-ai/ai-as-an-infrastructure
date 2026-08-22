@@ -3,6 +3,7 @@ package api
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -198,7 +199,7 @@ func (h *Handler) deleteNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.store.DeleteNote(r.Context(), r.PathValue("id"), u.Sub); err != nil {
-		if err == store.ErrNotFound {
+		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, "not found")
 			return
 		}
