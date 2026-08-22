@@ -1,3 +1,5 @@
+from itertools import pairwise
+
 import matplotlib
 
 matplotlib.use("svg")
@@ -68,7 +70,7 @@ ax.axis("off")
 for label, x, w, color in MAIN_FLOW:
     box(ax, x, MAIN_Y, w, BOX_H, label, color)
 
-for (_, x1, w1, _), (_, x2, _, _) in zip(MAIN_FLOW, MAIN_FLOW[1:]):
+for (_, x1, w1, _), (_, x2, _, _) in pairwise(MAIN_FLOW):
     arrow(ax, x1 + w1, MAIN_Y + BOX_H / 2, x2, MAIN_Y + BOX_H / 2)
 
 check_x = 0.45
