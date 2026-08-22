@@ -39,6 +39,12 @@ lint:
 # so stderr is dropped and the decision rests on the patch alone.
 # It is separate from `lint`, which is a .qmd style check on the prose sources.
 lint-modernize:
+	@for fixer in newexpr errorsastype; do \
+		go tool fix help 2>&1 | grep -q "^    $$fixer " || { \
+			echo "go fix no longer carries the $$fixer fixer, so -$$fixer=false is rejected and this check passes silently"; \
+			exit 1; \
+		}; \
+	done
 	@patch=$$(go fix -diff -newexpr=false -errorsastype=false ./... 2>/dev/null); \
 	if [ -n "$$patch" ]; then \
 		echo "$$patch"; \
