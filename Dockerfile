@@ -17,7 +17,7 @@ COPY . .
 RUN cd app && bun run build
 
 # Stage 2: build the Go server with _book/ embedded (//go:embed all:_book).
-FROM golang:1.26 AS server
+FROM golang:1.27 AS server
 WORKDIR /src
 # Dependencies first (cached unless go.mod/go.sum change). go mod download
 # fetches the private latere.ai/x/pkg the same way the sibling services do.
