@@ -8,8 +8,9 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres" // registers the postgres:// driver
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/latere-ai/ai-as-an-infrastructure/migrations"
 	"latere.ai/x/pkg/pgxmigrate"
+
+	"github.com/latere-ai/ai-as-an-infrastructure/migrations"
 )
 
 // NewPool opens a pgx connection pool and runs pending migrations. The migrate
