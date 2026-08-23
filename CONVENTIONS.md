@@ -134,10 +134,9 @@ and the **capability, efficiency, trust** lens that closes a chapter.
 
 The book has two parallel language trees, `en/` and `zh/`. A chapter exists as
 the same path under both trees with the same `{#sec-...}` label, and each tree
-is ordered by its `book.yml` manifest. The zh side follows
-`../specs/research/llm-training/TRANSLATION-GLOSSARY.md`: keep code, symbols,
-math, URLs, and author names byte-verbatim, use Chinese punctuation, and
-never carry over an em dash.
+is ordered by its `book.yml` manifest. The zh side follows the project
+translation glossary: keep code, symbols, math, URLs, and author names
+byte-verbatim, use Chinese punctuation, and never carry over an em dash.
 
 Chinese prose should read native, not translated: professional, direct, and
 not over-explained. Preserve structure, code, formulas, diagrams, citations,
