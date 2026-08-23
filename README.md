@@ -107,6 +107,7 @@ to alongside an edit link to its own source file.
 
 Content is licensed
 [CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/). See
-[`LICENSE`](LICENSE). Copyright © 2026 latere.ai. The variant is a
-deliberate, swappable choice; switch to BY-SA or BY if wider reuse and
-translation become the goal.
+[`LICENSE`](LICENSE). Copyright © 2026 latere.ai. You may read, share, and
+quote the book with attribution for non-commercial purposes; redistributing a
+modified version is not permitted. Corrections and fixes contributed here are
+merged into the book itself, so they are not derivative works.
