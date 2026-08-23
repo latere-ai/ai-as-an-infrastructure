@@ -13,7 +13,7 @@ Released under latere.ai, licensed CC BY-NC-ND 4.0.
   and `zh/book.yml` are the chapter/part manifests read by the custom reader.
 - The site is a **custom React + Bun reader** in `app/`. It
   compiles the `.qmd` content (markdown, KaTeX math, citations from
-  `references.bib`, `@sec`/`@fig` cross-refs, graphviz/mermaid, callouts,
+  `refs/*.bib`, `@sec`/`@fig` cross-refs, graphviz/mermaid, callouts,
   runnable/viz) to static HTML in `_book/{en,zh}`. See `app/src/pipeline/`.
 
 ## Authoring philosophy
@@ -36,7 +36,7 @@ reading.
   which embeds `_book` (`//go:embed`) and serves it on :8080. `make test` runs
   the server's routing-contract tests (redirects, canonicalization, caching).
 - `make og` regenerates the English social-share cards into `app/static/og/`
-  (Open Graph / Twitter cards, one 1200x630 PNG per chapter; on demand; slow —
+  (Open Graph / Twitter cards, one 1200x630 PNG per chapter; on demand; slow,
   headless Chrome). These ARE committed (source assets); `make build` copies
   them into `_book/og/` and warns (does not fail) if a referenced card is
   missing. Re-run and commit after adding or retitling a chapter.
@@ -47,8 +47,8 @@ reading.
 ## Writing conventions
 
 - No em dashes. Use commas, periods, or colons. No filler, no intensifiers.
-- The zh side follows `../specs/research/llm-training/TRANSLATION-GLOSSARY.md`:
-  code, symbols, math, URLs, and author names byte-verbatim.
+- The zh side follows the project translation glossary: code, symbols, math,
+  URLs, and author names byte-verbatim.
 
 ## Deploy
 
@@ -57,14 +57,10 @@ The book deploys to `aaai.latere.ai` as a single self-contained Go binary
 multi-stage `Dockerfile` compiles `_book` from source and embeds it into the
 binary (`docker.yml` builds it; no vendored HTML). Deploy = push `main` → image →
 `kubectl rollout restart deployment/aaai-web -n latere`. See `deploy/prod/` and
-`.github/workflows/`. DNS is one A record in `../terraform/dns.tf`; the header
-link lives in `../latere-ai`.
+`.github/workflows/`. The DNS record for `aaai.latere.ai` and the marketing
+site's header link are managed outside this repository.
 
 ## Commits
 
 - Commit message style: `scope: lowercase description`.
 - Commit often, one intended diff at a time. Work on `main` directly.
-
-## Related
-
-Other latere projects are in `../`.
