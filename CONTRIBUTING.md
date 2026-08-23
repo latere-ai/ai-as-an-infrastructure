@@ -61,17 +61,19 @@ Two suites cover different layers, and neither runs the other:
 
 - `cd app && bun test` checks the reader and the content contracts: first-use
   glosses, part-summary handoffs, citations, cross-references, zh copy rules,
-  and link resolution against the `_book/` that `make build` produced. Run
-  `make build` first, and install the Python helpers the runnable-cell tests
-  need with `pip install -r app/requirements-test.txt` (matplotlib and numpy).
+  and link resolution against the built `_book/`. CI runs `bun run build` and
+  installs `app/requirements-test.txt` (matplotlib and numpy, for the
+  runnable-cell tests) before it, so do the same locally.
 - `make test` runs the Go server tests: routing, redirects, canonicalization,
   and cache headers. It embeds `_book/`, so it builds the book first.
 
-One Go test is skipped by default rather than failed. The comment store's
-Postgres integration test runs only when `AAAI_TEST_DATABASE_URL` points at a
-throwaway database; without it, `go test` passes while that test never
-executes. Set the variable when changing anything under `internal/store` or
-`migrations/`.
+Two Go tests skip rather than fail when their environment is missing, and a
+green `go test` does not mean they ran:
+
+- The comment store's Postgres integration test runs only when
+  `AAAI_TEST_DATABASE_URL` points at a throwaway database. Set it when changing
+  anything under `internal/store/` or `migrations/`.
+- The publish-script test skips when `git` is not on `PATH`.
 
 ## Deploy
 
