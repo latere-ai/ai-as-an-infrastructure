@@ -20,7 +20,7 @@ RUN cd app && bun run build
 FROM golang:1.27 AS server
 WORKDIR /src
 # Dependencies first (cached unless go.mod/go.sum change). go mod download
-# fetches the private latere.ai/x/pkg the same way the sibling services do.
+# resolves latere.ai/x/pkg through its vanity import path.
 COPY go.mod go.sum ./
 RUN go mod download
 COPY main.go ./
