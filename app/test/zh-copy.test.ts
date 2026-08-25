@@ -252,9 +252,7 @@ test("zh orchestration prose avoids literal or note-like formulations", () => {
   expect(orchestrationText).not.toContain("最具分量的那个机制");
   expect(orchestrationText).not.toContain("只是作戏");
   expect(orchestrationText).not.toContain("锁有两个直接来自锁定文献的坑");
-  expect(orchestrationText).not.toContain("为何承重");
   expect(orchestrationText).not.toContain("从运行框架的座位上看");
-  expect(orchestrationText).not.toContain("承重的问题");
   expect(orchestrationText).not.toContain("把编排整个颠倒了过来");
   expect(orchestrationText).not.toContain("这条演化线索从汇集走向结构");
   expect(orchestrationText).not.toContain("这条弧线的现代终点");

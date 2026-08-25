@@ -14,7 +14,7 @@ import (
 )
 
 // NewPool opens a pgx connection pool and runs pending migrations. The migrate
-// bring-up (and its load-bearing connection-close) lives in the shared
+// bring-up (and the connection-close it needs) lives in the shared
 // pgxmigrate helper; the postgres driver is blank-imported here because
 // pgxmigrate selects it by the dsn scheme without importing it.
 func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {

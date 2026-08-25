@@ -60,7 +60,7 @@ links to its opening page on the site.
   inference: attested hardware in place of contractual privacy.
 - **[Part IX, Infrastructure and
   Compute](https://aaai.latere.ai/en/infrastructure).** Accelerators,
-  networking, the software substrate (frameworks, autodiff, compilers,
+  networking, the software layer (frameworks, autodiff, compilers,
   kernels, the CUDA moat), cluster orchestration and data infrastructure, and
   the compute frontier: silicon, power, geography, and failure at scale.
 - **[Part X, Frontiers and Limits](https://aaai.latere.ai/en/frontiers).**

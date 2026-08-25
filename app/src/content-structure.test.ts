@@ -1015,7 +1015,7 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
   }
 });
 
-test("the compute substrate ends before the frontier part begins", () => {
+test("the compute part ends before the frontier part begins", () => {
   const expected = [
     "infrastructure/01-accelerators-networking.qmd",
     "infrastructure/04-orchestration-data-infra.qmd",
@@ -1039,7 +1039,7 @@ test("the compute substrate ends before the frontier part begins", () => {
       last = next;
     }
 
-    // The limits chapters left the substrate part; nothing may claim them back.
+    // The limits chapters left the infrastructure part; nothing may claim them back.
     expect(
       yml,
       `${lang}/book.yml still lists a limits chapter under infrastructure/`,
@@ -1090,7 +1090,7 @@ test("the frontier arc explicitly hands off to ecosystem and practice", () => {
   expect(zhVerification).toContain("第十二部分会问");
   expect(zhVerification).toContain("运营契约");
 
-  // The practice intro situates itself after the substrate part (IX), the
+  // The practice intro situates itself after the infrastructure part (IX), the
   // frontier part (X), and ecosystem (XI). Only the numbering is pinned: the
   // sentence that carries it is prose and may be rephrased.
   const enPractice = flat("en/practice/index.qmd");

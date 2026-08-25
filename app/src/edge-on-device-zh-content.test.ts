@@ -244,7 +244,6 @@ test("the rewrite removes stale catalogs and universal claims", () => {
     "Qwen3.5",
     "四股拉力",
     "隐私：数据从不离开手机",
-    "务实的基底",
     "最激进的方向是 1 比特",
     "一个可移植的、跑在 CPU 上的 GGUF 模型，往往是处处都能依赖的底线",
     "三元权重把能耗预算转成以加法为主的算术",

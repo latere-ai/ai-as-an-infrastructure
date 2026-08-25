@@ -21,7 +21,7 @@ engineering history into reader-visible change.
 | --- | --- | --- |
 | `refs: escape % in bibliography text fields` | "Escaped percent signs in BibTeX" | "Reference summaries were being cut off at the first percent sign and now read in full" |
 | `ci: run bun test` | "Added bun test to CI" | omit, or fold into the week's opening sentence |
-| `book: split Part IX` | "Split Part IX into two parts" | "Part IX had grown into two parts under one name. Infrastructure and Compute keeps the substrate chapters; a new Part X, Frontiers and Limits, takes the three about what compute converts into. Old links redirect." |
+| `book: split Part IX` | "Split Part IX into two parts" | "Part IX had grown into two parts under one name. Infrastructure and Compute keeps the hardware and software chapters; a new Part X, Frontiers and Limits, takes the three about what compute converts into. Old links redirect." |
 
 A week whose work was entirely internal gets **one honest sentence** saying the
 machinery moved, not a bulleted list of it.

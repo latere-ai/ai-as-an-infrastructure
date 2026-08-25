@@ -43,7 +43,7 @@ the book has had:
    click `@gls-...` away mid-sentence, so a glossary entry does not discharge the
    debt. The test: read the chapter top to bottom assuming zero outside
    knowledge and no clicking; every term must be defined at or before its first
-   load-bearing use. This bites hardest on the *protagonist* term, the one the
+   substantive use. This bites hardest on the *protagonist* term, the one the
    chapter's payoff depends on (loss in scaling, the policy in RLHF, the
    embedding matrix in tokenization): define that one first and plainly.
 

@@ -74,7 +74,7 @@
   routing, evaluation, data, and sandbox controls. This also strengthens the
   book's distinctive thesis: its center is not deeper training/serving craft, but
   cross-layer constraint arrows and the physical, economic, and operational
-  substrate that shapes the AI stack.
+  constraints that shape the AI stack.
 
 - [x] **Verification frontier**
 
@@ -128,9 +128,9 @@ backed; none has been decided or started. Sizing is the audit's estimate.
 - [x] **Part IX has grown into two parts under one name** (restructuring, no
   new prose)
 
-  Eleven chapters against a four-to-eight norm, spanning hardware substrate,
-  software substrate, cluster and data plane, physical and economic substrate,
-  and epistemic frontier. The part's own summary opens "The infrastructure part
+  Eleven chapters against a four-to-eight norm, spanning hardware, the software
+  layer, cluster and data plane, physical and economic constraints, and
+  epistemic frontier. The part's own summary opens "The infrastructure part
   went below the model and then above it." Chapters 09-11 (where learning hits
   limits, the capability horizon, the verification frontier) are limits on what
   compute converts into, and the last two sit closer to Part VII. Splitting

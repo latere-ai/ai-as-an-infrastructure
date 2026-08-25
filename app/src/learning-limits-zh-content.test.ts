@@ -98,7 +98,7 @@ test("the Chinese synthetic-data section distinguishes protocols and evidence sc
   for (const phrase of [
     "替换协议",
     "累积协议",
-    "保留的人类数据基底",
+    "保留的人类数据锚点",
     "混合权重与去重策略",
     "低概率的尾部事件",
     "OPT-125M",

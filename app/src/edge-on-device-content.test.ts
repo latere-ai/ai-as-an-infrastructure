@@ -177,7 +177,6 @@ test("the rewrite is durable and retains stable interfaces", () => {
     "qwen3.5",
     "privacy is the decisive one",
     "this is why every model in this tier is over-trained",
-    "the pragmatic substrate",
     "the frontier is one bit",
   ]) expect(flat).not.toContain(phrase);
   for (const marker of [

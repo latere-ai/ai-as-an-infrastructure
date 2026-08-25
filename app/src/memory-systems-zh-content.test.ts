@@ -139,7 +139,7 @@ test("workspace durability states each storage guarantee separately", () => {
   ]) expect(flat).toContain(phrase);
 });
 
-test("snapshot math is scoped to RPO and substrate limits", () => {
+test("snapshot math is scoped to RPO and storage limits", () => {
   for (const phrase of [
     "崩溃在两次快照之间各个时点等可能发生",
     "恢复点目标（RPO）的简单上界",

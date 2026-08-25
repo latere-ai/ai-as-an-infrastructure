@@ -39,7 +39,7 @@ const handoffs: Array<[string, string[], string[]]> = [
   ["orchestration", ["Part VII supplies that instrument layer"], ["第七部分补上的就是这层仪器"]],
   ["evaluation", ["Part VIII starts from that dependency on evidence"], ["第八部分接着问"]],
   ["safety", ["Part IX moves below the policy surface"], ["第九部分会再往下走"]],
-  // The substrate part now hands off to the frontier part (X) rather than
+  // The infrastructure part now hands off to the frontier part (X) rather than
   // straight to economics, and every part after it moved up one numeral. Only
   // the numeral is pinned for the two summaries the split rewrote: their
   // sentences are prose.
