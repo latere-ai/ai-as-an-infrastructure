@@ -8,6 +8,7 @@ const changelog = readFileSync(
 const flat = changelog.replace(/\s+/g, " ").toLowerCase();
 
 const expectedWeeks = [
+  "August 24 to 29, 2026",
   "August 4 to 8, 2026",
   "July 27 to August 3, 2026",
   "July 20 to 26, 2026",
@@ -38,15 +39,26 @@ test("the introduction tells returning readers how to use the record", () => {
   ]) expect(flat).toContain(phrase);
 });
 
-test("the current entry records the verified English rewrite", () => {
+test("the current entry records the chapters that gained material", () => {
   const current = weekSections()[0].toLowerCase();
+  for (const phrase of [
+    "on-policy distillation",
+    "where training environments come from",
+    "the reasoning trace as a second monitoring surface",
+    "a benchmark's signal and its noise",
+    "how far the tuned model has moved from the base model",
+  ]) expect(current).toContain(phrase);
+});
+
+test("the preceding entry still records the verified English rewrite", () => {
+  const previous = weekSections()[1].toLowerCase();
   for (const phrase of [
     "english rewrite reached the epilogue",
     "one complete unit at a time",
     "scope, evidence, failure behavior, and operating handoff",
     "chapter-specific regression tests",
     "desktop and mobile",
-  ]) expect(current).toContain(phrase);
+  ]) expect(previous).toContain(phrase);
 });
 
 test("every dated entry remains a scannable categorized record", () => {
@@ -59,9 +71,9 @@ test("every dated entry remains a scannable categorized record", () => {
 
 test("release tags stay attached to the weeks in which they were published", () => {
   const sections = weekSections();
-  expect(sections[2]).toContain("v0.2.0");
-  expect(sections[3]).toContain("v0.1.0");
-  expect(sections[6]).toContain("v0.0.1");
+  expect(sections[3]).toContain("v0.2.0");
+  expect(sections[4]).toContain("v0.1.0");
+  expect(sections[7]).toContain("v0.0.1");
 });
 
 test("the historical additions and structural changes remain discoverable", () => {

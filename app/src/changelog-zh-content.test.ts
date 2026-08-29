@@ -14,6 +14,7 @@ const english = readFileSync(
 const flat = chinese.replace(/\s+/g, " ");
 
 const expectedWeeks = [
+  "2026 年 8 月 24 日至 29 日",
   "2026 年 8 月 4 日至 8 日",
   "2026 年 7 月 27 日至 8 月 3 日",
   "2026 年 7 月 20 日至 26 日",
@@ -45,8 +46,19 @@ test("the introduction tells returning readers how to use the record", () => {
   ]) expect(flat).toContain(phrase);
 });
 
-test("the current entry records the verified English rewrite", () => {
+test("the current entry records the chapters that gained material", () => {
   const current = weekSections(chinese)[0];
+  for (const phrase of [
+    "在策略蒸馏",
+    "环境从哪里来",
+    "把推理轨迹作为第二个可监控面",
+    "基准的信号与噪声",
+    "偏离基座模型的幅度",
+  ]) expect(current).toContain(phrase);
+});
+
+test("the preceding entry still records the verified English rewrite", () => {
+  const current = weekSections(chinese)[1];
   for (const phrase of [
     "英文版重写已经推进到尾声",
     "每次只处理一个完整单元",
@@ -70,9 +82,9 @@ test("every dated entry remains a scannable categorized record", () => {
 
 test("release tags stay attached to their publication weeks", () => {
   const sections = weekSections(chinese);
-  expect(sections[2]).toContain("v0.2.0");
-  expect(sections[3]).toContain("v0.1.0");
-  expect(sections[6]).toContain("v0.0.1");
+  expect(sections[3]).toContain("v0.2.0");
+  expect(sections[4]).toContain("v0.1.0");
+  expect(sections[7]).toContain("v0.0.1");
 });
 
 test("historical additions and structural changes remain discoverable", () => {
