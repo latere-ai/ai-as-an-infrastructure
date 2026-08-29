@@ -14,7 +14,7 @@ const chapterSlugs = readdirSync(refsDir)
 
 test("the Chinese Further Reading gloss overlay contains glosses only", () => {
   const overlay = parseBib(noteOverlay, { errorHandler: () => {} });
-  expect(overlay.entries).toHaveLength(180);
+  expect(overlay.entries).toHaveLength(192);
   expect(new Set(overlay.entries.map((entry: { key: string }) => entry.key)).size).toBe(overlay.entries.length);
   for (const entry of overlay.entries) {
     const fields = entry.fields as Record<string, unknown>;

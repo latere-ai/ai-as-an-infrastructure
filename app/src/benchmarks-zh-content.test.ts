@@ -47,6 +47,7 @@ test("Chapter 47 preserves the complete English benchmark contract", () => {
   ]);
   expect(headings(chapter, 2)).toEqual([
     "从决策出发，而不是从数据集出发",
+    "决策同时决定了要测什么量",
     "明确评测对象",
     "留出数据究竟要避开哪些环节",
     "审计测量工具",

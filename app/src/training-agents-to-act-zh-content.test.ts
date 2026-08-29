@@ -37,13 +37,17 @@ test("Chapter 37 preserves the complete English agent-training contract", () => 
     "把奖励设计成契约",
     "轨迹奖励不等于动作级信用分配",
     "争议所在",
+    "环境从哪里来",
     "把环境当作版本化的数据基础设施",
     "下层约束：rollout 耗时决定优化节奏",
     "资源布局与策略新鲜度彼此独立",
     "同时验证学习效果、环境质量与系统表现",
     "延伸阅读",
   ]);
-  expect(headings(chapter, 3)).toEqual([]);
+  expect(headings(chapter, 3)).toEqual([
+    "生成出来的任务未必是有用的任务",
+    "合成解决不了的问题",
+  ]);
   expect(displayMathSkeleton(chapter)).toEqual(displayMathSkeleton(english));
   expect(citationsAndCrossrefs(chapter)).toEqual(citationsAndCrossrefs(english));
   expect(chapter.match(/```\{dot\}/g)?.length).toBe(1);
