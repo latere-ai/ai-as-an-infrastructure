@@ -124,7 +124,7 @@ test("the Wald interval remains a bounded planning approximation", () => {
 test("bootstrap guidance preserves the evaluation design", () => {
   for (const phrase of [
     "重新计算完整的估计量",
-    "不会替你找出正确的独立单位",
+    "不会代为找出正确的独立单位",
     "对相关行逐行做 bootstrap",
     "每次重采样都使用同一套预先声明的权重",
   ]) expect(flat).toContain(phrase);

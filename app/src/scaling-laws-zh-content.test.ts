@@ -9,7 +9,7 @@ const zh = readFileSync(join(repoRoot, "zh/foundations/01-scaling-laws.qmd"), "u
 test("Chapter 5 defines the forecast, evaluation loss, and both token counts", () => {
   expect(en).toContain("For a fixed model family and training setup");
   expect(zh).toContain("对于固定的模型族和训练设置，扩展律估计留出损失怎样随模型规模、数据量和算力变化");
-  expect(zh).toContain("它不会替你选择数据，也不能保证下游能力");
+  expect(zh).toContain("它不会代为选择数据，也不能保证下游能力");
   expect(zh).toContain("## 预测值衡量什么");
   expect(zh).toContain("\\ell_t&=-\\log p_\\theta(x_t\\mid x_{<t})");
   expect(zh).toContain("L_{\\mathrm{eval}}(\\theta)&=\\frac{1}{T}\\sum_{t=1}^{T}\\ell_t");

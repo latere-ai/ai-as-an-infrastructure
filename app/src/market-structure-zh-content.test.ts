@@ -108,7 +108,7 @@ test("market definition fixes product geography time customers and threshold bef
     "可下载模型",
     "托管的前沿模型 API",
     "医院",
-    "先定义决策，不要让供应商类别替你定义市场",
+    "先定义决策，不要让供应商类别来定义市场",
     "收入",
     "已交付容量",
     "使用量",

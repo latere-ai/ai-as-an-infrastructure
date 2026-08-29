@@ -78,7 +78,7 @@ test("scope, chapter questions, and evaluation dimensions follow the English str
 
 test("reading routes replace the stale runnable and three-loop appendix", () => {
   expect(zh).toContain("## 选择阅读路线");
-  expect(zh).toContain("| 如果你的目标是…… | 建议路线 |");
+  expect(zh).toContain("| 如果目标是…… | 建议路线 |");
   expect(zh).toContain("建立完整的概念框架");
   expect(zh).toContain("开发应用或智能体");
   expect(zh).toContain("研究极限或有争议的能力主张");
