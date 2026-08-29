@@ -71,6 +71,7 @@ test("every dated entry remains a scannable categorized record", () => {
 
 test("release tags stay attached to the weeks in which they were published", () => {
   const sections = weekSections();
+  expect(sections[0]).toContain("v0.3.2");
   expect(sections[3]).toContain("v0.2.0");
   expect(sections[4]).toContain("v0.1.0");
   expect(sections[7]).toContain("v0.0.1");
