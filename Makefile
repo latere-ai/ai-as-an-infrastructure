@@ -1,4 +1,4 @@
-.PHONY: dev serve build og lint lint-modernize fmt fmt-check hooks test clean publish deploy
+.PHONY: dev serve build og lint lint-otel lint-modernize fmt fmt-check hooks test clean publish deploy
 
 # Live dev server for the reader (renders a sample chapter with hot client rebuild).
 dev:
@@ -23,6 +23,12 @@ test-hermetic:
 
 lint-config:
 	@go tool lateregate golangci
+
+# lint-otel fails on an outbound HTTP client that carries no tracing
+# transport, which sends no traceparent and so silently starts a fresh trace
+# at the far end instead of joining this service's.
+lint-otel:
+	@go tool lateregate otel-client
 
 GOLANGCI_VERSION ?= v2.13.1
 
