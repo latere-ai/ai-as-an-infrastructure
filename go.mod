@@ -10,6 +10,7 @@ require (
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/sdk v1.44.0
 	go.opentelemetry.io/otel/trace v1.44.0
+	gopkg.in/yaml.v3 v3.0.1
 	latere.ai/x/pkg v0.41.0
 )
 
