@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -311,7 +312,7 @@ func (h *Handler) ownedComment(w http.ResponseWriter, r *http.Request, u *User, 
 		writeErr(w, http.StatusInternalServerError, "lookup failed")
 		return nil, false
 	}
-	if c.AuthorSub != u.Sub && !(allowAdmin && u.IsSuperadmin) {
+	if c.AuthorSub != u.Sub && (!allowAdmin || !u.IsSuperadmin) {
 		writeErr(w, http.StatusForbidden, "not your comment")
 		return nil, false
 	}
@@ -347,7 +348,12 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	// The status line is already sent, so a failed encode cannot become an
+	// error response. It is logged rather than dropped: the client receives a
+	// truncated body and this is the only place that knows why.
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("writing a %d response: %v", status, err)
+	}
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {

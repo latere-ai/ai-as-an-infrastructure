@@ -11,8 +11,23 @@ serve: build
 
 # Routing-contract tests for the Go server (redirects, canonicalization, cache
 # headers). Needs _book present to embed, so build it first.
-test: build
+# The Go suite, without the book build: _book/ carries a committed .gitkeep so
+# the embed resolves, and the tests that serve real pages skip when it holds no
+# site. `make build && make test` covers those too.
+test:
+	go vet ./...
 	go test ./...
+
+test-hermetic:
+	@go tool lateregate hermetic
+
+lint-config:
+	@go tool lateregate golangci
+
+GOLANGCI_VERSION ?= v2.13.1
+
+lint-go: lint-config
+	@go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_VERSION) run ./...
 
 # Build the static site into _book/{en,zh}. Generated output, not committed;
 # the Go server embeds it (see `make serve`) and the Docker build compiles it.
@@ -39,18 +54,7 @@ lint:
 # so stderr is dropped and the decision rests on the patch alone.
 # It is separate from `lint`, which is a .qmd style check on the prose sources.
 lint-modernize:
-	@for fixer in newexpr errorsastype; do \
-		go tool fix help 2>&1 | grep -q "^    $$fixer " || { \
-			echo "go fix no longer carries the $$fixer fixer, so -$$fixer=false is rejected and this check passes silently"; \
-			exit 1; \
-		}; \
-	done
-	@patch=$$(go fix -diff -newexpr=false -errorsastype=false ./... 2>/dev/null); \
-	if [ -n "$$patch" ]; then \
-		echo "$$patch"; \
-		echo "go fix: the diff above is already in the standard library; apply it with go fix"; \
-		exit 1; \
-	fi
+	@go tool lateregate modernize
 
 # fmt rewrites every Go source in place with gofmt.
 fmt:
@@ -58,7 +62,7 @@ fmt:
 
 # fmt-check fails if any Go source is not gofmt-formatted.
 fmt-check:
-	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt: unformatted files:"; echo "$$out"; exit 1; fi
+	@go tool lateregate fmt-check
 
 # hooks installs the repository git hooks. The pre-commit hook rejects
 # unformatted Go files and code that a standard library call already covers.

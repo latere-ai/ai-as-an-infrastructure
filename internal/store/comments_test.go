@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -79,7 +80,7 @@ func TestSoftDeleteMissingIsNotFound(t *testing.T) {
 	s := store.New(mock)
 	mock.ExpectExec("update comments set deleted_at").WithArgs("nope").
 		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
-	if err := s.SoftDelete(context.Background(), "nope"); err != store.ErrNotFound {
+	if err := s.SoftDelete(context.Background(), "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

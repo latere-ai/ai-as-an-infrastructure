@@ -23,17 +23,21 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"latere.ai/x/pkg/oidc"
+	"latere.ai/x/pkg/otel"
 
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/api"
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/authn"
@@ -67,7 +71,11 @@ func init() {
 		panic(err)
 	}
 	book = sub
-	fs.WalkDir(book, ".", func(p string, d fs.DirEntry, err error) error {
+	// The ETag table is best-effort: an entry that cannot be read simply has
+	// no ETag, and the callback never returns an error, so WalkDir's own is
+	// always nil.
+	_ = fs.WalkDir(book, ".", func(p string, d fs.DirEntry, err error) error {
+		//nolint:nilerr // an unreadable entry is skipped, not fatal
 		if err != nil || d.IsDir() {
 			return nil
 		}
@@ -129,7 +137,7 @@ func serve(w http.ResponseWriter, r *http.Request) {
 	switch p {
 	case "/healthz":
 		w.Header().Set("Cache-Control", "no-store")
-		io.WriteString(w, "ok\n")
+		_, _ = io.WriteString(w, "ok\n")
 		return
 	case "/readyz":
 		w.Header().Set("Cache-Control", "no-store")
@@ -141,7 +149,7 @@ func serve(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		io.WriteString(w, "ok\n")
+		_, _ = io.WriteString(w, "ok\n")
 		return
 	}
 
@@ -282,13 +290,22 @@ func writeFile(w http.ResponseWriter, r *http.Request, name string, immutable bo
 		h.Add("Vary", "Accept-Encoding")
 		w.WriteHeader(http.StatusOK)
 		gw := gzip.NewWriter(w)
-		gw.Write(body)
-		gw.Close()
+		// The status line is already sent, so a write or flush failure cannot
+		// become an error response. Closing is still checked rather than
+		// dropped: an unflushed gzip stream is a truncated page, and this is
+		// the call that would report it.
+		_, writeErr := gw.Write(body)
+		closeErr := gw.Close()
+		if writeErr != nil || closeErr != nil {
+			log.Printf("serving %s: gzip response truncated: write=%v close=%v", r.URL.Path, writeErr, closeErr)
+		}
 		return true
 	}
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
-	w.Write(body)
+	if _, err := w.Write(body); err != nil {
+		log.Printf("serving %s: %v", r.URL.Path, err)
+	}
 	return true
 }
 
@@ -341,15 +358,57 @@ func acceptsGzip(r *http.Request) bool {
 	return strings.Contains(r.Header.Get("Accept-Encoding"), "gzip")
 }
 
+// isProbe reports whether path is one of the Kubernetes probe endpoints.
+func isProbe(path string) bool {
+	return path == "/healthz" || path == "/readyz"
+}
+
+// newHandler wraps the routing contract in OpenTelemetry tracing and metrics.
+// The probes are excluded: Kubernetes polls them every few seconds and they
+// would otherwise be the bulk of the recorded spans.
+func newHandler() http.Handler {
+	return otel.Handler(http.HandlerFunc(serve), "aaai",
+		otel.WithSkip(func(r *http.Request) bool { return isProbe(r.URL.Path) }),
+	)
+}
+
 func main() {
+	if err := run(); err != nil {
+		slog.Error("aaai-web stopped", "err", err)
+		os.Exit(1)
+	}
+}
+
+// run owns the process lifecycle. It is separate from main so the telemetry
+// flush and the database pool close deferred here still run on a startup or
+// serving failure; os.Exit in main would skip them.
+func run() error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	// Bootstrap wires logs, traces, and metrics and sets the slog default.
+	// Export stays a noop until OTEL_EXPORTER_OTLP_ENDPOINT is set, so a local
+	// run keeps writing plain structured logs to stderr.
+	logger, otelShutdown, logsErr := otel.Bootstrap(ctx, otel.Config{ServiceName: "aaai"})
+	if logsErr != nil {
+		logger.Warn("otlp logs init failed; continuing with local logging", "err", logsErr)
+	}
+	defer func() {
+		// ctx is cancelled by the signal that stopped the server, so the flush
+		// needs a context that outlives it.
+		if err := otelShutdown(context.WithoutCancel(ctx)); err != nil {
+			logger.Error("otel shutdown", "err", err)
+		}
+	}()
+
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		return fmt.Errorf("config: %w", err)
 	}
 	if cfg.DatabaseURL != "" {
 		pool, err := store.NewPool(context.Background(), cfg.DatabaseURL)
 		if err != nil {
-			log.Fatalf("database: %v", err)
+			return fmt.Errorf("database: %w", err)
 		}
 		defer pool.Close()
 		dbPing = pool.Ping
@@ -367,9 +426,9 @@ func main() {
 				Logout:       client.HandleLogout,
 				LogoutNotify: client.HandleLogoutNotify,
 			}
-			log.Printf("comments enabled with OIDC login")
+			logger.Info("comments enabled with OIDC login")
 		} else {
-			log.Printf("comments enabled (read-only: OIDC not configured)")
+			logger.Info("comments enabled (read-only: OIDC not configured)")
 		}
 		commentsAPI = api.New(store.New(pool), id, routes)
 	}
@@ -378,8 +437,14 @@ func main() {
 	if addr == "" {
 		addr = ":" + cmp.Or(os.Getenv("PORT"), "8080")
 	}
-	log.Printf("aaai-web serving embedded _book on %s", addr)
-	if err := http.ListenAndServe(addr, http.HandlerFunc(serve)); err != nil {
-		log.Fatal(err)
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           newHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
+	logger.Info("aaai-web serving embedded _book", "addr", addr)
+	// preShutdown is nil: the pool must outlive srv.Shutdown so in-flight
+	// requests can finish draining, which the deferred pool.Close honours.
+	return otel.RunServer(ctx, srv, 10*time.Second, nil)
 }

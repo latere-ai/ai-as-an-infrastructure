@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -8,6 +9,27 @@ import (
 
 // newServer starts the handler on a test server. A separate non-following
 // client lets us inspect a single hop's status and Location header.
+// bookBuilt reports whether the embedded tree carries a real site. The
+// directory is committed with only a .gitkeep so the go:embed directive
+// resolves without a bun build, so its presence proves nothing and the
+// English home page is the file that does.
+func bookBuilt() bool {
+	_, err := fs.Stat(book, "en/index.html")
+	return err == nil
+}
+
+// requireBook skips a test that serves real pages.
+//
+// Stated rather than assumed: without it these tests passed in CI, where an
+// earlier step runs `make build`, and failed in a clean clone for a reason
+// that looked like a routing bug and was not.
+func requireBook(t *testing.T) {
+	t.Helper()
+	if !bookBuilt() {
+		t.Skip("site not built; run `make build` to cover the served pages")
+	}
+}
+
 func newServer(t *testing.T) (string, *http.Client, *http.Client) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(serve))
@@ -68,6 +90,7 @@ func noloop(t *testing.T, c *http.Client, base, path string) {
 // guaranteed: apex language redirect, the 2026 reorg 301s, canonicalization,
 // extensionless serving, and the missing-page fallback.
 func TestRouting(t *testing.T) {
+	requireBook(t)
 	base, nf, follow := newServer(t)
 
 	// Apex resolves to a language home and never loops.
@@ -160,6 +183,7 @@ func TestApexRedirectIsRelative(t *testing.T) {
 
 // TestCacheHeaders checks the asset-vs-content cache policy and ETag 304 path.
 func TestCacheHeaders(t *testing.T) {
+	requireBook(t)
 	base, nf, _ := newServer(t)
 
 	// HTML is no-cache with an ETag.
