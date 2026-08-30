@@ -297,14 +297,15 @@ func writeFile(w http.ResponseWriter, r *http.Request, name string, immutable bo
 		_, writeErr := gw.Write(body)
 		closeErr := gw.Close()
 		if writeErr != nil || closeErr != nil {
-			log.Printf("serving %s: gzip response truncated: write=%v close=%v", r.URL.Path, writeErr, closeErr)
+			slog.ErrorContext(r.Context(), "gzip response truncated",
+				"path", r.URL.Path, "write", writeErr, "close", closeErr)
 		}
 		return true
 	}
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
 	if _, err := w.Write(body); err != nil {
-		log.Printf("serving %s: %v", r.URL.Path, err)
+		slog.ErrorContext(r.Context(), "writing a response", "path", r.URL.Path, "err", err)
 	}
 	return true
 }

@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -352,7 +352,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	// error response. It is logged rather than dropped: the client receives a
 	// truncated body and this is the only place that knows why.
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.Printf("writing a %d response: %v", status, err)
+		slog.Error("writing a response", "status", status, "err", err)
 	}
 }
 
