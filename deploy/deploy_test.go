@@ -13,11 +13,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// otlpEndpoint is the collector every latere service exports to. The shared
-// telemetry library resolves its endpoint from the standard OTEL_ environment
-// and stays a noop when it is unset, so an instrumented binary deployed
-// without this variable is silent.
-const otlpEndpoint = "http://otel-collector.observability.svc:4318"
+// injectedByOperator are the variables the Dash0 operator supplies. It points
+// workloads at the collector on their own node and must be the only writer of
+// these two: it skips any container that already sets either one, emitting only
+// a Warning event. A manifest that sets them therefore reads as configured
+// while its telemetry goes to whatever the value names, which after the Dash0
+// migration is nothing.
+var injectedByOperator = []string{
+	"OTEL_EXPORTER_OTLP_ENDPOINT",
+	"OTEL_EXPORTER_OTLP_PROTOCOL",
+}
 
 type deployment struct {
 	Kind string `yaml:"kind"`
@@ -69,26 +74,19 @@ func loadDeployment(t *testing.T) deployment {
 	return deployment{}
 }
 
-func TestDeploymentExportsTelemetry(t *testing.T) {
+func TestDeploymentLeavesTelemetryToTheOperator(t *testing.T) {
 	d := loadDeployment(t)
 	containers := d.Spec.Template.Spec.Containers
 	if len(containers) == 0 {
 		t.Fatal("deployment declares no containers")
 	}
 	for _, c := range containers {
-		var got string
-		var found bool
 		for _, e := range c.Env {
-			if e.Name == "OTEL_EXPORTER_OTLP_ENDPOINT" {
-				got, found = e.Value, true
+			for _, name := range injectedByOperator {
+				if e.Name == name {
+					t.Errorf("container %q sets %s=%q; the Dash0 operator skips containers that set it, so this container would export to the named address instead of the node-local collector. Remove it and let the operator inject.", c.Name, name, e.Value)
+				}
 			}
-		}
-		if !found {
-			t.Errorf("container %q: OTEL_EXPORTER_OTLP_ENDPOINT is unset, so the service exports nothing", c.Name)
-			continue
-		}
-		if got != otlpEndpoint {
-			t.Errorf("container %q: OTEL_EXPORTER_OTLP_ENDPOINT = %q, want %q", c.Name, got, otlpEndpoint)
 		}
 	}
 }
