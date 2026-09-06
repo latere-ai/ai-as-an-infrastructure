@@ -36,7 +36,7 @@ import (
 	"syscall"
 	"time"
 
-	"latere.ai/x/pkg/oidc"
+	"latere.ai/x/pkg/authkit/oidc"
 	"latere.ai/x/pkg/otel"
 
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/api"

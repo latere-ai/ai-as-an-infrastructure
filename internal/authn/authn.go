@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"net/http"
 
-	"latere.ai/x/pkg/oidc"
+	"latere.ai/x/pkg/authkit/oidc"
 
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/api"
 )
@@ -38,7 +38,7 @@ func (i *Identity) User(w http.ResponseWriter, r *http.Request) *api.User {
 	return &api.User{
 		Sub:          u.Sub,
 		Name:         cmp.Or(u.DisplayName, u.Name),
-		Avatar:       cmp.Or(u.AvatarURL, u.Picture),
+		Avatar:       u.Picture,
 		IsSuperadmin: u.IsSuperadmin,
 	}
 }
