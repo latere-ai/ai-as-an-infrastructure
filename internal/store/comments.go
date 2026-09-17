@@ -233,7 +233,7 @@ func (s *Store) UpdateBody(ctx context.Context, id, bodyMD string) error {
 	return nil
 }
 
-// SoftDelete marks a comment deleted. Authorization (author or superadmin) is
+// SoftDelete marks a comment deleted. Authorization (author or platform admin) is
 // enforced by the caller.
 func (s *Store) SoftDelete(ctx context.Context, id string) error {
 	tag, err := s.db.Exec(ctx, `update comments set deleted_at = now()

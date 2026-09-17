@@ -9,3 +9,8 @@ A section says what changed for whoever uses the release, not what was
 committed: the commit log already holds that.
 
 ## Unreleased
+
+- A reader who administers the installation is recognised by the
+  `platform_admin` role their sign-in carries, not by the account flag the
+  family retired. Moderating another reader's comment needs that role; an
+  organisation owner or admin has no say over the book's comments.

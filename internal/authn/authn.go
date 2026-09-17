@@ -36,10 +36,10 @@ func (i *Identity) User(w http.ResponseWriter, r *http.Request) *api.User {
 		return nil
 	}
 	return &api.User{
-		Sub:          u.Sub,
-		Name:         cmp.Or(u.DisplayName, u.Name),
-		Avatar:       u.Picture,
-		IsSuperadmin: u.IsSuperadmin,
+		Sub:    u.Sub,
+		Name:   cmp.Or(u.DisplayName, u.Name),
+		Avatar: u.Picture,
+		Roles:  u.Roles,
 	}
 }
 

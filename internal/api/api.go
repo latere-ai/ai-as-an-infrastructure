@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -16,13 +17,26 @@ import (
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/store"
 )
 
+// RolePlatformAdmin administers the installation. It is the one role this
+// API's permission table names: it travels in the token's roles claim
+// whatever the organisation, and the organisation roles (owner, admin,
+// member) reach nothing here. Access is by role and never by a flag
+// (identity rule R9).
+const RolePlatformAdmin = "platform_admin"
+
 // User is the authenticated principal behind a request.
 type User struct {
-	Sub          string
-	Name         string
-	Avatar       string
-	IsSuperadmin bool
+	Sub    string
+	Name   string
+	Avatar string
+	// Roles are the role names the session's token carried. An absent or
+	// an unknown role confers no authority, which keeps the check
+	// fail-safe for a token minted before the claim.
+	Roles []string
 }
+
+// Has reports whether the user carries the role.
+func (u *User) Has(role string) bool { return u != nil && slices.Contains(u.Roles, role) }
 
 // Identity resolves the current user and validates CSRF for writes. main.go
 // supplies an OIDC-backed implementation; an anonymous one keeps the read path
@@ -143,7 +157,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 	}
 	csrf := h.id.EnsureCSRF(w, r)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"sub": u.Sub, "name": u.Name, "avatar": u.Avatar, "admin": u.IsSuperadmin, "csrf": csrf,
+		"sub": u.Sub, "name": u.Name, "avatar": u.Avatar, "admin": u.Has(RolePlatformAdmin), "csrf": csrf,
 	})
 }
 
@@ -258,7 +272,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	if u == nil {
 		return
 	}
-	c, ok := h.ownedComment(w, r, u, true) // superadmin may delete any
+	c, ok := h.ownedComment(w, r, u, true) // a platform admin may delete any
 	if !ok {
 		return
 	}
@@ -312,7 +326,7 @@ func (h *Handler) ownedComment(w http.ResponseWriter, r *http.Request, u *User, 
 		writeErr(w, http.StatusInternalServerError, "lookup failed")
 		return nil, false
 	}
-	if c.AuthorSub != u.Sub && (!allowAdmin || !u.IsSuperadmin) {
+	if c.AuthorSub != u.Sub && (!allowAdmin || !u.Has(RolePlatformAdmin)) {
 		writeErr(w, http.StatusForbidden, "not your comment")
 		return nil, false
 	}

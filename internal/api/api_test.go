@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -146,9 +147,44 @@ func TestDeleteAuthorization(t *testing.T) {
 	if w := do(api.New(fs, other, nil), "DELETE", "/api/comments/c1", ""); w.Code != 403 {
 		t.Fatalf("non-owner want 403, got %d", w.Code)
 	}
-	admin := fakeID{user: &api.User{Sub: "admin", IsSuperadmin: true}, csrf: true}
+	// An organisation role is not the installation's administrator: only
+	// platform_admin deletes another reader's comment (identity R9).
+	orgAdmin := fakeID{user: &api.User{Sub: "orgadmin", Roles: []string{"owner", "admin", "member"}}, csrf: true}
+	if w := do(api.New(fs, orgAdmin, nil), "DELETE", "/api/comments/c1", ""); w.Code != 403 {
+		t.Fatalf("org roles want 403, got %d", w.Code)
+	}
+	admin := fakeID{user: &api.User{Sub: "admin", Roles: []string{api.RolePlatformAdmin}}, csrf: true}
 	if w := do(api.New(fs, admin, nil), "DELETE", "/api/comments/c1", ""); w.Code != http.StatusNoContent {
 		t.Fatalf("admin want 204, got %d", w.Code)
+	}
+}
+
+// TestMeAdminIsTheRole pins /api/me's admin hint to the platform_admin role
+// in the session, the claim that replaced the retired is_superadmin flag.
+func TestMeAdminIsTheRole(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		roles []string
+		want  bool
+	}{
+		{"the platform_admin role", []string{api.RolePlatformAdmin}, true},
+		{"organisation roles only", []string{"owner", "admin"}, false},
+		{"no role at all", nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := fakeID{user: &api.User{Sub: "u1", Roles: tc.roles}, csrf: true}
+			w := do(api.New(newFakeStore(), id, nil), "GET", "/api/me", "")
+			if w.Code != http.StatusOK {
+				t.Fatalf("me want 200, got %d", w.Code)
+			}
+			var me map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &me); err != nil {
+				t.Fatalf("decode /api/me: %v", err)
+			}
+			if me["admin"] != tc.want {
+				t.Errorf("admin = %v, want %v", me["admin"], tc.want)
+			}
+		})
 	}
 }
 
