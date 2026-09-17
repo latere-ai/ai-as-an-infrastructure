@@ -14,3 +14,7 @@ committed: the commit log already holds that.
   `platform_admin` role their sign-in carries, not by the account flag the
   family retired. Moderating another reader's comment needs that role; an
   organisation owner or admin has no say over the book's comments.
+- A release refuses to cut while this repository's CI is red, and the
+  refusal says who acts: a budget or policy stop is the maintainer's, a
+  flake is re-run, a code failure is fixed and pushed first (ci-gate
+  v0.42.0). Nothing changes for a reader of the book.
