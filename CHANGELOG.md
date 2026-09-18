@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.4.0 - 2026-09-18
+
 - A reader who administers the installation is recognised by the
   `platform_admin` role their sign-in carries, not by the account flag the
   family retired. Moderating another reader's comment needs that role; an
