@@ -13,17 +13,21 @@ import (
 	"github.com/latere-ai/ai-as-an-infrastructure/migrations"
 )
 
-// NewPool opens a pgx connection pool and runs pending migrations. The migrate
-// bring-up (and the connection-close it needs) lives in the shared
-// pgxmigrate helper; the postgres driver is blank-imported here because
+// NewPool opens a pgx connection pool on servingURL and runs pending
+// migrations over migrationURL. The two are separate because migrations hold a
+// session-scoped advisory lock across statements: a transaction-mode pooler
+// reassigns the backend between transactions and the lock is lost, so the
+// migrator stays on the direct endpoint while serving traffic goes through the
+// pooler. The migrate bring-up (and the connection-close it needs) lives in the
+// shared pgxmigrate helper; the postgres driver is blank-imported here because
 // pgxmigrate selects it by the dsn scheme without importing it.
-func NewPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+func NewPool(ctx context.Context, servingURL, migrationURL string) (*pgxpool.Pool, error) {
+	pool, err := pgxpool.New(ctx, servingURL)
 	if err != nil {
 		return nil, fmt.Errorf("open pool: %w", err)
 	}
 
-	if err := pgxmigrate.Up(databaseURL, migrations.FS, "."); err != nil {
+	if err := pgxmigrate.Up(migrationURL, migrations.FS, "."); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("run migrations: %w", err)
 	}

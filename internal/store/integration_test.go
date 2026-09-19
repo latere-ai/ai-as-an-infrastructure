@@ -18,7 +18,7 @@ func TestIntegration(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	pool, err := store.NewPool(ctx, dsn) // runs migrations
+	pool, err := store.NewPool(ctx, dsn, dsn) // runs migrations
 	if err != nil {
 		t.Fatalf("NewPool/migrations: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestAccountIntegration(t *testing.T) {
 		t.Skip("set AAAI_TEST_DATABASE_URL")
 	}
 	ctx := context.Background()
-	pool, err := store.NewPool(ctx, dsn) // runs migrations 0001 + 0002
+	pool, err := store.NewPool(ctx, dsn, dsn) // runs migrations 0001 + 0002
 	if err != nil {
 		t.Fatalf("NewPool/migrations: %v", err)
 	}

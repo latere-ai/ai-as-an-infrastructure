@@ -407,7 +407,7 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 	if cfg.DatabaseURL != "" {
-		pool, err := store.NewPool(context.Background(), cfg.DatabaseURL)
+		pool, err := store.NewPool(context.Background(), cfg.ServingURL(), cfg.DatabaseURL)
 		if err != nil {
 			return fmt.Errorf("database: %w", err)
 		}
