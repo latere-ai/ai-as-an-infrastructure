@@ -10,6 +10,14 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+- The comment store serves through the family's database pooler. Serving
+  traffic opens `DATABASE_POOL_URL` when the deployment carries it and falls
+  back to `DATABASE_URL`, so an installation whose secret predates the pool
+  starts unchanged. Migrations keep `DATABASE_URL`: they hold a lock across
+  statements that a transaction pooler cannot keep on one connection. The
+  pool's own size, and no longer this service's replica count, is its claim
+  on the shared database. Nothing changes for a reader of the book.
+
 ## v0.4.0 - 2026-09-18
 
 - A reader who administers the installation is recognised by the
