@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.5.0 - 2026-09-19
+
 - The comment store serves through the family's database pooler. Serving
   traffic opens `DATABASE_POOL_URL` when the deployment carries it and falls
   back to `DATABASE_URL`, so an installation whose secret predates the pool
