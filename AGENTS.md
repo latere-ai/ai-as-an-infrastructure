@@ -55,10 +55,14 @@ reading.
 The book deploys to `aaai.latere.ai` as a single self-contained Go binary
 (scratch image, the whole book embedded) behind the shared K8s ingress. The
 multi-stage `Dockerfile` compiles `_book` from source and embeds it into the
-binary (`docker.yml` builds it; no vendored HTML). Deploy = push `main` → image →
-`kubectl rollout restart deployment/aaai-web -n latere`. See `deploy/prod/` and
-`.github/workflows/`. The DNS record for `aaai.latere.ai` and the marketing
-site's header link are managed outside this repository.
+binary; no vendored HTML. A push to `main` only builds the `:main` image
+(`docker.yml`). A deploy is a version tag: `go tool lateregate release vX.Y.Z`
+moves the `Unreleased` notes in `CHANGELOG.md` under the version, commits,
+tags, and pushes; `release.yml` then builds the image, applies `deploy/prod/`
+to the `latere` namespace, smokes the live book, and publishes the GitHub
+release. `deploy/publish.sh` applies the same overlay by hand. The DNS record
+for `aaai.latere.ai` and the marketing site's header link are managed outside
+this repository.
 
 ## Commits
 
