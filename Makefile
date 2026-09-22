@@ -72,7 +72,6 @@ fmt-check:
 # unformatted Go files and code that a standard library call already covers.
 hooks:
 	git config core.hooksPath .githooks
-	@[ -e CLAUDE.md ] || [ -L CLAUDE.md ] || ln -s AGENTS.md CLAUDE.md
 	@echo "installed git hooks (core.hooksPath=.githooks)"
 
 publish:
