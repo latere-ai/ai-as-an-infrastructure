@@ -254,7 +254,7 @@ test("the complete chapter renders without swallowing diagrams or late prose", a
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("The frontier is an evidence-engineering problem");
+  expect(html).toContain("Narrowing the verification frontier is therefore an engineering problem");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(4);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });

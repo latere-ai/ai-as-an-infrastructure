@@ -23,7 +23,7 @@ test("Chinese Chapter 72 preserves the complete English structure", () => {
   expect([...chinese.matchAll(/^## (.+)$/gm)].map((match) => match[1])).toEqual([
     "一个主张需要证据契约",
     "约束如何向上传导",
-    "验证能力受制于待审队列",
+    "验证能力与待审积压",
     "不同检查提供不同保证",
     "作为基础设施的形式证明",
     "发现循环需要评估器",
@@ -31,7 +31,7 @@ test("Chinese Chapter 72 preserves the complete English structure", () => {
     "独立性与来源记录",
     "失效模式",
     "运营台账",
-    "这如何改变前沿",
+    "主张产出之后剩下的工作",
     "争议所在",
     "延伸阅读",
   ]);
@@ -47,7 +47,7 @@ test("Chinese Chapter 72 preserves the complete English structure", () => {
 test("the Chinese thesis defines a bounded verification frontier", () => {
   for (const phrase of [
     "生成主张与有充分理由接受主张之间的差距",
-    "生产不等于接受",
+    "接受这些产出则是另一个步骤",
     "工作假设",
     "不是经过测量的普适定律",
     "范围小于整个安全问题",
@@ -78,7 +78,7 @@ test("the Chinese acceptance policy is a versioned evidence contract", () => {
     "分数阈值",
     "接受决定的责任主体",
     "版本化策略",
-    "不是对真理的普适定义",
+    "这个模板描述的是某一主张类别的一项版本化策略",
     "缺少证据时如何处理",
     "不会把判断变成真理",
   ]) expect(flat).toContain(phrase);
@@ -183,7 +183,7 @@ test("the Chinese learned-oversight evidence preserves experiment scope", () => 
     "自然语言处理、国际象棋和奖励建模",
     "低于完整的强模型监督",
     "5,000 项 APPS 编程任务",
-    "不构成对真正失调系统的部署保证",
+    "不构成对实际失调模型的部署保证",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -240,10 +240,10 @@ test("the Chinese failure inventory and operating ledger remain complete", () =>
 
 test("the Chinese frontier handoff keeps evidence engineering and book structure explicit", () => {
   for (const phrase of [
-    "线索，不是已接受的定理",
-    "假设，不是疗法",
-    "草案，不是一次操作",
-    "证据工程问题",
+    "产出的只是线索",
+    "仍然只是假设",
+    "也只是草案",
+    "缩小验证前沿是一个工程问题",
     "主张流",
     "检查的覆盖范围与局限",
     "待审积压",
@@ -320,7 +320,7 @@ test("the complete Chinese Chapter 72 renders through its handoff", async () => 
   const { html, headings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("前沿是一个证据工程问题");
+  expect(html).toContain("缩小验证前沿是一个工程问题");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(4);
   expect(html).toContain('<figure id="fig-verification-frontier-gap" class="rdr-figure">');
   expect(headings.some(({ text }) => text === "延伸阅读")).toBeTrue();
