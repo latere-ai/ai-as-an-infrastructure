@@ -4,8 +4,8 @@ Once a model's weights are fixed, a system can still spend more work on an
 individual prompt. It can generate additional candidates, extend or revise a
 partial answer, call a tool, search a branching state space, or evaluate several
 alternatives before returning one. These operations are grouped under
-**inference-time scaling**, but they do not spend the same resource or improve
-an answer for the same reason.
+**inference-time scaling**, but they spend different resources and improve an
+answer for different reasons.
 
 The model is only one component of this process. A controller decides what work
 to request, an evaluator supplies evidence about the results, and a stopping
@@ -18,10 +18,11 @@ construct a better answer from them.
 An inference strategy can vary several quantities at once:
 
 - **Breadth:** the number and diversity of candidate responses.
-- **Depth:** the length of a trajectory or the number of dependent revision
-  steps.
+- **Depth:** the length of a trajectory (the sequence of generated steps in one
+  attempt) or the number of dependent revision steps.
 - **Evaluation:** tests, proof checks, learned scores, answer aggregation, or
-  judge calls applied to candidates and partial states.
+  calls to a judge model that grades the output, applied to candidates and
+  partial states.
 - **External work:** retrieval, code execution, simulation, or other tools.
 - **Serving resources:** model choice, accelerator time, memory, concurrency,
   and the latency allowed for the request.
@@ -69,21 +70,25 @@ strategies; $Y_a$ is the answer returned by strategy $a$; and $U_x$ is the true
 task utility, including any value assigned to abstaining or escalating.
 $C_a$ denotes compute or monetary cost, $L_a$ latency, and the nonnegative
 weights $\lambda$ and $\mu$ express the deployment's cost and latency
-trade-offs. The router cannot observe true utility before answering. It must
-estimate the value of each action from held-out data and signals available at
-runtime.
+trade-offs. In choosing a strategy for each request, the controller acts as a
+router. The router cannot observe true utility before answering. It must
+estimate the value of each action from held-out data, meaning prompts that were
+not used to tune the strategy, and from signals available at runtime.
 
 This objective also shows why inference compute is not automatically cheaper
 than training or model capacity. Some strategies require a separately trained
-verifier or revision model. The best choice depends on request volume, hardware,
-quality targets, and which prompts can benefit from additional work.
+verifier (a model that judges whether an answer is correct) or revision model.
+The best choice depends on request volume, hardware, quality targets, and which
+prompts can benefit from additional work.
 
 ## Repeated sampling buys coverage
 
 Parallel sampling is the simplest case. Draw a response $Y$ from the fixed
-proposal distribution $\pi(\cdot\mid x)$ for prompt $x$. Here
-$h_x(Y)\in\{0,1\}$ indicates whether that response satisfies the task's true
-acceptance condition. The one-sample success probability is
+proposal distribution $\pi(\cdot\mid x)$ for prompt $x$: the probability
+distribution over responses that the model and its sampling settings produce
+for that prompt. Here $h_x(Y)\in\{0,1\}$ indicates whether that response
+satisfies the task's true acceptance condition. The one-sample success
+probability is
 
 $$
 p_x
@@ -107,8 +112,9 @@ unchanged proposal. Independence can fail when later prompts adapt to earlier
 outputs, calls share state, or a controller couples, deduplicates, or resamples
 candidates. Diversity is a separate issue: independent draws can still repeat
 the same answer because repetition is part of $\pi(\cdot\mid x)$. Sampling
-temperature, prompt variation, model diversity, and search policy all change
-the proposal and therefore its coverage.
+temperature (the setting that controls how random each draw is), prompt
+variation, model diversity, and search policy all change the proposal and
+therefore its coverage.
 
 Brown et al. measured coverage across models and tasks for as many as 10,000
 samples per problem. Aggregate curves were often well fit by an exponentiated
@@ -120,8 +126,9 @@ does not imply that every task has a comparable scaling curve.
 
 ## Selection determines realized accuracy
 
-Coverage is not the accuracy of a deployed system. Suppose a selector $S$
-must return one of the sampled candidates $Y_{1:k}$. Its realized accuracy is
+A deployed system returns a single answer, so its accuracy depends on which
+sampled candidate it picks. Suppose a selector $S$ must return one of the
+sampled candidates $Y_{1:k}$. Its realized accuracy is
 
 $$
 A_k(x)
@@ -140,24 +147,28 @@ this particular bound because its output can leave the original set.
 
 Selectors have different evidence and different failure modes:
 
-- An **exact checker** validates a fully specified property. A proof kernel can
-  establish that a proof term satisfies its formal rules. A test suite usually
-  checks only sampled behavior, so a passing program can still be wrong outside
-  the tests. Verification also consumes compute.
+- An **exact checker** validates a fully specified property. A proof kernel,
+  the small trusted core of a proof assistant that checks every step of a
+  proof, can establish that a proof term satisfies its formal rules. A test
+  suite usually checks only sampled behavior, so a passing program can still be
+  wrong outside the tests. Verification also consumes compute.
 - **Answer voting** groups candidates by a normalized final answer and chooses
   the largest group. Self-consistency introduced this sample-and-marginalize
   procedure for reasoning paths and evaluated up to 40 paths
-  [@wang2022selfconsistency]. Voting works when probability mass concentrates on
-  the correct answer, not merely because one correct sample exists.
+  [@wang2022selfconsistency]. Voting returns the correct answer only when
+  that answer is also the most frequent one, so it depends on where probability
+  mass concentrates; a single correct sample in the pool is not enough.
 - A **learned scorer or judge** ranks candidates using a proxy for task utility.
   It can distinguish answers that do not admit exact checks, but its errors may
-  be correlated with the generator and can be exploited by a large candidate
-  pool.
+  be correlated with the generator, and a search over a large candidate pool
+  can find candidates that exploit them.
 
 In Brown et al.'s GSM8K and MATH selection experiments, majority voting and
-learned reward-model selection failed to track the continued growth in oracle
-coverage [@brown2024monkeys]. More generally, best-of-$n$ selection against an
-imperfect reward model can eventually prefer responses that exploit the
+selection by a learned reward model (a model trained to score how good a
+response is) failed to track the continued growth in oracle coverage, the
+coverage measured with the true answer check [@brown2024monkeys]. More
+generally, best-of-$n$ selection, which returns the highest-scoring of $n$
+candidates, can eventually prefer responses that exploit an imperfect reward
 model's scoring errors. Huang et al. formalize this failure and show why an
 ideal candidate count can exist when the reward model is imperfect
 [@huang2025bestofn]. A larger pool is therefore useful evidence only if the
@@ -223,51 +234,56 @@ feedback. These sources should not be described as equivalent. They differ in
 cost, independence, and how directly they constrain correctness.
 
 The s1 work provides a narrow example of direct length control. Its budget
-forcing procedure could suppress the end-of-thinking token and append “Wait”
-when s1-32B tried to stop, or terminate thinking at a fixed limit. On AIME 2024,
-the final paper reports an increase from 50% without the intervention to 57%
-with it [@muennighoff2025s1]. AIME 2024 contains only 30 questions, so each
-question moves the score by about 3.3 percentage points. This result combines a
-particular model, its 1,000-example SFT set, a competition-math benchmark, and a
-decoding procedure. It does not establish that appending a continuation cue
-improves arbitrary models or that accuracy rises monotonically with trace
-length.
+forcing procedure either extended thinking, by suppressing the end-of-thinking
+token when s1-32B produced it and appending “Wait”, or terminated it at a fixed
+limit. On AIME 2024, the final paper reports an increase from 50% without the
+intervention to 57% with it [@muennighoff2025s1]. AIME 2024 contains only 30
+questions, so each question moves the score by about 3.3 percentage points. This
+result combines a particular model, its 1,000-example supervised fine-tuning
+(SFT) set, a competition-math benchmark, and a decoding procedure. It does not
+establish that appending a continuation cue improves arbitrary models or that
+accuracy rises monotonically with trace length.
 
-Revision without new evidence is especially fragile. Huang et al. define
-**intrinsic self-correction** as asking a model to correct its answer without
-external feedback. Across their reasoning experiments, the studied models
-struggled to improve and sometimes degraded their answers [@huang2024selfcorrect].
-A unit-test failure or a retrieved fact changes the information available to the
-next step; a second opinion from the same model may only restate the first
-error. Sequential compute is valuable when the loop supplies a useful search
-operation or a feedback channel, not simply because the transcript is longer.
+Revision without new evidence is the least reliable form of sequential work.
+Huang et al. define **intrinsic self-correction** as asking a model to correct
+its answer without external feedback. Across their reasoning experiments, the
+studied models struggled to improve and sometimes degraded their answers
+[@huang2024selfcorrect]. A unit-test failure or a retrieved fact changes the
+information available to the next step; a second opinion from the same model may
+only restate the first error. Sequential compute adds value when the loop
+supplies a useful search operation or a feedback channel; transcript length
+alone supplies neither.
 
 ## Allocate a budget instead of maximizing it
 
 A uniform budget wastes work on easy prompts and may still be insufficient for
 hard ones. Snell et al. studied two mechanisms on MATH using PaLM 2 models
-fine-tuned for the relevant operation: search against a process reward model
-and sequential revision of the proposal distribution. The effective strategy
-depended on both problem difficulty and the base model
+fine-tuned for the relevant operation: search against a process reward model,
+which scores each intermediate step of a solution rather than only the final
+answer, and sequential revision of the proposal distribution. The effective
+strategy depended on both problem difficulty and the base model
 [@snell2024scaling]. Their difficulty bins used 2,048 samples per problem and
-either ground-truth pass@1 or the verifier's average score, while the cost of
-estimating difficulty was excluded. Their compute-optimal allocation was more
-than four times as efficient as a fixed best-of-$n$ baseline in the reported
-setup. In parts of the paper's FLOPs-matched workload analysis, the smaller
-model with test-time compute outperformed a model about fourteen times larger
-only on problem subsets where the smaller model already had a nontrivial
-success rate; the comparison also depended on the assumed ratio between
-inference and pretraining demand.
+either ground-truth pass@1 (the fraction of those samples that were correct, an
+estimate of $p_x$) or the verifier's average score, while the cost of estimating
+difficulty was excluded. Their compute-optimal allocation was more than four
+times as efficient as a fixed best-of-$n$ baseline in the reported setup. In
+parts of the paper's FLOPs-matched workload analysis, the smaller model with
+test-time compute outperformed a model about fourteen times larger only on
+problem subsets where the smaller model already had a nontrivial success rate;
+the comparison also depended on the assumed ratio between inference and
+pretraining demand.
 
-Those findings are conditional, not a theorem that inference compute replaces
-parameters. The study estimated problem difficulty using large offline sample
-pools and a learned verifier; that oracle-like information is not free at
-deployment. A practical router must infer difficulty from cheaper signals such
-as a first-pass score, candidate disagreement, checker failures, prompt class,
-or historical outcomes. It must also recognize uncertainty in that estimate.
-No observed success within one proposal and budget does not prove that the true
-success probability is zero. A different model, prompt, tool, or decomposition
-may create coverage that repeated sampling from the original proposal did not.
+Those findings hold under the conditions just listed; they do not show that
+inference compute can replace parameters in general. The study estimated problem
+difficulty using large offline sample pools and a learned verifier, which comes
+close to knowing the answers in advance, and a deployed system does not get that
+information for free. A practical router must infer difficulty from cheaper
+signals such as a first-pass score, candidate disagreement, checker failures,
+prompt class, or historical outcomes. It must also recognize uncertainty in that
+estimate. Observing no success within one proposal and budget does not prove
+that the true success probability is zero. A different model, prompt, tool, or
+decomposition may create coverage that repeated sampling from the original
+proposal did not.
 
 <figure id="fig-ttc-budget">
 <div class="viz" data-viz="ttc-budget" data-lang="en"></div>
@@ -280,15 +296,15 @@ Longer computation can also reverse an initially correct answer. A 2026 study
 of R1-32B and s1-32B across AIME 2024/2025, MATH-500, and GPQA Diamond used
 forced budgets from 500 to 16,000 tokens. It found diminishing marginal returns,
 cases where models abandoned previously correct answers, and different useful
-stopping lengths for different difficulty levels [@zhou2026overthinking]. The
-appropriate response is not one universal token cap. It is a validated stopping
-policy with both a hard resource limit and task-specific evidence for
-continuing.
+stopping lengths for different difficulty levels [@zhou2026overthinking].
+Because the useful length varies with difficulty, the appropriate response is a
+validated stopping policy that combines a hard resource limit with
+task-specific evidence for continuing.
 
 ## Account for the work where it is paid
 
-Generated tokens are convenient to count, but they are not a complete compute
-measure. A useful request-level ledger over $R$ attempts is
+Generated tokens are convenient to count, but they leave out evaluation, tool,
+and orchestration work. A useful request-level ledger over $R$ attempts is
 
 $$
 C_{\mathrm{total}}
@@ -312,21 +328,22 @@ L_{\mathrm{queue}}+L_{\mathrm{prefill}}
 +\max_{p\in\mathcal P}\sum_{s\in p}L_s.
 $$
 
-Here $\mathcal P$ is the set of dependency paths through generation,
-evaluation, and tool stages; $s$ is one stage on path $p$; and $L_s$ is that
-stage's latency. Queueing and prompt prefill precede the longest dependent path.
+Here $\mathcal P$ is the set of dependency paths through generation, evaluation,
+and tool stages; $s$ is one stage on path $p$; and $L_s$ is that stage's
+latency. Queueing and prompt prefill, the forward pass that processes the whole
+prompt before the first token is generated, precede the longest dependent path.
 Parallel samples can overlap in wall-clock time only when spare concurrency
 exists. Under a fixed hardware budget they may increase queueing, reduce
 batching efficiency, or delay other users even while one request finishes
 sooner.
 
-Comparisons should therefore match the resource that matters. Equal output
-tokens do not imply equal floating-point operations when model sizes differ.
-Equal floating-point operations do not imply equal latency when one strategy is
-serial and another uses wide concurrency. Equal latency does not imply equal
-fleet cost. Report generated and evaluated tokens, model and verifier calls,
-tool executions, peak concurrency, accelerator time, and latency percentiles
-alongside task quality.
+Comparisons should therefore match the resource that constrains the deployment.
+Equal output tokens do not imply equal floating-point operations when model
+sizes differ. Equal floating-point operations do not imply equal latency when
+one strategy is serial and another uses wide concurrency. Equal latency does not
+imply equal fleet cost. Report generated and evaluated tokens, model and
+verifier calls, tool executions, peak concurrency, accelerator time, and latency
+percentiles alongside task quality.
 
 ## Operating an inference policy
 
@@ -341,8 +358,9 @@ A defensible deployment makes the controller observable and testable:
 3. **Compare matched strategies.** Give parallel sampling, sequential revision,
    stronger-model escalation, and tool use the same cost or latency envelope.
 4. **Audit selectors under search.** Measure false accepts, false rejects,
-   calibration, and performance as the candidate pool grows. Include adversarial
-   candidates selected to expose scorer weaknesses.
+   calibration (how closely scores match observed correctness rates), and
+   performance as the candidate pool grows. Include adversarial candidates
+   selected to expose scorer weaknesses.
 5. **Use explicit stop reasons.** Log exact-check success, stable agreement,
    budget exhaustion, low expected marginal value, timeout, and escalation as
    distinct outcomes.
@@ -355,11 +373,11 @@ A defensible deployment makes the controller observable and testable:
 
 The last control is a security requirement as well as a cost control. The
 OverThink study inserted decoy reasoning problems into content used by
-retrieval-augmented systems. Across its evaluated models, it reported slowdowns
-up to 18 times on FreshQA and 46 times on SQuAD while preserving contextually
-correct answers [@kumar2025overthink]. Output-only monitoring would miss that
-failure. Reasoning work, tool calls, and wall-clock occupancy need their own
-alerts and quotas.
+retrieval-augmented systems, which fetch documents and add them to the model's
+prompt. Across its evaluated models, it reported slowdowns up to 18 times on
+FreshQA and 46 times on SQuAD while preserving contextually correct answers
+[@kumar2025overthink]. Output-only monitoring would miss that failure. Reasoning
+work, tool calls, and wall-clock occupancy need their own alerts and quotas.
 
 ::: {.callout-important}
 ## What's contested
@@ -380,25 +398,26 @@ combination of those components.
 ## Constraint arrow
 
 Inference-time scaling turns the reasoning methods in this part into a serving
-workload. @sec-memory-scheduling determines how many parallel candidates fit in
-memory, @sec-faster-decoding sets the price of each generated token, and
-@sec-serving-problem determines whether extra concurrency reduces latency or
-only creates a queue elsewhere. The verifier boundary from
-@sec-verifiers-process-supervision remains equally important: more search
-amplifies whatever acceptance rule the system actually implements.
+workload. Memory capacity and scheduling (@sec-memory-scheduling) determine how
+many parallel candidates fit in memory, decoding speed (@sec-faster-decoding)
+sets the price of each generated token, and serving capacity
+(@sec-serving-problem) determines whether extra concurrency reduces latency or
+only creates a queue elsewhere. The limits of the verifiers in
+@sec-verifiers-process-supervision also carry into this layer, since more
+search amplifies whatever acceptance rule the system implements.
 :::
 
 ## Payoff and boundary
 
-Inference-time compute can turn a frozen model into a stronger system for some
-prompts. Its value comes from a complete policy: create alternatives, gather
-evidence, choose or revise an answer, and stop before the marginal benefit falls
-below the resource cost. Extra candidates without selection buy coverage, not a
-returned answer. Extra revisions without a validated improvement signal add
-work; they do not establish reliable correction. A scaling claim is
-operationally meaningful only when it reports
-quality together with generation, evaluation, tools, latency, and the limits of
-the measured regime.
+Inference-time compute can turn a model with fixed weights into a stronger
+system for some prompts. Its value comes from a complete policy: create
+alternatives, gather evidence, choose or revise an answer, and stop before the
+marginal benefit falls below the resource cost. Extra candidates raise coverage,
+and a selection rule is still needed to turn that coverage into a returned
+answer. Extra revisions correct errors reliably only when a validated
+improvement signal guides them; otherwise they add work. A scaling claim is
+operationally meaningful only when it reports quality together with generation,
+evaluation, tools, latency, and the limits of the measured regime.
 
 ## Further reading
 

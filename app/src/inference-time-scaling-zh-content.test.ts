@@ -166,7 +166,7 @@ test("sequential scaling identifies feedback sources and their limits", () => {
     "人工反馈",
     "不能把这些来源当作等价信号",
     "没有外部反馈",
-    "不是因为文字记录变得更长",
+    "单靠文字记录变长，两者都提供不了",
   ]) {
     expect(flat).toContain(phrase);
   }
@@ -252,7 +252,7 @@ test("the payoff states what extra candidates and revisions can actually buy", (
     "创造备选方案、收集证据、选择或修订答案",
     "边际收益低于资源成本之前停止",
     "只有额外候选而没有选择，只能换来覆盖率",
-    "没有经过验证的改进信号",
+    "经过验证的改进信号引导下",
     "质量、生成工作、评估工作、工具、延迟和测量范围的边界",
   ]) {
     expect(flat).toContain(phrase);
