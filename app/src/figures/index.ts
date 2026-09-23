@@ -5,7 +5,8 @@
 import type { AnyFigure } from "./types.ts";
 import pagedKvBatching from "./paged-kv-batching.ts";
 import roofline from "./roofline.ts";
+import causalAttention from "./causal-attention.ts";
 
-const ALL: AnyFigure[] = [pagedKvBatching, roofline];
+const ALL: AnyFigure[] = [pagedKvBatching, roofline, causalAttention];
 
 export const FIGURES: ReadonlyMap<string, AnyFigure> = new Map(ALL.map((f) => [f.name, f]));
