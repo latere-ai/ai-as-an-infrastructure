@@ -35,7 +35,7 @@ test("Chapter 26 preserves the complete English artifact contract", () => {
   expect(matches(zh, /^## (.+)$/gm)).toEqual([
     "可执行产物需要明确约定",
     "执行成功不等于答案正确",
-    "各类运行时究竟能证明什么",
+    "各类运行时能证明什么",
     "程序辅助方法证明了什么",
     "忠实性有三层含义",
     "修复是一轮受控搜索",
@@ -95,7 +95,7 @@ test("acceptance keeps well-formedness, execution success, and task agreement se
     "三个条件全部成立时",
     "前两项检查往往可以机械完成",
     "第三项才是难点",
-    "精确执行只会把错误形式化封装起来，并不会修好它",
+    "三个例子中的执行都准确无误，返回的是错误形式化下的答案",
     "人工审查、独立测试、以来源为依据的约束或弃答",
   ]) expect(zh).toContain(phrase);
 });
@@ -144,7 +144,7 @@ test("program-aided evidence remains scoped to the tasks actually studied", () =
     "Python、Datalog 或 PDDL 规划器",
     "数学应用题、规划、多跳问答和关系推理",
     "不能证明任意开放式推理都能以同样方式翻译或检查",
-    "共同贡献在于提供一套接口，而不是新的真相来源",
+    "这些工作的共同贡献是一套接口",
   ]) expect(zh).toContain(phrase);
 });
 
@@ -210,7 +210,7 @@ test("the executor is treated as an untrusted-code security boundary", () => {
 
 test("the contested boundary and closing preserve the system-level conclusion", () => {
   for (const phrase of [
-    "争议不在于执行能否改善算术或证明检查",
+    "执行可以改善算术和证明检查",
     "形式化、任务检查和沙箱的成本",
     "不应外推到需求仍然含糊",
     "狭窄的产物语言和独立验收条件",
@@ -218,7 +218,7 @@ test("the contested boundary and closing preserve the system-level conclusion", 
     "翻译器、产物约定、隔离执行器、任务检查和答案绑定",
     "最薄弱的接口决定结果值得多少信任",
     "把一部分推理变成可观测的计算",
-    "下一章会直接讨论这个缺失环节",
+    "下一章讨论这个组件",
   ]) expect(zh).toContain(phrase);
 });
 
