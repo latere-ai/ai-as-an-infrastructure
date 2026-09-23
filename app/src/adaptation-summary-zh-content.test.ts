@@ -13,7 +13,7 @@ function bodyParagraphs(source: string): string[] {
 }
 
 test("the Part III summary preserves the missing-interface thesis", () => {
-  expect(zh).toContain("从基座模型所缺的行为接口出发");
+  expect(zh).toContain("它已具备大量能力，却缺少产品所需的行为");
   expect(zh).toContain("都在界定模型应该保留哪些行为");
   expect(zh).toContain("必须有某种信号告诉模型，什么样的行为算得上更好");
   for (const mechanism of [
@@ -32,18 +32,18 @@ test("the Part III summary preserves the missing-interface thesis", () => {
 });
 
 test("alignment remains governance over fragile signals", () => {
-  expect(zh).toContain("最脆弱的正是这项信号本身");
+  expect(zh).toContain("这项信号可能以三种方式失效");
   expect(zh).toContain("规格不充分时");
   expect(zh).toContain("把奖励当作博弈目标");
   expect(zh).toContain("实际表现没有改善，内部指标仍可能显得更好");
-  expect(zh).toContain("对齐首先是一项治理问题");
+  expect(zh).toContain("把对齐当作一项治理问题");
   for (const governed of ["信号", "评审者", "过滤器", "验证器", "策略文本"]) {
     expect(zh).toContain(governed);
   }
 });
 
 test("the summary carries one evidence test into the inference-time handoff", () => {
-  expect(zh).toContain("贯穿全书的检验标准很简单");
+  expect(zh).toContain("本书其余部分都会对每项信号追问同样四个问题");
   expect(zh).toContain("信号由谁写出，怎样核查，在哪里失效，以及系统何时获准信任自身输出");
   expect(zh).toContain("合成数据、AI 反馈和验证器能把改善推进多远");
   expect(zh).toContain("评判者、过滤器或策略是否会成为新的能力上限");

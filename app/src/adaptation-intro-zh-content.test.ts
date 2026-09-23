@@ -73,7 +73,7 @@ test("reward modeling, direct preference objectives, and checkable rewards stay 
   expect(zh).toContain("系统不再依赖唯一正确答案，而是从回答间的比较中学习");
   expect(zh).toContain("奖励代理替人评分；这个代理本身也是一个习得模型");
   expect(zh).toContain("把这条回路化简为直接偏好目标");
-  expect(zh).toContain("各类变体的差别不在口号，而在它们如何权衡不同目标");
+  expect(zh).toContain("各类变体的差别在于各自针对的约束和所作的权衡");
   expect(zh).toContain("将习得奖励与可核查奖励分开");
 });
 
@@ -85,10 +85,10 @@ test("safety tuning and synthetic data close the route without stronger claims",
 
 test("alignment is scoped to signals, proxy failures, and oversight", () => {
   expect(zh).toContain("把模型行为塑造成有帮助且安全，而不仅仅是准确");
-  expect(zh).toContain("并不是一个在所有意义上都「好」的模型");
+  expect(zh).toContain("它最终指向三件事");
   expect(zh).toContain("选择什么训练信号、愿意承受哪些代理失效");
   expect(zh).toContain("决定监督机制应在回路的哪个位置介入");
-  expect(zh).toContain("需要付出的不只是算力，还有对训练信号的信任，因为正是它告诉模型何为「更好」");
+  expect(zh).toContain("除了算力，后训练还依赖对训练信号的信任，因为这项信号告诉模型何为「更好」");
 });
 
 test("the Chinese opener avoids unsupported additions and translated phrasing", () => {
