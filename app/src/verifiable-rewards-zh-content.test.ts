@@ -24,11 +24,11 @@ function crossRefs(source: string): string[] {
 }
 
 test("Chapter 21 starts from reward provenance rather than a generic verifier promise", () => {
-  expect(zh).toContain("偏好模型可以预测人们倾向于哪个回答");
-  expect(zh).toContain("程序是否真的通过测试，或两个代数式是否等价");
+  expect(zh).toContain("偏好模型预测的则是人们倾向于哪个回答");
+  expect(zh).toContain("生成的代码是否通过测试，或两个代数式是否等价");
   expect(zh).toContain("去掉了一个学习型评判者，却没有消除规格错误");
-  expect(zh).toContain("决定性边界在于奖励来自哪里");
-  expect(zh).toContain("选择与训练是信号的两种不同用途");
+  expect(zh).toContain("奖励首先按来源区分");
+  expect(zh).toContain("信号可以用来挑选回答，也可以用来训练模型");
 });
 
 test("the executable checker and learned reward model have different contracts", () => {
@@ -173,7 +173,7 @@ test("process reward is learned and has no universal aggregation rule", () => {
   expect(zh).toContain(String.raw`s_t=\widehat{P}_\phi(S_t=1\mid x,z_{\le t})`);
   expect(zh).toContain(String.raw`R_{\mathrm{proc}}=A(s_1,\ldots,s_T)`);
   expect(zh).toContain("不存在一种普适的折扣求和定义");
-  expect(zh).toContain("是一个困难数学场景中的证据，并不是过程监督总能胜出的定理");
+  expect(zh).toContain("这是来自一个困难数学场景的证据");
   expect(zh).toContain("PRM 也重新带回了代理风险");
 });
 
@@ -199,7 +199,7 @@ test("path verification and transfer claims retain their measurement limits", ()
   expect(zh).toContain("路径验证器是学习得到的，也会出错");
   expect(zh).toContain("同一训练任务族中的留出实例");
   expect(zh).toContain("相关任务族");
-  expect(zh).toContain("真正不同的领域");
+  expect(zh).toContain("不相关的领域");
   expect(zh).toContain("第一层的证据不能证明第三层");
 });
 
