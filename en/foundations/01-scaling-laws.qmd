@@ -2,16 +2,20 @@
 
 Training a base model requires several choices that become expensive to revise
 once the run begins: the architecture, parameter count, data mixture, number of
-training tokens, optimizer, and schedule. Scaling laws address one part of that
-planning problem. For a fixed model family and training setup, they estimate how
-held-out loss changes with model size, data, and compute.
+training tokens, optimizer, and learning-rate schedule. Scaling laws address one
+part of that planning problem. For a fixed model family and training setup, they
+estimate how held-out loss changes with model size, data, and compute. Held-out
+loss measures how poorly a model predicts text that was withheld from training.
 
-That is narrower than predicting whether a model will be useful. A
-@gls-scaling-law can help choose the size of a training run and forecast its
-validation loss. It does not choose the data, guarantee a downstream capability,
-or account for
-serving cost unless those factors are added to the objective. Keeping those
-boundaries visible is the key to using the method well.
+This forecast is narrower than a prediction of whether a model will be useful.
+A @gls-scaling-law can help choose the size of a training run and forecast its
+validation loss. The fit takes the training data as given, a downstream
+capability has to be measured separately, and serving cost enters the
+calculation only when it is added to the objective. The chapter first defines
+the loss being forecast and fits a loss surface that yields a model-data
+allocation. It then shows how serving demand and finite data change that
+allocation, and covers the optimizer, schedule, batch size, and stability
+controls that need their own experiments.
 
 ## What the forecast measures
 
@@ -46,8 +50,8 @@ The word *token* is used in two different counts. A vocabulary contains token
 types, while a training run processes token instances. In particular,
 @gls-training-tokens are not vocabulary entries, and repeated passes over the
 same text count again. If a corpus contains $U$ unique token instances and is
-read for $R$ full epochs, the run processes approximately $D=RU$ training
-tokens.
+read for $R$ full passes, called epochs, the run processes approximately $D=RU$
+training tokens.
 
 ## From small runs to a loss surface
 
@@ -168,17 +172,19 @@ $D_\star\propto C_{\mathrm{train}}^{0.27}$ for data
 budget. That estimate favored increasingly large models trained on comparatively
 few tokens.
 
-Hoffmann et al. ran a broader set of iso-compute experiments and found exponents
-near one half for both model size and data [@hoffmann2022chinchilla]. Their 70B
+Hoffmann et al. ran a broader set of iso-compute experiments, which compare
+different model-data splits at equal training compute, and found exponents near
+one half for both model size and data [@hoffmann2022chinchilla]. Their 70B
 parameter Chinchilla model was trained on 1.4T tokens, about twenty tokens per
 parameter, and outperformed several larger models trained with similar compute.
-The useful conclusion is that the models of that period were undertrained on
-data. “Twenty tokens per parameter” is the configuration of that demonstration
-and a practical rule of thumb, not a physical constant.
+The result showed that the models of that period were undertrained on data.
+“Twenty tokens per parameter” is the configuration of that demonstration and a
+practical rule of thumb, not a physical constant.
 
-Later analyses help explain the disagreement without making it disappear.
-Kaplan counted non-embedding parameters, whereas Chinchilla used total
-parameters. Pearce and Song show that this accounting choice, combined with the
+Later analyses account for a large part of the disagreement. Kaplan counted
+non-embedding parameters, which exclude the lookup table that maps each
+vocabulary token to a vector, whereas Chinchilla used total parameters. Pearce
+and Song show that this accounting choice, combined with the
 smaller scale of Kaplan's experiments, reproduces much of the difference in the
 reported exponents [@pearce2024reconciling]. Other experimental and fitting
 choices still matter.
@@ -253,18 +259,19 @@ Muennighoff et al. found little loss penalty from repeating constrained data for
 up to roughly four epochs at fixed compute in their experiments. Beyond that
 range, repeated tokens had diminishing value. Their fitted allocation still
 favored smaller models trained for more epochs than a naive application of the
-single-pass Chinchilla law would suggest [@muennighoff2023scaling]. The result is
-not that every fourth pass is free; it is evidence from a particular range of
-models, corpora, and compute budgets.
+single-pass Chinchilla law would suggest [@muennighoff2023scaling]. The
+four-epoch figure applies to the range of models, corpora, and compute budgets in
+those experiments.
 
 A 2026 preprint studies heavier repetition and adds an explicit overfitting
 penalty to the loss law [@lovelace2026prescriptive]. In experiments up to 1B
 parameters and 16 epochs, Lovelace et al. found regimes where further repetition
 became counterproductive and additional compute was better spent on capacity.
-Strong weight decay reduced their fitted repetition penalty by about 70%, but it
-worsened the single-epoch frontier and helped only after a data- and
-compute-dependent crossover. This is promising recent evidence, not yet a
-universal recipe.
+Weight decay shrinks parameters toward zero at every update. Strong weight decay
+reduced their fitted repetition penalty by about 70%, but it worsened the
+single-epoch frontier and helped only after a data- and compute-dependent
+crossover. As a single recent preprint, the study supports its prescriptions
+only within the regimes it tested.
 
 The three planning questions are therefore distinct:
 
@@ -354,8 +361,9 @@ own experiments.
 
 **Optimizer.** @gls-adamw decouples weight decay from Adam's gradient update and
 remains a common baseline [@loshchilov2019decoupled]. It stores first- and
-second-moment estimates for each optimized parameter, so optimizer state is a
-major memory cost in large runs. Muon instead orthogonalizes momentum updates for
+second-moment estimates for each optimized parameter, running averages of its
+gradient and squared gradient, so optimizer state is a major memory cost in
+large runs. Muon instead orthogonalizes momentum updates for
 matrix-shaped hidden-layer weights; it is not a curvature or second-order method.
 Its authors report about twice the compute efficiency of AdamW in their scaling
 experiments and use AdamW for embeddings, normalization parameters, and the
@@ -374,9 +382,11 @@ points in their schedules.
 
 **Batch size.** A batch is the set of token examples used for one optimizer
 update. Larger batches expose more data parallelism and can reduce the number of
-updates needed to reach a target loss. The benefit is not proportional forever.
-The gradient noise scale predicts a *critical batch size* near the knee where
-larger batches begin trading compute efficiency for fewer sequential steps
+updates needed to reach a target loss. Beyond some size, the benefit grows less
+than proportionally. The gradient noise scale compares the variance of
+per-example gradients with the squared norm of the average gradient. It predicts
+a *critical batch size* near the knee where larger batches begin trading compute
+efficiency for fewer sequential steps
 [@mccandlish2018empirical]. The noise scale often grows as loss falls, so a useful
 batch size may change during the run. @fig-scaling-laws-2 shows the shape; it is
 not a hard failure threshold.
@@ -385,15 +395,19 @@ not a hard failure threshold.
 
 ## Keeping a long run stable
 
-A predicted final loss is worthless if the run diverges before reaching it.
-Stability controls address different signals rather than forming one universal
-recovery recipe.
+A predicted final loss assumes that the run reaches its planned end without
+diverging. Stability controls address different signals rather than forming one
+universal recovery recipe.
 
-- @gls-z-loss penalizes the squared log of the softmax normalizer, discouraging
-  all output logits from drifting together to large absolute values. PaLM used
-  it as a stability control [@chowdhery2022palm].
-- @gls-qk-norm normalizes query and key vectors before their dot product, limiting
-  attention-logit growth. Small-scale proxy experiments reproduce this large-run
+- @gls-z-loss acts on the output logits, the unnormalized scores the model
+  assigns to each vocabulary token before softmax converts them into
+  probabilities. It penalizes the squared log of the softmax normalizer,
+  discouraging all logits from drifting together to large absolute values. PaLM
+  used it as a stability control [@chowdhery2022palm].
+- In attention, a token's query vector is compared by dot product with the key
+  vectors of the tokens it attends to, and the results set the attention
+  weights. @gls-qk-norm normalizes queries and keys before that dot product,
+  limiting attention-logit growth. Small-scale proxy experiments reproduce this large-run
   instability and show that the mitigation can be tested cheaply
   [@wortsman2023small].
 - Global-norm @gls-gradient-clipping rescales an unusually large gradient before
@@ -411,9 +425,10 @@ to Muon [@kimiteam2025k2]. Those are results from two training systems, not a
 guarantee that the same controls will transfer unchanged.
 
 Distributed execution, checkpoint storage, numerical precision, and failure
-recovery are developed in @sec-training-at-scale. This chapter's boundary is the
-training recipe: the scaling fit proposes a destination, while optimization and
-systems engineering determine whether the run reaches it.
+recovery are developed in @sec-training-at-scale. This chapter stops at the
+training recipe. The scaling fit supplies a target allocation and a loss
+forecast, and optimization and systems engineering determine whether the run
+achieves that loss.
 
 ## Before committing the run
 
@@ -428,8 +443,7 @@ The decision record for a large training run should state:
 - the unique-data budget and expected number of repeated epochs;
 - the optimizer, schedule, batch policy, and stability gates.
 
-That record turns a scaling law from an impressive curve into an auditable
-allocation decision. It also makes the forecast falsifiable: after the run, the
+That record turns a fitted scaling law into an auditable allocation decision. It also makes the forecast falsifiable: after the run, the
 observed held-out loss can be compared with the interval that justified the
 investment.
 

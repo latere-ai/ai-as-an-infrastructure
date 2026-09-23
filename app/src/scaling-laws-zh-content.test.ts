@@ -9,7 +9,7 @@ const zh = readFileSync(join(repoRoot, "zh/foundations/01-scaling-laws.qmd"), "u
 test("Chapter 5 defines the forecast, evaluation loss, and both token counts", () => {
   expect(en).toContain("For a fixed model family and training setup");
   expect(zh).toContain("对于固定的模型族和训练设置，扩展律估计留出损失怎样随模型规模、数据量和算力变化");
-  expect(zh).toContain("它不会代为选择数据，也不能保证下游能力");
+  expect(zh).toContain("拟合把训练数据当作既定条件，下游能力需要另行测量");
   expect(zh).toContain("## 预测值衡量什么");
   expect(zh).toContain("\\ell_t&=-\\log p_\\theta(x_t\\mid x_{<t})");
   expect(zh).toContain("L_{\\mathrm{eval}}(\\theta)&=\\frac{1}{T}\\sum_{t=1}^{T}\\ell_t");
@@ -74,7 +74,7 @@ test("deployment replaces the training-only objective with lifetime cost", () =>
 test("finite-data evidence separates fresh tokens, repetition, and overfitting", () => {
   expect(zh).toContain("## 有限数据会再次改变选择");
   expect(zh).toContain("最多约四轮");
-  expect(zh).toContain("并不意味着每到第四轮都没有代价");
+  expect(zh).toContain("约四轮这个数字只适用于这些实验覆盖的模型、语料和算力范围");
   expect(zh).toContain("10 亿参数和 16 轮训练");
   expect(zh).toContain("约 70% 的重复惩罚");
   expect(zh).toContain("单轮训练的前沿反而变差");
