@@ -31,7 +31,7 @@ test("Chinese Chapter 77 preserves the complete English structure", () => {
     ["##", "争议所在"],
     ["##", "把切换当作有方向的路径来测量"],
     ["##", "从权利与激励分析垂直整合"],
-    ["##", "开放、透明与可竞争性不是一回事"],
+    ["##", "区分开放、透明与可竞争性"],
     ["##", "每项结论都要对应证据"],
     ["##", "约束如何传导"],
     ["##", "持续维护市场记录"],
@@ -222,7 +222,7 @@ test("switching is a five-layer directed migration path", () => {
     "迁移演练",
     "测量质量和尾延迟",
     "恢复服务所需的时间",
-    "从未通过这项演练的后备方案只是一种愿望",
+    "只有通过这项演练的后备方案，才能算作可信替代方案",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -306,7 +306,7 @@ test("the constraint arrow and nine-step review produce a reproducible record", 
     "工作负载与验收规则摘要",
     "HHI 敏感性",
     "未决假设",
-    "议价能力止于可信替代方案消失之处",
+    "在组织内部产生这种价值",
   ]) expect(flat).toContain(phrase);
   const section = chinese.match(/## 持续维护市场记录\n([\s\S]*?)\n```\{dot\}/);
   expect(section).not.toBeNull();
@@ -368,7 +368,7 @@ test("the complete Chinese chapter renders through the adoption handoff", async 
   const { html, headings: renderedHeadings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("议价能力止于可信替代方案消失之处");
+  expect(html).toContain("在组织内部产生这种价值");
   expect(html.match(/<figure/g)?.length).toBe(2);
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();
 });

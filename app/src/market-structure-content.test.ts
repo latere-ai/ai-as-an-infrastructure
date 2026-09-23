@@ -244,7 +244,7 @@ test("the complete chapter renders through its final handoff", async () => {
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("Bargaining power lives where credible alternatives end");
+  expect(html).toContain("The next chapter measures when a deployed capability produces");
   expect(html.match(/<figure/g)?.length).toBe(2);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });
