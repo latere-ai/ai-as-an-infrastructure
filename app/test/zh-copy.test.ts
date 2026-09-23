@@ -895,7 +895,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/02-scalable-oversight-control.qmd",
-      ["Scalable oversight asks whether", "Measure the gap you actually have", "Three jobs, three kinds of evidence", "assume intentional subversion", "An operating contract for oversight evidence"],
+      ["Scalable oversight asks whether", "Identify and measure the gap", "Three jobs, three kinds of evidence", "assume intentional subversion", "An operating contract for oversight evidence"],
     ],
     [
       "zh/safety/02-scalable-oversight-control.qmd",

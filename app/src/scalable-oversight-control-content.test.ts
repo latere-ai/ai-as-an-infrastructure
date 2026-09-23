@@ -46,7 +46,7 @@ test("training signals, evaluation evidence, and deployment control remain disti
     "assisted evaluation",
     "deployment control",
     "an improved supervision signal is not a release decision",
-    "a control result is not evidence that the model is aligned",
+    "a control result is evidence about one protocol under a declared threat model",
     "these methods can be combined",
   ]) expect(flat).toContain(phrase);
 });
@@ -109,7 +109,7 @@ test("control metrics separate usefulness, attack success, errors, and resources
 
 test("deception-related evidence is bounded to the constructed experiments", () => {
   for (const phrase of [
-    "the answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training",
+    "@gls-deceptive-alignment is the possibility that a model can appear aligned under training",
     "proof-of-concept",
     "deliberately trained backdoor",
     "does not estimate how often such behavior arises naturally",

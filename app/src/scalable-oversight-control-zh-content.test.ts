@@ -105,7 +105,7 @@ test("training evaluation and deployment remain three different jobs", () => {
     "辅助评估",
     "部署控制",
     "改进后的监督信号不等于发布决定",
-    "控制结果也不能证明模型已经对齐",
+    "控制结果说明的是某项协议在已声明的威胁模型下表现如何",
     "可以组合使用",
   ]) expect(flat).toContain(phrase);
 });
@@ -234,7 +234,7 @@ test("larger-gap estimates remain a fitted experimental framework", () => {
     "四个简化博弈",
     "基于模型的估计",
     "不是对部署风险的一般估计",
-    "不能凭空创造一条普适的衰减曲线",
+    "不能据此得出一条监督成功率随差距扩大而下降的普适曲线",
     "任意任务或任意差距",
   ]) expect(flat).toContain(phrase);
 });
@@ -262,7 +262,7 @@ test("the operating record makes every oversight claim reproducible", () => {
     "带版本的评估工件",
     "冻结受评估的版本",
     "发布失败案例",
-    "不能自行授权部署",
+    "它为风险决策提供一项依据",
   ]) expect(flat).toContain(phrase);
 });
 

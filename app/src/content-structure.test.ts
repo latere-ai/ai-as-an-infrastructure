@@ -298,8 +298,8 @@ test("high-friction glossary terms explain themselves in the reading flow", () =
     ["zh/ecosystem/04-economics.qmd", "@gls-capex 指投入自有加速器、数据中心设备等长期资产的现金"],
     ["en/safety/01-mechanistic-interpretability.qmd", "The hypothesis is @gls-superposition: a model represents more features than it has dimensions"],
     ["zh/safety/01-mechanistic-interpretability.qmd", "这里的假说是 @gls-superposition：模型通过让非正交的特征方向共享激活空间，表示的特征数多于维度数"],
-    ["en/safety/02-scalable-oversight-control.qmd", "The answer is @gls-deceptive-alignment: the possibility that a model can appear aligned under training"],
-    ["zh/safety/02-scalable-oversight-control.qmd", "答案是 @gls-deceptive-alignment：模型可能在训练中表现得已经对齐"],
+    ["en/safety/02-scalable-oversight-control.qmd", "@gls-deceptive-alignment is the possibility that a model can appear aligned under training"],
+    ["zh/safety/02-scalable-oversight-control.qmd", "@gls-deceptive-alignment 指模型可能在训练中表现得已经对齐"],
     ["en/practice/11-human-interface-oversight.qmd", "@gls-automation-bias is the tendency to over-accept automated advice"],
     ["zh/practice/11-human-interface-oversight.qmd", "@gls-automation-bias，是指人们过度接受自动化建议的倾向"],
   ];
