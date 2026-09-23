@@ -27,7 +27,7 @@ test("Chinese Chapter 79 preserves the complete English structure", () => {
     ["##", "先明确用途，再审查数据"],
     ["##", "把证据与决策分开"],
     ["##", "不同信号不能混为一谈"],
-    ["##", "评估权利完备的数据选项，而不是词元堆"],
+    ["##", "对照基线为权利完备的数据集定价"],
     ["##", "法院判决不会给出全球统一价格"],
     ["##", "合规可以打开市场"],
     ["##", "开源回答的是另一个问题"],
@@ -92,7 +92,7 @@ test("the ledger keeps facts law policy controls and evidence separate", () => {
     "语料清单",
     "到期日期",
     "许可证标签可能有误",
-    "法律判断只有经过测试的控制落实到语料、索引、模型工作流和发布流程中，才真正可执行",
+    "法律判断只有经过测试的控制落实到语料、索引、模型工作流和发布流程中，才会生效",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -144,7 +144,7 @@ test("rights economics prices an option against one feasible baseline", () => {
     "摊销共享成本",
     "市场准入收益既算作收入，又算作避免损失",
     "不能让步的隐私、安全和法律限制",
-    "许可证费用不是数据集的内在价值，也不是每词元价格",
+    "这笔费用不是数据集的内在价值，也不是每词元价格",
     "内容、访问方式、许可用途、服务、排他性、期限、保证和议价能力",
   ]) expect(flat).toContain(phrase);
 });
@@ -230,7 +230,7 @@ test("open source answers modification freedom not rights compliance", () => {
 
 test("the release ledger covers identity decision scope obligations and enforcement", () => {
   for (const phrase of [
-    "不要保存一个全局的 `usable = true`",
+    "而不是保存一个全局的 `usable = true`",
     "允许、拒绝或复核",
     "资产、用途、产品、地区、客户类别和时间",
     "身份",
@@ -281,7 +281,7 @@ test("the constraint handoff treats rights evidence as deployable capability", (
     "法律判断",
     "决定哪些产品和地区可以进入",
     "权利证据是可部署能力的一部分",
-    "不是模型建成后才附加的元数据",
+    "要与语料和模型一同产生",
   ]) expect(flat).toContain(phrase);
 });
 

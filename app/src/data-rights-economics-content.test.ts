@@ -106,7 +106,7 @@ test("rights economics uses one accounting horizon and compatible units", () => 
     "same currency",
     "accounting horizon",
     "baseline",
-    "license fee is not",
+    "license fee reflects",
     "per-token price",
     "double counting",
     "guardrails",
