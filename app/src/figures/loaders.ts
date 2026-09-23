@@ -35,4 +35,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "iteration-roofline": () => import("./iteration-roofline.ts"),
   "moe-dispatch": () => import("./moe-dispatch.ts"),
   "recurrent-state": () => import("./recurrent-state.ts"),
+  "hybrid-schedule": () => import("./hybrid-schedule.ts"),
 };
