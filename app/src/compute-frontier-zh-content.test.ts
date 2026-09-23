@@ -59,11 +59,11 @@ test("Chapter 66 preserves the complete English compute-frontier contract", () =
     "算力前沿：带宽，而非 FLOPs {#sec-compute-frontier}",
   ]);
   expect(headings(chapter, 2)).toEqual([
-    "前沿是一组约束，不是单一指标",
+    "前沿是一组约束",
     "封装改变了内存边界",
     "纵向扩展域可以跨越多个节点",
-    "架构选择只会移动约束，不会消除约束",
-    "预填充与解码是工作阶段，不是固定的硬件类别",
+    "架构选择会移动下界中的约束项",
+    "预填充与解码是两个工作阶段",
     "每条破局路径都只改变一个明确的约束项",
     "如何比较前沿系统",
     "约束如何向上传导",
@@ -180,7 +180,7 @@ test("parallel placement follows measured traffic rather than acronyms", () => {
 
 test("network claims separate specifications implementations and optical choices", () => {
   for (const phrase of [
-    "开放规范不等于已经可用的实现",
+    "UALink 1.0 是一项面向纵向扩展的开放规范",
     "每通道 200 Gb/s",
     "最多 1,024 个加速器",
     "不能证明规范描述的交换机、线缆、软件栈或大规模部署都已可用",
@@ -189,7 +189,7 @@ test("network claims separate specifications implementations and optical choices
     "光路交换是另一种思路",
     "TPU v4",
     "Opus",
-    "都不会让通信变成零成本",
+    "通信仍是下界中的一项",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -198,7 +198,7 @@ test("architecture comparisons move bounds and carry evidence status", () => {
     "改变上面下界中的哪一项，又把什么成本暴露到别处",
     "传统 HBM 加速器",
     "定制加速器",
-    "晶圆级集成选择了另一种局部性位置",
+    "晶圆级集成把局部性边界放在了另一个位置",
     "“没有 HBM”只移除了一道明确的边界",
     "可用系统",
     "已发布产品",
@@ -223,7 +223,7 @@ test("prefill and decode stay conditional phases with a transfer boundary", () =
 
 test("escape routes name the term they change and the cost they create", () => {
   for (const phrase of [
-    "不存在一条统一的成熟度阶梯",
+    "各种机制可以组合使用",
     "减少流量",
     "提高局部性",
     "提高可持续带宽",
@@ -235,9 +235,9 @@ test("escape routes name the term they change and the cost they create", () => {
   ]) expect(flat).toContain(phrase);
 });
 
-test("frontier comparisons start from a reproducible operating contract", () => {
+test("frontier comparisons state their measurement conditions", () => {
   for (const phrase of [
-    "从运行契约开始，而不是比较两个峰值数字",
+    "写明每个数字的测量条件",
     "模型与操作",
     "张量形状、批次大小与序列长度",
     "输入、权重、累积、通信与存储状态所用的精度",
@@ -259,7 +259,7 @@ test("the constraint arrow and conclusion keep the argument conditional", () => 
     "拓扑决定哪些并行组共享高速域",
     "服务方式决定状态是复用还是搬运",
     "先指出边界、测量流量、改变一个约束项，再重新测量",
-    "不是一个 FLOPs 数字与一个带宽数字之间的竞赛",
+    "只拿一个 FLOPs 数字对照一个带宽数字，定位不了极限",
     "找出当前生效的边界",
     "区分可持续速率与峰值",
   ]) expect(flat).toContain(phrase);
@@ -271,7 +271,7 @@ test("the contested section preserves four workload-dependent questions", () => 
     "纵向扩展是否必须使用专有网络",
     "光学器件应该在什么时候进入封装",
     "专用或晶圆级设计会不会取代通用加速器",
-    "工作负载流量，而不是 GPU 数量本身",
+    "取决于工作负载的流量模式",
     "相同的消息大小、拓扑、软件成熟度与可用性",
     "机队可靠性与可维护性证据",
     "答案取决于工作负载与部署环境",

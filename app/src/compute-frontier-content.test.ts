@@ -147,7 +147,7 @@ test("prefill and decode remain conditional workload phases", () => {
   expect(flat).not.toContain("prefill, the processing of a long prompt, is compute-bound");
 });
 
-test("hardware comparisons use a reproducible operating contract", () => {
+test("hardware comparisons record their measurement conditions", () => {
   for (const phrase of [
     "model and operation",
     "tensor shape",
@@ -234,7 +234,7 @@ test("the complete chapter renders without swallowing diagrams or late prose", a
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("The durable skill is to locate the active boundary");
+  expect(html).toContain("Locating it means finding the active boundary");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(4);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });
