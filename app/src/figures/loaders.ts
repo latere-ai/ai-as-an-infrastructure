@@ -13,4 +13,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   roofline: () => import("./roofline.ts"),
   "causal-attention": () => import("./causal-attention.ts"),
   "speculative-sampling": () => import("./speculative-sampling.ts"),
+  "candidate-tree": () => import("./candidate-tree.ts"),
 };
