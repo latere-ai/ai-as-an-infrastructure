@@ -43,7 +43,7 @@ test("Chapter 35 preserves the complete English structured-and-long-context cont
     "延伸阅读",
   ]);
   expect(headings(chapter, 3)).toEqual([
-    "解析器处理词元字节，而不是词元标签",
+    "解析器处理词元字节",
     "保证覆盖什么",
     "强制跨度需要一次扩展计算",
     "注意力汇与近期窗口",
@@ -95,7 +95,7 @@ test("token bytes, parser state, and the implemented guarantee stay connected", 
     "上下文无关文法还需要解析器栈",
     "语法有效不等于取值正确",
     "所请求 schema、后端语法覆盖、分词器集成与终止行为的交集",
-    "不能取代应用验证器或授权层",
+    "其余故障仍由应用验证器和授权层负责",
     "内容准确率与解析成功率都要比较",
   ]) expect(flat).toContain(phrase);
 });
@@ -132,9 +132,9 @@ test("cache policies state what they store, read, and can lose", () => {
     "驱逐不可逆",
     "保留完整缓存",
     "下一次查询可以改选其他页面",
-    "支持持续生成，不等于支持无限回忆",
+    "已驱逐的内容却无法再回忆",
     "历史注意力不一定能预测未来重要性",
-    "提示词压缩，不是持续更新的重击者缓存",
+    "此后选择结果保持不变",
     "永久删除变成了单次查询遗漏",
     "训练原生稀疏注意力",
   ]) expect(flat).toContain(phrase);
@@ -143,7 +143,7 @@ test("cache policies state what they store, read, and can lose", () => {
 test("cache state includes position, ownership, metadata, and physical constraints", () => {
   for (const phrase of [
     "逻辑位置、层与头的身份、数值格式和所有权状态",
-    "把有缺口的保留词元重新连续编号会改变注意力几何",
+    "把有缺口的保留词元重新连续编号，会改变注意力分数所依赖的相对位置",
     "分页分配并不会让任意逐词元或逐头驱逐变得免费",
     "共享前缀缓存",
     "引用计数、预留、提交、回滚、取消与前缀缓存身份",
@@ -172,8 +172,8 @@ test("the conclusion preserves the separate production boundaries", () => {
     "每项质量或速度声明",
     "调度器必须容纳语法编译与异构掩码",
     "投机解码必须把同一语法应用于目标分布",
-    "无法让取值变成事实",
-    "无法让已经丢弃的证据重新可用",
+    "取值是否正确仍要靠语义验证",
+    "被丢弃的证据则不再能供后续查询使用",
     "保证、任务质量与服务结果一起衡量",
   ]) expect(flat).toContain(phrase);
 });

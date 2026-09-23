@@ -8,16 +8,15 @@ different guarantees. A grammar can guarantee membership in an implemented
 formal language. Cache eviction and sparse reads approximate full attention and
 must be evaluated against the task.
 
-This distinction matters in production. Parseable JSON can still contain the
-wrong value. A bounded cache can keep a stream fluent while forgetting a fact
-that appeared thousands of tokens earlier. Neither mechanism should be sold as
-a general correctness guarantee.
+In production, parseable JSON can still contain the wrong value, and a bounded
+cache can keep a stream fluent while forgetting a fact that appeared thousands
+of tokens earlier. Neither mechanism is a general correctness guarantee.
 
 ## Constrained decoding changes the token distribution
 
-Consider @gls-constrained-decoding, the grammar-checked decode loop. Here
-$p(v\mid x_{<t})$ be the model probability of vocabulary token $v$ after prefix
-$x_{<t}$. Let $s_t$ be the current parser configuration and $A(s_t)$ the tokens
+Consider @gls-constrained-decoding, the grammar-checked decode loop. Let
+$p(v\mid x_{<t})$ denote the model probability of vocabulary token $v$ after
+prefix $x_{<t}$. Let $s_t$ be the current parser configuration and $A(s_t)$ the tokens
 that preserve the possibility of a valid completion. Grammar-constrained
 sampling uses
 
@@ -43,8 +42,9 @@ implementation guarantees that the emitted byte string belongs to the
 implemented language. A maximum-token stop,
 cancellation, or engine failure can still leave an incomplete document.
 
-The following runnable shows the renormalization itself. It deliberately uses a
-small allowed set rather than pretending to implement a full JSON parser.
+The following runnable shows the renormalization itself. It starts from logits,
+the unnormalized scores that softmax turns into probabilities, and uses a small
+hand-picked allowed set in place of a JSON parser.
 
 :::: {.runnable}
 ```python
@@ -72,7 +72,7 @@ print("illegal mass:", round(sum(probabilities[i] for i in range(len(vocab))
 ```
 ::::
 
-### The parser runs on token bytes, not token labels
+### The parser runs on token bytes
 
 A model emits tokenizer IDs, while a grammar is defined over an alphabet such
 as bytes or Unicode code points. The runtime must compose the two. For each
@@ -119,7 +119,7 @@ parses as JSON and that a field has an integer spelling. It cannot establish
 that the integer was copied from the source, that a tool call is authorized, or
 that a SQL statement is safe to execute. Those are semantic and policy checks.
 
-JSON Schema adds another boundary. Engines commonly implement a supported
+JSON Schema support adds another limit. Engines commonly implement a supported
 subset of JSON Schema by translating it into a grammar or parser. Keywords for
 cross-field relationships, remote references, numeric ranges, or string
 semantics may be unsupported or enforced after generation. The advertised
@@ -131,8 +131,9 @@ schema coverage, compilation behavior, and output quality
 
 The consumer validates the finished object again. It should reject extra bytes,
 unsupported schema features, incorrect field values, unsafe operations, and
-truncated output. Constrained decoding removes one class of failure; it does not
-replace the application validator or authorization layer.
+truncated output. Constrained decoding removes one class of failure, malformed
+syntax; the application validator and the authorization layer remain
+responsible for every other class.
 
 Hard token masking also changes the model's sequence distribution. The local
 renormalization above does not, in general, sample from the original model
@@ -169,13 +170,13 @@ an empirical result for evaluated engines and workloads, not a universal bound
 ### Forced spans use an extend pass
 
 A grammar often has deterministic spans such as punctuation and field names.
-SGLang compresses singular paths and jumps to the next branch
-[@zheng2024sglang]. This avoids one autoregressive decode iteration per forced
-token, but it does not make those tokens free. The forced span must still enter
-the model state so later tokens attend to it. The runtime retokenizes the
-combined suffix at the boundary, reconciles any changed tokenization, and
-processes the deterministic tokens together in a prefill-style pass that
-extends the KV cache.
+SGLang compresses paths that have a single legal continuation and jumps to the
+next branch [@zheng2024sglang]. This avoids one autoregressive decode iteration
+per forced token. The forced span must still enter the model state so later
+tokens attend to it. Concatenated text can split into different tokens than its
+parts did, so the runtime retokenizes the combined suffix at the boundary,
+reconciles any changed tokenization, and processes the deterministic tokens
+together in a prefill-style pass that extends the KV cache.
 
 ```{dot}
 //| label: fig-slc-jumpforward
@@ -204,8 +205,8 @@ and scheduler load.
 
 ## Long context has four separate limits
 
-"Supports 128K" does not answer every long-context question. A deployment must
-separate four limits:
+A deployment that advertises "supports 128K" still has to separate four
+limits:
 
 1. **The model's supported context length.** Position encoding, training
    distribution, and architecture determine whether the model behaves sensibly
@@ -217,8 +218,9 @@ separate four limits:
    read an increasingly large state for every new query. Chapter 34's IO model
    applies directly.
 4. **Information retention.** A policy that drops or skips state may remove the
-   evidence a later query needs. Stable perplexity or fluent generation is not
-   proof of long-range recall.
+   evidence a later query needs. Stable perplexity (a measure of how well the
+   model predicts each next token) or fluent generation is not proof of
+   long-range recall.
 
 Here $\kappa$ is the logical KV bytes per retained token from
 @sec-quantization-kernels. Full attention retains approximately
@@ -228,9 +230,10 @@ M_{\mathrm{full}}(T)=T\kappa
 $$
 
 bytes for a sequence of $T$ tokens, before allocator and metadata overhead.
-Here $T$ is the logical sequence length. A sink-plus-window policy with $s$
-initial tokens and a recent window of $w$ tokens has budget $K=s+w$ and, after
-warm-up, retains at most
+Here $T$ is the logical sequence length. A sink-plus-window policy keeps $s$
+initial tokens, called sinks for a reason explained below, and a
+recent window of $w$ tokens. It has budget $K=s+w$ and, after warm-up, retains
+at most
 
 $$
 M_{\mathrm{window}}\lesssim K\kappa+M_{\mathrm{policy}}.
@@ -243,8 +246,8 @@ and compute for all $T$ tokens.
 
 ## Three policy families, three failure modes
 
-Long-context methods are easier to compare by what they store and read than by
-publication date.
+The table compares long-context methods by what they store and what they read
+for each query; the subsections that follow define each row's terms.
 
 | Policy | Stored KV after setup | KV read for a query | Selection time | Primary failure mode |
 |---|---|---|---|---|
@@ -272,10 +275,10 @@ sequences without fine-tuning [@xiao2023streaming].
 
 The paper proposes softmax normalization as part of the explanation: when a
 head has no strongly relevant token, initial positions can absorb attention
-mass. This is an observed model behavior, not a theorem that every head follows.
-Sink count and window size are model- and workload-specific. The policy also
-does not remember evicted content. It supports continuing generation,
-not unlimited recall.
+mass. The behavior was observed in the evaluated models and need not hold for
+every head. Sink count and window size are model- and workload-specific. The
+policy keeps generation going over a long stream, and content it has evicted
+cannot be recalled.
 
 ```{=html}
 <figure id="fig-structured-long-context-attention-heatmap">
@@ -286,42 +289,42 @@ not unlimited recall.
 
 ### Attention-history eviction and prompt compression
 
-H2O retains recent tokens and tokens with large accumulated attention scores in
-the models and tasks it evaluates [@zhang2023h2o]. The score is historical. A
-token with little attention so far may still become essential to a later query,
-so the heavy-hitter budget must be tested against future-use patterns rather
+H2O retains recent tokens and tokens with large accumulated attention scores,
+which the paper calls heavy hitters, in the models and tasks it evaluates
+[@zhang2023h2o]. The score reflects past attention only. A token with little
+attention so far may still become essential to a later query, so the
+heavy-hitter budget must be tested against future-use patterns rather
 than only average language-model loss.
 
-SnapKV is a different operation. It observes attention near the end of the
-prompt, selects important prompt positions separately by head, and compresses
-prompt KV before generation [@li2024snapkv]. This is prompt compression, not a
-continually updated heavy-hitter cache. It can reduce decode-state memory and
-reads, but it may not reduce prefill peak cost because the observation is made
-after the prompt has been processed.
+SnapKV compresses the prompt once, before generation. It observes attention
+near the end of the prompt, selects important prompt positions separately by
+head, and compresses prompt KV accordingly [@li2024snapkv]. The selection then
+stays fixed, whereas H2O updates its heavy-hitter set throughout generation.
+SnapKV can reduce decode-state memory and reads, but it may not reduce prefill
+peak cost because the observation is made after the prompt has been processed.
 
 ### Query-aware page selection
 
-Quest keeps the full cache and stores per-channel key extrema for each page.
-For a new query, those summaries provide an upper-bound score used to choose
-the top-$k$ pages to load for attention [@tang2024quest]. Storage remains close
+Quest keeps the full cache and stores, for each page, the minimum and maximum
+of every key channel. For a new query, those summaries provide an upper-bound
+score used to choose the top-$k$ pages to load for attention [@tang2024quest]. Storage remains close
 to full KV plus summaries, while device-memory traffic and attention work can
 fall. This changes the failure from permanent deletion to query-specific
 omission, but it does not guarantee that every relevant page is selected.
 
-Native sparse-attention architectures make token selection part of training.
-They are an important alternative, but they do not belong to the fixed-model
-inference policies above. Retrofitting an eviction or selection rule onto a
-dense-attention checkpoint and training a model to use sparse attention are
-different interventions.
+Native sparse-attention architectures make token selection part of training,
+so they fall outside the fixed-model inference policies above. Retrofitting an
+eviction or selection rule onto a dense-attention checkpoint and training a
+model to use sparse attention are different interventions.
 
 ## Cache state must remain internally consistent
 
-A keep or read policy operates on more than key and value arrays. Each retained
-entry needs its logical position, layer and head identity, numeric format, and
+A keep or read policy operates on key and value arrays together with per-entry
+metadata. Each retained entry needs its logical position, layer and head identity, numeric format, and
 ownership state. Position metadata must remain consistent with the model's
 rotary or other positional encoding. Renumbering retained tokens as if gaps had
-never existed changes attention geometry unless the method explicitly requires
-and validates that transformation.
+never existed changes the relative positions that attention scores depend on,
+unless the method explicitly requires and validates that transformation.
 
 Paged allocation helps when a policy keeps or evicts whole blocks. It does not
 make arbitrary per-token or per-head eviction free. A physical block may contain
@@ -334,7 +337,7 @@ reserve/commit/rollback, cancellation, and prefix-cache identity from
 The policy metadata also consumes memory and bandwidth. H2O-style scores,
 SnapKV per-head indices, and Quest page summaries should be included in peak and
 resident measurements. A policy that stores less KV but launches slow gather
-kernels can lose latency even while capacity improves.
+kernels can have worse latency even while capacity improves.
 
 ## Verify the complete service path
 
@@ -398,11 +401,12 @@ make grammar batching, prefill peaks, and cache selection more demanding.
 
 ## Payoff and boundary
 
-Constrained decoding can make malformed syntax unreachable when grammar,
-tokenizer, and termination agree. It cannot make the values true. Long-context
-policies can bound resident state or reduce attention reads. They cannot make
-discarded evidence available. Production readiness means stating that boundary,
-then measuring the guarantee, task quality, and service result together.
+When grammar, tokenizer, and termination agree, constrained decoding can make
+malformed syntax unreachable; whether the values are correct remains a question
+for semantic validation. Long-context policies can bound resident state or
+reduce attention reads, and evidence they discard is unavailable to later
+queries. A production deployment states these limits and measures the
+guarantee, task quality, and service result together.
 
 ## Further reading
 
