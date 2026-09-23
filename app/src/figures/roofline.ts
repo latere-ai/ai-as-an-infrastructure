@@ -49,6 +49,7 @@ const labels = {
     memory: "memory-bound",
     compute: "compute-bound",
     ridge: "ridge I* = P / B = {v}",
+    ridgeShort: "ridge I* = {v}",
     others: "dashed: {names}, for comparison",
     bound: "T ≥ max(F / P, Q / B)",
     termF: "F / P",
@@ -68,6 +69,7 @@ const labels = {
     memory: "带宽受限",
     compute: "算力受限",
     ridge: "拐点 I* = P / B = {v}",
+    ridgeShort: "拐点 I* = {v}",
     others: "虚线：{names}，用于对照",
     bound: "T ≥ max(F / P, Q / B)",
     termF: "F / P",
@@ -162,7 +164,7 @@ function render(st: State<P>, lang: Lang): string {
   parts.push(el("line", { x1: xr, x2: xr, y1: y(m.hw.peak), y2: top + plotH, stroke: C.ink2, "stroke-width": 1, "stroke-dasharray": "3 3" }));
   obstacles.push(...lineObstacles([[xr, y(m.hw.peak)], [xr, top + plotH]]));
   // The ridge label joins the label placement below, near the foot of the line.
-  const ridgeReq = { x: xr, y: top + plotH - 12, text: tpl(L.ridge, { v: sig(m.ridge, 3) }), size: TYPE.small, sides: ["right" as const, "left" as const], gap: 5, priority: 4, attrs: { class: "fig-t-muted" } };
+  const ridgeReq = { x: xr, y: top + plotH - 12, text: tpl(narrow ? L.ridgeShort : L.ridge, { v: sig(m.ridge, 3) }), size: TYPE.small, sides: ["right" as const, "left" as const], gap: 5, priority: 4, attrs: { class: "fig-t-muted" } };
   // Region names in the upper corners.
   parts.push(text(left + 6, top + 14, L.memory, { "font-size": TYPE.small, class: "fig-t-muted" }));
   obstacles.push(textBox(left + 6, top + 14, L.memory, TYPE.small));
