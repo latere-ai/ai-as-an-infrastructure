@@ -20,6 +20,8 @@ An inference strategy can vary several quantities at once:
 - **Breadth:** the number and diversity of candidate responses.
 - **Depth:** the length of a trajectory (the sequence of generated steps in one
   attempt) or the number of dependent revision steps.
+- **Latent depth:** serial computation inside the model that emits no tokens,
+  such as passing each token through the same block of layers several times.
 - **Evaluation:** tests, proof checks, learned scores, answer aggregation, or
   calls to a judge model that grades the output, applied to candidates and
   partial states.
@@ -254,7 +256,88 @@ only restate the first error. Sequential compute adds value when the loop
 supplies a useful search operation or a feedback channel; transcript length
 alone supplies neither.
 
-## Allocate a budget instead of maximizing it
+Every form of sequential work above carries its intermediate state through
+emitted tokens. A transformer applies a fixed stack of layers to produce each
+token, which bounds the serial computation available per token. A task that
+needs more dependent steps than the stack provides has to write intermediate
+results into the context and read them back at later positions. **Latent
+reasoning**, or reasoning in latent space, adds serial steps without writing
+them out: the model iterates on its hidden states, the vectors its layers pass
+to one another, and emits no token for those steps.
+
+The two main designs differ in where the extra steps go. Continuous
+thought, introduced as Coconut, takes the final layer's hidden state at one
+position and feeds it back as the input embedding of the next position, the
+slot that normally holds the vector for an input token, instead of decoding it
+into a word. Its authors report that one continuous thought can encode several
+alternative next steps, so the model can search breadth-first instead of
+committing early to a single path. On a GPT-2 base model, Coconut beat a
+written chain of thought on ProsQA, a logical-reasoning dataset whose questions
+require search over a graph of relations (97.0% against 77.5%), and trailed it
+on the GSM8K math word problems (34.1% against 42.9%) [@hao2024coconut].
+
+Recurrent depth, the design used in looped transformers, reapplies one block
+of layers several times for each token, and the number of loops can be raised at
+test time. Geiping et al. trained such a model with 3.5 billion parameters on
+800 billion tokens. With more loops it improved on reasoning benchmarks up to a
+computation load equivalent to a 50-billion-parameter model, without
+specialized training data [@geiping2025recurrent]. Zhu et al. pretrained looped
+models of 1.4 and 2.6 billion parameters on 7.7 trillion tokens, report that
+they match models of up to 12 billion parameters across a range of benchmarks,
+and attribute the gain to better manipulation of stored knowledge, not to
+storing more of it [@zhu2025ouro].
+
+Both designs add serial computation without adding output tokens, and their
+costs fall in different places. Continuous thoughts still occupy positions in
+the context, so they add cache entries and attention work, although no token is
+sampled or shown for them. A looped model adds no positions. Each loop is another pass
+through the reused layers, so accelerator time and latency per token grow with
+the loop count while the token count stays fixed. Training is also harder.
+Coconut is trained in stages, each stage replacing one more written step of the
+chain with continuous thoughts, and Zou et al. prove that a curriculum of this
+kind is necessary: without one, a distributional mismatch makes direct training
+fail [@zou2026latentlimits]. They explain the ProsQA and GSM8K split as a
+trade-off in decisional certainty, how firmly a latent step commits to one
+option: low certainty lets a continuous thought keep
+several branches open, which helps search, and it also lets errors accumulate
+in computation that must be exact. Most of these results come from models with
+a few billion parameters or fewer, and how latent methods compare with written
+chains of thought at larger scale is still being measured.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- Fan et al. report that published latent chain-of-thought methods fall behind
+  written chains of thought above 1 billion parameters, with a gap that widens
+  with scale. Their looped method, LOTUS, closes the gap at 3 billion
+  parameters and cuts thought-phase latency by 2.5 to 6.9 times (preprint)
+  [@fan2026lotus].
+- The looped models released with open weights are small: Ouro at 1.4 and 2.6
+  billion parameters [@zhu2025ouro], and Nanbeige4.2-3B, which feeds hidden
+  states back into the same layers after each bottom-to-top pass and was
+  trained on 28 trillion tokens [@nanbeige2026looped]. Both add depth per token;
+  neither replaces the written trace with continuous thoughts.
+- A press report, by TechCrunch citing The Information, states that OpenAI's
+  GPT-6 Astra uses recurrent depth, processing a query several times in a loop
+  [@brandom2026astra]. OpenAI's system card for the model does not describe its
+  architecture. It reports “a substantial decrease in chain-of-thought
+  monitorability compared to previous models” and finds the model more capable
+  of controlling its own chain of thought than GPT-5.6 Sol
+  [@openai2026astra].
+:::
+
+Moving serial work into hidden states changes what the visible trace records.
+When intermediate steps are written as tokens, a monitor or reviewer can read
+them, within the faithfulness limits discussed in @sec-eliciting-reasoning.
+When the steps run in loops or continuous thoughts, any trace the model writes
+is a report produced alongside the computation, and reading it no longer
+inspects the steps themselves. How much a trace reveals depends on three
+quantities that can change independently: the serial computation available
+without emitting tokens, the training pressure applied to the trace, and the
+length of the trace. @sec-oversight-control treats the consequence for
+oversight.
+
+## Allocate the budget by difficulty
 
 A uniform budget wastes work on easy prompts and may still be insufficient for
 hard ones. Snell et al. studied two mechanisms on MATH using PaLM 2 models
@@ -345,6 +428,57 @@ imply equal fleet cost. Report generated and evaluated tokens, model and
 verifier calls, tool executions, peak concurrency, accelerator time, and latency
 percentiles alongside task quality.
 
+Hosted reasoning models complicate token counts in two ways. Providers bill the
+hidden reasoning a model generates as output tokens, even when the response
+shows only a summary of it or nothing at all, and they expose an effort setting
+that changes how much reasoning a request receives. The provider fixes the
+price per token, while tokens per task depend on the effort level, the model,
+and the task, so cost per task has to be measured on the workload, as
+@sec-choosing-model does when comparing candidates. Latent depth does not
+appear in token counts at all. A looped model that runs more iterations per
+token spends more accelerator time and latency for the same number of generated
+tokens, so for such a model each generation term $C_{\mathrm{gen},r}$ has to be
+metered in accelerator time or floating-point operations instead of inferred
+from tokens.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- OpenAI, Anthropic, and Google bill reasoning or thinking tokens as output
+  tokens [@openai2026reasoningguide; @anthropic2026steeringthinking;
+  @google2026geminipricing]. Anthropic bills the full thinking process, not
+  the summary returned in the response. OpenAI's effort values run from `none`
+  to `max`, and it recommends reserving at least 25,000 tokens for reasoning
+  and output when starting with these models; Anthropic's values run from
+  `low` to `max`. Both report the reasoning share of output under
+  `output_tokens_details`.
+- Artificial Analysis measured GPT-6 Astra's cost per task on its Intelligence
+  Index at USD 0.82 at low effort and USD 3.26 at max effort. At max effort
+  Astra matched the index score of Claude Fable 5.1 (run at max with fallback)
+  at about 40% of its cost per task, USD 3.26 against USD 7.63
+  [@artificialanalysis2026astra]. In a later article the same evaluator counted
+  about 119,000 output tokens per task for Claude Opus 5.5 at max effort and
+  about 27,000 for GPT-6 Astra [@artificialanalysis2026opus55].
+:::
+
+The ledger so far assumes that every request runs on the same fixed weights,
+the premise this chapter started from. **Test-time training** relaxes it: the
+model updates some of its weights during the request, using the request's own
+context as training data. TTT-E2E applies this to long context. A transformer
+whose attention reads only a fixed window of recent tokens keeps training by
+next-token prediction on the context it reads, compressing that context into
+its weights; at 3 billion parameters, it scaled with context length the way
+full attention does and ran 2.7 times faster than full attention at 128K tokens
+of context [@tandon2025ttte2e]. The serving cost falls on batching, which assumes that
+every request in a batch shares one set of static weights. With request-owned
+weights, serial execution is correct but slow, and naive batching can corrupt
+one request's state. RW-TTT tags each decode step with its owner, weight
+version, and read or write effect, batches only compatible steps, and reports
+9.31 times the throughput of sequential serving with eight streams on one GPU
+[@yang2026rwttt]. Weight updates that persist across requests, learned from
+deployment experience, are continual learning, which @sec-learning-limits
+treats.
+
 ## Operating an inference policy
 
 A defensible deployment makes the controller observable and testable:
@@ -387,9 +521,12 @@ mechanism. The system may have searched a fixed distribution more thoroughly,
 changed the proposal through revision, imported new information from a tool, or
 benefited from a selector that corrected an earlier error. Conversely, failure
 to find a correct answer in a finite sample does not establish that the model
-assigns it zero probability. Claims that a model “learned to reason at test
-time” should be replaced by measurements of the proposal, controller,
-evaluator, budget, and returned-answer quality. Whether empirical scaling curves
+assigns it zero probability. When the weights stay fixed, a claim that a model
+“learned to reason at test time” names no mechanism and should be replaced by
+measurements of the proposal, controller, evaluator, budget, and
+returned-answer quality. Under test-time training the weights do change during
+the request, and the claim then also needs the update rule, the data the update
+used, and its serving cost. Whether empirical scaling curves
 continue beyond the measured range remains an experimental question for each
 combination of those components.
 :::
