@@ -1,25 +1,32 @@
 # RLHF and Reward Modeling {#sec-rlhf}
 
-Preference data does not update a language model by itself. Reinforcement
-learning from human feedback (RLHF) adds two learned systems: a reward model
-that estimates which responses the labeling procedure would prefer, and a
-policy that is updated to receive higher estimated reward. The first compresses
-comparisons into a scalar score. The second searches for responses that score
+Reinforcement learning from human feedback (RLHF) trains a language model on
+preference data, the recorded comparisons between candidate responses. It adds
+two learned systems: a reward model that estimates which responses the labeling
+procedure would prefer, and a policy that is updated to receive higher estimated
+reward. The policy is the language model being trained, described in
+reinforcement-learning terms: given a prompt, it assigns a probability to every
+possible response, and each response it generates is a sample from that
+distribution. The reward model compresses comparisons into a scalar score.
+Training then shifts the policy's probabilities toward responses that score
 well.
 
 The familiar recipe is to train a reward model on human comparisons, then
-optimize a *policy* (the model being trained) against that reward with
-@gls-ppo. Some constitutional and @gls-rlaif variants change who produces some of
-the comparisons, not what the reward model mathematically represents. In the
-classic recipe, a learned reward needs a KL constraint because the score is a
-proxy learned on a limited response distribution. Neither the constraint nor
-PPO makes that proxy correct.
+optimize the policy against that reward with
+@gls-ppo, a reinforcement-learning algorithm described later in this chapter.
+Some constitutional and @gls-rlaif variants have a model produce some of the
+comparisons; the reward model's mathematical definition is unchanged. In the
+classic recipe, a learned reward needs a KL constraint, a penalty on how far the
+policy's output distribution moves from the model it started from, because the
+score is a proxy learned on a limited response distribution. Neither the
+constraint nor PPO makes that proxy correct.
 
 This chapter keeps three objects separate: the preference record is a
 measurement, the reward model is an estimator fitted to those measurements,
-and the policy objective decides how aggressively to use the estimate.
+and the policy objective sets how aggressively the estimate is used.
 @sec-behavior-specs covered the first object. This chapter starts with the
-second and follows it through an online policy update.
+second and follows it through the online policy update, in which the policy is
+trained on responses it samples as training proceeds (on-policy data).
 
 ## RLHF learns a judge, then trains a policy
 
@@ -36,14 +43,16 @@ The classic assistant-training pipeline has three stages:
 2. **Reward modeling.** Labelers compare responses sampled for the same prompt.
    A reward model learns to predict those comparisons.
 3. **Policy optimization.** The current policy samples new responses. The
-   frozen reward model scores them, a frozen reference measures policy drift,
-   and a policy-gradient optimizer updates the policy.
+   frozen reward model scores them, a frozen reference (a fixed copy of the SFT
+   model) measures how far the policy has drifted, and a policy-gradient
+   optimizer updates the policy so that high-scoring responses become more
+   probable.
 
 Only the third stage is reinforcement learning. The reward-model stage is
-supervised learning on comparison labels. Keeping the stages distinct matters
-because they fail differently: the labels may express the wrong criterion, the
-reward model may generalize poorly, or the policy may exploit an error in an
-otherwise useful reward model.
+supervised learning on comparison labels. The stages also fail in different
+ways: the labels may express the wrong criterion, the reward model may
+generalize poorly, or the policy may exploit an error in an otherwise useful
+reward model.
 
 ## Train a scorer from comparisons
 
@@ -56,8 +65,9 @@ $$
 where $x_i$ is prompt $i$; $y_i^+$ is the response preferred under the
 annotation procedure; $y_i^-$ is the other response; and $N$ is the number of
 recorded comparisons. A reward model $r_\phi(x,y)$ with parameters $\phi$
-assigns one scalar to a prompt-response pair. Under the Bradley-Terry model
-[@bradley1952rank], define
+assigns one scalar to a prompt-response pair. The Bradley-Terry model
+[@bradley1952rank] converts the difference between two scores into the
+probability that one item is preferred. Under that model, define
 
 $$
 \Delta_i
@@ -79,9 +89,9 @@ $y_i^+$ to $y_i^-$. The model is never told that either response deserves an
 absolute reward such as 7. It is asked to make the observed winner more
 probable than the loser.
 
-A hard winner discards uncertainty. If the same pair receives $m_i$ valid votes
-and $n_i^+$ of them prefer $y_i^+$, a soft target
-$q_i=n_i^+/m_i$ can retain the vote split:
+A hard label, which records only the winner, discards uncertainty. If the same
+pair receives $m_i$ valid votes and $n_i^+$ of them prefer $y_i^+$, a soft
+target $q_i=n_i^+/m_i$ can retain the vote split:
 
 $$
 \mathcal{L}_i
@@ -100,18 +110,22 @@ four and nine responses, then derived every ordered pair implied by the ranking
 $K(K-1)/2$ pairwise constraints, but not that many independent observations:
 the pairs share the same prompt, candidates, and labeler. Ouyang et al. grouped
 all pairs from one ranking into one training batch because treating them as
-independent updates caused rapid overfitting. Rankings amortize annotation
-effort; they do not manufacture independent evidence.
+independent updates caused rapid overfitting. Rankings reduce the annotation
+effort per pair, and the pairs from one ranking still count as one correlated
+group of observations.
 
 A reward-model validation report should include held-out log loss, pairwise
-accuracy, and a calibration curve. Accuracy alone treats a probability of
-$0.51$ like $0.99$ when both select the same winner. Break the report down by
-prompt source, task, response length, candidate policy, safety category, and
-annotator group. RewardBench illustrates the need for structured slices by
-testing reward models on chat, reasoning, and safety comparisons whose winners
-sometimes differ for small but verifiable reasons [@lambert2024rewardbench].
+accuracy, and a calibration curve. Held-out log loss is the loss above computed
+on comparisons excluded from training; a calibration curve compares predicted
+preference probabilities with observed win rates. Accuracy alone treats a
+probability of $0.51$ like $0.99$ when both select the same winner. Break the
+report down by prompt source, task, response length, candidate policy, safety
+category, and annotator group. RewardBench illustrates the need for structured
+slices by testing reward models on chat, reasoning, and safety comparisons whose
+winners sometimes differ for small but verifiable reasons
+[@lambert2024rewardbench].
 
-## Pairwise training fixes differences, not absolute quality
+## Pairwise training determines only score differences
 
 The loss depends on a score difference. For any prompt-only offset $c(x)$,
 
@@ -137,19 +151,21 @@ shifted the reward-model bias so labeler demonstrations had mean reward zero
 [@ouyang2022training]. Centering in this way changes no score difference and no
 pairwise probability. Rescaling is different. Multiplying every reward by a
 positive constant preserves the ranking but changes the fitted probabilities
-and the reward's strength relative to the KL penalty. For reproducibility,
-reward scale and $\beta$ must be recorded together.
+and the reward's strength relative to the KL penalty, whose coefficient $\beta$
+appears in the policy objective below. For reproducibility, reward scale and
+$\beta$ must be recorded together.
 
 The scalar itself is also an assumption. Bradley-Terry represents the compared
 responses with one latent ordering. Cyclic preferences, context-dependent
 criteria, and stable differences among annotators may not fit that ordering.
-Pooling them can still yield a useful predictor, but it does not turn plural
-judgments into one objective truth.
+Pooling them can still yield a useful predictor, whose single score is an
+average over those plural judgments.
 
 ## The policy objective has two terms
 
 Once the reward model is frozen, the policy generates responses and receives
-their learned scores. A common population objective is
+their learned scores. A common objective, averaged over prompts and the
+responses the policy samples for them, is
 
 $$
 J(\theta)
@@ -183,12 +199,14 @@ $$
 
 In this sum, $T$ is the response length; $y_t$ is token $t$; and $y_{<t}$ is
 the preceding response prefix. Implementations use these sampled token
-log-ratios as reward-shaping terms. A sampled log-ratio is not itself the KL
-divergence, and an individual contribution can be negative. The KL is an
-expectation over tokens sampled from the policy.
+log-ratios as reward-shaping terms, per-token adjustments to the reward the
+policy receives. A sampled log-ratio is not itself the KL divergence, and an
+individual contribution can be negative. The KL is an expectation over tokens
+sampled from the policy.
 
-The penalty is a regularizer, not a certificate. A small measured KL does not
-show that the reward is correct, and a large $\beta$ can prevent useful changes.
+The penalty is a regularizer: it discourages large moves away from the
+reference. A small measured KL does not show that the reward is correct, and a
+large $\beta$ can prevent useful changes.
 Some systems keep $\beta$ fixed; others adjust it to track a target KL. Either
 way, the achieved KL, not only the configured coefficient, belongs in the run
 record.
@@ -197,12 +215,18 @@ record.
 
 PPO is one optimizer for the objective above [@schulman2017proximal]. It
 introduces a third policy notation that is easy to confuse with the reference.
-Here the rollout policy $\pi_{\mathrm{old}}$ is a snapshot that generated the current
-batch. The reference $\pi_{\mathrm{ref}}$ is the SFT anchor used across many
-batches. They usually are not the same model.
+Here the rollout policy $\pi_{\mathrm{old}}$ is a snapshot of the policy that
+sampled the current batch of responses, the rollout batch. The reference
+$\pi_{\mathrm{ref}}$ is the SFT anchor used across many batches. They usually
+are not the same model.
 
+PPO describes generation in reinforcement-learning terms: each token is an
+action, taken in a state formed by the prompt and the tokens generated so far.
 Here $a_t=y_t$ is the sampled token and $s_t=(x,y_{<t})$ is its
-prompt-and-prefix state. PPO forms the importance ratio
+prompt-and-prefix state. Because PPO takes several gradient steps on one
+rollout batch, it divides the probability the updated policy gives each sampled
+token by the probability the snapshot gave it. That quotient is the importance
+ratio
 
 $$
 \rho_t(\theta)
@@ -210,7 +234,8 @@ $$
 {\pi_{\mathrm{old}}(a_t\mid s_t)}
 $$
 
-and maximizes the clipped surrogate
+PPO then maximizes the clipped surrogate, a substitute objective computed from
+the stored batch:
 
 $$
 L_{\mathrm{clip}}(\theta)
@@ -223,13 +248,14 @@ L_{\mathrm{clip}}(\theta)
 \right].
 $$
 
-Here $a_t$ is the sampled token; $s_t$ is its prompt-and-prefix state;
-$\rho_t$ compares the updated policy with the rollout snapshot;
+Here $\rho_t$ compares the updated policy with the rollout snapshot;
 $\widehat{A}_t$ is an estimated advantage; $\epsilon>0$ is the clipping width;
 and $\operatorname{clip}(z,l,u)$ truncates $z$ to the interval $[l,u]$. The
-advantage compares the shaped return from a partial response with a critic's
-prefix-conditioned baseline. This reduces gradient variance. It does not reveal
-which token was causally “good.”
+advantage estimates how much better a sampled token turned out than expected. It
+compares the shaped return, the reward (including the KL shaping terms) that the
+response collects from that token onward, with a baseline predicted by a critic,
+a learned predictor of the expected return from the prefix alone. The comparison
+reduces gradient variance without identifying which token caused the outcome.
 
 The two controls solve different problems:
 
@@ -237,8 +263,9 @@ The two controls solve different problems:
 - PPO clipping limits the incentive to change sampled likelihood ratios far
   beyond the clipping interval while reusing one rollout batch.
 
-Clipping does not impose a hard trust region or guarantee that the final policy
-stays within a chosen distance [@wang2019truly]. Learning rate, advantage
+Clipping does not impose a hard trust region, meaning a guaranteed bound on how
+far one update can move the policy, and does not guarantee that the final
+policy stays within a chosen distance [@wang2019truly]. Learning rate, advantage
 normalization, value estimation, batching, and numerical stability still
 matter.
 
@@ -256,8 +283,8 @@ matter.
 
 ## Four roles participate in the loop
 
-Classic PPO-based RLHF has four parameter roles. They are not necessarily four
-same-sized models loaded as full replicas on every accelerator.
+Classic PPO-based RLHF has four parameter roles. Each role is a logical function
+in the loop, and the last column lists the ways implementations realize it.
 
 | Role | Updated during PPO? | Job | Implementation choices |
 |---|---:|---|---|
@@ -269,9 +296,9 @@ same-sized models loaded as full replicas on every accelerator.
 The rollout snapshot $\pi_{\mathrm{old}}$ is another logical policy state, but
 stored rollout log-probabilities can represent it during optimization. InstructGPT
 used a 6B reward model and a 6B value model even when training a 175B policy
-[@ouyang2022training]. That concrete design is why “four roles” should not be
-translated into “four copies of the policy.” Sharing, sharding, adapters,
-offloading, and recomputation change peak memory and throughput.
+[@ouyang2022training]. That design shows that “four roles” does not mean
+“four copies of the policy.” Sharing, sharding, adapters, offloading, and
+recomputation change peak memory and throughput.
 
 @fig-rlhf-pipeline shows the data flow. Dashed boxes stay frozen during a PPO
 update; the policy and critic receive gradients.
@@ -334,7 +361,7 @@ instructions and made the SFT, reward-model, and PPO sequence widely known. Its
 held-out API prompt distribution [@ouyang2022training]. That result demonstrates
 the value of post-training on the measured distribution. It does not show that
 the smaller model had greater general capability. The same paper reported
-regressions on some public NLP tasks and simple mistakes outside the headline
+regressions on some public NLP tasks and simple mistakes outside the main
 preference comparison.
 
 Constitutional AI changed the source of part of the feedback. In its harmlessness
@@ -345,47 +372,48 @@ stage, not human normative choices or evaluation. People still chose the
 principles, and the setup retained human feedback for helpfulness. RLAIF names
 that substitution of AI-produced feedback for some human-produced feedback.
 
-PPO is not part of the definition of human feedback. RLOO and GRPO are
+PPO is one of several optimizers used with human feedback. RLOO and GRPO are
 critic-free policy-gradient alternatives, but they construct baselines
 differently: RLOO uses the mean return of the *other* samples, while GRPO
 standardizes rewards within a same-prompt group [@ahmadian2024back;
 @shao2024deepseekmath]. DAPO modifies the group-relative family for verifiable
 reasoning and can remove the explicit reference term in that setting
-[@yu2025dapo]. These methods are prominent in disclosed reasoning work, not a
-basis for claiming that one optimizer now governs every post-training stack.
-@sec-training-to-reason covers them in their main application. The offline
-alternative, which removes the explicit reward model and online RL loop, begins
-in @sec-dpo-variants.
+[@yu2025dapo]. These methods are prominent in disclosed reasoning work; that
+prominence does not establish that any one optimizer is used in every
+post-training stack. @sec-training-to-reason covers them in their main
+application. The offline alternative, which removes the explicit reward model
+and online RL loop, begins in @sec-dpo-variants.
 
 ## Optimization tests the proxy outside its training distribution
 
 A reward model is evaluated on held-out comparisons sampled from some candidate
-distribution. Policy optimization changes that distribution. It therefore asks
-the reward model to score responses selected precisely because they receive
-unusually high predicted reward. This is a harder test than ordinary validation.
+distribution. Policy optimization changes that distribution. The reward model
+then scores responses that were selected because they receive unusually high
+predicted reward, which is a harder test than ordinary validation.
 
-The failure has direct human evidence. In summarization experiments, Stiennon et
-al. trained policies at several optimization strengths. Under light
-optimization, both learned reward and labeler preference improved. With stronger
-optimization, predicted reward continued to improve while labeler preference
-fell, eventually becoming anti-correlated with the proxy in that experiment
-[@stiennon2020summarize].
+The failure has been observed directly in human evaluation. In summarization
+experiments, Stiennon et al. trained policies at several optimization strengths.
+Under light optimization, both learned reward and labeler preference improved.
+With stronger optimization, predicted reward continued to improve while labeler
+preference fell, eventually becoming anti-correlated with the proxy in that
+experiment [@stiennon2020summarize].
 
 Gao et al. studied the curve more systematically with a controlled substitute
 for expensive repeated human evaluation. A fixed gold reward model stood in for
 human judgment and generated labels used to train a separate proxy reward
 model. Optimizing the proxy eventually reduced the independent gold-model score,
-for both RL and best-of-$n$ selection, and the curve changed with model size,
-data size, optimizer, and KL penalty [@gao2022scaling]. This demonstrates proxy
+for both RL and best-of-$n$ selection (sampling $n$ responses and keeping the
+one the proxy scores highest), and the curve changed with model size, data
+size, optimizer, and KL penalty [@gao2022scaling]. This demonstrates proxy
 over-optimization in a synthetic gold-model setup. It does not measure a
 universal curve of true human quality.
 
 ![A schematic proxy-over-optimization curve. The optimized proxy score continues to rise as the policy shifts from its reference, while an independent gold-model score can peak and then fall. The gold score represents Gao et al.'s controlled model-based stand-in for human judgment, not an absolute measure of true quality.](/figures/rlhf-reward-modeling-1.svg){#fig-rlhf-reward-modeling-1}
 
-The small program below makes the distinction explicit. Its quadratic gold
-curve is a toy illustration, not a reproduction of Gao et al.'s fitted
-coefficients. Change `curvature` to see why there is no universal stopping
-point.
+The small program below plots both curves. Its quadratic gold curve is a
+schematic and does not reproduce Gao et al.'s fitted coefficients. Changing
+`curvature` moves the peak of the gold curve, which shows why there is no
+universal stopping point.
 
 :::: {.runnable}
 ```python
@@ -424,7 +452,7 @@ misspecified score.
 
 ## What the controls can and cannot do
 
-Each control addresses a different boundary. None replaces an evaluation that
+Each control addresses a different failure. None replaces an evaluation that
 is independent of the optimized reward.
 
 | Control | What it can address | What it does not establish |
@@ -438,10 +466,11 @@ is independent of the optimized reward.
 | Diverse reward-model ensembles | Some model-specific errors and uncertainty | Shared blind spots or contested value choices |
 | Pre-training-data mixing | Regressions on capabilities represented by that data | Better preference alignment by itself |
 
-Ensembles are a partial control, not a proof. Coste et al. found that
-conservative objectives over reward-model ensembles reduced over-optimization
-in a synthetic gold-reward setup, with particularly strong results for
-best-of-$n$ selection [@coste2023ensembles]. Shared training data and shared
+A reward-model ensemble combines the scores of several reward models, and it
+controls only part of the problem. Coste et al. found that conservative
+objectives over reward-model ensembles reduced over-optimization in a synthetic
+gold-reward setup, with particularly strong results for best-of-$n$ selection
+[@coste2023ensembles]. Shared training data and shared
 rubrics can still produce shared errors.
 
 The “alignment tax” is likewise an empirical regression, not a universal law
@@ -450,29 +479,30 @@ on specific public NLP datasets. Mixing pre-training gradients into PPO greatly
 reduced those regressions without reducing labeler preference, although some
 gaps remained. Increasing the KL coefficient alone did not recover the same
 tasks and reduced validation reward [@ouyang2022training]. Over-refusal is a
-different failure: it is a miscalibrated safety boundary, not another name for
-any capability regression.
+different failure: a miscalibrated safety boundary under which the model
+declines requests it should answer.
 
 Which post-training method produces that regression is itself measurable.
 Shenfeld et al. fine-tuned the same base models on the same new tasks with
-supervised fine-tuning and with on-policy RL, matched the new-task score, then
-measured what had been lost on prior tasks. The RL runs retained more. Their
-explanation is a single quantity: forgetting tracked the KL divergence between
-the fine-tuned and the base policy, measured on the new task, rather than the
-number of steps, the learning rate, or the size of the weight change. Supervised
-fine-tuning has no term that keeps the policy near the base, so it can reach the
-new task from arbitrarily far away. On-policy RL samples from the current policy
-and reweights what that policy already produces, which biases it toward the
-KL-nearest solution that satisfies the reward. The authors name the bias RL's
-Razor and report it for language models and for robotic control
-[@shenfeld2025rlrazor].
+supervised fine-tuning and with on-policy RL, which trains on responses sampled
+from the current policy. They matched the new-task score, then measured what had
+been lost on prior tasks. The RL runs retained more. In their explanation,
+forgetting tracked the KL divergence between the fine-tuned and the base policy,
+measured on the new task, rather than the number of steps, the learning rate, or
+the size of the weight change. Supervised fine-tuning has no term that keeps the
+policy near the base, so the solution it converges to for the new task can lie
+arbitrarily far from the base policy. On-policy RL reweights what the current
+policy already produces, which biases it toward the KL-nearest solution that
+satisfies the reward. The authors name the bias RL's Razor and report it for
+language models and for robotic control [@shenfeld2025rlrazor].
 
-That gives the reference-KL row above a second reading. An explicit $\beta$
-penalizes drift on purpose, while on-policy sampling limits drift as a side
-effect of where the gradients come from. A run that reports its achieved KL is
-therefore reporting a predictor of retention, not only a leash on the optimizer.
-The finding is a correlation established over particular task pairs, so it
-suggests which recipe to try first and does not replace the retention suite.
+This result gives the reference-KL row in the table above a second role. An
+explicit $\beta$ penalizes drift on purpose, while on-policy sampling limits
+drift as a side effect of where the gradients come from. The achieved KL that a
+run reports therefore measures how far the optimizer moved the policy and also
+predicts how much prior-task performance the model retains. The finding is a
+correlation established over particular task pairs, so it suggests which recipe
+to try first and does not replace evaluation on the prior tasks.
 
 ::: {.callout-important}
 ## What's contested

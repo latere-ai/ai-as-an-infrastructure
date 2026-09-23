@@ -618,7 +618,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/adaptation/03-rlhf-reward-modeling.qmd",
-      ["train a reward model on human", "comparisons", "optimize a *policy* (the model being trained) against that reward with @gls-ppo", "constitutional and @gls-rlaif variants", "learned reward needs a KL constraint"],
+      ["train a reward model on human", "comparisons", "optimize the policy against that reward with @gls-ppo", "constitutional and @gls-rlaif variants", "learned reward needs a KL constraint"],
     ],
     [
       "zh/adaptation/03-rlhf-reward-modeling.qmd",

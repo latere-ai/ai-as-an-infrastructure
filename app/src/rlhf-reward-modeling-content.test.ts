@@ -15,7 +15,7 @@ test("RLHF chapter separates the learned judge from the policy update", () => {
   const required = [
     "RLHF learns a judge, then trains a policy",
     "Train a scorer from comparisons",
-    "Pairwise training fixes differences, not absolute quality",
+    "Pairwise training determines only score differences",
     "The policy objective has two terms",
     "KL and PPO clipping constrain different moves",
     "Four roles participate in the loop",

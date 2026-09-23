@@ -82,7 +82,7 @@ test("reward-model validation includes calibration and structured slices", () =>
 });
 
 test("pairwise training identifies differences rather than absolute quality", () => {
-  expect(zh).toContain("## 成对训练确定的是分数差，而非绝对质量");
+  expect(zh).toContain("## 成对训练只确定分数差");
   expect(zh).toContain(String.raw`r'_\phi(x,y)=r_\phi(x,y)+c(x)`);
   expect(zh).toContain("原始奖励值没有自然的零点，也不应跨提示比较");
   expect(zh).toContain(String.raw`\Delta=\log[p/(1-p)]`);
@@ -184,7 +184,7 @@ test("the history keeps evidence bounded to measured distributions", () => {
 
 test("RLAIF and policy-gradient alternatives retain their actual scope", () => {
   expect(zh).toContain("从无害性阶段移除的是人工无害性标签，而不是人的规范选择或评测");
-  expect(zh).toContain("使用人类反馈，并不意味着一定要用 PPO");
+  expect(zh).toContain("PPO 只是配合人类反馈使用的几种优化器之一");
   expect(zh).toContain("RLOO 使用其他样本的平均回报");
   expect(zh).toContain("GRPO 则在同一提示的样本组内对奖励做标准化");
   expect(zh).toContain("不能据此声称某一种优化器适用于所有后训练技术栈");
