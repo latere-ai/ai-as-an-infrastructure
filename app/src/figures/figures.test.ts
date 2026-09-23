@@ -8,6 +8,7 @@ import { expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { FIGURES } from "./index.ts";
+import { LOADERS } from "./loaders.ts";
 import { defaults, resolve } from "./lib/params.ts";
 import { STATIC_WIDTHS, renderStatic, openingTime } from "./static.ts";
 import { parseFigureBlock } from "../pipeline/figures.ts";
@@ -56,7 +57,8 @@ test("en and zh embed the same figures with the same parameters on each page", (
   }
 });
 
-test("every module is registered under its file name and labels both languages", () => {
+test("every module is registered under its file name and labels both languages", async () => {
+  for (const [key, load] of Object.entries(LOADERS)) expect((await load()).default.name, `loaders.ts key ${key}`).toBe(key);
   for (const [name, fig] of FIGURES) {
     expect(fig.name).toBe(name);
     expect(existsSync(join(import.meta.dir, `${name}.ts`)), `${name}.ts`).toBe(true);

@@ -24,19 +24,21 @@ const repoRoot = new URL("../../", import.meta.url).pathname;
 const outRoot = join(repoRoot, "_book");
 const css = readFileSync(new URL("./theme.css", import.meta.url), "utf8");
 
-// Build the client hydration bundle once (shared by every page).
+// Build the client hydration bundle once (shared by every page). Code
+// splitting puts each figure module in its own chunk, loaded on demand by the
+// pages that embed it. Every file is named by its content hash, so a deploy
+// never serves a stale bundle. The entry must be loaded by its plain file name
+// (no ?v= query): chunks import it back as "./reader-<hash>.js", and a second
+// URL for the same file would evaluate the app twice and hydrate the page twice.
 const built = await Bun.build({
   entrypoints: [new URL("./hydrate.tsx", import.meta.url).pathname],
-  target: "browser", minify: true,
+  target: "browser", minify: true, splitting: true,
+  naming: { entry: "reader-[hash].[ext]", chunk: "chunk-[hash].[ext]" },
   define: { "process.env.NODE_ENV": '"production"' },
 });
 if (!built.success) { console.error(built.logs); process.exit(1); }
-const clientJs = await built.outputs[0].text();
-// Content hash for cache-busting. reader.js keeps a stable filename (so nginx
-// serves it), but the <script src> carries ?v=<hash> so a returning reader's
-// browser fetches the new bundle instead of a stale cached one on every deploy.
-const clientHash = Bun.hash(clientJs).toString(36).slice(0, 10);
-
+const clientOutputs = await Promise.all(built.outputs.map(async (o) => ({ name: o.path.replace(/^\.\//, ""), kind: o.kind, text: await o.text() })));
+const clientEntry = clientOutputs.find((o) => o.kind === "entry-point")!.name;
 
 const graphviz = await loadGraphviz();
 const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
@@ -71,7 +73,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
   const figSrc = join(repoRoot, lang, "figures");
   if (existsSync(figSrc)) cpSync(figSrc, join(langOut, "figures"), { recursive: true });
 
-  writeFileSync(join(langOut, "reader.js"), clientJs);
+  for (const o of clientOutputs) writeFileSync(join(langOut, o.name), o.text);
 
   const searchDocs: ReturnType<typeof buildSearchDocs> = [];
   // book order already ends with references.qmd, so cited[] is complete by then.
@@ -79,7 +81,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const data = compileChapter(book, ch, ctx);
     const bodyHtml = renderToString(createElement(Reader, { chapter: data }));
     const depth = ch.href.split("/").length - 1;
-    const clientHref = "../".repeat(depth) + "reader.js?v=" + clientHash;
+    const clientHref = "../".repeat(depth) + clientEntry;
     // English-only share card (same image + text for en/zh at this path).
     if (lang === "en") enShare[ch.href] = { title: data.title, description: data.description };
     const en = enShare[ch.href] ?? { title: data.title, description: data.description };

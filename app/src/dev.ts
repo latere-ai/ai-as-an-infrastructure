@@ -36,18 +36,25 @@ const ctxFor = (lang: Lang) => ({
 });
 
 
+// The client entry plus its code-split chunks (one per figure module), kept in
+// memory. Chunks are imported relative to /client.js, so they are served from
+// the root as /chunk-<hash>.js.
+const clientChunks = new Map<string, string>();
 async function buildClient(): Promise<string> {
   const out = await Bun.build({
     entrypoints: [new URL("./hydrate.tsx", import.meta.url).pathname],
     target: "browser",
     minify: false,
+    splitting: true,
+    naming: { entry: "client.[ext]", chunk: "chunk-[hash].[ext]" },
     define: { "process.env.NODE_ENV": '"production"' },
   });
   if (!out.success) {
     console.error(out.logs);
     throw new Error("client build failed");
   }
-  return await out.outputs[0].text();
+  for (const o of out.outputs) if (o.kind === "chunk") clientChunks.set(o.path.replace(/^\.\//, ""), await o.text());
+  return await out.outputs.find((o) => o.kind === "entry-point")!.text();
 }
 
 let clientJs = await buildClient();
@@ -82,6 +89,10 @@ Bun.serve({
       case "client":
         clientJs = await buildClient(); // rebuild each load in dev
         return new Response(clientJs, { headers: { "content-type": "text/javascript" } });
+      case "chunk": {
+        const js = clientChunks.get(route.file);
+        return js != null ? new Response(js, { headers: { "content-type": "text/javascript" } }) : new Response("not found", { status: 404 });
+      }
       case "figure": {
         const f = Bun.file(join(repoRoot, route.lang, "figures", route.file));
         return (await f.exists()) ? new Response(f) : new Response("not found", { status: 404 });

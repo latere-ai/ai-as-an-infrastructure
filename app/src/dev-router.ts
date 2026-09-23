@@ -7,6 +7,7 @@ import type { Lang } from "./types.ts";
 
 export type DevRoute =
   | { kind: "client" } // the hydration bundle (/client.js)
+  | { kind: "chunk"; file: string } // a code-split chunk of it (/chunk-<hash>.js)
   | { kind: "figure"; lang: Lang; file: string } // a figure under <lang>/figures/
   | { kind: "static"; file: string } // a root asset from app/static/ (e.g. favicon.svg)
   | { kind: "search"; lang: Lang } // the per-language search index (/{lang}/search.json)
@@ -20,6 +21,8 @@ const STATIC_ROOT_ASSETS = new Set(["favicon.svg"]);
 
 export function resolveDevRoute(pathname: string): DevRoute {
   if (pathname === "/client.js") return { kind: "client" };
+  const chunk = pathname.match(/^\/(chunk-[\w-]+\.js)$/);
+  if (chunk) return { kind: "chunk", file: chunk[1] };
 
   const asset = pathname.slice(1);
   if (STATIC_ROOT_ASSETS.has(asset)) return { kind: "static", file: asset };

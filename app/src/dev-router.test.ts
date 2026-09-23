@@ -8,6 +8,7 @@ import { resolveDevRoute } from "./dev-router.ts";
 // the same way the static build lays out _book/.
 test("resolveDevRoute maps language, chapter, figure, and apex routes", () => {
   expect(resolveDevRoute("/client.js")).toEqual({ kind: "client" });
+  expect(resolveDevRoute("/chunk-tec4z227.js")).toEqual({ kind: "chunk", file: "chunk-tec4z227.js" });
 
   // Apex and unknown paths fall back to the English home.
   expect(resolveDevRoute("/")).toEqual({ kind: "redirect", to: "/en/" });

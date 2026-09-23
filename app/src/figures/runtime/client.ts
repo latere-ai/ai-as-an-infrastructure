@@ -11,7 +11,7 @@
 // host.__fig exposes { params, t, set, seek, play, pause } for tests,
 // screenshots, and debugging.
 
-import { FIGURES } from "../index.ts";
+import { LOADERS } from "../loaders.ts";
 import type { AnyFigure, Lang } from "../types.ts";
 import { coerce, defaults, type ParamRecord } from "../lib/params.ts";
 import { buildControls } from "./controls.ts";
@@ -32,9 +32,7 @@ declare global {
 
 const reducedMotion = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-function mount(host: HTMLElement) {
-  const fig: AnyFigure | undefined = FIGURES.get(host.dataset.figure ?? "");
-  if (!fig) { host.dataset.figError = "unknown figure"; return; }
+function mount(host: HTMLElement, fig: AnyFigure) {
   const lang: Lang = host.dataset.lang === "zh" ? "zh" : "en";
   let p: ParamRecord = { ...defaults(fig), ...JSON.parse(host.dataset.params || "{}") };
   const tl = fig.timeline;
@@ -136,12 +134,27 @@ function mount(host: HTMLElement) {
   } as FigHandle;
 }
 
+// Load each embedded figure's module once, then mount every host that uses
+// it. Until the module arrives, and if it fails, the static SVG stays visible.
 export function mountFigures() {
-  document.querySelectorAll<HTMLElement>(".fig[data-figure]:not(.fig-ready)").forEach((host) => {
-    try { mount(host); } catch (e) {
-      // Keep the static figure visible; record the failure for diagnosis.
-      host.dataset.figError = String((e as Error).message ?? e);
-      console.error(`figure ${host.dataset.figure}:`, e);
-    }
-  });
+  const hosts = [...document.querySelectorAll<HTMLElement>(".fig[data-figure]:not(.fig-ready):not(.fig-loading)")];
+  for (const host of hosts) {
+    const name = host.dataset.figure ?? "";
+    const load = LOADERS[name];
+    if (!load) { host.dataset.figError = "unknown figure"; continue; }
+    host.classList.add("fig-loading");
+    load().then(({ default: fig }) => {
+      host.classList.remove("fig-loading");
+      if (!host.isConnected) return;
+      try { mount(host, fig); } catch (e) {
+        // Keep the static figure visible; record the failure for diagnosis.
+        host.dataset.figError = String((e as Error).message ?? e);
+        console.error(`figure ${name}:`, e);
+      }
+    }).catch((e: unknown) => {
+      host.classList.remove("fig-loading");
+      host.dataset.figError = String((e as Error)?.message ?? e);
+      console.error(`figure ${name}:`, e);
+    });
+  }
 }
