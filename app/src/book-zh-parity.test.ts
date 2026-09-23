@@ -89,9 +89,7 @@ const knownMathDivergence = [
   "generative/03-speech-and-voice.qmd",
   "frontiers/03-verification-frontier.qmd",
   "ecosystem/05-market-structure.qmd",
-  "practice/05-agents-and-sandboxes.qmd",
   "practice/07-evaluation-and-observability.qmd",
-  "practice/08-wiring-a-2026-stack.qmd",
   "practice/10-reliability-nondeterministic.qmd",
 ];
 
