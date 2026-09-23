@@ -55,3 +55,43 @@ test("every inline [@key] resolves in the merged refs/ bibliography", () => {
   }
   expect(unresolved).toEqual([]);
 });
+
+// A key defined in more than one refs/*.bib file must name one work. The
+// loader keeps the definition from the file that sorts last, so a key reused
+// for a different source silently renders the wrong work in every chapter
+// that cites it (nvidia2025nvfp4 once pointed an inference chapter at a
+// pretraining paper). Copies may differ in URL (arXiv versus proceedings) and
+// in title spelling, but the titles must still name the same work.
+const knownKeyCollisions = new Set(["mcp2026rc"]);
+
+function titleWords(title: string): Set<string> {
+  return new Set(title.replace(/[{}\\]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+}
+
+test("a citation key names the same work in every refs file that defines it", () => {
+  const defs = new Map<string, { file: string; url: string; title: string }[]>();
+  const refsDir = join(repoRoot, "refs");
+  for (const file of readdirSync(refsDir).filter((f) => f.endsWith(".bib") && !f.startsWith("00-")).sort()) {
+    const src = readFileSync(join(refsDir, file), "utf8");
+    for (const m of src.matchAll(/@\w+\{([^,\s]+),([\s\S]*?)\n\}/g)) {
+      const body = m[2];
+      const url = body.match(/\burl\s*=\s*\{([^}]*)\}/)?.[1] ?? body.match(/\bdoi\s*=\s*\{([^}]*)\}/)?.[1] ?? "";
+      const title = body.match(/\btitle\s*=\s*\{([\s\S]*?)\},\s*\n/)?.[1] ?? "";
+      const list = defs.get(m[1]) ?? [];
+      list.push({ file, url, title });
+      defs.set(m[1], list);
+    }
+  }
+  const conflicts: string[] = [];
+  for (const [key, list] of defs) {
+    if (list.length < 2 || knownKeyCollisions.has(key)) continue;
+    if (new Set(list.map((d) => d.url)).size === 1) continue;
+    const [first, ...rest] = list.map((d) => titleWords(d.title));
+    const sameWork = rest.every((words) => {
+      const shared = [...words].filter((w) => first.has(w)).length;
+      return shared / Math.min(words.size, first.size) >= 0.6;
+    });
+    if (!sameWork) conflicts.push(`${key}: ${list.map((d) => d.file).join(", ")}`);
+  }
+  expect(conflicts).toEqual([]);
+});
