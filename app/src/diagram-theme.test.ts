@@ -61,15 +61,25 @@ test("graphviz diagram text uses the UI font so cluster labels are not serif", (
   expect(css).toMatch(/\.rdr-diagram svg text \{[^}]*font-family:\s*var\(--font-ui\)\s*!important/);
 });
 
-test("graphviz diagrams keep their intrinsic width inside horizontal scroll", () => {
-  // Wide DOT figures were made unreadable on narrow screens because the global
-  // responsive SVG rule shrank them before the .rdr-diagram scroller could work.
+test("graphviz diagrams scale with the column instead of keeping their natural width", () => {
+  // `flex: none; max-width: none` showed every SVG at its natural width inside
+  // a horizontal scroller, so 34 diagrams scrolled sideways at 390 px. The SVG
+  // now takes the column width, bounded by the inline max-width (natural size)
+  // and min-width (smallest text at 11 px) the build writes on it.
   const diagramRule = css.match(/\.rdr-diagram \{[^}]*\}/)?.[0] ?? "";
   const graphvizSvgRule = css.match(/\.rdr-diagram svg \{[^}]*\}/)?.[0] ?? "";
   expect(diagramRule).toContain("overflow-x: auto");
-  expect(graphvizSvgRule).toContain("flex: none");
-  expect(graphvizSvgRule).toContain("max-width: none");
-  expect(graphvizSvgRule).not.toContain("max-width: 100%");
+  expect(graphvizSvgRule).toContain("width: 100%");
+  expect(graphvizSvgRule).not.toContain("max-width: none");
+  expect(css).not.toMatch(/\.rdr-diagram svg \{[^}]*flex:\s*none/);
+});
+
+test("graphviz captions take the column width, not the diagram's", () => {
+  // A shrink-to-fit figure wrapped a narrow diagram's caption to two or three
+  // words per line.
+  for (const rule of css.matchAll(/([^{}]*)\{[^}]*width:\s*(?:fit-content|0)\b[^}]*\}/g)) {
+    expect(rule[1]).not.toContain(".rdr-diagram");
+  }
 });
 
 test("graphviz colors come from theme tokens by class, not a list of hex values", () => {

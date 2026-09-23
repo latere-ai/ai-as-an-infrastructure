@@ -2,9 +2,14 @@ import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { CATEGORICAL_HEX, colorRole, themeClasses } from "./diagram-color.ts";
 import { LAYOUT_FONT, prepareDot } from "./diagram-source.ts";
-import { loadGraphviz, renderDot } from "./diagrams.ts";
+import { loadGraphviz, MIN_TEXT_PX, renderDot } from "./diagrams.ts";
 
 const gv = await loadGraphviz();
+const svgsOf = (html: string): string[] => html.match(/<svg[\s\S]*?<\/svg>/g) ?? [];
+const styleOf = (svg: string) => {
+  const m = svg.match(/^<svg[^>]*style="max-width:([\d.]+)px;min-width:([\d.]+)px"/);
+  return m ? { max: Number(m[1]), min: Number(m[2]) } : null;
+};
 
 test("injects the layout font, a transparent background, and a node margin after the graph brace", () => {
   const out = prepareDot("digraph {\n  a -> b;\n}");
@@ -54,7 +59,18 @@ test("Graphviz SVGs expose the figure caption as an accessible name", () => {
     "digraph { A -> B }",
   ].join("\n");
   const html = renderDot(gv, code, new Map(), "chapter.html", "../");
-  expect(html).toContain('<svg role="img" aria-label="Artifact &amp; kernel compatibility."');
+  expect(html).toContain('role="img" aria-label="Artifact &amp; kernel compatibility."');
+});
+
+test("an SVG may scale down only until its smallest text reaches the minimum size", () => {
+  const html = renderDot(gv, "digraph { node [fontsize=9]; a -> b; }", new Map(), "x", "");
+  const svg = svgsOf(html)[0] ?? "";
+  const s = styleOf(svg)!;
+  const width = Number(svg.match(/^<svg[^>]*\swidth="([\d.]+)"/)![1]);
+  expect(s.max).toBe(width);
+  // 9 pt text is 12 px at natural size.
+  expect(s.min).toBeCloseTo(width * (MIN_TEXT_PX / 12), 1);
+  expect(svg).not.toMatch(/^<svg[^>]*\swidth="[\d.]+pt"/);
 });
 
 test("colors map to theme roles by job, for any color", () => {

@@ -3,6 +3,10 @@
 // emitted as <pre class="mermaid"> and rendered client-side,
 // themed from the palette. Both support Pandoc-style //| label: / %%| label: and
 // fig-cap: directives and become numbered <figure>s via the crossref map.
+//
+// A Graphviz figure scales with the reading column. Its SVG is as wide as the
+// column up to its natural size, and no narrower than the width at which its
+// smallest text renders at MIN_TEXT_PX; below that the diagram scrolls.
 
 import { Graphviz } from "@hpcc-js/wasm";
 import type { CrossrefMap } from "./crossref.ts";
@@ -15,6 +19,13 @@ export type GraphvizInstance = Awaited<ReturnType<typeof Graphviz.load>>;
 export async function loadGraphviz(): Promise<GraphvizInstance> {
   return await Graphviz.load();
 }
+
+// Graphviz lays out in points and the SVG maps one point to 4/3 CSS px.
+const PX_PER_PT = 4 / 3;
+// The smallest size diagram text is scaled down to, as for figure modules.
+export const MIN_TEXT_PX = 11;
+// Reading-column width at a 390 px viewport.
+export const PHONE_COLUMN_PX = 312;
 
 // Pull `//| key: value` (dot) or `%%| key: value` (mermaid) directive lines off
 // the top of a diagram body.
@@ -57,17 +68,45 @@ function escapeAttribute(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
+// One compiled layout: the SVG body (preamble dropped, colors classed), its
+// natural width and height in CSS px, and the narrowest width it may be scaled
+// to before its smallest text drops below MIN_TEXT_PX.
+export interface DotLayout { svg: string; width: number; height: number; minWidth: number }
+
+const round = (n: number) => Math.round(n * 100) / 100;
+
+function compile(gv: GraphvizInstance, body: string): DotLayout {
+  let svg = gv.dot(prepareDot(body), "svg");
+  const i = svg.indexOf("<svg"); // drop the <?xml?> + DOCTYPE preamble for inline HTML
+  if (i > 0) svg = svg.slice(i);
+  const widthPt = Number(svg.match(/^<svg[^>]*\swidth="([\d.]+)pt"/)?.[1]);
+  const heightPt = Number(svg.match(/^<svg[^>]*\sheight="([\d.]+)pt"/)?.[1]);
+  const width = round(widthPt * PX_PER_PT);
+  const height = round(heightPt * PX_PER_PT);
+  svg = svg.replace(/^<svg([^>]*)\swidth="[\d.]+pt"\s+height="[\d.]+pt"/, `<svg$1 width="${width}" height="${height}"`);
+  const scale = Number(svg.match(/<g id="graph0"[^>]*transform="scale\(([\d.]+)/)?.[1] ?? 1);
+  const sizes = [...svg.matchAll(/<text\b[^>]*\sfont-size="([\d.]+)"/g)].map((m) => Number(m[1]) * scale * PX_PER_PT);
+  const smallest = sizes.length ? Math.min(...sizes) : Infinity;
+  const minWidth = round(width * Math.min(1, MIN_TEXT_PX / smallest));
+  return { svg: themeClasses(svg), width, height, minWidth };
+}
+
+function svgElement(layout: DotLayout, name: string): string {
+  const attrs = [
+    ` role="img" aria-label="${name}"`,
+    ` style="max-width:${layout.width}px;min-width:${layout.minWidth}px"`,
+  ].join("");
+  return layout.svg.replace("<svg", `<svg${attrs}`);
+}
+
 export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap, currentHref: string, prefix: string): string {
   const { body, label, cap } = extractDirectives(code, "//|");
-  let svg: string;
+  const name = escapeAttribute(cap || label || "Diagram");
+  let inner: string;
   try {
-    svg = gv.dot(prepareDot(body), "svg");
-    const i = svg.indexOf("<svg"); // drop the <?xml?> + DOCTYPE preamble for inline HTML
-    if (i > 0) svg = svg.slice(i);
-    const accessibleName = escapeAttribute(cap || label || "Diagram");
-    svg = themeClasses(svg.replace("<svg", `<svg role="img" aria-label="${accessibleName}"`));
-  } catch (e) { svg = `<pre class="rdr-diagram-error">graphviz error: ${String(e)}</pre>`; }
-  return figureWrap(`<div class="rdr-diagram">${svg}</div>`, label, cap, xref, currentHref, prefix);
+    inner = svgElement(compile(gv, body), name);
+  } catch (e) { inner = `<pre class="rdr-diagram-error">graphviz error: ${String(e)}</pre>`; }
+  return figureWrap(`<div class="rdr-diagram">${inner}</div>`, label, cap, xref, currentHref, prefix);
 }
 
 export function renderMermaid(code: string, xref: CrossrefMap, currentHref: string, prefix: string): string {

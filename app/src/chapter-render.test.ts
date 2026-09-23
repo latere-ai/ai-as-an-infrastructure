@@ -14,7 +14,7 @@ import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { stripCjkSoftBreaks } from "./pipeline/cjk.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { LAYOUT_FONT } from "./pipeline/diagram-source.ts";
-import { loadGraphviz, renderDot } from "./pipeline/diagrams.ts";
+import { loadGraphviz, PHONE_COLUMN_PX, renderDot } from "./pipeline/diagrams.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
 import { renderMarkdown } from "./pipeline/markdown.ts";
 import type { Lang } from "./types.ts";
@@ -206,28 +206,23 @@ function sampleOf(masked: string | null, lang: Lang): string | null {
   return best.length >= (lang === "en" ? 20 : 8) ? best : null;
 }
 
-// Wide Graphviz figures that currently scroll horizontally in the mobile
-// reading column. The list is exact: a figure that newly exceeds the column,
-// and a listed figure that now fits, both fail until the list is updated.
-const MOBILE_COLUMN_PT = 235;
+// Graphviz figures that still scroll horizontally in the phone column: scaled
+// until their smallest text is 11 px, they are wider than the column. The list
+// is exact: a figure that newly exceeds the column, and a listed figure that
+// now fits, both fail until the list is updated.
 const knownWideFigures = [
   "en:fig-agent-architectures-react-loop",
   "en:fig-agent-control-loop",
   "en:fig-agent-rl-loop",
   "en:fig-behavior-specs-supply-chain",
-  "en:fig-ce-pipeline",
   "en:fig-compilers-kernels-lowering",
   "en:fig-compilers-kernels-validation",
   "en:fig-compute-frontier-domain",
   "en:fig-data-curation-pipeline",
-  "en:fig-diffusion-lineage",
   "en:fig-dpo-variants-map",
   "en:fig-dpo-variants-reduction",
-  "en:fig-eliciting-reasoning-structure",
-  "en:fig-embedding-contract",
   "en:fig-embodied-data-loop",
   "en:fig-frameworks-autodiff-contract",
-  "en:fig-frameworks-autodiff-tape",
   "en:fig-harness-state-machine",
   "en:fig-kv-sharing",
   "en:fig-memory-fork-bundle",
@@ -255,7 +250,6 @@ const knownWideFigures = [
   "en:fig-verifiable-rewards-map",
   "en:fig-verification-queue",
   "en:fig-vlm-connectors",
-  "en:fig-voice-cascade-vs-e2e",
   "en:fig-whole-stack-loops",
   "en:fig-whole-stack-pipeline",
   "en:fig-world-model-loop",
@@ -263,17 +257,12 @@ const knownWideFigures = [
   "zh:fig-compilers-kernels-lowering",
   "zh:fig-compute-frontier-domain",
   "zh:fig-data-curation-pipeline",
-  "zh:fig-diffusion-lineage",
   "zh:fig-dpo-variants-map",
   "zh:fig-dpo-variants-reduction",
   "zh:fig-embodied-data-loop",
-  "zh:fig-frameworks-autodiff-contract",
-  "zh:fig-frameworks-autodiff-tape",
   "zh:fig-horizon-thresholds",
-  "zh:fig-memory-fork-bundle",
   "zh:fig-memory-governed-loop",
   "zh:fig-memory-state-boundaries",
-  "zh:fig-memory-unknown-effect",
   "zh:fig-moe-routing",
   "zh:fig-orchestration-checkpoint-commit",
   "zh:fig-orchestration-control-loop",
@@ -281,8 +270,6 @@ const knownWideFigures = [
   "zh:fig-quantization-kernels-flashattention",
   "zh:fig-reference-arch",
   "zh:fig-rlhf-pipeline",
-  "zh:fig-slc-structured-loop",
-  "zh:fig-whole-stack-loops",
   "zh:fig-whole-stack-pipeline",
   "zh:fig-world-model-loop",
 ];
@@ -304,14 +291,14 @@ test("every Graphviz figure parses and fits the mobile reading column", () => {
   for (const page of pages) {
     fenceBodies(page.source, "dot").forEach((body, index) => {
       const label = body.match(/^\s*\/\/\|\s*label:\s*(\S+)/m)?.[1] ?? `${page.href}#${index}`;
-      const svg = renderDot(graphviz, body, new Map(), page.href, "");
-      if (svg.includes("graphviz error")) {
+      const html = renderDot(graphviz, body, new Map(), page.href, "");
+      if (html.includes("graphviz error")) {
         failures.push(`${page.path}: ${label} does not parse`);
         return;
       }
-      const widthPt = Number(svg.match(/<svg[^>]* width="([\d.]+)pt"/)?.[1]);
-      if (!Number.isFinite(widthPt)) failures.push(`${page.path}: ${label} has no width`);
-      else if (widthPt > MOBILE_COLUMN_PT) wide.push(`${page.lang}:${label}`);
+      const minWidths = [...html.matchAll(/<svg[^>]*style="max-width:[\d.]+px;min-width:([\d.]+)px"/g)].map((m) => Number(m[1]));
+      if (!minWidths.length) failures.push(`${page.path}: ${label} has no width bounds`);
+      else if (Math.min(...minWidths) > PHONE_COLUMN_PX) wide.push(`${page.lang}:${label}`);
     });
   }
   expect(failures).toEqual([]);
