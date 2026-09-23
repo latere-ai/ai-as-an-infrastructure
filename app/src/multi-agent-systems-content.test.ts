@@ -134,7 +134,7 @@ test("security contains delegation and treats protocols as transport", () => {
     "fan-out",
     "tenant",
     "prompt injection",
-    "a2a provides interoperability, not trust",
+    "agent2agent protocol (a2a) provides interoperability, not trust",
     "majority is not authorization",
     "point of effect",
   ]) expect(flat).toContain(phrase);

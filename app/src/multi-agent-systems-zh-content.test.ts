@@ -55,7 +55,7 @@ test("Chapter 43 preserves the complete English multi-agent contract", () => {
     "并行执行有一条关键路径",
     "权限必须在每次委派时收紧",
     "恢复也是协调的一部分",
-    "评估机制，而不是标签",
+    "评估协调机制",
     "争议所在",
     "下层约束",
     "一条用于生产的选择规则",
@@ -82,7 +82,7 @@ test("the critical-path equation is split for a narrow reading column", () => {
 test("the opening starts from measurable value and a single-agent baseline", () => {
   for (const phrase of [
     "并行完成工作",
-    "真正不同的能力",
+    "第一个智能体不具备的能力",
     "独立检查",
     "单智能体基线",
     "可衡量的边际价值",
@@ -109,7 +109,7 @@ test("distributed systems contribute bounded agreement and runtime duties", () =
   for (const phrase of [
     "拜占庭将军问题",
     "$N \\ge 3f+1$",
-    "不是关于答案真伪的定理",
+    "一致本身说明不了所达成的答案是否为真",
     "故障参与者可以串通",
     "MapReduce",
     "分解、调度、中间数据、故障处理和归约",
@@ -140,7 +140,7 @@ test("coordination invariants bound authority ownership retries and cancellation
     "经过验证的完成",
     "根据外部影响决定是否重试",
     "不能盲目重试",
-    "真正的取消",
+    "完整的取消",
     "静止状态",
     "工作树能减少文件冲突，但它不是事务，也不是租户边界",
   ]) expect(flat).toContain(phrase);
@@ -206,8 +206,8 @@ test("security narrows delegation and keeps transport outside trust", () => {
     "多数票不是授权",
     "在外部影响发生时",
     "上下文分离有用，但它不等于隔离",
-    "A2A 提供互操作性，不提供信任",
-    "智能体卡是一项能力声明，不是证明",
+    "Agent2Agent 协议（A2A）提供互操作性，不提供信任",
+    "智能体卡是远端智能体对自身能力的陈述",
   ]) expect(flat).toContain(phrase);
 });
 
