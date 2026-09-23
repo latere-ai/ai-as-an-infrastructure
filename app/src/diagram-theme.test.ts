@@ -69,9 +69,11 @@ test("graphviz diagrams scale with the column instead of keeping their natural w
   const diagramRule = css.match(/\.rdr-diagram \{[^}]*\}/)?.[0] ?? "";
   const graphvizSvgRule = css.match(/\.rdr-diagram svg \{[^}]*\}/)?.[0] ?? "";
   expect(diagramRule).toContain("overflow-x: auto");
+  expect(diagramRule).toMatch(/container:\s*rdr-dg\s*\/\s*inline-size/);
   expect(graphvizSvgRule).toContain("width: 100%");
   expect(graphvizSvgRule).not.toContain("max-width: none");
   expect(css).not.toMatch(/\.rdr-diagram svg \{[^}]*flex:\s*none/);
+  expect(css).toMatch(/@container rdr-dg \(max-width: 479px\) \{\s*\.rdr-diagram \.rdr-dg-wide \{ display: none; \}\s*\.rdr-diagram \.rdr-dg-narrow \{ display: block; \}/);
 });
 
 test("graphviz captions take the column width, not the diagram's", () => {

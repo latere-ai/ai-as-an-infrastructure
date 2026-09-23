@@ -206,72 +206,18 @@ function sampleOf(masked: string | null, lang: Lang): string | null {
   return best.length >= (lang === "en" ? 20 : 8) ? best : null;
 }
 
-// Graphviz figures that still scroll horizontally in the phone column: scaled
-// until their smallest text is 11 px, they are wider than the column. The list
-// is exact: a figure that newly exceeds the column, and a listed figure that
-// now fits, both fail until the list is updated.
+// Graphviz figures that still scroll horizontally in the phone column: even
+// their narrowest layout, scaled until its smallest text is 11 px, is wider
+// than the column. The list is exact: a figure that newly exceeds the column,
+// and a listed figure that now fits, both fail until the list is updated.
 const knownWideFigures = [
   "en:fig-agent-architectures-react-loop",
-  "en:fig-agent-control-loop",
-  "en:fig-agent-rl-loop",
-  "en:fig-behavior-specs-supply-chain",
-  "en:fig-compilers-kernels-lowering",
-  "en:fig-compilers-kernels-validation",
-  "en:fig-compute-frontier-domain",
-  "en:fig-data-curation-pipeline",
   "en:fig-dpo-variants-map",
-  "en:fig-dpo-variants-reduction",
-  "en:fig-embodied-data-loop",
-  "en:fig-frameworks-autodiff-contract",
   "en:fig-harness-state-machine",
-  "en:fig-kv-sharing",
-  "en:fig-memory-fork-bundle",
-  "en:fig-memory-governed-loop",
-  "en:fig-memory-state-boundaries",
-  "en:fig-memory-unknown-effect",
-  "en:fig-mid-training-boundary",
-  "en:fig-mm-input-contracts",
-  "en:fig-moe-routing",
-  "en:fig-orchestration-checkpoint-commit",
   "en:fig-orchestration-control-loop",
-  "en:fig-orchestration-data-resume",
-  "en:fig-personalization-memory-loop",
-  "en:fig-powering-critical-path",
-  "en:fig-quantization-kernels-flashattention",
-  "en:fig-reference-arch",
-  "en:fig-rlhf-pipeline",
-  "en:fig-runtime-control-path",
-  "en:fig-safety-tuning-hierarchy",
-  "en:fig-sft-peft-masking",
-  "en:fig-slc-structured-loop",
-  "en:fig-synthetic-data-loop",
-  "en:fig-tooling-protocols",
-  "en:fig-training-wiring",
-  "en:fig-verifiable-rewards-map",
-  "en:fig-verification-queue",
-  "en:fig-vlm-connectors",
-  "en:fig-whole-stack-loops",
   "en:fig-whole-stack-pipeline",
-  "en:fig-world-model-loop",
   "zh:fig-agent-architectures-react-loop",
-  "zh:fig-compilers-kernels-lowering",
-  "zh:fig-compute-frontier-domain",
-  "zh:fig-data-curation-pipeline",
-  "zh:fig-dpo-variants-map",
-  "zh:fig-dpo-variants-reduction",
-  "zh:fig-embodied-data-loop",
-  "zh:fig-horizon-thresholds",
-  "zh:fig-memory-governed-loop",
-  "zh:fig-memory-state-boundaries",
-  "zh:fig-moe-routing",
-  "zh:fig-orchestration-checkpoint-commit",
   "zh:fig-orchestration-control-loop",
-  "zh:fig-orchestration-data-resume",
-  "zh:fig-quantization-kernels-flashattention",
-  "zh:fig-reference-arch",
-  "zh:fig-rlhf-pipeline",
-  "zh:fig-whole-stack-pipeline",
-  "zh:fig-world-model-loop",
 ];
 
 // Hard-wrapped hyphenated compounds already in the sources, as

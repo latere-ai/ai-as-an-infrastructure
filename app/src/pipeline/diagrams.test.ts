@@ -1,8 +1,9 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { CATEGORICAL_HEX, colorRole, themeClasses } from "./diagram-color.ts";
-import { LAYOUT_FONT, prepareDot } from "./diagram-source.ts";
-import { loadGraphviz, MIN_TEXT_PX, renderDot } from "./diagrams.ts";
+import { mirrorVertically, nodeCenters, orderReversed } from "./diagram-geometry.ts";
+import { LAYOUT_FONT, prepareDot, wrapLine } from "./diagram-source.ts";
+import { layoutDot, loadGraphviz, MIN_TEXT_PX, PHONE_COLUMN_PX, renderDot } from "./diagrams.ts";
 
 const gv = await loadGraphviz();
 const svgsOf = (html: string): string[] => html.match(/<svg[\s\S]*?<\/svg>/g) ?? [];
@@ -49,7 +50,8 @@ test("size and ratio are dropped, so text is never scaled below the reader's min
   const out = prepareDot(src);
   expect(out).not.toMatch(/(?<![\w])size\s*=/);
   expect(out).not.toMatch(/\bratio\s*=/);
-  expect(gv.dot(out, "svg")).toMatch(/transform="scale\(1 1\)/);
+  const svg = gv.dot(out, "svg");
+  expect(svg).toMatch(/transform="scale\(1 1\)/);
 });
 
 test("Graphviz SVGs expose the figure caption as an accessible name", () => {
@@ -71,6 +73,43 @@ test("an SVG may scale down only until its smallest text reaches the minimum siz
   // 9 pt text is 12 px at natural size.
   expect(s.min).toBeCloseTo(width * (MIN_TEXT_PX / 12), 1);
   expect(svg).not.toMatch(/^<svg[^>]*\swidth="[\d.]+pt"/);
+});
+
+test("a diagram that fits the phone column ships one layout", () => {
+  const html = renderDot(gv, "digraph { a -> b -> c; }", new Map(), "x", "");
+  expect(svgsOf(html)).toHaveLength(1);
+  expect(html).not.toContain("rdr-dg-narrow");
+});
+
+test("a diagram too wide for the phone column also ships a narrower layout", () => {
+  const nodes = Array.from({ length: 5 }, (_, i) => `n${i} [label="a fairly long label number ${i}"]`).join("; ");
+  const edges = Array.from({ length: 5 }, (_, i) => `r -> n${i}`).join("; ");
+  const html = renderDot(gv, `digraph { ${nodes}; ${edges}; }`, new Map(), "x", "");
+  const svgs = svgsOf(html);
+  expect(svgs).toHaveLength(2);
+  expect(svgs[0]).toContain('class="rdr-dg-wide"');
+  expect(svgs[1]).toContain('class="rdr-dg-narrow"');
+  const [wide, narrow] = svgs.map((svg) => styleOf(svg)!);
+  expect(narrow!.min).toBeLessThanOrEqual(PHONE_COLUMN_PX);
+  expect(narrow!.min).toBeLessThan(wide!.min);
+});
+
+test("narrow layouts skip record labels, whose wrapped form crashes Graphviz", () => {
+  const src = 'digraph { rankdir=TB; Q [label="Hard requirements Q with a long name"]; G [shape=record, label="{confirmed | eligible}|{refuted | ineligible}|{unknown | unresolved}|{another | column}"]; Q -> G; }';
+  expect(prepareDot(src, { wrapEm: 9 })).toContain('label="{confirmed | eligible}|{refuted | ineligible}');
+  expect(() => layoutDot(gv, src)).not.toThrow();
+});
+
+test("wrapped label lines are balanced and never leave a one-character word alone", () => {
+  expect(wrapLine("short", 9)).toEqual(["short"]);
+  expect(wrapLine("change loss shape", 9)).toEqual(["change", "loss shape"]);
+  expect(wrapLine("prompt + preferred + rejected", 9)).toEqual(["prompt +", "preferred +", "rejected"]);
+  for (const line of wrapLine("sample response y store rollout", 5.5)) expect(line.trim().length).toBeGreaterThan(1);
+  // CJK text breaks between glyphs, not inside a Latin word.
+  const zh = wrapLine("学习到的动力学下一状态和奖励", 9);
+  expect(zh.join("")).toBe("学习到的动力学下一状态和奖励");
+  expect(zh.length).toBe(2);
+  expect(wrapLine("预测 KV cache 大小", 4).some((l) => l.includes("KV") && !l.includes("K V"))).toBe(true);
 });
 
 test("colors map to theme roles by job, for any color", () => {
@@ -106,4 +145,25 @@ test("every painted shape and text run gets a theme class", () => {
   }
   expect(out).toContain("dg-f-c4t");
   expect(out).toContain("dg-f-c2");
+});
+
+test("a flipped layout of separate components is mirrored back into reading order", () => {
+  // rankdir=LR stacks separate components bottom to top, so a row that read
+  // Q1 Q2 Q3 left to right came out with Q3 on top.
+  const src = "digraph { node [shape=box]; q1 -> k1; q2 -> k2; q3 -> k3; }";
+  const tb = gv.dot(prepareDot(src), "svg");
+  const lr = gv.dot(prepareDot(src, { flip: true, invertLabels: true }), "svg");
+  expect(orderReversed(tb, lr)).toBe(true);
+  const fixed = nodeCenters(mirrorVertically(lr));
+  expect(fixed.get("q1")!.y).toBeLessThan(fixed.get("q2")!.y);
+  expect(fixed.get("q2")!.y).toBeLessThan(fixed.get("q3")!.y);
+  // Labels move with their boxes.
+  const label = mirrorVertically(lr).match(/<g id="node1" class="node">[\s\S]*?<\/g>/)![0];
+  const y = Number(label.match(/<text[^>]*\sy="(-?[\d.]+)"/)![1]);
+  const box = [...label.matchAll(/-?[\d.]+,(-?[\d.]+)/g)].map((m) => Number(m[1]));
+  expect(y).toBeGreaterThan(Math.min(...box));
+  expect(y).toBeLessThan(Math.max(...box));
+  // A connected fan keeps its order without mirroring.
+  const fan = "digraph { r -> a; r -> b; r -> c; }";
+  expect(orderReversed(gv.dot(prepareDot(fan), "svg"), gv.dot(prepareDot(fan, { flip: true }), "svg"))).toBe(false);
 });
