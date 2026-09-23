@@ -39,13 +39,13 @@ function textFences(source: string): string[] {
 test("Chapter 41 preserves the complete English harness contract", () => {
   expect(headings(chapter, 2)).toEqual([
     "运行时契约",
-    "运行是状态机，不是递归函数",
+    "运行是显式状态机",
     "固定定义版本，明确适配协议",
     "控制动词各有含义",
     "持久工作、重复交付与外部影响",
     "工具是有类型、受授权的外部操作边界",
     "有状态工具：区分三类状态",
-    "上下文是视图，不是记录",
+    "上下文是历史的投影",
     "沙箱由多道独立边界构成",
     "预算与准入控制必须协同",
     "把运行框架作为整体评估",
@@ -73,8 +73,8 @@ test("the opening states user value and keeps authority outside the harness", ()
     "模型负责提出建议，运行框架负责排序并记录",
     "策略与身份系统决定权限",
     "工具和外部系统承载实际影响",
-    "不会授予权限",
-    "无法保证外部影响恰好发生一次",
+    "运行框架执行这项决定",
+    "重复的尝试能否只生效一次，取决于接收端",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -91,7 +91,7 @@ test("the runtime contract defines durable state transitions and invariants", ()
     "终态运行不会发出新命令",
     "预算只能通过明确授权的追加而增加",
     "迟到或重复的结果",
-    "检查点只是优化手段，不是第二份真相",
+    "检查点只是从这份历史派生的优化手段",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -106,7 +106,7 @@ test("run states expose waits cancellation and reconciliation", () => {
     "可见状态",
     "转换日志必须先于命令交付完成提交",
     "外部系统可能已经提交写入",
-    "恢复逻辑必须理解外部影响",
+    "恢复逻辑必须先查明外部影响的结果",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -155,12 +155,12 @@ test("durable execution distinguishes ownership delivery and effect safety", () 
 
 test("tool contracts separate admission exposure authorization and results", () => {
   for (const phrase of [
-    "名称和 JSON 输入模式还不够",
+    "除了名称和 JSON 输入模式",
     "目录准入",
     "逐轮暴露",
     "执行授权",
     "结果处理",
-    "检索可以改善选择，不能授予权限",
+    "检索可以改善选择，权限仍然只来自执行授权",
     "不可信的模型输入",
     "任意令牌",
     "绑定到目标资源",
@@ -195,9 +195,9 @@ test("sandbox budget and admission contracts compose across the run tree", () =>
     "生命周期",
     "工作树不是安全边界",
     "短期、范围狭窄并绑定受众和资源的凭据",
-    "限制是一套账本，不是警告计数器",
+    "运行框架用一套预留账本管理限制",
     "预留其允许的最坏消耗",
-    "子运行从父运行获得子预算",
+    "子运行的子预算从父运行的剩余额度中划出",
     "原子地预留配额或容量",
     "断路器解决的是另一个问题",
   ]) expect(flat).toContain(phrase);
@@ -230,7 +230,7 @@ test("lower layers contested choices and the operational handoff remain explicit
     "哪一个不可变定义和归约器版本",
     "何时确认取消",
     "父预算和子预算",
-    "运行框架让智能体具备可运维性，而不只是能运行",
+    "让智能体具备可运维性",
     "图形界面会带来更长的动作链",
   ]) expect(flat).toContain(phrase);
 });

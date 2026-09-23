@@ -1,17 +1,18 @@
 # The Harness {#sec-the-harness}
 
-A model can suggest the next action. It cannot, by itself, turn that suggestion
-into bounded, observable work. The harness is the runtime around the model that
-does so. It assembles model input, records progress, dispatches tools, waits for
-approval, enforces limits, and gives a person reliable ways to pause or stop a
-run.
+The harness is the runtime around the model that turns each suggested next
+action into bounded, observable work. It assembles model input, records
+progress, dispatches tools, waits for approval, enforces limits, and gives a
+person reliable ways to pause or stop a run.
 
-This distinction is the chapter's foundation: **the model proposes; the harness
-sequences and records; policy and identity systems decide authority; tools and
-external systems own effects**. The harness enforces a decision, but it does not
-grant authority. It coordinates attempts, but it does not make external effects
-exactly once. Those boundaries keep a convenient agent loop from being mistaken
-for a transaction manager or a security principal.
+An agent run divides responsibility among four roles. The model proposes the
+next action. The harness sequences those proposals into steps and records each
+one durably. Policy and identity systems decide whether an action is
+authorized, and the harness enforces their decision. Tools and the external
+systems behind them carry out the effects; the harness coordinates attempts at
+an effect, and whether a repeated attempt takes effect only once depends on the
+receiving system. Keeping these roles separate prevents a convenient agent loop
+from being mistaken for a transaction manager or a security principal.
 
 ## The runtime contract
 
@@ -48,9 +49,11 @@ the transition emits. The state `S_t = (r, h, w, m, p, k, b, q)` contains:
 - `b`: remaining and reserved budgets; and
 - `q`: outstanding work, attempts, leases, and unresolved effects.
 
-The reducer is versioned because recovery must interpret old history with the
-same semantics that produced it. It should be deterministic over accepted
-events even when model and tool outputs are not. Four invariants follow:
+The transition function is called the reducer because it folds each accepted
+event into the run state. The reducer is versioned because recovery must
+interpret old history with the same semantics that produced it. It should be
+deterministic over accepted events even when model and tool outputs are not.
+Four invariants follow:
 
 1. A terminal run emits no new commands.
 2. Every effect command records its actor, scope, approval, stable step ID,
@@ -60,16 +63,17 @@ events even when model and tool outputs are not. Four invariants follow:
    are retained as evidence but cannot silently advance state twice.
 
 This event history is the source for restart and audit. A checkpoint is an
-optimization, not a second truth: it records a verified history position plus
-the versions, pending operation IDs, deadlines, workspace references, and known
-effect outcomes needed to continue.
+optimization derived from that history, and the history remains authoritative.
+It records a verified history position plus the versions, pending operation
+IDs, deadlines, workspace references, and known effect outcomes needed to
+continue.
 
-## Runs are state machines, not recursive functions
+## Runs are explicit state machines
 
 The states below are deliberately explicit. A client that receives `paused` or
 `waiting for approval` should not have to infer that condition from missing
-tokens on a stream. Likewise, **needs reconciliation** is a visible state, not a
-generic failure that invites a blind retry.
+tokens on a stream. Likewise, `needs reconciliation` is a visible state of its
+own, which tells the client to reconcile an unknown outcome before any retry.
 
 | State | Meaning |
 |---|---|
@@ -121,9 +125,9 @@ digraph {
 
 The transition journal must be committed before a command is delivered. That
 ordering prevents a worker crash from erasing the reason a tool was called.
-It cannot remove the classic uncertainty window: an external system may commit
-a write just before the worker crashes and records its receipt. Recovery must
-therefore understand effects, not merely replay functions.
+It leaves one uncertainty window open: an external system may commit a write
+just before the worker crashes and records its receipt. Recovery must therefore
+establish what happened to an effect before it replays the step that issued it.
 
 ## Pin definitions; adapt protocols explicitly
 
@@ -136,8 +140,8 @@ checkpoint. A rollout policy then routes *new* runs to a canary or stable
 definition and states whether existing runs remain pinned, migrate at a safe
 boundary, or stop.
 
-Provider protocols are not interchangeable. A compatibility adapter should
-publish a feature matrix for tool calls, structured output, streaming,
+Provider protocols differ in features and semantics. A compatibility adapter
+should publish a feature matrix for tool calls, structured output, streaming,
 cancellation, usage data, continuation identifiers, and error semantics. When a
 feature cannot be represented, fail explicitly or declare the downgrade. Do
 not silently interpret “request accepted” as feature parity. Pin adapter and
@@ -161,8 +165,8 @@ strength levels of one interrupt:
 - **Kill** forcefully terminates harness-owned execution, such as a process
   group or sandbox. It is an escalation path, not a rollback mechanism.
 - **Fork** creates a new run namespace from a checkpoint, with isolated mutable
-  state and a new idempotency scope. Already committed external effects remain
-  shared reality.
+  state and a new idempotency scope. External effects committed before the fork
+  point apply to both the original run and the fork.
 
 Cancellation has two useful milestones. It is **acknowledged** when the request
 is durable and no new commands will be scheduled. It is **quiescent** when all
@@ -198,7 +202,7 @@ Scheduling uses the same model. Give each occurrence a stable identity such as
 Duplicate delivery and execution are still possible. Kubernetes documents that
 even a single-completion Job may start the same program twice
 [@kubernetes2026jobs]. A scheduler lease prevents overlap while it remains
-valid; it does not provide exactly-once effects.
+valid, and duplicate effects still have to be handled at the receiver.
 
 Effect safety depends on the receiver:
 
@@ -210,20 +214,21 @@ Effect safety depends on the receiver:
 | Authentication, authorization, validation, or business-rule failure | Normally non-retryable; surface it. |
 
 Persist the error class, next-attempt time, absolute deadline, and retry budget
-so a restart cannot reset the policy. Automatic retries are useful precisely
-because operations can fail transiently, but an activity may execute more than
+so a restart cannot reset the policy. Automatic retries are useful because
+operations can fail transiently, and an activity may therefore execute more than
 once and should be designed accordingly [@temporal2026retry].
 
 Locks also belong at the resource they protect. A session lock serializes one
 conversation; it cannot protect a branch, customer account, or deployment
 touched by another run. Use resource-level concurrency through conditional
 writes, database constraints, protected branches, merge queues, or a lock keyed
-to the actual resource. A Git worktree separates local files; it does not
-serialize remote pushes or turn Git into a transaction.
+to the actual resource. A Git worktree separates local files; pushes from
+different worktrees to the same remote still need one of these resource-level
+controls.
 
 ## A tool is a typed, authorized effect boundary
 
-A name and JSON input schema are not enough. The harness needs a contract that
+Beyond a name and a JSON input schema, the harness needs a tool contract that
 can drive admission, approval, execution, retry, and result handling:
 
 ```text
@@ -244,7 +249,8 @@ Four gates must remain separate:
 1. **Catalog admission** decides whether a tool definition and implementation
    are trusted enough to register.
 2. **Per-turn exposure** selects the smallest relevant candidate set for the
-   model. Retrieval improves selection; it never grants permission.
+   model. Retrieval improves selection, and permission still comes only from
+   execution authorization.
 3. **Execution authorization** checks the current principal, tenant, action,
    resource, arguments, policy, and bound approval immediately before dispatch.
 4. **Result handling** validates structure, caps inline size, stores large
@@ -252,13 +258,15 @@ Four gates must remain separate:
    untrusted data.
 
 Tool names, descriptions, schemas, and results are all untrusted model input.
-Signing and review reduce tool poisoning, while authorization still applies to
-every concrete call, including calls made by a child agent. MCP similarly
-defines tools with input and optional output schemas, asks clients to validate
-results, and recommends keeping a human able to deny sensitive invocations
-[@mcp2025tools]. Its authorization guidance also forbids passing arbitrary
-tokens through to downstream servers and requires tokens to be bound to their
-intended resource [@mcp2025security; @campbell2020resource].
+Signing and review reduce tool poisoning (a tool definition that carries
+instructions aimed at the model), while authorization still applies to
+every concrete call, including calls made by a child agent. The Model Context
+Protocol (MCP), a standard interface between agent hosts and tool servers,
+similarly defines tools with input and optional output schemas, asks clients to
+validate results, and recommends keeping a human able to deny sensitive
+invocations [@mcp2025tools]. Its authorization guidance also forbids passing
+arbitrary tokens through to downstream servers and requires tokens to be bound
+to their intended resource [@mcp2025security; @campbell2020resource].
 
 No universal tool-count threshold determines when a flat catalog fails. Measure
 selection quality with the actual model, schemas, and task distribution. When
@@ -283,10 +291,10 @@ explicit handle when the protocol supports it. Otherwise it starts a new
 connection without pretending that durable resource state vanished. Protocols
 can change these mechanics; MCP, for example, has revised transports and
 authorization across dated specification versions [@mcp2025transports;
-@mcp2025changelog]. Pin the version and design to its declared guarantees, not
-to a story that every connection is a durable session.
+@mcp2025changelog]. Pin the version and design to its declared guarantees,
+without assuming that every connection is a durable session.
 
-## Context is a view, not the record
+## Context is a projection of history
 
 The canonical history contains accepted commands, model and tool results,
 approval decisions, receipts, source links, and unresolved obligations. The
@@ -328,8 +336,8 @@ choice is empirical and task-specific.
 | Lifetime | What survives pause, restart, cancellation, kill, expiry, and deletion? |
 
 A worktree is not a security boundary. It reduces file collisions between
-coding runs, but it does not isolate the kernel, processes, network, host
-credentials, or a container-runtime socket. Untrusted execution needs a
+coding runs and leaves the kernel, processes, network, host credentials, and
+any container-runtime socket shared. Untrusted execution needs a
 sandbox appropriate to the threat model, such as a hardened container,
 user-space kernel, or microVM, plus non-root execution, restricted mounts,
 dropped privileges, system-call policy, and default-deny egress
@@ -338,20 +346,21 @@ dropped privileges, system-call policy, and default-deny egress
 Do not mount long-lived secrets. A broker can issue short-lived, narrowly
 scoped, audience- and resource-bound credentials after validating the exact
 action. The broker must also redact logs and support rotation and revocation.
-These controls reduce credential theft and blast radius; they do not make an
-authorized action safe. Killing a local sandbox likewise does not revoke an
-external effect already committed under its credential.
+These controls reduce credential theft and blast radius; whether an authorized
+action is safe remains a question for policy and approval. Killing a local
+sandbox does not revoke an external effect already committed under its
+credential.
 
 ## Budgets and admission must compose
 
-Limits are a ledger, not warning counters. Before starting a model or tool call,
-reserve its worst allowed consumption; after completion, reconcile the actual
-usage and release the remainder. Reject work that cannot be reserved. Enforce
-independent ceilings for wall-clock and idle time, model calls, input and output
-tokens, money, tool calls, external mutations, bytes, child runs, concurrent
-operations, and sandbox resources.
+The harness keeps limits as a ledger of reservations. Before starting a model
+or tool call, reserve its worst allowed consumption; after completion,
+reconcile the actual usage and release the remainder. Reject work that cannot
+be reserved. Enforce independent ceilings for wall-clock and idle time, model
+calls, input and output tokens, money, tool calls, external mutations, bytes,
+child runs, concurrent operations, and sandbox resources.
 
-A child receives a sub-budget from its parent, not a fresh allowance. Parent
+A child receives a sub-budget carved from its parent's remaining budget. Parent
 and child reservations therefore remain under the same monotone ceiling. Store
 absolute deadlines so a restart cannot grant more wall-clock time, and
 propagate the remaining deadline downstream. A local timeout only bounds how
@@ -373,11 +382,11 @@ status, receipts, postcondition checks, and explicit goal verification.
 
 ## Evaluate the harness as a system
 
-A harness change is a treatment, not background noise. Compare it under a fixed
-model, task set, tool implementations, policy, sampling configuration, and
-resource envelope. Record the exact agent definition, harness and adapter
-versions, effective request, tool schemas, sandbox profile, and environment.
-Report task quality alongside the mechanisms intended to protect it:
+A harness change is itself an experimental treatment, because it can move the
+measured result. Compare it under a fixed model, task set, tool implementations,
+policy, sampling configuration, and resource envelope. Record the exact agent
+definition, harness and adapter versions, effective request, tool schemas,
+sandbox profile, and environment. Report task quality alongside the mechanisms intended to protect it:
 
 - task success and invalid-tool-call rate;
 - tool-selection precision and recall;
@@ -413,8 +422,8 @@ Two questions remain open. First, no context-projection strategy reliably knows
 which detail a future step will need; compaction, masking, retrieval, and larger
 windows trade different errors. Second, a portable harness can normalize common
 operations but cannot manufacture provider capabilities or identical error and
-cancellation semantics. Both should be measured as explicit product choices,
-not hidden behind a generic “agent” API.
+cancellation semantics. Both are product choices that a generic “agent” API
+should state explicitly, and both should be measured.
 :::
 
 ## Operational contract checklist
@@ -431,8 +440,9 @@ Before trusting a harness with a long run, verify that it can answer:
   contain execution?
 - Can recovery and fault-injection tests demonstrate these claims?
 
-The harness therefore makes an agent operable, not merely runnable. The next
-chapter, @sec-computer-use, puts this contract under more pressure: a graphical
+A harness that can answer these questions makes an agent operable: each run can
+be inspected, interrupted, recovered, and bounded. The next chapter,
+@sec-computer-use, puts this contract under more pressure: a graphical
 interface creates longer action chains, weaker state observations, more
 latency, and side effects that are harder to identify before execution.
 

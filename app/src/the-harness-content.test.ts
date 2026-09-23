@@ -17,8 +17,8 @@ test("the harness begins with user value and a bounded responsibility", () => {
     "bounded, observable work",
     "model proposes",
     "harness sequences",
-    "does not grant authority",
-    "does not make external effects exactly once",
+    "decide whether an action is authorized",
+    "depends on the receiving system",
   ]) expect(flat).toContain(phrase);
 });
 
