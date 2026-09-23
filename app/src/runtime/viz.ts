@@ -1587,68 +1587,6 @@
     watchTheme(host, draw);
   };
 
-  // Adaptive test-time compute: hard prompts need longer useful thinking, while
-  // easy prompts hit the overthinking side earlier. The marker chooses the
-  // synthetic utility optimum after a small latency penalty.
-  R['ttc-budget'] = function (host) {
-    var lang = host.getAttribute('data-lang') === 'zh' ? 'zh' : 'en';
-    host.setAttribute('role', 'img');
-    var L = lang === 'zh' ? {
-      difficulty: '难度', tokens: '推理词元', accuracy: '准确率',
-      optimum: '预算', window: '有效窗口', over: '过度思考',
-      description: '合成的自适应测试时计算曲线'
-    } : {
-      difficulty: 'difficulty', tokens: 'reasoning tokens', accuracy: 'accuracy',
-      optimum: 'budget', window: 'useful window', over: 'overthinking',
-      description: 'Synthetic adaptive test-time compute curve'
-    };
-    var diff = 0.55;
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 285);
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 45 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var xs = [], i, bestK = 1, bestU = -1;
-      for (i = 0; i <= 180; i++) xs.push(Math.exp(Math.log(4) + (Math.log(1024) - Math.log(4)) * i / 180));
-      var scale = 12 + 130 * diff;
-      var threshold = 1.15 + 1.25 * diff;
-      function acc(k) {
-        var lx = Math.log(k) / Math.log(10);
-        var base = 0.32 + 0.18 * (1 - diff);
-        var gain = (0.38 + 0.28 * diff) * (1 - Math.exp(-k / scale));
-        var penalty = 0.055 * Math.pow(Math.max(0, lx - threshold), 2.1);
-        return Math.max(0, Math.min(0.98, base + gain - penalty));
-      }
-      xs.forEach(function (k) {
-        var utility = acc(k) - 0.10 * Math.log(k / 4) / Math.log(1024 / 4);
-        if (utility > bestU) { bestU = utility; bestK = k; }
-      });
-      function X(k) { return pd + (Math.log(k) - Math.log(4)) / (Math.log(1024) - Math.log(4)) * (W - 2 * pd); }
-      function Y(v) { return H - pd - v * (H - 2 * pd); }
-      var win0 = Math.max(4, scale * 0.7), win1 = Math.min(1024, Math.exp(threshold * Math.log(10)));
-      ctx.fillStyle = 'rgba(59,130,246,0.09)'; ctx.fillRect(X(win0), pd, Math.max(0, X(win1) - X(win0)), H - 2 * pd);
-      ctx.fillStyle = 'rgba(224,147,107,0.11)'; ctx.fillRect(X(win1), pd, W - pd - X(win1), H - 2 * pd);
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
-      ctx.strokeStyle = t.accent; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
-      xs.forEach(function (k, i) { var x = X(k), y = Y(acc(k)); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
-      ctx.stroke();
-      ctx.strokeStyle = t.accent2; ctx.lineWidth = 1.5 * cv.dpr; ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); ctx.beginPath();
-      xs.forEach(function (k, i) { var x = X(k), y = Y(0.18 + 0.72 * (Math.log(k) - Math.log(4)) / (Math.log(1024) - Math.log(4))); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
-      ctx.stroke(); ctx.setLineDash([]);
-      ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(X(bestK), Y(acc(bestK)), 5 * cv.dpr, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(L.window, (X(win0) + X(win1)) / 2, pd + 16 * cv.dpr);
-      ctx.fillText(L.over, (X(win1) + W - pd) / 2, pd + 34 * cv.dpr);
-      ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.fillText(L.tokens, W / 2, H - 12 * cv.dpr);
-      ctx.save(); ctx.translate(13 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.accuracy, 0, 0); ctx.restore();
-      read.textContent = L.optimum + '≈' + Math.round(bestK) + ' · ' + L.accuracy + '=' + Math.round(acc(bestK) * 100) + '%';
-      host.setAttribute('aria-label', L.description + ': ' + read.textContent);
-    }
-    host.appendChild(slider(L.difficulty, 0, 1, 0.01, diff, function (v) { diff = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Mid-training mixture: an exact linear ramp from broad-only data to a
   // configured specialist share. The integrated area is total specialist-token
   // exposure when the token rate is constant; no capability score is invented.

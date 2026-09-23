@@ -20,4 +20,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "float-formats": () => import("./float-formats.ts"),
   "device-mesh": () => import("./device-mesh.ts"),
   "coverage-selection": () => import("./coverage-selection.ts"),
+  "difficulty-budget": () => import("./difficulty-budget.ts"),
 };
