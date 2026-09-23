@@ -266,6 +266,10 @@ reduced motion, and a static fallback when scripts do not run.
   2026-09-23.
 - [ ] **Two hard-wrapped hyphenated compounds** in `adaptation/04`
   ("instruction-tuned", "log-probabilities").
+- [ ] **Long display equations are clipped, not scrolled.** In
+  `foundations/04` the equation ending in a softmax is cut off mid-word at
+  desktop width. Display math wider than the column needs horizontal scroll or
+  a line break, and the render test should catch it.
 - [ ] **`app/src/reader-mermaid.test.ts` always skips**: it points at a stale page
   path and the figure it checked is now Graphviz.
 
