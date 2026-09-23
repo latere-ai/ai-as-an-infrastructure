@@ -394,7 +394,7 @@ test("lora-lowrank clamps reconstruction rank to available components", () => {
 });
 
 test("task arithmetic scales its vectors from the canvas, independent of label length", () => {
-  const component = rt.slice(rt.indexOf("R['task-arithmetic']"), rt.indexOf("R['grpo-advantage']"));
+  const component = rt.slice(rt.indexOf("R['task-arithmetic']"), rt.indexOf("R['ssm-vs-attention']"));
   expect(component).toContain("vectorLength = Math.min(W, H) * 0.3");
   expect(component).toContain("/ vectorLength");
 });
@@ -465,14 +465,13 @@ test("expanded adaptation chapters use the post-training visualizations in both 
 
 // Wave 5: the deep-catalog tail of bespoke components.
 test("the viz runtime registers the wave-5 components", () => {
-  for (const name of ["grpo-advantage", "ssm-vs-attention", "rl-timeline", "rrf-fusion", "decision-tree", "float-bits", "pipeline-bubble"]) {
+  for (const name of ["ssm-vs-attention", "rl-timeline", "rrf-fusion", "decision-tree", "float-bits", "pipeline-bubble"]) {
     expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
   }
 });
 
 test("wave-5 components are used in their chapters, both languages", () => {
   const uses: [string, string][] = [
-    ["reasoning/05-training-to-reason", "grpo-advantage"],
     ["foundations/05-moe-ssm-hybrids", "ssm-vs-attention"],
     ["orchestration/01-training-agents-to-act", "rl-timeline"],
     ["orchestration/08-rag-retrieval", "rrf-fusion"],

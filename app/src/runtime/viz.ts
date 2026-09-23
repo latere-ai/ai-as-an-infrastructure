@@ -1326,59 +1326,6 @@
     watchTheme(host, draw);
   };
 
-  // GRPO group-relative advantage: G completions to one prompt, each rewarded.
-  // The advantage is each reward minus the group mean over the group std, so it
-  // drops the critic. The reward-spread slider scales the rewards around their
-  // mean. Dividing by the std cancels that scale, so the normalized advantages
-  // (solid bars) are invariant to spread; the raw reward gaps (faint bars) are
-  // not, and shrink with the slider. At zero spread every reward is equal, the
-  // std is zero, and both collapse: the no-spread-no-signal case.
-  R['grpo-advantage'] = function (host) {
-    var G = 6, spread = 1, base = [0.92, 0.18, 0.7, 0.08, 0.5, 0.85], m0 = 0;
-    base.forEach(function (x) { m0 += x; }); m0 /= G;
-    var vb = 0; base.forEach(function (x) { vb += (x - m0) * (x - m0); });
-    var sdBase = Math.sqrt(vb / G); // group std at full spread; fixed reference
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 240);
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 32 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var r = base.map(function (x) { return m0 + (x - m0) * spread; });
-      var sd = spread * sdBase; // group std scales with spread
-      // Normalized advantage divides out that scale, so it stays fixed for any
-      // spread > 0; the raw gap (reward minus mean, in the same std units) does
-      // not, and tracks the slider.
-      var adv = base.map(function (x) { return sd > 1e-6 ? (x - m0) / sdBase : 0; });
-      var raw = base.map(function (x) { return sd > 1e-6 ? spread * (x - m0) / sdBase : 0; });
-      var z = H * 0.6, bw = (W - 2 * pd) / G, half = z - pd, amax = 2.3;
-      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr; ctx.beginPath(); ctx.moveTo(pd, z); ctx.lineTo(W - pd, z); ctx.stroke();
-      ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left';
-      ctx.fillText('advantage Aᵢ (solid) · reward − mean (faint)', pd, pd - 4 * cv.dpr);
-      adv.forEach(function (a, i) {
-        var slot = pd + bw * i, pos = a >= 0;
-        // Two side-by-side bars per group so they never merge into one shape:
-        // faint raw gap (left) scales with spread; solid normalized advantage
-        // (right) holds fixed. Dragging spread grows/shrinks the left bar while
-        // the right stays put, which is the whole point.
-        var pw = bw * 0.26;
-        var rg = raw[i], rx = slot + bw * 0.18, rh = (rg / amax) * half;
-        ctx.fillStyle = (rg >= 0 ? 'rgba(61,189,138,' : 'rgba(224,147,107,') + '0.4)';
-        if (rg >= 0) ctx.fillRect(rx, z - rh, pw, rh); else ctx.fillRect(rx, z, pw, -rh);
-        var ax = slot + bw * 0.52, ah = (a / amax) * half;
-        ctx.fillStyle = pos ? '#3dbd8a' : '#e0936b';
-        if (pos) ctx.fillRect(ax, z - ah, pw, ah); else ctx.fillRect(ax, z, pw, -ah);
-        ctx.fillStyle = 'rgba(128,128,128,0.85)'; ctx.font = (10 * cv.dpr) + 'px ui-monospace,monospace'; ctx.textAlign = 'center';
-        ctx.fillText('r ' + r[i].toFixed(2), slot + bw * 0.5, H - pd + 14 * cv.dpr);
-      });
-      read.textContent = sd > 1e-6
-        ? ('raw gaps scale, advantages hold (÷ std) · advantage span ' + (Math.max.apply(null, adv) - Math.min.apply(null, adv)).toFixed(2))
-        : 'no spread in rewards · all advantages 0 · no signal';
-    }
-    host.appendChild(slider('reward spread', 0, 1.5, 0.01, spread, function (x) { spread = x; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Attention vs recurrent decode state: attention retains one record per past
   // position, while a recurrent layer keeps a fixed number of state slots.
   // This visualizes storage shape only; it does not invent a recall curve.
