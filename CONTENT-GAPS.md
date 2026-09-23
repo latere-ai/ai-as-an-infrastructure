@@ -174,7 +174,7 @@ backed; none has been decided or started. Sizing is the audit's estimate.
 Found on 2026-09-23 while running a wording pass over every chapter and a
 coverage check of the English tree. None has been decided or started.
 
-- [ ] **Separate durable explanation from dated evidence**
+- [x] **Separate durable explanation from dated evidence** (convention adopted 2026-09-23: `callout-note .dated` blocks titled "As of September 2026"; applied to every refreshed chapter)
 
   Named models, benchmark scores, prices, hardware products, and regulatory
   dates sit inside the explanatory prose of about ninety chapters. A monthly
@@ -251,6 +251,11 @@ the parts for the author to judge, then the rest. Constraints: a zh twin with
 matching inputs for every figure, theme tokens, the mobile column width,
 reduced motion, and a static fallback when scripts do not run.
 
+Decision (author, 2026-09-23): image-based golden figure tests come after the
+visuals ship to production and the author confirms them; animations are not
+tested beyond "the figure builds, its fallback renders, and en and zh inputs
+match". Test effort goes to content quality, not to per-figure assertions.
+
 ## Open goals: rendering and parity defects found by the new tests
 
 - [x] **Bold renders as literal `**` on 12 zh pages.** Fixed 2026-09-23 in the pipeline. `**标签：**正文` does not
@@ -292,28 +297,28 @@ is written.
 
 Left unchanged during the wording pass because resolving them needs a source.
 
-- [ ] `orientation/04` (en 20-22): Facebook-only workload measurements are
+- [x] `orientation/04` (en 20-22): Facebook-only workload measurements are
   generalized to all production AI of the period.
-- [ ] `foundations/01` (en 179, zh 98): "larger models trained with similar
+- [x] `foundations/01` (en 179, zh 98): "larger models trained with similar
   compute"; in Hoffmann et al. only Gopher shares Chinchilla's budget.
-- [ ] Preface (en 126, zh 47): says every chapter has a "What's contested" box;
+- [x] Preface (en 126, zh 47): says every chapter has a "What's contested" box;
   `orientation/01`, `orientation/03`, `orchestration/04`, `practice/06`,
   `safety/08`, and `infrastructure/06` have none.
-- [ ] `orientation/02` (en 146-152): the compute-only fit after the Kaplan
+- [x] `orientation/02` (en 146-152): the compute-only fit after the Kaplan
   citation carries an irreducible term that Kaplan's compute law does not have.
-- [ ] `orientation/index` (en 66-72, zh 29): the prerequisite sentence
+- [x] `orientation/index` (en 66-72, zh 29): the prerequisite sentence
   contradicts the next one, which says the transformer chapter builds it.
-- [ ] `generative/05` (en 234, zh 140): a literal "Chapter 15" instead of a
+- [x] `generative/05` (en 234, zh 140): a literal "Chapter 15" instead of a
   cross-reference; its Further reading note still cites the "1/200,000"
   estimate that the body rejects.
-- [ ] `reasoning/01` (en 106-107, zh 62): "early wrong answer" is listed under
+- [x] `reasoning/01` (en 106-107, zh 62): "early wrong answer" is listed under
   failing before the first solution step.
 - [x] `reasoning/06` (en 298, zh 168): "the one change from L_soft"
   understates the difference; MOPD is never expanded.
 - [x] `inference/03` (en 255, zh 155) and `inference/05` (en 218, zh 127):
   literal "Chapter 32" and "Chapter 34's IO model" instead of
   cross-references.
-- [ ] `inference/06` (en 127, zh 84): "upper-level accounting model" is
+- [x] `inference/06` (en 127, zh 84): "upper-level accounting model" is
   unclear; (en 353, zh 197) the definition of S conflicts with e_s.
 - [x] `orchestration/06` (en/zh 145): OSWorld-Human "2.7-4.3 times as many
   steps" may be 1.4-2.7 in the current version of the paper.
@@ -321,7 +326,7 @@ Left unchanged during the wording pass because resolving them needs a source.
   relative to single-agent Claude Opus 4; name that baseline.
 - [x] `orchestration/08` (en 537, zh 283): "oracle-context gap" does not name
   the two conditions it compares.
-- [ ] `safety/01` (en 179-180, zh 96): "held-out feature labels" reads as
+- [x] `safety/01` (en 179-180, zh 96): "held-out feature labels" reads as
   circular; probably held-out activating examples.
 - [x] `refs/scalable-oversight-control.bib`: the zh note for
   `greenblatt2024faking` mixes the compliance rate with the reasoning rate;
