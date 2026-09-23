@@ -1123,11 +1123,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/infrastructure/index.qmd",
-      ["lower layers are stubbornly physical", "what the machine makes possible"],
+      ["lower layers are physical machines", "what the machine makes possible"],
     ],
     [
       "zh/infrastructure/index.qmd",
-      ["最底下始终是物理机器", "机器已经替我们决定了什么"],
+      ["最底下始终是物理机器", "看看机器能支撑什么"],
     ],
     // The frontier thesis moved with its chapters when Part IX was split.
     [
