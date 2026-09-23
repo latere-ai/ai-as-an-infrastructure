@@ -97,7 +97,7 @@ test("item and scorer audits preserve failure semantics", () => {
     "alternative valid forms",
     "adjudication log",
     "invalid`, `unknown`, `timeout`, and `scorer_error",
-    "does not mean “interpretation-free",
+    "automatic grading still involves interpretation",
   ]) expect(flat).toContain(phrase);
 });
 

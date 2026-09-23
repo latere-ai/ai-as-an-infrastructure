@@ -46,7 +46,7 @@ test("Chapter 47 preserves the complete English benchmark contract", () => {
     "基准是一份测量契约 {#sec-benchmarks}",
   ]);
   expect(headings(chapter, 2)).toEqual([
-    "从决策出发，而不是从数据集出发",
+    "从决策出发",
     "决策同时决定了要测什么量",
     "明确评测对象",
     "留出数据究竟要避开哪些环节",
@@ -166,7 +166,7 @@ test("contamination audits retain scope instead of certifying absence", () => {
 
 test("the instrument audit checks cases baselines revisions and rights", () => {
   for (const phrase of [
-    "即使测试确实从未出现过，也仍可能出错",
+    "即使测试从未进入训练，也仍可能出错",
     "一种站得住脚的解释",
     "其他有效答案能否通过归一化和解析",
     "许可证与访问条款",
@@ -188,7 +188,7 @@ test("model and best-system comparisons answer different questions", () => {
     "unknown",
     "timeout",
     "scorer_error",
-    "自动评分不等于没有解释空间",
+    "自动评分同样包含解释",
   ]) expect(flat).toContain(phrase);
 });
 
