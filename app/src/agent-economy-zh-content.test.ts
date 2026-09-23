@@ -24,14 +24,14 @@ function refs(source: string) {
 test("Chinese Chapter 80 preserves the complete English structure", () => {
   expect(chinese).toMatch(/^# 智能体经济：身份、委托与机器支付 \{#sec-agent-economy\}/);
   expect(headings(chinese)).toEqual([
-    ["##", "从角色入手，不要先看协议"],
-    ["##", "身份不等于权限"],
+    ["##", "一笔交易中的角色"],
+    ["##", "身份认证与授权"],
     ["##", "授权书是一项有边界的指令"],
     ["##", "协议名称掩盖了不同职责"],
     ["##", "小额支付的经济性因何改变"],
-    ["##", "跟踪交易，也要跟踪证据"],
-    ["##", "x402 是支付协议，不是经济保证"],
-    ["##", "有活动不等于经济体已经成熟"],
+    ["##", "交易状态与证据"],
+    ["##", "基于 HTTP 402 的支付：x402 与 MPP"],
+    ["##", "衡量采用情况"],
     ["##", "把交易契约落实到运营"],
     ["##", "争议所在"],
     ["##", "约束如何传导"],
@@ -42,7 +42,8 @@ test("Chinese Chapter 80 preserves the complete English structure", () => {
 
 test("the thesis keeps authority payment and delivery as independent decisions", () => {
   for (const phrase of [
-    "付费智能体是一条交易路径，不是新的法律主体",
+    "付费智能体是在交易路径中运行的软件",
+    "并不是新的法律主体",
     "哪套软件发出了请求",
     "哪位委托人给予了授权",
     "商户是否接受",
@@ -81,7 +82,7 @@ test("authentication is not confused with delegation or acceptance", () => {
     "仍是正在推进的互联网草案，不是 RFC",
     "终端用户认证不在范围内",
     "Visa 规范，不是所有商务协议共用的通用身份层",
-    "OAuth 不只是应用程序标识机制",
+    "OAuth 是一套授权框架",
     "RFC 8693 令牌交换",
     "区分主体与行动方",
     "RFC 9396 富授权请求",
@@ -108,13 +109,13 @@ test("a mandate is bounded evidence rather than proof of truth", () => {
     "不会自行完成清算，也不会自行分配法律责任",
     "可验证凭证",
     "不能证明声明为真，也不能要求验证方接受",
-    "授权书是决策所需的证据，不是决策本身",
+    "验证方把它当作证据，是否接受仍按自身规则决定",
   ]) expect(flat).toContain(phrase);
 });
 
 test("protocols are mapped by function without inventing one mandatory stack", () => {
   for (const phrase of [
-    "并不是一个强制性协议栈中可以互换的层",
+    "强制性协议栈中可以互换的层",
     "请求认证和智能体识别",
     "受保护资源的授权与委托",
     "商品、结账、订单和能力协作",
@@ -146,7 +147,7 @@ test("micropayment models define compatible units and bounded thresholds", () =>
   for (const phrase of [
     "买方为小额购买投入的注意力",
     "配置购物智能体只是转移了部分工作",
-    "委托可以摊薄一次决策的成本，但不会让决策变成零成本",
+    "委托把一次决策的成本分摊到多次购买上",
     "一份授权书覆盖的购买次数",
     "每笔购买的智能体成本",
     "每笔购买的人类决策成本",
@@ -198,10 +199,12 @@ test("x402 and MPP remain protocols rather than economic guarantees", () => {
     "`PAYMENT-RESPONSE`",
     "客户端、资源服务器和可选的促成方",
     "不限定网络、代币和币种",
-    "终局性、流动性、费用、合规、隐私和退款",
+    "终局性（转账从何时起不可撤销）",
+    "流动性、费用、合规、隐私和退款",
     "成功清算不能证明响应有用、只交付了一次",
     "不能保证需求或正利润",
-    "可以协商稳定币、银行卡或其他支付方式",
+    "可以协商稳定币",
+    "银行卡或其他支付方式",
     "哪个资产发生了转移",
     "哪些退款和消费者保护规则适用",
   ]) expect(flat).toContain(phrase);
@@ -209,7 +212,7 @@ test("x402 and MPP remain protocols rather than economic guarantees", () => {
 
 test("adoption evidence stays within the measured population", () => {
   for (const phrase of [
-    "发布协议不等于生产环境已经采用",
+    "发布协议只能说明规范已经存在，不能说明生产环境已经采用",
     "不能放在同一条增长曲线上",
     "内部实验",
     "186 笔交易",
@@ -219,7 +222,7 @@ test("adoption evidence stays within the measured population", () => {
     "尝试下单数",
     "接受订单数",
     "履约、退款、争议和损失",
-    "有边界的实验可以提出测量问题，不能直接给出市场预测",
+    "有边界的实验可以指出生产环境中应当收集哪些测量",
   ]) expect(flat).toContain(phrase);
   for (const stale of [
     "超过一亿笔付款",
@@ -267,19 +270,19 @@ test("the contested boundary keeps settlement acceptance and accountability sepa
     "问责",
     "谁在何时作出了什么声明",
     "合同法、消费者法、支付法和代理法",
-    "协议可以让记录更清楚，却不能决定适用规则",
+    "协议和签名证据可以清楚记录",
   ]) expect(flat).toContain(phrase);
 });
 
 test("the constraint handoff treats the model as an untrusted planner", () => {
   for (const phrase of [
     "下层约束来自安全",
-    "请求签名认证的是密钥，不是安全模型",
+    "请求签名认证的只是密钥，无法说明背后的模型行为是否安全",
     "授权书缩小了权限范围",
     "遭到提示词注入或入侵的智能体",
     "本地授权、小额预算、幂等控制、独立效果回执和恢复状态",
     "有效权限是授权与策略的交集",
-    "不是发出请求的智能体有多自信",
+    "发出请求的智能体再自信，也不会扩大这一范围",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -329,7 +332,7 @@ test("the complete Chinese chapter renders through its final handoff", async () 
   const { html, headings: renderedHeadings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("付费智能体是一条交易路径，不是新的法律主体");
+  expect(html).toContain("付费智能体是在交易路径中运行的软件");
   expect(html.match(/<figure/g)?.length).toBe(1);
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();
 });

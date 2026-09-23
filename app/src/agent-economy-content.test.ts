@@ -148,7 +148,7 @@ test("transaction state preserves uncertain and compensating outcomes", () => {
 test("adoption evidence is bounded and incompatible vendor metrics are removed", () => {
   for (const phrase of [
     "protocol publication",
-    "not production adoption",
+    "does not show production adoption",
     "internal experiment",
     "186 deals",
     "just over $4,000",
@@ -248,7 +248,7 @@ test("the complete chapter renders through its final handoff", async () => {
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("A paying agent is a transaction path");
+  expect(html).toContain("A paying agent is software that operates within a transaction path");
   expect(html.match(/<figure/g)?.length).toBe(1);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });
