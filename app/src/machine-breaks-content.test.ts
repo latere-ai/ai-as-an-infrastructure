@@ -24,7 +24,7 @@ test("the thesis defines reliability at a workload boundary", () => {
     "workload boundary",
     "useful progress",
     "correct result",
-    "not interchangeable",
+    "different outcomes",
   ]) expect(flat).toContain(phrase);
   expect(chapter).not.toContain("/figures/the-machine-that-breaks-1.svg");
   expect(flat).not.toContain("not five problems but one phenomenon");
@@ -297,7 +297,7 @@ test("the complete chapter renders without swallowing diagrams or late prose", a
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("A reliable machine is not one that never fails");
+  expect(html).toContain("A reliable machine is one whose failures are defined");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(5);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });

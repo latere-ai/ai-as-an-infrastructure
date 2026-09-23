@@ -5,10 +5,10 @@ silicon, and supplied the site. Operation introduces a different question:
 does the system keep producing accepted work when parts of it fail? The answer
 cannot be read from component reliability alone. A stalled training step, a
 wrong tensor, a late serving request, and an agent that changes the wrong file
-are different outcomes. They are **not interchangeable**.
+are different outcomes, and a reliability count has to keep them apart.
 
 Reliability therefore starts with a **failure contract**. It names the
-**workload boundary**, the event that counts as failure, the observation
+workload boundary, the event that counts as failure, the observation
 window, and the test for recovery. For training, the objective may be useful
 progress without corrupting model state. For serving, it may be a correct
 result within a latency objective. For an agent, it may be a verified state
@@ -16,10 +16,12 @@ transition rather than a plausible final message. Scale makes all three harder:
 more components create more opportunities for interruption, wider
 synchronization turns one fault into a larger stall, and longer trajectories
 give undetected errors more time to propagate. At enough scale, some component
-is failing somewhere almost all the time. Reliability engineering determines
-whether that local event becomes lost progress, a missed objective, or a wrong
-result. The operating objective shifts from preventing failures to amortizing
-them within an explicit failure budget.
+is failing somewhere almost all the time; the Llama 3 training run examined
+below recorded an unexpected interruption about every 3.1 hours on average.
+Reliability engineering determines whether that local event becomes lost
+progress, a missed objective, or a wrong result. The operating objective
+shifts from preventing failures to amortizing them within an explicit failure
+budget.
 
 ```{dot}
 //| label: fig-machine-failure-contract
@@ -49,17 +51,19 @@ A useful event taxonomy separates causes from symptoms:
 - a **correlated failure** affects a shared fault domain such as a host, rack,
   switch, storage service, power feed, or software release.
 
-For every class, record event count, exposure, affected ranks, detection
+For every class, record event count, exposure (the operating time during which
+events could occur), affected ranks (the worker processes involved), detection
 latency, diagnosis time, recovery time, blast radius, and lost work. A machine
 can have few crashes yet poor useful time because hangs are detected slowly. It
 can have excellent availability yet produce a wrong checkpoint. One aggregate
 “failure rate” hides both cases.
 
-Meta's Llama 3 paper provides a rare public ledger. During a 54-day snapshot
-of 405B-model pretraining, which used up to 16,384 H100 GPUs, the authors
-reported **466 total interruptions**: 47 were planned and 419 were unexpected.
-They classified 58.7 percent of the unexpected events as GPU issues and
-reported more than 90 percent effective training time [@grattafiori2024llama].
+Meta's Llama 3 paper is one of the few public interruption records for a large
+training run. During a 54-day snapshot of 405B-model pretraining, which used
+up to 16,384 H100 GPUs, the authors reported 466 total interruptions: 47 were
+planned and 419 were unexpected. They classified 58.7 percent of the
+unexpected events as GPU issues and reported more than 90 percent effective
+training time [@grattafiori2024llama].
 The arithmetic average between unexpected interruptions is about 3.1 hours,
 but the paper does not establish a fixed per-GPU law or say that every moment
 of the window used exactly 16,384 devices.
@@ -100,19 +104,20 @@ where:
 This result assumes stationary, independent Poisson events. Real fleets have
 burn-in, aging, common software, shared networks, maintenance bursts, and
 different fault-containment policies. Those effects violate the assumptions.
-Multiplying the Llama event rate by a device-count ratio can be shown as a
-**conditional projection**: it gives about 30 minutes at 100,000 devices if
-every interrupting hazard scales linearly, but it is not a universal scaling
-law or a forecast.
+Multiplying the Llama event rate by a device-count ratio gives a conditional
+projection of about 30 minutes between interruptions at 100,000 devices, which
+holds only if every interrupting hazard scales linearly with device count. The
+projection is not a universal scaling law or a forecast.
 
 ## A failure budget connects events to useful time
 
 Once interruptions are measured, checkpointing becomes an economic choice.
-Checkpoint too often and saving state consumes the run. Checkpoint too rarely
-and each interruption discards more computation. Young introduced the classic
-first-order approximation in 1974; Daly later refined it for a more complete
-restart model [@young1974checkpoint; @daly2006checkpoint]. A transparent
-first-order waste budget is
+Checkpointing too often spends a growing share of wall time saving state;
+checkpointing too rarely lets each interruption discard more computation.
+Young introduced the classic first-order approximation in 1974; Daly later
+refined it for a more complete restart model
+[@young1974checkpoint; @daly2006checkpoint]. A transparent first-order waste
+budget is
 
 $$
 W(\tau)
@@ -146,9 +151,11 @@ The $\tau/(2M)$ term assumes an interruption loses half an interval on average.
 The whole expression is a small-waste approximation with stationary Poisson
 interruptions, blocking periodic checkpoints, and no failures during recovery.
 It does not model asynchronous snapshots, correlated faults, checkpoint
-failures, or silent corruption discovered long after it occurred. Use it to
-expose assumptions, not to replace measurement; a production system should
-measure ETTR directly over a declared window.
+failures, or silent corruption discovered long after it occurred. Its use is
+to make these assumptions explicit. A production system should still measure
+ETTR directly over a declared window. ETTR, the effective training time ratio,
+is the measured share of wall time that advances training; $E_{\mathrm{approx}}$
+is the model's estimate of the same quantity.
 
 :::: {.runnable}
 ```python
@@ -178,8 +185,8 @@ print(f"Conditional 100k interval: {conditional_100k:.1f} minutes")
 ::::
 
 The one-minute checkpoint, detection, and recovery values are illustrative;
-they were not reported for Llama 3. The runnable deliberately separates
-observed input from assumed operating costs.
+they were not reported for Llama 3. The code keeps the observed input separate
+from the assumed operating costs.
 
 ```{dot}
 //| label: fig-machine-budget
@@ -213,27 +220,27 @@ stalled or replaying the parallel work described in @sec-training-at-scale.
 ## Recovery is a verified control loop
 
 A checkpoint file is only one part of recovery. The operational loop must
-**detect** loss of progress, **isolate** the smallest credible fault domain,
-**restore** state on known-good resources, and **verify** that progress and
-numerical behavior have resumed. Each transition has a timeout, an owner, and
+detect loss of progress, isolate the smallest credible fault domain, restore
+state on known-good resources, and verify that progress and numerical behavior
+have resumed. Each transition has a timeout, an owner, and
 an acceptance criterion. Fast restart without isolation can recreate the same
 failure; restart without verification can continue from a corrupt state.
 
-ByteRobust is a useful production example, not a universal prescription. The
-authors report up to 97 percent ETTR for one three-month training job on 9,600
-Hopper GPUs. Their system combines live checks, stop-time diagnosis,
-over-eviction of suspected failure domains, warm standby machines, and
-in-memory checkpoints with a peer backup outside the evicted group. They also
-report every-step checkpointing with less than 0.9 percent overhead
-[@byterobust2025]. These numbers are a reported production result on that
-platform. The paper reports speedups for recovery mechanisms, but it does not
-justify a generic claim that every full restart takes only seconds.
+ByteRobust is one production example. The authors report up to 97 percent ETTR
+for one three-month training job on 9,600 Hopper GPUs. Their system combines
+live checks, stop-time diagnosis, over-eviction of suspected failure domains,
+warm standby machines, and in-memory checkpoints with a peer backup outside the
+evicted group. They also report every-step checkpointing with less than 0.9
+percent overhead [@byterobust2025]. These numbers are a reported production
+result on that platform. The paper reports speedups for recovery mechanisms,
+but it does not justify a generic claim that every full restart takes only
+seconds.
 
-The design lesson is the separation of concerns. Liveness signals answer
-“are ranks moving?” Performance signals answer “are they moving at the
-expected rate?” Correctness checks answer “are they producing an acceptable
-state?” Quarantine policy answers “which resources must leave the next
-attempt?” The control plane needs all four.
+Recovery depends on four separate questions, and the control plane needs a
+mechanism for each. Liveness signals answer “are ranks moving?” Performance
+signals answer “are they moving at the expected rate?” Correctness checks
+answer “are they producing an acceptable state?” Quarantine policy answers
+“which resources must leave the next attempt?”
 
 ```{dot}
 //| label: fig-machine-recovery
@@ -255,10 +262,10 @@ digraph {
 
 ## Silent corruption needs a correctness path
 
-@gls-sdc, silent data corruption, is an incorrect computation that produces no
-explicit hardware or software error. It matters because ordinary availability
-telemetry can remain green while model state diverges: the computation may
-raise no alarm. Its rate and effect must be kept separate: a study of what
+In @gls-sdc, a computation returns an incorrect result without any explicit
+hardware or software error. Because the computation may raise no alarm,
+ordinary availability telemetry can remain green while model state diverges.
+Its rate and effect must be kept separate: a study of what
 corruptions look like does not establish how often they occur in a fleet, and
 a study of already-faulty nodes does not estimate the prevalence among healthy
 nodes.
@@ -269,12 +276,13 @@ found cases where weights drifted while pretraining loss remained nearly
 unchanged; in separate fine-tuning experiments, some affected nodes produced
 visible loss spikes, including one run with zero final accuracy. The study used
 single-node tensor parallelism and explicitly notes its limited sample and
-scale [@ma2025sdc]. It demonstrates possible consequences, not the probability
-that an arbitrary frontier run is corrupted.
+scale [@ma2025sdc]. The study documents possible consequences of corruption; it
+gives no estimate of how often an arbitrary frontier run is corrupted.
 
 A second study asked a different question. Tung and colleagues ran a
-gate-level **stuck-at fault-injection simulation** on a reduced two-SM model of
-one production-class GPU architecture using 63 CUDA micro-benchmarks. Within
+gate-level stuck-at fault-injection simulation on a reduced two-SM model of
+one production-class GPU architecture using 63 CUDA micro-benchmarks; a
+stuck-at fault holds one signal line permanently at 0 or 1. Within
 that simulated campaign, NaN and infinity values were 1.01 percent of observed
 corruptions, and single-bit events were under 40 percent of non-special
 bit-flip corruptions [@anatomy2026sdc]. Those figures are a fault-model outcome
@@ -287,8 +295,9 @@ against a golden output; online numerical invariants and progress canaries;
 comparison or replay when a rank becomes suspect; quarantine of the implicated
 failure domain; rollback to a checkpoint older than the first divergent step;
 and a clean replay test before return to service. Coverage, overhead, detection
-latency, and false-positive rate must all be measured. “We watch the loss” is
-not a coverage statement.
+latency, and false-positive rate must all be measured. Watching the training
+loss alone gives no coverage figure: in the Ma study, weights drifted while
+pretraining loss stayed nearly unchanged.
 
 ```{dot}
 //| label: fig-machine-sdc
@@ -319,28 +328,32 @@ NCCLX reports one concrete hierarchy. In Meta's topology connecting more than
 100,000 GPUs, latency across racks within one AI Zone, across AI Zones, and
 across data-center buildings was about 7, 15, and 30 times same-rack traffic,
 respectively [@meta2025ncclx]. These are topology-specific ratios for that RoCE
-fabric, not constants of nature. They motivate placing exposed,
-latency-sensitive communication in the smallest practical domain while
-measuring whether larger collectives can overlap their traffic.
+fabric, and another topology needs its own measurement. They motivate placing
+latency-sensitive communication that is exposed on the critical path in the
+smallest practical domain, while measuring whether larger collectives can
+overlap their traffic with other work.
 
 Relaxing global lockstep changes both the failure domain and the optimization
-algorithm. Decoupled DiLoCo provides two distinct demonstrations that should
-not be merged. In one experiment, a synthetic event tape represented 1.2
-million chips with a one-year per-chip interruption interval. Eight learners
-retained 88 percent goodput, compared with 58 percent for elastic data
-parallelism, with similar reported evaluation results. Separately, the authors
-trained a 12B model using eight learners placed across U.S. regions and
-reported step speed close to a collocated DiLoCo run [@diloco2026]. The first
-result is simulated failure exposure; the second is a geographically
-distributed research experiment. The latter demonstrates feasibility at that
-scale; it is not frontier-scale production.
+algorithm. In DiLoCo-style training, several model replicas, called learners,
+train on separate groups of accelerators and synchronize infrequently instead
+of at every step. Decoupled DiLoCo reports two separate experiments. In the
+first, a synthetic event tape represented 1.2 million chips with a one-year
+per-chip interruption interval. Eight learners retained 88 percent goodput, the
+fraction of training throughput that counted as useful progress, compared with
+58 percent for elastic data parallelism, with similar reported evaluation
+results. Separately, the authors trained a 12B model using eight learners
+placed across U.S. regions and reported step speed close to a collocated DiLoCo
+run [@diloco2026]. The first result measures simulated failure exposure; the
+second is a geographically distributed research experiment, which demonstrates
+feasibility at that scale and is not frontier-scale production.
 
-This is the connection to @sec-powering-ai: distributing power may create a
-reason to distribute training, but it does not make asynchronous optimization
-free. A proposal needs an algorithmic quality comparison at matched tokens and
-compute, a network and failure trace, a stale-update policy, a recovery test,
-and a cost for duplicated model state. Goodput without final quality is not
-useful progress.
+Distributed power supply, discussed in @sec-powering-ai, may give a reason to
+distribute training across sites, and asynchronous optimization then carries
+costs of its own. A proposal needs an algorithmic quality comparison at
+matched tokens and compute, a network and failure trace, a stale-update
+policy, a recovery test, and a cost for duplicated model state. Goodput counts
+as useful progress only when the trained model also reaches its target
+quality.
 
 ## Serving: a split adds a handoff
 
@@ -352,33 +365,37 @@ generation. *SLO goodput* is the sustainable request rate whose TTFT and TPOT
 remain within declared thresholds; raw tokens per second can rise while SLO
 goodput falls.
 
-Prefill and decode often have different resource profiles, but the labels are
-conditional. Prefill exposes parallel work across prompt tokens and commonly
+A request runs in two phases: prefill processes the whole prompt, and decode
+then generates output tokens one at a time. The two phases often have
+different resource profiles, and which resource limits each phase depends on
+the workload. Prefill exposes parallel work across prompt tokens and commonly
 reaches higher arithmetic utilization. Autoregressive decode at modest batch
 size repeatedly streams weights; with conventional attention and a long
-context it also reads a growing @gls-kv-cache. Batch size, prompt length,
-output length, model architecture, precision, parallelism, and network latency
-can move either phase to a different bottleneck [@erdil2025inference]. “Decode
-is bandwidth-bound” is a workload statement, not an identity. This interaction
+context it also reads a growing @gls-kv-cache, the attention state stored for
+every earlier token. Batch size, prompt length, output length, model
+architecture, precision, parallelism, and network latency can move either
+phase to a different bottleneck [@erdil2025inference]. “Decode is
+bandwidth-bound” therefore holds only for particular workloads. This interaction
 is often summarized as the latency hierarchy and the decode bandwidth wall,
 but a deployment must measure both under its own request mix.
 
 DistServe showed one response: place prefill and decode on separate GPU pools,
 provision each independently, and account for the KV-cache transfer between
 them. Its OSDI 2024 evaluation reported up to 7.4 times more requests or 12.6
-times tighter latency objectives than its tested baselines, not a universal
-speedup [@distserve2024]. Mooncake provides production evidence for a related
-design. The Kimi serving platform uses separated pools, a distributed KV
-cache, and a transfer engine; its FAST 2025 paper reports results from real
-traces and deployment across thousands of nodes [@mooncake2025].
+times tighter latency objectives than its tested baselines [@distserve2024].
+Mooncake provides production evidence for a related design. The Kimi serving
+platform uses separated pools, a distributed KV cache, and a transfer engine;
+its FAST 2025 paper reports results from real traces and deployment across
+thousands of nodes [@mooncake2025].
 
 The split also creates another failure boundary. The scheduler must know
 whether a failed KV-cache transfer can be retried, recomputed, or routed to a
 co-located replica. It must protect decode from head-of-line blocking and keep
 duplicate model capacity available in both pools. A co-located design with
-continuous batching or chunked prefill avoids the handoff and may win for
-another request mix. The decision needs arrival traces, TTFT and TPOT targets,
-KV size, transfer bandwidth, queueing, failure behavior, and cost.
+continuous batching or chunked prefill avoids the handoff and may perform
+better for another request mix. The decision needs arrival traces, TTFT and
+TPOT targets, KV size, transfer bandwidth, queueing, failure behavior, and
+cost.
 
 ```{dot}
 //| label: fig-machine-disagg
@@ -414,7 +431,7 @@ The serving mechanics connect to @sec-serving-problem and
 
 ## Agents need transactions too
 
-An agent trajectory is not a single model call. An agent that runs for hours
+An agent trajectory spans many model calls. An agent that runs for hours
 performs a sequence of proposed state changes, tool responses, validations,
 and retries. The probability that all required steps succeed follows the chain
 rule:
@@ -431,29 +448,32 @@ where:
 - $n$ is the number of required steps in the declared task decomposition;
 - $i$ indexes the current step;
 - $S_i$ is the event that step $i$ satisfies its acceptance condition;
-- $S_{1:i-1}$ is the history of acceptance events before step $i$; and
+- $S_{1:i-1}$ is the history of acceptance events before step $i$;
 - $S_{1:n}$ is the event that all steps from 1 through $n$ are accepted;
 - $\Pr$ denotes probability; and
 - $\prod$ multiplies the conditional probabilities across the indexed steps.
 
 If every step is independent, has the same success probability $p$, and no
-earlier error can be corrected, the expression reduces to $p^n$. That is a
-useful **null model**, not a forecast for arbitrary agents. Tool failures,
-self-correction, retries, shared hidden state, and a growing error-filled
-context make the conditional probabilities history-dependent.
+earlier error can be corrected, the expression reduces to $p^n$. That product
+is a **null model**, a baseline that holds only under those three assumptions.
+Tool failures, self-correction, retries, shared hidden state, and a growing
+error-filled context break them and make the conditional probabilities
+history-dependent.
 
 Sinha and colleagues isolated execution in a controlled multi-turn task. They
 found that errors inserted into prior turns reduced later-step accuracy, an
-effect they call self-conditioning. Scaling the tested non-thinking models did
-not eliminate the effect, while the thinking variants tested in the study did
-not show it [@longhorizon2025]. That result is evidence for one controlled task,
-not proof that every agent decays at the same rate.
+effect they call self-conditioning. Scaling the tested non-thinking models,
+which answer without first producing an extended reasoning trace, did not
+eliminate the effect, while the thinking variants tested in the study did not
+show it [@longhorizon2025]. The result comes from one controlled task and does
+not establish a common decay rate for all agents.
 
 Two other metrics answer different questions. METR's **time horizon** is the
 human expert task duration at which a fitted agent has a stated probability of
-success; it is not a count of model steps and remains benchmark- and
-scaffold-dependent [@metr2026horizon]. The $\tau$-bench reliability metric
-asks whether the same task succeeds across repeated trials:
+success. It is not a count of model steps, and it depends on the benchmark and
+on the scaffold, the harness code that wraps the model [@metr2026horizon]. The
+$\tau$-bench reliability metric asks whether the same task succeeds across
+repeated trials:
 
 $$
 \operatorname{pass}^{k}
@@ -469,7 +489,7 @@ where:
 - $\operatorname{pass}^{k}$ is the probability that all $k$ trials pass
   [@taubench2024].
 
-The distinction matters: $p^n$ is a within-trajectory baseline, whereas
+Of the two quantities, $p^n$ is a within-trajectory baseline, whereas
 $\operatorname{pass}^{k}$ measures consistency across repeated trajectories.
 A deployment should report task distribution, scaffold and tool versions,
 retry policy, partial-credit rule, and confidence intervals rather than a
@@ -478,11 +498,12 @@ single pass rate.
 The systems response is to give each consequential action a transaction
 boundary: declare preconditions, execute an idempotent or compensatable step,
 check postconditions against external state, persist a compact checkpoint,
-and either continue, retry, roll back, or escalate. This is the role of the
-harness in @sec-the-harness and the evaluators in @sec-evaluating-agents; it
-does not turn a weak model into a capable one. @sec-capability-horizon tracks
-the changing model frontier, while this chapter asks what must surround any
-given model before it can be trusted to run for longer.
+and either continue, retry, roll back, or escalate. The harness in
+@sec-the-harness and the evaluators in @sec-evaluating-agents implement these
+boundaries. They contain the consequences of a model's errors; raising the
+model's capability is a separate problem. The changing model frontier is
+tracked in @sec-capability-horizon, while this chapter asks what must surround
+a given model before it can be trusted to run for longer.
 
 ::: {.callout-important}
 ## What's contested
@@ -508,8 +529,8 @@ given model before it can be trusted to run for longer.
 
 ## Make the evidence replayable
 
-A reliability review should be reconstructible from records, not remembered as
-an outage story. Freeze an **event taxonomy** and attach a source timestamp,
+A reliability review should be reconstructible from records alone. Freeze an
+event taxonomy and attach a source timestamp,
 software and firmware versions, topology, affected ranks, and failure-domain
 classification to every event. Record detection time, isolation time, recovery
 time, checkpoint age, lost accelerator time, first divergent step when known,
@@ -524,7 +545,7 @@ external-state diff, verifier output, and intervention. For every layer, keep a
 replay test, a fault injection that exercises the recovery path, an acceptance
 criterion, and an owner for failed evidence.
 
-This evidence contract prevents three common mistakes: projecting one
+Records kept this way prevent three common mistakes: projecting one
 operator's event rate as a law of hardware, quoting a simulated failure model
 as field incidence, and reporting throughput without correctness or latency.
 It also makes improvements falsifiable: a new detector should reduce detection
@@ -534,16 +555,16 @@ improve verified task completion on repeated trials.
 
 ## A machine that fails within bounds
 
-**A reliable machine is not one that never fails.** It is one whose failures
-are defined, detected, contained, recovered, and checked before more state is
-trusted. Training reliability protects expensive progress. Serving reliability
-protects a latency and correctness contract. Agent reliability protects the
-world the agent is allowed to change. The mechanisms differ, but the operating
-discipline is consistent: count at the right boundary, make assumptions
-visible, and close every recovery loop with evidence.
+A reliable machine is one whose failures are defined, detected, contained, and
+recovered, and whose recovery is checked before more state is trusted. For training, reliability protects
+accumulated progress; for serving, the latency and correctness objectives of
+each request; for agents, the external state the agent is permitted to change.
+The mechanisms differ across the three layers, and all three rely on the same
+practices: counting failures at the workload boundary, stating the assumptions
+behind each model, and closing each recovery with a verification step.
 
-The infrastructure part of the book ends here. The next chapter moves from
-limits of the machine to limits of learning itself.
+The infrastructure part of the book ends here. The next chapter turns to the
+limits of learning.
 
 ## Further reading
 
