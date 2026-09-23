@@ -220,7 +220,12 @@ coverage check of the English tree. None has been decided or started.
   matter, and the changelog gains a monthly digest that links every change to
   its chapter.
 
-- [ ] **A year in a chapter title**
+- [ ] **A year in a chapter path**
+
+  The H1 of `practice/08` is "Wiring the Stack"; the year appears only in the
+  file path `practice/08-wiring-a-2026-stack`, the figure id
+  `fig-wiring-a-2026-stack-cost-crossover`, and the bib filename. Renaming the
+  path changes the published URL and needs a redirect.
 
   `practice/08-wiring-a-2026-stack` names a year in its H1. Either it becomes
   the one chapter that is explicitly a dated snapshot, or it is retitled, which
@@ -240,10 +245,10 @@ coverage check of the English tree. None has been decided or started.
   `app/src/chapter-render.test.ts`.
 - [ ] **39 Graphviz figures are wider than the mobile column** (34 en, 5 zh) and
   scroll sideways; listed as `knownWideFigures`.
-- [ ] **Display math differs between en and zh on 11 pages**; listed as
+- [ ] **Display math differs between en and zh on 9 pages**; listed as
   `knownMathDivergence` in `app/src/book-zh-parity.test.ts`. Most are
-  punctuation or layout, but `practice/05` writes `\text{otherwise}` where en
-  lists deny and approve.
+  punctuation or layout. `practice/05` and `practice/08` were fixed on
+  2026-09-23.
 - [ ] **Two hard-wrapped hyphenated compounds** in `adaptation/04`
   ("instruction-tuned", "log-probabilities").
 - [ ] **`app/src/reader-mermaid.test.ts` always skips**: it points at a stale page
@@ -262,9 +267,7 @@ is written.
 - [x] **Compute geopolitics beyond U.S. export rules.** Done 2026-09-23 in `infrastructure/05` and `06` (Huawei Ascend as vendor claims, TPU7x and TPU 8, Trainium3, tariffs and destination groups). Other Chinese vendors remain unverified.
 - [x] **Open-weight labs as market actors.** Done 2026-09-23 in `ecosystem/01` (hosting carve-outs, release tiers) and `ecosystem/05` (measured open-closed gap).
 - [x] **Current model lineup.** Partly done 2026-09-23: OpenAI and Anthropic lineups in a dated block in `practice/01`; the full lineup belongs in the state-of-the-field edition.
-- [ ] **Coding agents as a deployed system.** SWE-bench appears in five files,
-  but no section treats coding agents as a product category, and Claude Code
-  and Codex are not mentioned.
+- [x] **Coding agents as a deployed system.** Done 2026-09-23 in `practice/05` (what coding agents run, sandbox and credential decisions, how usage is measured, dated usage figures).
 
 ## Pending factual checks (September 2026 wording pass)
 
