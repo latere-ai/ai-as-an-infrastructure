@@ -4,19 +4,19 @@ AI systems have two histories. The first happens before a user arrives: data is
 collected, a model is trained, its behavior is refined, and its weights are
 deployed. The second begins when a request reaches the deployed system: a model
 service generates tokens, an agent runtime invokes tools, and tests or other
-observations determine what happens next. These histories meet at deployment,
-but they are not the same process.
+observations determine what happens next. These histories meet at deployment, but they are not the same
+process.
 
-This chapter follows both. The distinction matters because the expected runtime
-workload can change earlier design choices. A model that is cheap to train may
-be expensive to serve. An agent that can call tools needs stronger evaluation
+This chapter follows both and shows how the expected runtime workload can change
+earlier design choices. A model that is cheap to train may be expensive to
+serve. An agent that can call tools needs stronger evaluation
 and security boundaries than a model that only produces text. Later chapters
 develop each mechanism in detail; here the aim is to establish the connections.
 
 ![Schematic of five layers in the stack and the three pressures each layer exposes. Capability dominates training, efficiency dominates serving, and trust becomes more important when a system acts through tools. Idealized relative weights, not measured data.](/figures/whole-stack-1.svg){#fig-whole-stack-1}
 
-The running task is simple: *a user asks an assistant to find a bug in a small
-repository, propose a fix, and explain it.* Building that capability requires
+The chapter follows one running task: *a user asks an assistant to find a bug
+in a small repository, propose a fix, and explain it.* Building that capability requires
 training. Executing the request requires serving, tools, and feedback from the
 repository. Keeping those phases separate will make their dependencies easier
 to see.
@@ -26,12 +26,11 @@ dense Transformer, which applies nearly all of the model's layers and parameters
 to every token [@grattafiori2024llama]. DeepSeek-V3 is a @gls-moe model that
 activates only a few expert sub-networks for each token: 37 billion of its 671
 billion parameters are active for that token [@deepseek2024deepseekv3]. These
-models are not a
-controlled comparison of equal capability. They are useful because they expose
-two different cost structures. Later releases continued the move toward sparse
-capacity: Meta introduced its first mixture-of-experts Llama models in April
-2025 [@meta2025llama4], and DeepSeek released a preview of its sparse V4 family
-in April 2026 [@deepseek2026v4].
+models are not a controlled comparison of equal capability. They are useful
+because they expose two different cost structures. Later releases in both
+families also use sparse architectures: Meta introduced its first
+mixture-of-experts Llama models in April 2025 [@meta2025llama4], and DeepSeek
+released a preview of its sparse V4 family in April 2026 [@deepseek2026v4].
 
 ## Building the capability: data and tokens
 
@@ -56,12 +55,15 @@ step from bytes to token identifiers.
 ## Pre-training produces a base model
 
 Pre-training repeatedly gives the model a prefix and asks it to predict the next
-token. Given `if err != nil {`, for example, a model that assigns high probability to
+token. Each prediction is scored by a loss, a number that grows as the model
+assigns less probability to the token that actually follows. Given
+`if err != nil {`, for example, a model that assigns high probability to
 `return` incurs less loss than one that assigns the probability elsewhere. A
-training step computes this prediction error, propagates it backward, and
-updates the model's parameters. Repeating the process over a large corpus
-produces a base model: a general predictor of likely continuations, not yet a
-reliable assistant.
+training step computes this prediction error and propagates it backward through
+the network, which yields a gradient for each parameter, a measure of how that
+parameter should change to reduce the loss. The step then updates the model's
+parameters. Repeating the process over a large corpus produces a base model: a
+general predictor of likely continuations, not yet a reliable assistant.
 
 For a fixed compute budget, model size and training-token count cannot both grow
 without limit. Empirical scaling laws estimate how loss changes with parameters,
@@ -112,7 +114,8 @@ responses annotators or automated graders prefer (@sec-behavior-specs).
 
 Preference training follows two common routes. In reinforcement learning from
 human feedback, a reward model learns to score responses, and the language model
-is optimized as a policy to receive higher scores (@sec-rlhf). Direct preference
+is treated as a policy, the reinforcement-learning term for the component that
+chooses actions, and optimized to receive higher scores (@sec-rlhf). Direct preference
 methods train from preferred and rejected response pairs without a separate
 reward model (@sec-dpo-variants). Safety tuning adds rules about which
 instructions take priority and when the model should refuse
@@ -120,10 +123,11 @@ instructions take priority and when the model should refuse
 
 For the bug-fixing task, post-training turns plausible code completion into a
 sequence of useful behaviors: inspect the repository, state a plan, use tools,
-and explain a patch. Reasoning-oriented training and test-time methods may also
-allocate more computation to difficult steps. Part IV follows that path from
-elicitation and search to verification, distillation, and inference-time routing
-(@sec-eliciting-reasoning through @sec-inference-time-scaling).
+and explain a patch. Reasoning-oriented training and test-time methods, which
+run while the model answers a request, may also allocate more computation to
+difficult steps. Part IV follows that path from elicitation and search to
+verification, distillation, and inference-time routing (@sec-eliciting-reasoning
+through @sec-inference-time-scaling).
 
 ## Deployment turns weights into a service
 
@@ -133,10 +137,12 @@ a latency budget. Processing the input prompt, called *prefill*, often demands
 substantial arithmetic. Generating later tokens, called *decode*, repeatedly
 reads model weights and is often limited by memory bandwidth.
 
-During generation, attention needs keys and values computed for earlier tokens.
-The @gls-kv-cache stores this state so the model does not recompute the entire
-prefix at every step, but the cache grows with the number of tokens and active
-requests. @sec-serving-problem introduces this cost; @sec-memory-scheduling
+During generation, each new token draws information from earlier tokens
+through attention, the Transformer operation that relates positions in a
+sequence. Attention needs a key vector and a value vector computed for every
+earlier token. The @gls-kv-cache stores this state so the model does not
+recompute the entire prefix at every step, but the cache grows with the number
+of tokens and active requests. @sec-serving-problem introduces this cost; @sec-memory-scheduling
 explains batching and paging the cache. Speculative decoding proposes several
 tokens cheaply and verifies them with the target model (@sec-faster-decoding).
 Quantization stores selected weights or cache values at lower precision, reducing
@@ -144,20 +150,22 @@ memory and bandwidth at some risk to accuracy (@sec-quantization-kernels).
 
 ## Runtime: the request enters the system
 
-Only now does the user's bug report enter the system. An agent runtime sends the
-request to the model service, interprets the response as text or a tool call,
-executes permitted actions, and returns observations to the model. A typical
-trace reads a file, runs a test, inspects the failure, edits the code, and runs
-the test again. The model proposes actions; the runtime enforces permissions and
-executes them; the repository and test runner provide evidence about the result.
+The user's bug report enters the system at this stage. An agent runtime sends
+the request to the model service, interprets the response as text or a tool
+call, executes permitted actions, and returns observations to the model. A
+typical trace reads a file, runs a test, inspects the failure, edits the code,
+and runs the test again. In this trace the model requests each action, and the
+runtime checks the request against the task's permissions before executing it.
+The repository and the test runner then provide the evidence about the result.
 
 @sec-agent-architectures develops this control loop, and @sec-the-harness covers
-the runtime around it. Some systems use retrieval-augmented generation
-(@sec-rag-retrieval) to select relevant material from an index. A code agent may
-instead use file search and repository tools directly. In both cases,
-@sec-context-engineering addresses the same finite-context problem: which
-instructions, files, tool results, and summaries should accompany the next model
-call.
+the runtime built around it, which the book calls the harness. Some systems use
+retrieval-augmented generation (@sec-rag-retrieval) to select relevant material
+from an index. A code agent may instead use file search and repository tools
+directly. In both cases,
+@sec-context-engineering addresses the same problem. A model call accepts a
+bounded amount of input, called its context, so the runtime must choose which
+instructions, files, tool results, and summaries accompany the next call.
 
 @fig-whole-stack-pipeline keeps the lifecycle and runtime paths separate. The
 deployed weights connect them: training produces the artifact that serving
@@ -223,7 +231,7 @@ where model calls alternate with actions in an environment. Its total cost and
 failure probability accumulate across the trajectory.
 
 @fig-whole-stack-loops shows these relationships. The agent loop contains model
-calls, and each call contains token-by-token decoding. Training sits to the left
+calls, and each call contains token-by-token decoding. Training sits above them
 as their dependency rather than inside them. This gives three useful accounting
 units: per model version, per token and model call, and per task.
 
@@ -293,12 +301,12 @@ Sparse models express a related pressure through architecture. DeepSeek-V3
 activates 37 billion of 671 billion parameters per token, reducing expert
 arithmetic while paying for a larger resident parameter pool, routing,
 communication, and load balancing [@deepseek2024deepseekv3]. Inference-aware
-model sizing and mixture-of-experts routing are different techniques, but both
-show why downstream cost belongs in upstream design.
+model sizing and mixture-of-experts routing are different techniques, but in
+both the expected serving cost shapes choices made before training.
 :::
 
-The lifecycle comparison can be written without pretending that two released
-models form a controlled experiment. For a design $j$, let
+A lifecycle cost comparison between two hypothetical designs makes the
+condition explicit. For a design $j$, let
 
 $$
 C_j(V) = T_j + V I_j,
@@ -315,8 +323,8 @@ V^* = \frac{T_B-T_A}{I_A-I_B}.
 $$
 
 This small model omits hardware utilization, prompt processing, memory capacity,
-and engineering labor. Its purpose is narrower: it shows exactly when an
-expected runtime bill can justify a larger up-front training bill.
+and engineering labor. It shows only the condition under which expected serving
+cost justifies a larger up-front training cost.
 
 :::: {.runnable}
 ```python
@@ -376,10 +384,10 @@ of the book. From there, readers can follow the lifecycle in order or enter at a
 current engineering problem and use the cross-references to recover its
 dependencies.
 
-Two distinctions should remain after this first pass. Model development and
-request execution are connected timelines, not one journey. Capability,
-efficiency, and trust must be evaluated for the complete deployed system, not
-inferred from model architecture alone. The rest of the book develops the
+This first pass establishes two distinctions. Model development and request
+execution are two connected timelines that meet at the deployed weights.
+Capability, efficiency, and trust must be evaluated for the complete deployed
+system, not inferred from model architecture alone. The rest of the book develops the
 mechanisms behind those claims.
 
 ## Further reading
