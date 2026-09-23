@@ -27,4 +27,6 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "flash-attention": () => import("./flash-attention.ts"),
   "kv-head-sharing": () => import("./kv-head-sharing.ts"),
   "hybrid-retrieval": () => import("./hybrid-retrieval.ts"),
+  "compute-optimal-allocation": () => import("./compute-optimal-allocation.ts"),
+  "scaling-fit-extrapolation": () => import("./scaling-fit-extrapolation.ts"),
 };
