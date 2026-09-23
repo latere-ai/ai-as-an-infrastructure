@@ -32,31 +32,31 @@ test("the Chinese ecosystem summary preserves the complete English shape", () =>
 
 test("the recap explains how the ecosystem shapes what teams can operate", () => {
   for (const phrase of [
-    "发布方式、工具、价格、市场结构、采用情况和数据权利都会塑造技术栈",
+    "技术栈在什么条件下被提供和使用",
     "API、开放权重还是受限许可证",
     "开发团队能够部署和运营哪些系统",
     "工具标准、网关、沙箱和可观测性",
-    "决定哪些做法能够普及",
-    "训练与推理的经济性",
-    "构成更硬的边界",
+    "影响着哪些做法能够普及",
+    "训练与服务的成本",
+    "按每个合格结果计算",
     "哪些设计能够长期维持",
   ]) expect(flat).toContain(phrase);
 });
 
 test("nontechnical conditions remain architectural constraints", () => {
   for (const phrase of [
-    "非技术条件会转化为技术约束",
+    "非技术条件可能转化为技术约束",
     "定价、供应集中度、许可证条款、合规义务和权利主张",
     "对架构的影响可能不亚于基准成绩或内核性能",
-    "能力再强，也可能因无法获得而无用",
-    "价格再低，运营总成本也可能很高",
-    "即使开放，也未必容易以负责任的方式使用",
+    "基准成绩、获取条件、服务成本",
+    "彼此独立变化",
+    "在另一项上仍可能达不到",
   ]) expect(flat).toContain(phrase);
 });
 
 test("the handoff turns market constraints into operating contracts", () => {
   for (const phrase of [
-    "生态系统不是技术栈周围的背景",
+    "生态系统是其中的一种机制",
     "能力如何转化为使用机会、供应商锁定、利润空间和运营风险",
     "越来越容易按需租用",
     "芯片供应商、云服务商、模型提供商、应用公司、劳动者和数据权利人",
@@ -96,7 +96,7 @@ test("the rewritten ecosystem summary renders through its Part XII handoff", asy
     glossaryFirstUses: new Map(),
   };
   const { html, headings } = renderMarkdown(chinese, ctx);
-  expect(html).toContain("生态系统不是技术栈周围的背景");
+  expect(html).toContain("生态系统是其中的一种机制");
   expect(html).toContain("第十二部分");
   expect(html).not.toContain("katex-error");
   expect(headings.length).toBe(0);
