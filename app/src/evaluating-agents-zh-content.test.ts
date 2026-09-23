@@ -51,8 +51,8 @@ test("Chapter 52 preserves the complete English agent-evaluation contract", () =
     "分开评测状态与约束",
     "让每项任务有效且可重置",
     "区分智能体失败与评测失败",
-    "一次尝试不代表可靠性",
-    "用轨迹诊断，而不是事后编故事",
+    "用重复尝试衡量可靠性",
+    "用轨迹做诊断",
     "运行契约",
     "争议所在",
     "下层约束",
@@ -73,13 +73,13 @@ test("Chapter 52 preserves the complete English agent-evaluation contract", () =
 
 test("the opening separates claims from completed work", () => {
   for (const phrase of [
-    "智能体不只会生成回答",
+    "智能体会观察环境",
     "观察环境、选择动作、调用工具并改变状态",
     "检查实际发生了什么",
     "最终消息只能证明智能体声称自己做了什么",
     "环境状态和保留下来的动作日志",
     "评测有版本的系统，核验最终状态",
-    "真正的流程约束",
+    "只在任务确有硬性流程约束时检查轨迹",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -151,7 +151,7 @@ test("required success combines outcomes with only hard constraints", () => {
     "结果和所有硬性约束都通过",
     "空乘积为 1",
     "不要求智能体遵循作者偏好的路线",
-    "真正属于任务要求的中间事实",
+    "属于任务要求本身的中间事实",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -278,11 +278,11 @@ test("contested scope and lower-layer observability remain explicit", () => {
   for (const phrase of [
     "只看结果的评分",
     "密集的流程评分",
-    "既不是只看结果，也不是全程规定路径",
+    "合理的默认做法是核验必要结果",
     "把硬性流程约束限制在必要范围",
     "执行层没有暴露的状态，评测层就看不到",
     "无法证明哪些文件、凭据、网络调用或数据库记录发生了变化",
-    "评测设计从评分器的下一层开始",
+    "先确定执行层记录哪些内容，再编写评分器",
   ]) expect(flat).toContain(phrase);
 });
 

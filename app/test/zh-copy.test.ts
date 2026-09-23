@@ -871,11 +871,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/06-evaluating-agents.qmd",
-      ["An agent does not merely produce an answer", "Evaluate the versioned system, verify the resulting state", "Score state and constraints separately", "One attempt is not reliability"],
+      ["An agent observes an environment, chooses", "Evaluate the versioned system, verify the resulting state", "Score state and constraints separately", "Measure reliability over repeated attempts"],
     ],
     [
       "zh/evaluation/06-evaluating-agents.qmd",
-      ["智能体不只会生成回答", "定义受测系统", "分开评测状态与约束", "一次尝试不代表可靠性"],
+      ["智能体会观察环境", "定义受测系统", "分开评测状态与约束", "用重复尝试衡量可靠性"],
     ],
     [
       "en/evaluation/07-operational-evaluation.qmd",

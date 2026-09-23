@@ -14,12 +14,12 @@ const flat = chapter.replace(/\s+/g, " ").toLowerCase();
 
 test("the opening separates claims from completed work", () => {
   for (const phrase of [
-    "does not merely produce an answer",
+    "an agent observes an environment, chooses actions",
     "the environment state and retained action log",
     "evidence about what it *did*",
     "evaluate the versioned system",
     "verify the resulting state",
-    "genuine process constraints",
+    "hard process constraints",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -86,7 +86,7 @@ test("required success combines outcomes with only hard constraints", () => {
     "c_{ij}(\\tau_{ir})\\in\\{0,1\\}",
     "y_{ir}=g_i(s_0,s_t)\\prod_{j=1}^{j_i} c_{ij}(\\tau_{ir})",
     "empty product is one",
-    "does **not** require the agent to follow an author's preferred route",
+    "does not require the agent to follow an author's preferred route",
     "only those intermediate facts that are part of the real requirement",
   ]) expect(flat).toContain(phrase);
 });
