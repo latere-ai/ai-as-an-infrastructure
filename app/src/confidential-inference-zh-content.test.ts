@@ -66,7 +66,7 @@ test("Chapter 60 preserves the complete English confidential-serving contract", 
     "保留运行记录",
     "争议所在",
     "下层约束",
-    "机密性属于完整路径，而不是某种产品",
+    "完整路径决定机密性主张",
     "延伸阅读",
   ]);
   expect(headings(chapter, 3)).toEqual(["回归场景"]);
@@ -218,7 +218,7 @@ test("GPU confidentiality composes independent evidence roots and links", () => 
 
 test("key release binds policy identity lifecycle and failure closure", () => {
   for (const phrase of [
-    "只有在决策真正控制某项秘密或服务的访问权时",
+    "只有在决策控制某项秘密或服务的访问权时",
     "密钥代理、KMS 或客户端",
     "租户、用途、工作负载度量值、模型和数据版本",
     "证据缺失、过期、处于调试模式、已撤销或彼此不一致",
