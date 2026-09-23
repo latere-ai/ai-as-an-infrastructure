@@ -1,23 +1,22 @@
 # Context Engineering {#sec-context-engineering}
 
-Context engineering decides what a model sees for one inference step. It does
-not replace the knowledge in the model's weights, and it is not a way to pour
-an application's entire state into a prompt. It constructs a bounded,
-versioned view of the current task from instructions, user input, retrieved
-evidence, conversation state, tool descriptions, and tool results. The useful
-question is therefore not “how much text fits?” but “which authorized tokens
-give this call the evidence and constraints it needs, without hiding conflicts
-or spending the space reserved for an answer?”
+Context engineering decides what a model sees for one inference step. It
+supplements the knowledge in the model's weights with a bounded, versioned view
+of the current task, built from instructions, user input, retrieved evidence,
+conversation state, tool descriptions, and tool results. For each call, the
+design question is which authorized tokens give the model the evidence and
+constraints it needs without hiding conflicts or spending the space reserved
+for an answer.
 
 Prompt engineering remains part of that work: instructions still need clear
 language. The broader label became popular in 2025 as agent systems made the
 rest of the assembly visible [@anthropic2025context]. The underlying mechanism
-is older. Brown et al.
-showed in 2020 that demonstrations in the input could change GPT-3's task
-behavior without a weight update [@brown2020language]. Retrieval, tools, and
-multi-turn agents then turned a hand-written prompt into a per-step data
-pipeline. Context engineering is the discipline of specifying and testing that
-pipeline, not a claim that prompting was renamed on a particular date.
+is older: Brown et al. showed in 2020 that demonstrations in the input, worked
+examples of the task, could change GPT-3's task behavior without a weight
+update [@brown2020language]. Retrieval, tools, and multi-turn agents then
+turned a hand-written prompt into a per-step data pipeline. Context engineering
+is the discipline of specifying and testing that pipeline, not a claim that
+prompting was renamed on a particular date.
 
 ![Schematic comparison of indiscriminate context growth and selective context assembly. The curves are illustrative: actual quality depends on the model, task, evidence, and ordering.](/figures/context-engineering-1.svg){#fig-context-engineering-1}
 
@@ -30,7 +29,9 @@ projection is wrong, a capable model can still answer the wrong question,
 follow stale instructions, cite obsolete evidence, or repeat an action that
 already happened.
 
-Treat the projection as a versioned interface:
+Treat the projection as a versioned interface. The two records below form the
+assembly contract: `ContextSpec` pins the model, limits, and policies that
+shape a call, and `ContextItem` describes one piece of candidate content.
 
 ```text
 ContextSpec {
@@ -59,7 +60,8 @@ in a user message or a tool result, but it does not thereby gain permission to
 override application instructions. Source and access-control fields make the
 item traceable to the authorized state from which it was derived.
 
-The exact rendered request is part of the contract. A provider's chat template
+The exact rendered request is part of the contract. A provider's chat template,
+which renders role-tagged messages into the token sequence the model reads,
 can add role markers, separators, tool-call records, and hidden formatting.
 Changing that template or tokenizer can change both behavior and token count
 even when the visible strings are identical. Hash the spec, record the ordered
@@ -90,11 +92,13 @@ the output reserve. When an API exposes only one combined limit, the two
 constraints reduce to the second one.
 
 The inequalities are admission checks, not targets. Filling every available
-token can raise prefill latency, enlarge the key-value cache, dilute useful
-evidence, and leave later tool results nowhere to go. A production policy
-normally sets smaller budgets for categories such as tool schemas, retrieved
-evidence, demonstrations, and history. Those allocations are policy choices to
-measure, not universal percentages. A multi-step tool loop also needs headroom
+token can raise prefill latency (the time to process the whole input before
+the first output token), enlarge the key-value cache that holds attention state
+for every token in the sequence, dilute useful evidence, and leave later tool
+results nowhere to go. A production policy normally sets smaller budgets for
+categories such as tool schemas, retrieved evidence, demonstrations, and
+history. Those allocations are policy choices, and their values come from
+measurement on the workload. A multi-step tool loop also needs headroom
 for the assistant's tool request and the result that becomes input to the next
 call; reserving only the final prose answer can strand the run halfway through.
 
@@ -108,23 +112,25 @@ provider's returned usage so tokenizer or template drift becomes observable.
 
 ## Selection and placement are empirical policies
 
-More context can help because the model can condition on task-specific
-information that its weights do not contain. It can also hurt because items
-compete for finite space and influence one another. In-context demonstrations
-are a simple example. GPT-3 established that zero-, one-, and few-shot prompts
-could produce useful behavior without gradient updates, but the effect varied
-substantially by task and model size [@brown2020language]. Later controlled
-experiments found that changing the order of the same four demonstrations
-could sharply change classification accuracy for the evaluated GPT-family
-models [@lu2022ordered]. Example identity, order, format, and label balance are
-therefore inputs to an evaluation, not decoration around a fixed method.
+More context can help because the model can use task-specific information
+that its weights do not contain. It can also hurt because items compete for
+finite space and influence one another. In-context demonstrations are a simple
+example. GPT-3 established that zero-, one-, and few-shot prompts, which carry
+zero, one, or a few demonstrations, could produce useful behavior without
+gradient updates, but the effect varied substantially by task and model size
+[@brown2020language]. Later controlled experiments found that changing the
+order of the same four demonstrations could sharply change classification
+accuracy for the evaluated GPT-family models [@lu2022ordered]. Example
+identity, order, format, and label balance are therefore inputs to an
+evaluation and belong to the method under test.
 
-Irrelevant information is not neutral either. Shi et al. inserted distracting
-sentences into grade-school arithmetic problems and measured accuracy losses
-in the evaluated language models [@shi2023distracted]. That result does not
-prove that every extra passage lowers quality. It does show why retrieval score
-alone is insufficient: test distractors that are lexically related, plausible,
-stale, duplicated, or in conflict with the answer-bearing evidence.
+Irrelevant information can also lower accuracy. Shi et al. inserted
+distracting sentences into grade-school arithmetic problems and measured
+accuracy losses in the evaluated language models [@shi2023distracted]. That
+result does not prove that every extra passage lowers quality. It does show
+that retrieval score alone is an insufficient filter, so an evaluation should
+include distractors that are lexically related, plausible, stale, duplicated,
+or in conflict with the answer-bearing evidence.
 
 Position can matter as well. Liu et al. varied the location of relevant
 information in multi-document question answering and synthetic key-value
@@ -142,9 +148,9 @@ and later architectures can change the curve.
 </figure>
 ```
 
-The practical response is a permutation test, not a slogan such as “always put
-evidence at the edges.” Hold the selected items fixed, move the answer-bearing
-and conflicting items through the rendered request, and measure the change.
+The practical response is a permutation test on the deployed model. Hold the
+selected items fixed, move the answer-bearing and conflicting items through the
+rendered request, and measure the change.
 Chat roles and templates may place text differently from the source order, so
 inspect the actual payload. Adopt an ordering rule only when that rule wins on
 the target workload and remains stable across important slices.
@@ -170,22 +176,24 @@ Three rules follow:
    chooses one claim converts uncertainty into false certainty.
 
 Roles, XML tags, and delimiters help the model parse these boundaries, but
-formatting alone is not a security boundary. Indirect prompt injection works
-precisely because untrusted data and executable instructions meet inside one
-model input. StruQ demonstrated a stronger separation by pairing a structured
-front end with a model specifically trained to ignore instructions in the data
-channel [@chen2025struq]. Its result should not be generalized to an arbitrary
+formatting alone is not a security boundary. Indirect prompt injection, in
+which instructions planted in retrieved documents or tool output steer the
+model, works because untrusted data and executable instructions meet inside
+one model input. StruQ demonstrated a stronger separation by pairing a
+structured front end with a model specifically trained to ignore instructions
+in the data channel [@chen2025struq]. Its result should not be generalized to an arbitrary
 model that merely sees tags. Authorization, least-privilege tools, confirmation
 for consequential actions, output validation, and the controls in
 @sec-adversarial-robustness remain necessary.
 
 ## Compaction is a lossy state transition
 
-Long conversations and agent trajectories eventually exceed any fixed window.
-Dropping old turns loses state; carrying every turn forward consumes the
-budget; summarizing creates a new, fallible representation. Compaction is
-therefore a state transition with an explicit loss policy, not routine text
-cleanup.
+Long conversations and agent trajectories, the growing record of an agent's
+steps and tool results, eventually exceed any fixed context window, the token
+limit set in the budget above. Dropping old turns loses state; carrying
+every turn forward consumes the budget; summarizing creates a new, fallible
+representation. Compaction is therefore a state transition with an explicit
+loss policy, designed and tested like any other change to application state.
 
 Separate at least three kinds of state:
 
@@ -201,23 +209,25 @@ Separate at least three kinds of state:
 Every compacted checkpoint records its input range, policy version, content
 hash, source pointers, unresolved uncertainty, and actions already performed.
 Later calls can retrieve the original evidence when a decision depends on
-detail the summary omitted. This is the same separation used by
-@sec-memory-systems: durable storage owns truth; the window holds a working
+detail the summary omitted. @sec-memory-systems uses the same separation:
+durable storage holds the authoritative record, and the window holds a working
 set.
 
-Compression quality is task-dependent. RECOMP trained extractive and
-abstractive compressors against downstream retrieval-augmented tasks and also
-learned when augmentation should be omitted [@xu2024recomp]. That is stronger
-evidence than assuming a generic summary preserves whatever the next step will
-need. Evaluate compaction on delayed questions, commitments, negations,
+Compression quality is task-dependent. RECOMP trained extractive compressors,
+which select sentences from the retrieved documents, and abstractive
+compressors, which write a new summary, against downstream retrieval-augmented
+tasks, and also learned when augmentation should be omitted [@xu2024recomp].
+That is stronger evidence than assuming a generic summary preserves whatever
+the next step will need. Evaluate compaction on delayed questions, commitments, negations,
 multi-step dependencies, and recovery after failure. For irreversible actions,
 reconcile against the external system rather than trusting a prose summary.
 
-## Tools expand the candidate set, not the authority
+## Tool catalogs, calls, and results
 
-A tool protocol determines how capabilities are described and invoked. It does
-not decide which capabilities a model should see, whether a call is authorized,
-or how much of a result belongs in the next context.
+A tool protocol determines how capabilities are described and invoked. Which
+capabilities a model should see, whether a call is authorized, and how much of
+a result belongs in the next context are decisions the application makes
+around the protocol.
 
 The Model Context Protocol (MCP) standardizes a client-host-server exchange for
 resources, prompts, and tools. In its architecture, the host coordinates
@@ -272,9 +282,9 @@ Inputs:
 ```
 
 Here $q$ is the current task request, $a$ is the authenticated caller, $D$ is
-the durable application state, and $V$ is the selected context contract. $F$,
-$C$, $S$, $\pi$, and $X$ have the meanings defined in the budget formulation
-above. A `ContextManifest` is metadata for replay and diagnosis; sensitive raw
+the durable application state, and $V$ is the selected `ContextSpec` version.
+$F$, $C$, $S$, $\pi$, and $X$ have the meanings defined in the budget
+formulation above. A `ContextManifest` is metadata for replay and diagnosis; sensitive raw
 content remains subject to its source retention and access policy.
 
 ```{dot}
@@ -306,13 +316,13 @@ operator can distinguish retrieval failure, authorization filtering, budget
 exclusion, compaction loss, serialization error, and model non-use. Without
 that record, all six failures look like “the model forgot.”
 
-## Evaluate the assembler, not just the answer
+## Evaluate the assembler
 
 Freeze the model revision, tokenizer and chat template, context spec, corpus
 and permission snapshot, tool catalog, and evaluation cases. Compare against
 the current production policy, a no-added-context baseline, a full-context
 baseline, and, where possible, an oracle containing only the necessary
-authorized items. Then test four boundaries separately:
+authorized items. Then test four areas separately:
 
 - **Selection and use:** task success, evidence recall after packing, supported
   claims, instruction adherence, and abstention when required evidence is
@@ -331,11 +341,11 @@ authorized items. Then test four boundaries separately:
 Use paired cases so only the context policy changes, and report uncertainty
 over tasks, the worst relevant position, and the mean rather than one average
 from unrelated workloads. Inspect material slices such as language, request
-length, tool family, permission cohort, and conversation age. A shorter context
-is not better if it drops decisive
-evidence; a longer one is not better if it adds latency and distractors without
-improving the task. Synthetic retrieval probes are useful diagnostics but do
-not establish long-context capability by themselves; HELMET combines recall,
+length, tool family, permission cohort, and conversation age. Judge a change in
+context length by its effect on the task: a shorter context that drops decisive
+evidence is worse, and so is a longer one that adds latency and distractors
+without improving the task. Synthetic retrieval probes are useful diagnostics
+but do not establish long-context capability by themselves; HELMET combines recall,
 retrieval-augmented generation, many-shot learning, question answering, and
 summarization to expose different failure modes [@yen2025helmet].
 
@@ -350,8 +360,7 @@ training. Extractive compression preserves wording but may miss cross-document
 synthesis; abstractive compression can combine evidence but may invent or erase
 qualifiers. Even instruction/data separation spans a spectrum from formatting
 conventions to models trained for distinct channels. These choices are
-competing hypotheses to test on the deployed system, not stages of one
-inevitable architecture.
+competing hypotheses to test on the deployed system.
 :::
 
 ::: {.callout-tip}
@@ -368,8 +377,8 @@ reuse work for an exact stable prefix, but cached tokens still occupy the
 window; cache reuse is an optimization, not durable memory.
 :::
 
-Context engineering closes the orchestration loop: retrieval, memory, tools,
-and agent state become one bounded, authorized input with a replayable
+In context engineering, the retrieval, memory, tools, and agent state of the
+preceding chapters become one bounded, authorized input with a replayable
 manifest. The next part begins with @sec-benchmarks and asks what evidence is
 strong enough to show that this machinery works beyond a hand-picked example.
 

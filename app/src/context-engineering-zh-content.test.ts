@@ -48,9 +48,9 @@ test("Chapter 46 preserves the complete English context-engineering contract", (
     "选择与摆放策略要靠实测",
     "保留权限边界与来源信息",
     "压缩是一种有损状态转换",
-    "工具扩大候选集合，不扩大权限",
+    "工具目录、调用与结果",
     "组装一次模型调用",
-    "评估组装器，而不只是最终回答",
+    "评估组装器",
     "争议所在",
     "下层约束",
     "延伸阅读",
@@ -70,7 +70,7 @@ test("Chapter 46 preserves the complete English context-engineering contract", (
 test("the opening defines context engineering as a bounded per-call projection", () => {
   for (const phrase of [
     "一次推断中能看到什么",
-    "并不取代模型权重中的知识",
+    "在模型权重中的知识之外",
     "有界且带版本的视图",
     "临时投影",
     "哪些经过授权的词元",
@@ -118,8 +118,8 @@ test("budgeting counts the exact serialized request and fails explicitly", () =>
 test("selection placement and distractor claims preserve their empirical limits", () => {
   for (const phrase of [
     "相同四个示范的顺序",
-    "不能当作无关紧要的装饰",
-    "无关信息也并非中性",
+    "属于被测方法的一部分",
+    "无关信息同样可能降低准确率",
     "并不能证明每一段额外文本都会降低质量",
     "不是每个模型、任务或上下文长度都遵循的定律",
     "置换测试",
@@ -154,7 +154,7 @@ test("compaction keeps durable truth separate from lossy working state", () => {
 
 test("tool protocols standardize exchange without granting authority", () => {
   for (const phrase of [
-    "不会决定模型应该看到哪些能力",
+    "模型应该看到哪些能力",
     "协调客户端、权限、同意流程和上下文聚合",
     "不会把所有信任域合并成一个安全枢纽",
     "模式校验通过，不等于获得了调用权限",

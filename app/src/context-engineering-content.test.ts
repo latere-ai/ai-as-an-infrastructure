@@ -80,7 +80,7 @@ test("in-context learning claims preserve their experimental scope", () => {
     "varied substantially by task and model size",
     "same four demonstrations",
     "evaluated gpt-family models",
-    "inputs to an evaluation, not decoration",
+    "inputs to an evaluation",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -119,7 +119,7 @@ test("compaction remains lossy derived state", () => {
 
 test("MCP standardization does not grant authority", () => {
   for (const phrase of [
-    "does not decide which capabilities",
+    "which capabilities a model should see",
     "host coordinates clients, permissions, consent",
     "does not collapse all trust domains",
     "a valid schema is not permission",
