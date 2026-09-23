@@ -17,4 +17,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "group-relative-rl": () => import("./group-relative-rl.ts"),
   "pass-at-k-boundary": () => import("./pass-at-k-boundary.ts"),
   "pipeline-schedule": () => import("./pipeline-schedule.ts"),
+  "float-formats": () => import("./float-formats.ts"),
 };

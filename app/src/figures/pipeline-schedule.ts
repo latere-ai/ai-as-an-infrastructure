@@ -37,7 +37,8 @@ import { C, TYPE } from "./lib/theme.ts";
 import { linear } from "./lib/scale.ts";
 import { axis, axisHeight } from "./lib/axis.ts";
 import { legend, type LegendItem } from "./lib/legend.ts";
-import { textWidth, wrap } from "./lib/labels.ts";
+import { textWidth } from "./lib/labels.ts";
+import { wrapCjk as wrap } from "./lib/kinsoku.ts";
 import { pct, sig, tpl } from "./lib/format.ts";
 
 // ---------------------------------------------------------------- schedule

@@ -465,7 +465,7 @@ test("expanded adaptation chapters use the post-training visualizations in both 
 
 // Wave 5: the deep-catalog tail of bespoke components.
 test("the viz runtime registers the wave-5 components", () => {
-  for (const name of ["ssm-vs-attention", "rl-timeline", "rrf-fusion", "decision-tree", "float-bits"]) {
+  for (const name of ["ssm-vs-attention", "rl-timeline", "rrf-fusion", "decision-tree"]) {
     expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
   }
 });
@@ -476,28 +476,12 @@ test("wave-5 components are used in their chapters, both languages", () => {
     ["orchestration/01-training-agents-to-act", "rl-timeline"],
     ["orchestration/08-rag-retrieval", "rrf-fusion"],
     ["practice/01-choosing-a-model", "decision-tree"],
-    ["foundations/06-training-at-scale", "float-bits"],
   ];
   for (const [path, viz] of uses) {
     for (const lang of ["en", "zh"]) {
       expect(src(`${lang}/${path}.qmd`)).toContain(`data-viz="${viz}"`);
     }
   }
-});
-
-test("Chapter 10 visualizations localize labels, controls, and accessible summaries", () => {
-  const floatStart = rt.indexOf("R['float-bits']");
-  const floatEnd = rt.indexOf("  R['", floatStart + 1);
-  const floatBits = rt.slice(floatStart, floatEnd);
-
-  expect(floatBits).toContain("host.getAttribute('data-lang')");
-  expect(floatBits).toContain("document.documentElement.lang.indexOf('zh') === 0");
-  for (const phrase of ["符号", "指数（范围）", "尾数（精度）", "位 = 1 位符号"]) {
-    expect(floatBits).toContain(phrase);
-  }
-  expect(floatBits).toContain("b.setAttribute('aria-pressed'");
-  expect(floatBits).toContain("bits.setAttribute('role', 'img')");
-  expect(floatBits).toContain("bits.setAttribute('aria-label'");
 });
 
 test("the RL systems view separates placement from synchronization", () => {
@@ -733,7 +717,8 @@ function qmdSources(dir: string): string[] {
 }
 
 test("every decision-tree placement requests a tree the runtime defines", () => {
-  const component = rt.slice(rt.indexOf("R['decision-tree']"), rt.indexOf("R['float-bits']"));
+  const start = rt.indexOf("R['decision-tree']");
+  const component = rt.slice(start, rt.indexOf("  R['", start + 1));
   const trees = component.match(/var TREES = \{([^}]*)\}/)?.[1] ?? "";
   const modes = ["en", "zh"].flatMap((lang) =>
     qmdSources(lang).flatMap((source) =>
@@ -744,9 +729,4 @@ test("every decision-tree placement requests a tree the runtime defines", () => 
   );
   expect(modes.length).toBeGreaterThan(0);
   expect(modes.filter((mode) => !trees.includes(`'${mode}':`))).toEqual([]);
-});
-
-test("the precision inspector includes the FP4 E2M1 format", () => {
-  const component = rt.slice(rt.indexOf("R['float-bits']"));
-  expect(component).toContain("{ n: 'fp4 E2M1', e: 2, m: 1 }");
 });

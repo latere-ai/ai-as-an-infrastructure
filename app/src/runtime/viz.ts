@@ -1561,51 +1561,6 @@
     show(TREE);
   };
 
-  // Float-bit inspector: each value format spends one sign bit then splits the
-  // rest between exponent (range) and mantissa (precision). bf16's wide exponent
-  // usually avoids FP16 loss scaling; scaled FP8/FP4 recipes also carry metadata
-  // and accumulation rules that this value-level view intentionally omits.
-  R['float-bits'] = function (host) {
-    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
-    var zh = lang === 'zh';
-    var L = zh ? {
-      sign: '符号', exponent: '指数（范围）', mantissa: '尾数（精度）'
-    } : {
-      sign: 'sign', exponent: 'exponent (range)', mantissa: 'mantissa (precision)'
-    };
-    var FORM = [
-      { n: 'fp32', e: 8, m: 23 }, { n: 'fp16', e: 5, m: 10 }, { n: 'bf16', e: 8, m: 7 },
-      { n: 'fp8 E4M3', e: 4, m: 3 }, { n: 'fp8 E5M2', e: 5, m: 2 },
-      { n: 'fp4 E2M1', e: 2, m: 1 }
-    ];
-    var sel = 2;
-    var COL = { s: '#888', e: '#2d63a8', m: '#e0936b' };
-    var formats = el('div', 'viz-fb-formats'), bits = el('div', 'viz-fb-bits'), note = el('div', 'viz-fb-note');
-    bits.setAttribute('role', 'img');
-    var legend = el('div', 'viz-fb-legend');
-    [[L.sign, COL.s], [L.exponent, COL.e], [L.mantissa, COL.m]].forEach(function (item) {
-      var k = el('span', 'viz-fb-key'); var sw = el('span', 'viz-fb-sw'); sw.style.background = item[1]; var tx = el('span'); tx.textContent = item[0]; k.appendChild(sw); k.appendChild(tx); legend.appendChild(k);
-    });
-    var chipEls = [];
-    FORM.forEach(function (f, i) {
-      var b = el('button', 'viz-ce-chip'); b.type = 'button'; b.textContent = f.n;
-      b.addEventListener('click', function () { sel = i; render(); });
-      formats.appendChild(b); chipEls.push(b);
-    });
-    host.appendChild(formats); host.appendChild(bits); host.appendChild(legend); host.appendChild(note);
-    function render() {
-      chipEls.forEach(function (b, i) { b.classList.toggle('on', i === sel); b.setAttribute('aria-pressed', i === sel ? 'true' : 'false'); });
-      var f = FORM[sel]; bits.textContent = '';
-      function cells(n, col) { for (var i = 0; i < n; i++) { var c = el('div', 'viz-fb-bit'); c.style.background = col; bits.appendChild(c); } }
-      cells(1, COL.s); cells(f.e, COL.e); cells(f.m, COL.m);
-      note.textContent = zh
-        ? (1 + f.e + f.m) + ' 位 = 1 位符号 + ' + f.e + ' 位指数 + ' + f.m + ' 位尾数'
-        : (1 + f.e + f.m) + ' bits = 1 sign + ' + f.e + ' exponent + ' + f.m + ' mantissa';
-      bits.setAttribute('aria-label', f.n + (zh ? '：' : ': ') + note.textContent);
-    }
-    render();
-  };
-
   // Accuracy precision screen: this deliberately shows only the rough Wald
   // half-width for one iid binomial proportion. It is not a power calculation,
   // a paired A/B interval, or a release rule.
