@@ -45,7 +45,7 @@ test("the recap preserves all three limits and their qualifications", () => {
 
 test("the synthesis explains why acceptance capacity becomes scarce", () => {
   for (const phrase of [
-    "真正紧缺的资源已经从生成能力转向验收能力",
+    "紧缺的资源已经从生成能力转向验收能力",
     "候选答案、程序、证明、设计和假设",
     "使结果足以被采信的证据与制度基础",
     "可检查的证明对象",
