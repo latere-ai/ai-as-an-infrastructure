@@ -5,21 +5,21 @@ sublayers: attention mixes positions, and a feed-forward network (FFN)
 transforms each position. This chapter varies those two sublayers along
 independent axes.
 
-A mixture-of-experts (MoE) FFN stores many expert networks but evaluates only
-a selected subset for each token. It changes parameter activation; it does not
-make attention sparse. A state-space or linear-recurrent layer changes how the
-sequence is mixed and what state is retained during decoding; it does not by
-itself add expert routing. A hybrid can use either change, or both, in one
-stack. Keeping the axes separate prevents three quantities from being confused:
-stored parameters, arithmetic executed for one token, and state retained for
-one sequence.
+A mixture-of-experts (MoE) FFN stores many expert networks, each a separate
+FFN with its own weights, but evaluates only a selected subset for each token.
+It changes which parameters a token activates and leaves attention unchanged. A
+state-space or linear-recurrent layer changes how the sequence is mixed and
+what state is retained during decoding, and leaves the FFN as it was. A hybrid
+can use either change, or both, in one stack. Keeping the axes separate
+prevents three quantities from being confused: stored parameters, arithmetic
+executed for one token, and state retained for one sequence.
 
 ## Two independent architecture axes
 
 For a dense Transformer block, every token evaluates the same FFN weights, and
 every attention layer retains keys and values for every cached position. That
-is a specific design, not a definition of a language model. Alternatives ask
-two different questions:
+is one specific design for a language model. The alternatives change it along
+two separate axes:
 
 | Axis | Dense choice | Alternative | Resource primarily changed |
 |---|---|---|---|
@@ -29,9 +29,9 @@ two different questions:
 These substitutions introduce new costs. MoE routing creates dispatch,
 imbalance, and communication. A recurrence compresses history into a state
 whose width is fixed by the architecture, so past positions are no longer
-individually represented in a growing key-value cache. The relevant comparison
-is therefore a workload-level one: quality, training arithmetic, memory,
-communication, batch shape, and serving latency all count.
+individually represented in a growing key-value cache. The comparison therefore
+has to be made over a whole workload, counting quality, training arithmetic,
+memory, communication, batch shape, and serving latency.
 
 ## MoE routes tokens through conditional FFNs
 
@@ -40,8 +40,8 @@ sparsely gated MoE layer at large scale in 2017 inside recurrent language
 models [@shazeer2017outrageously]. GShard then combined conditional experts
 with Transformer models and automatic sharding [@lepikhin2020gshard], while
 Switch Transformer studied top-1 routing and trillion-parameter models
-[@fedus2021switch]. The durable idea is narrower than the surrounding scale
-claims: store more expert weights than one token evaluates.
+[@fedus2021switch]. The idea these systems share is narrower than their scale
+claims. A layer can store more expert weights than one token evaluates.
 
 ### Routing is a defined mathematical operation
 
@@ -54,7 +54,8 @@ z_t=W_rh_t,
 \mathcal{S}_t=\operatorname{TopK}(z_t,k).
 $$
 
-The normalized gate for each selected expert is
+The normalized gate for each selected expert, the weight that scales that
+expert's output, is
 
 $$
 g_{t,e}=
@@ -73,14 +74,15 @@ $$
 
 Here $h_t\in\mathbb{R}^{d}$ is the hidden vector at token position $t$;
 $E$ is the number of routed experts; $W_r\in\mathbb{R}^{E\times d}$ is the
-router matrix; $z_{t,e}$ is expert $e$'s routing logit;
+router matrix; $z_{t,e}$ is expert $e$'s routing logit, its unnormalized
+score for that token;
 $\mathcal{S}_t$ is the set of $k$ selected expert indices;
 $g_{t,e}$ is the selected expert's normalized gate weight;
 $F_e:\mathbb{R}^{d}\rightarrow\mathbb{R}^{d}$ is expert $e$; and
 $m_t\in\mathbb{R}^{d}$ is the MoE output. A residual connection and any
 shared expert are outside this equation.
 
-This is one router contract, not a universal definition. Switch uses top-1
+These equations specify one router among several in use. Switch uses top-1
 routing; some systems apply softmax before selection, some after it, and some
 use sigmoid affinities. The gate value may or may not be renormalized after
 top-$k$. These choices change gradients and checkpoint semantics, so a model
@@ -183,18 +185,19 @@ for experts in (8, 16, 32, 64):
 
 ### Routing creates a dispatch problem
 
-Expert weights are commonly partitioned across an expert-parallel group. A
-forward pass then has four stages: compute router scores, group token copies by
-destination expert, exchange those copies to the expert owners, and return the
-expert outputs to their original token order. Implementations often use one
+Expert weights are commonly partitioned across an expert-parallel group, a set
+of devices that each hold a subset of the experts. A forward pass then has four
+stages: compute router scores, group token copies by destination expert,
+exchange those copies to the expert owners, and return the expert outputs to
+their original token order. Implementations often use one
 all-to-all collective for dispatch and another for the return path, but an
 all-to-all is not intrinsic when all experts are local or the placement differs.
 
 The arithmetic saved inside expert FFNs can therefore be replaced by network
 time or small, poorly utilized matrix multiplications. Useful measurements
 include bytes dispatched, tokens per expert, padded versus useful expert slots,
-collective time, overlap with computation, and tail latency. "Active
-parameters" alone proves none of these.
+collective time, overlap with computation, and tail latency. None of these can
+be derived from the active-parameter count.
 
 For a routing group with $T$ tokens, $E$ experts, and $k$ assignments per token,
 the even-share load is $kT/E$ assignments per expert. A fixed-capacity
@@ -216,12 +219,12 @@ or block-sparse execution instead of a fixed cap [@gale2023megablocks].
 <figcaption>A toy top-2 dispatcher with six experts. Balanced mode spreads assignments; collapsed mode concentrates them. The dashed line is a fixed capacity factor times the current even-share assignment count. Assignments above that illustrative limit are marked dropped. Production routers and dropless kernels can use different policies.</figcaption>
 </figure>
 
-### Balance losses change optimization, not just utilization
+### Balance losses shape optimization
 
 Unregularized routing can concentrate assignments, under-train some experts,
 and make overloaded expert ranks into stragglers. Shazeer et al. used separate
 importance and load objectives [@shazeer2017outrageously]. Switch introduced a
-simpler top-1 auxiliary loss
+simpler top-1 auxiliary loss, an extra term added to the training loss:
 
 $$
 \mathcal{L}_{\mathrm{bal}}
@@ -241,16 +244,18 @@ $\mathbf{1}[\cdot]$ is an indicator. The product penalizes jointly large
 traffic and probability mass. Top-$k$ systems use related but not identical
 definitions.
 
-The coefficient is a real optimization choice: too little balance can create
-poor utilization, while too much pressure can override task-driven routing.
+The coefficient sets the balance between two failure modes. Too little balance
+pressure can leave experts poorly utilized, while too much can override
+task-driven routing.
 DeepSeek-V3 primarily steers top-$k$ selection with per-expert biases that are
 adjusted from recent load, while retaining a small sequence-wise auxiliary
 loss to prevent extreme imbalance [@deepseek2024deepseekv3;
 @wang2024auxiliaryfree]. The bias affects selection, not the gate weight used
-to combine expert outputs. This is more precise than saying the model removed
-all balancing losses.
+to combine expert outputs. Describing the model as having removed all
+balancing losses is therefore inaccurate.
 
-ST-MoE also introduced a router z-loss [@zoph2022stmoe]:
+ST-MoE also introduced a router z-loss, a penalty that keeps router logits from
+growing large [@zoph2022stmoe]:
 
 $$
 \mathcal{L}_{z}
@@ -261,14 +266,15 @@ $$
 Here $z_{t,e}$ is the router logit defined earlier; the log-sum-exp term is the
 router log-partition for token $t$; $T$ and $E$ retain their earlier meanings;
 and $\beta\ge0$ controls the penalty. Switch also reported selectively using
-float32 for router computations inside a bfloat16 model
-[@fedus2021switch]. Those are experiment-backed stabilizers, not proof that
-hard top-$k$ selection or low precision is the sole cause of every MoE failure.
+float32 for router computations inside a model otherwise computed in the
+16-bit bfloat16 format [@fedus2021switch]. Both are stabilizers supported by
+experiments. Neither result shows that hard top-$k$ selection or low precision
+causes every MoE failure.
 
 ### Refinements solve different routing problems
 
-Several named designs are alternatives, not a single progression toward one
-default:
+Each of the following designs addresses a different routing problem, and they
+coexist as alternatives:
 
 - **Top-1 and top-$k$.** Switch evaluates one expert; Mixtral evaluates two.
   Increasing $k$ raises expert arithmetic and communication, approaching dense
@@ -285,8 +291,9 @@ default:
   the label "shared" does not guarantee that a network has learned only general
   knowledge.
 - **Sparse upcycling.** A dense FFN can be copied into several experts, followed
-  by continued training with a new router [@komatsuzaki2022sparse]. This changes
-  initialization cost, not the eventual dispatch and serving contract.
+  by continued training with a new router [@komatsuzaki2022sparse]. Upcycling
+  affects only the initialization cost; the resulting model has the dispatch
+  and serving behavior of any MoE model with the same configuration.
 
 GLaM and Mixtral demonstrate other points in the design space
 [@du2022glam; @jiang2024mixtral]. Their results do not establish a universal
@@ -295,12 +302,13 @@ the training budget, batch shape, topology, memory, kernels, and target latency.
 
 ## State-space layers replace a growing history with a recurrence
 
-The second axis concerns sequence mixing. State-space models (SSMs) originate
-in dynamical-systems and control formulations, long before their use in neural
-sequence models. S4 showed in 2022 that a structured linear state-space layer
-could model long sequences efficiently [@gu2021s4]. Mamba then made key parts
-of the recurrence input-dependent and supplied a hardware-aware selective scan
-[@gu2023mamba].
+The second axis concerns sequence mixing. A state-space model (SSM) carries a
+fixed-size state vector: each input updates it, and each output is read from
+it. SSMs originate in dynamical-systems and control formulations, long before
+their use in neural sequence models. S4 showed in 2022 that a structured
+linear state-space layer could model long sequences efficiently [@gu2021s4].
+Mamba then made key parts of the recurrence input-dependent and supplied a
+hardware-aware selective scan [@gu2023mamba].
 
 ### From a continuous system to a discrete layer
 
@@ -320,7 +328,8 @@ $C\in\mathbb{R}^{d_{out}\times n}$ reads the state; and
 $D_{\mathrm{skip}}\in\mathbb{R}^{d_{out}\times d_{in}}$ is a direct input
 path. The dimensions $d_{in}$, $n$, and $d_{out}$ are fixed by the layer.
 
-After discretization at a fixed step, the same layer can be written
+Discretization replaces the continuous derivative with one update per token
+position. After discretization at a fixed step, the same layer can be written
 
 $$
 h_t=\bar A h_{t-1}+\bar Bx_t,
@@ -348,14 +357,15 @@ Here $i\ge0$ is a lag; $K_i\in\mathbb{R}^{d_{out}\times d_{in}}$ is the
 convolution kernel at that lag; $\bar A^i$ is the $i$-th matrix power; $j$ is
 an earlier token position; and all other symbols retain their definitions
 above. The recurrent and convolutional views compute the same linear operator.
-S4 exploits structure in $A$ to generate and apply long kernels efficiently;
-its theoretical filter-generation and FFT costs should not be collapsed into a
-blanket claim that every SSM implementation is simply $O(S)$.
+S4 exploits structure in $A$ to generate and apply long kernels efficiently.
+Its filter generation and FFT steps carry their own costs, so the statement
+that every SSM implementation is $O(S)$ in sequence length $S$ is too coarse.
 
 ### Mamba makes the recurrence selective
 
-For one simplified Mamba channel, the token-dependent terms produced by the
-selection mechanism are
+For one simplified Mamba channel, a single feature dimension with its own
+recurrent state, the token-dependent terms produced by the selection mechanism
+are
 
 $$
 (\Delta_t,B_t,C_t)=s_\theta(x_t),
@@ -386,11 +396,13 @@ $\Delta_t$, $B_t$, and $C_t$ are selective; continuous $A$ is not
 
 Input dependence removes the single stationary convolution kernel $K$ from the
 previous section. Mamba recovers parallel training through a fused associative
-scan over affine recurrence updates, then uses the recurrent form for
-autoregressive decoding. Mamba-2 relates a restricted class of SSM transitions
-to semiseparable mixing matrices and uses chunked matrix multiplication; its
-paper reports a 2 to 8 times faster core layer than Mamba's selective scan in
-the tested settings [@dao2024mamba2]. That is a measured result under those
+scan, a parallel prefix computation, over affine recurrence updates, then uses
+the recurrent form for autoregressive decoding. Mamba-2 relates a restricted
+class of SSM transitions to semiseparable mixing matrices, structured
+matrices whose submatrices in the lower-triangular part have low rank, and
+uses chunked matrix multiplication; its paper reports a 2 to 8 times faster
+core layer than Mamba's selective scan in the tested settings
+[@dao2024mamba2]. That is a measured result under those
 implementations, not an architecture-independent speed ratio.
 
 ### Linear attention is another fixed-state route
@@ -416,7 +428,7 @@ associative factorization, not merely removing softmax, eliminates the need to
 form every query-key pair. Gated DeltaNet adds targeted delta-rule updates to
 this family [@yang2024gateddeltanet].
 
-### Linear sequence scaling is not automatic speed
+### Sequence-length growth and decode state
 
 With model dimensions fixed, dense full-sequence attention forms a number of
 query-key relationships proportional to $S^2$, while a recurrent scan performs
@@ -454,8 +466,9 @@ precision, but not with cached context length.
 <figcaption>Persistent decode-state shape as sequence length changes. An attention layer retains one key-value record per cached position. A recurrent layer keeps a fixed number of state slots chosen by its architecture. This figure compares storage structure only; it makes no claim that attention retrieves perfectly or that every recurrent model forgets distant tokens at a fixed rate.</figcaption>
 </figure>
 
-The trade is representational. Attention retains a separate cached
-representation for each past position and permits direct content-based access.
+The two mechanisms also represent history differently. Attention retains a
+separate cached representation for each past position and permits direct
+content-based access.
 A recurrent layer repeatedly compresses prior information into a fixed-shape
 state, so information can interfere or be lost. Neither mechanism guarantees
 recall. Retrieval quality must be measured on the target distribution, at the
@@ -497,37 +510,37 @@ Released models illustrate different schedules and reporting conventions:
 | Model | Sequence mixers | FFN sparsity | Scope of the reported evidence |
 |---|---|---|---|
 | Jamba | One attention layer per seven Mamba layers in its main configuration | 16 experts, top-2 in selected layers | The authors report stronger throughput and lower KV memory than named baselines under specified hardware and context settings [@lieber2024jamba] |
-| MiniMax-01 | Seven Lightning Attention blocks per softmax-attention block | 32 experts, top-2; 456B total and 45.9B activated | The report trained to 1M-token contexts and evaluated extrapolation to 4M [@minimax2025minimax01] |
+| MiniMax-01 | Seven Lightning Attention (linear-attention) blocks per softmax-attention block | 32 experts, top-2; 456B total and 45.9B activated | The report trained to 1M-token contexts and evaluated extrapolation to 4M [@minimax2025minimax01] |
 | Qwen3-Next-80B-A3B | Twelve repetitions of three Gated DeltaNet layers and one gated-attention layer | 512 routed experts, 10 selected, plus one shared expert | The official card reports 80B total, 3B activated, and a native 262,144-token context [@qwen2025qwen3next] |
 | Nemotron-H | Mamba-2, attention, and dense FFN layers | Dense FFNs | The authors report 8B, 56B, and distilled 47B variants, with throughput comparisons scoped to their benchmark setup [@nvidia2025nemotronh] |
 
-These examples prove that the components can be trained and implemented at
-large scale. They do not prove that a hybrid dominates full attention on every
-quality measure or serving workload. MiniMax later chose full attention for M2
+These examples establish that the components can be trained and implemented at
+large scale. They leave open whether a hybrid outperforms full attention on a
+given quality measure or serving workload. MiniMax later chose full attention
+for M2
 and reported that hybrid weaknesses appeared on complex multi-hop tasks at
 larger scale, while low-precision state, prefix caching, speculative decoding,
 kernel maturity, and evaluation remained practical concerns
-[@minimax2025m2attention]. That first-party retrospective is one team's
-evidence, not a universal verdict against recurrent or hybrid models.
+[@minimax2025m2attention]. That retrospective reports one team's first-party
+evidence and is not a general result about recurrent or hybrid models.
 
 ::: {.callout-important}
 ## What's contested
 
-The open question is not whether subquadratic mixers can run. It is where their
-quality, state capacity, and implementation costs cross the full-attention
-baseline for a particular workload. Small or saturated benchmarks can hide
-retrieval and multi-step reasoning deficits; theoretical linear work can still
-be memory-bound; and an attention-heavy software stack may erase an
-architecture's nominal advantage. Comparisons need matched data, tokens,
-parameters, training compute, kernels, hardware, context lengths, and serving
-features.
+The open question is where the quality, state capacity, and implementation
+costs of subquadratic mixers cross the full-attention baseline for a particular
+workload. Small or saturated benchmarks can hide retrieval and multi-step
+reasoning deficits; theoretical linear work can still be memory-bound; and an
+attention-heavy software stack may erase an architecture's nominal advantage.
+Comparisons need matched data, tokens, parameters, training compute, kernels,
+hardware, context lengths, and serving features.
 :::
 
 ::: {.callout-tip}
 ## Constraint arrow
 
-Architecture now fixes two contracts for @sec-training-at-scale. MoE fixes
-expert placement, dispatch volume, and load imbalance across the device
+The architecture fixes two sets of requirements for @sec-training-at-scale.
+MoE fixes expert placement, dispatch volume, and load imbalance across the device
 topology. Recurrent and hybrid mixers fix scan kernels, state precision, and
 which layers still allocate a KV cache. Those choices then constrain batching,
 prefix reuse, speculative decoding, and memory scheduling in
@@ -576,15 +589,16 @@ must agree on it.
    test packed samples, prefix reuse, state copying, and speculative rollback.
 7. **Stress retrieval and state tracking.** Evaluate direct lookup, order,
    repeated keys, distractors, and multi-hop use across the deployed length,
-   rather than relying on one needle test.
+   rather than relying on one needle test, which retrieves a single planted
+   fact.
 8. **Benchmark the complete workload.** Compare quality, training throughput,
    prefill, decode, memory, batch capacity, and failure recovery against dense
    and attention-only baselines under matched budgets.
 
-MoE and recurrent layers each remove one dense assumption, but neither removes
-resource accounting. The useful abstraction is a contract: which weights a
-token evaluates, where those weights live, how sequence state evolves, and
-which costs move into communication or serving.
+MoE and recurrent layers each remove one dense assumption, and both still
+require resource accounting. The architecture contract records that
+accounting: which weights a token evaluates, where those weights live, how
+sequence state evolves, and which costs move into communication or serving.
 
 ## Further reading
 

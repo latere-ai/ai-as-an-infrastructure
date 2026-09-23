@@ -14,7 +14,7 @@ const zh = readFileSync(
 test("Chapter 9 separates expert activation from sequence mixing", () => {
   expect(zh).toContain("## 两条相互独立的架构轴");
   expect(zh).toContain("| FFN 参数激活 | 同一个稠密 FFN | 每个词元只路由到少数专家 | 存储参数与专家路径算术量的比例 |");
-  expect(zh).toContain("MoE 改变参数激活方式，并不会让注意力变稀疏");
+  expect(zh).toContain("MoE 改变的是每个词元激活哪些参数，注意力部分保持原样");
   expect(zh).toContain("状态空间层或线性递归层改变序列混合方式");
   expect(zh).toContain("存储参数、单个词元实际执行的算术量，以及一条序列需要保留的状态");
 });
@@ -63,7 +63,7 @@ test("dispatch, capacity, and dropless execution are explicit", () => {
 });
 
 test("balancing and z-loss equations state their optimization tradeoffs", () => {
-  expect(zh).toContain("### 均衡损失改变优化过程，而不只是利用率");
+  expect(zh).toContain("### 均衡损失影响优化过程");
   for (const formula of [
     "\\mathcal{L}_{\\mathrm{bal}}",
     "f_e &= \\frac{1}{T}\\sum_{t=1}^{T}",
@@ -114,7 +114,7 @@ test("linear attention and recurrent decode state have explicit boundaries", () 
   expect(zh).toContain("### 线性注意力也是一条固定状态路线");
   expect(zh).toContain("S_t &= \\lambda_tS_{t-1}+\\phi(k_t)v_t^{\\top}");
   expect(zh).toContain("结合律分解，而不只是去掉 softmax");
-  expect(zh).toContain("### 线性序列扩展不等于自动提速");
+  expect(zh).toContain("### 序列长度增长与解码状态");
   expect(zh).toContain("它不是 FLOPs 或实测运行时间曲线");
   expect(zh).toContain("M_{\\mathrm{rec}}");
   expect(zh).toContain("不会随已缓存的上下文长度增长");
@@ -134,11 +134,11 @@ test("hybrids specify schedules and scope model evidence", () => {
 
 test("the contested boundary and lower-layer constraint match English", () => {
   expect(zh).toContain("## 争议所在");
-  expect(zh).toContain("问题不在于次二次复杂度的混合器能否运行");
+  expect(zh).toContain("次二次复杂度混合器的质量、状态容量和实现成本会在何处与完整注意力基线交叉");
   expect(zh).toContain("需要在数据、词元数、参数量、训练算力、内核、硬件、上下文长度和服务功能上做匹配");
   expect(zh).toContain("## 下层约束");
   expect(zh).toContain("专家放置、分发流量和设备拓扑上的负载不均衡");
-  expect(zh).toContain("只有分布式实现和服务实现真正兑现了节省，渐近优势才有意义");
+  expect(zh).toContain("只有分布式实现和服务实现兑现了节省，渐近优势才有意义");
 });
 
 test("the architecture contract and eight validation gates close the chapter", () => {
