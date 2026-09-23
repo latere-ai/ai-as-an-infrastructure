@@ -34,7 +34,7 @@ test("Chapter 38 preserves the complete English agent-architecture contract", ()
     "一轮交互就是一次状态转移",
     "架构是一组契约",
     "根据任务选择控制模式",
-    "规划不是开关，而是一种节奏",
+    "选择规划节奏",
     "选择动作表示方式",
     "让每一个分支都明确",
     "区分自主性与权限",
