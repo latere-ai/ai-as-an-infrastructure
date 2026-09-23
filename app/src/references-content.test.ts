@@ -10,20 +10,11 @@ import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
 
 const repoRoot = join(import.meta.dir, "../..");
-const source = readFileSync(join(repoRoot, "en/references.qmd"), "utf8");
 const summaryOverlay = readFileSync(join(repoRoot, "refs/00-references-summaries.bib"), "utf8");
 const graphviz = await loadGraphviz();
 // This compiles the entire English book while the CI runner executes up to 20
 // test files concurrently. Preserve the full audit and allow for that load.
 const wholeBookTimeout = 240_000;
-
-test("the English References page explains its order, labels, notes, and links", () => {
-  const prose = source.replace(/\s+/g, " ");
-  expect(prose).toContain("ordered by the first author's surname and then by year");
-  expect(prose).toContain("the citation label used in the chapters");
-  expect(prose).toContain("a short note explaining what the source contributes");
-  expect(prose).toContain("Select a citation in any chapter to jump to its entry here.");
-});
 
 test("the References summary overlay contains prose only", () => {
   const overlay = parseBib(summaryOverlay, { errorHandler: () => {} });

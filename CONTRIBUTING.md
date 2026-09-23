@@ -59,11 +59,14 @@ rather than all of them, name its href: `cd app && bun run og contribute`.
 
 Two suites cover different layers, and neither runs the other:
 
-- `cd app && bun test` checks the reader and the content contracts: first-use
-  glosses, part-summary handoffs, citations, cross-references, zh copy rules,
-  and link resolution against the built `_book/`. CI runs `bun run build` and
-  installs `app/requirements-test.txt` (matplotlib and numpy, for the
-  runnable-cell tests) before it, so do the same locally.
+- `cd app && bun test` checks the reader and the content structure: en/zh
+  parity (headings, anchors, citations, cross-references, math, interactive
+  figures), rendering of every page, runnable cells, citations, and link
+  resolution against the built `_book/`. Tests do not pin prose wording, so a
+  wording edit needs no test edit; do not add tests that assert phrases or
+  heading text. CI runs `bun run build` and installs
+  `app/requirements-test.txt` (matplotlib and numpy, for the runnable-cell
+  tests) before it, so do the same locally.
 - `make test` runs the Go server tests: routing, redirects, canonicalization,
   and cache headers. It embeds `_book/`, so it builds the book first.
 

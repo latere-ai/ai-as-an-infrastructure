@@ -6,42 +6,6 @@ const chapter = readFileSync(
   "utf8",
 );
 
-test("SFT and PEFT chapter separates the objective, parameter update, and deployment artifact", () => {
-  const flat = chapter.replace(/\s+/g, " ");
-  const required = [
-    "SFT and PEFT therefore answer different questions",
-    "Turn conversations into supervised tokens",
-    "Data determines the behavior being copied",
-    "LoRA constrains each update to a low-rank factorization",
-    "The low-rank form is a capacity constraint, not proof",
-    "QLoRA changes the storage of the frozen base",
-    "Merged and switchable adapters have different costs",
-    "Weight merging is a separate approximation",
-    "Run adaptation as a controlled experiment",
-    "Lower-layer constraint",
-    "rankdir=TB;",
-  ];
-  for (const phrase of required) expect(flat).toContain(phrase);
-
-  const rejected = [
-    "pre-training buys knowledge under the wrong objective",
-    "Adaptation is a small, low-rank, additive, composable change",
-    "Why a few thousand examples reshape behavior",
-    "Why a rank-16 adapter approximates a full fine-tune",
-    "two fine-tunes can be added together",
-    "The sections that follow take the three in turn",
-    "a hundredfold cut in trainable parameters",
-    "the adapters learn around it",
-    "small, bounded accuracy risk",
-    "quality it buys saturates",
-    "Raise the rank.",
-    "Constraint arrow",
-    "rankdir=LR;",
-    'data-family="diminishing"',
-  ];
-  for (const phrase of rejected) expect(chapter).not.toContain(phrase);
-});
-
 test("LoRA runnable reports exact per-matrix parameter counts", () => {
   const cell = chapter.match(/:::: \{\.runnable\}\s*```python\n([\s\S]*?)\n```\s*::::/);
   expect(cell).not.toBeNull();

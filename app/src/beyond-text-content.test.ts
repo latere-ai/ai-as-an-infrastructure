@@ -6,47 +6,6 @@ const chapter = readFileSync(
   "utf8",
 );
 
-test("beyond-text chapter separates observation prediction from embodied control", () => {
-  const flat = chapter.replace(/\s+/g, " ");
-  const required = [
-    "Predicting plausible observations is not the same as predicting what changes under an action",
-    "Give a world model an action interface",
-    "Test predictions under intervention",
-    "Test what a shared backbone adds to control",
-    "There is no sound conversion from language tokens to robot trajectories",
-    "Offline action prediction is a development metric, not a deployment result",
-    "The data loop above improves a policy when each pass is measured",
-    "rankdir=TB;",
-    "Lower-layer constraint",
-  ];
-  for (const phrase of required) expect(flat).toContain(phrase);
-
-  const rejected = [
-    "Text has a data wall",
-    "The early evidence leans toward the latter",
-    "carried more by free data",
-    "Constraint arrow",
-    "the field has split into three",
-    "three architectural answers",
-    "render anyway",
-    "abandon pixels",
-    "geometry is the model",
-    "A flagship video app",
-    "became mainstream",
-    "displacing the adapter-bridged stack",
-    "quality cliff",
-    "Robotics has no internet",
-    "one two-hundred-thousandth",
-    "Four ways to manufacture a flywheel",
-    "Nobody can grade it yet",
-    "evidence favors the skeptics",
-    "the same wall stands",
-    "The final chapter turns",
-    "rankdir=LR;",
-  ];
-  for (const phrase of rejected) expect(chapter).not.toContain(phrase);
-});
-
 test("control-loop example distinguishes commands, model calls, and predictions", () => {
   const cell = chapter.match(/:::: \{\.runnable\}\s*```python\n([\s\S]*?)\n```\s*::::/);
   expect(cell).not.toBeNull();

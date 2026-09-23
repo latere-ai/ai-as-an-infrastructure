@@ -184,14 +184,15 @@ coverage check of the English tree. None has been decided or started.
   <date>" block. The "Dated release examples" section of `ecosystem/01` is the
   working model.
 
-- [ ] **Content locks pin structure, not wording**
+- [x] **Tests check structure, not wording**
 
-  About two hundred content-lock tests pin prose phrases, and
-  `app/test/zh-copy.test.ts` pins the opening of every chapter. In the
-  September wording pass nearly every chapter commit needed lock edits. For a
-  monthly cadence, locks pin headings, display math, citation and
-  cross-reference sets, and part handoffs, and dated evidence blocks carry no
-  prose locks.
+  About two hundred content-lock tests pinned prose phrases and heading text,
+  so nearly every wording edit broke a test. They were removed on 2026-09-23.
+  Tests now check English and Chinese parity (headings, anchors, citations,
+  cross-references, display math, interactive figures), that every page
+  renders without leaking markup or dropping content, runnable cells,
+  citations, and links. Remaining known divergences are listed as allow-lists
+  in the tests and as open items below.
 
 - [ ] **A dated state-of-the-field edition**
 
@@ -225,10 +226,28 @@ coverage check of the English tree. None has been decided or started.
   the one chapter that is explicitly a dated snapshot, or it is retitled, which
   regenerates its share card.
 
-- [ ] **Lint misses `---` inside sentences**
+- [x] **Lint misses `---` inside sentences**
 
-  The reader renders `---` in prose as an em dash, and `tools/lint.sh` checks
-  only for the U+2014 character. Two chapters contained it in September.
+  The reader renders `---` in prose as an em dash. `tools/lint.sh` now fails on
+  `---` inside a prose line.
+
+## Open goals: rendering and parity defects found by the new tests
+
+- [ ] **Bold renders as literal `**` on 12 zh pages.** `**标签：**正文` does not
+  close under CommonMark when full-width punctuation meets a CJK letter
+  (visible in `zh/foundations/scaling-laws`). Fix in the pipeline, not page by
+  page; the pages are listed as `knownBoldLeaks` in
+  `app/src/chapter-render.test.ts`.
+- [ ] **39 Graphviz figures are wider than the mobile column** (34 en, 5 zh) and
+  scroll sideways; listed as `knownWideFigures`.
+- [ ] **Display math differs between en and zh on 11 pages**; listed as
+  `knownMathDivergence` in `app/src/book-zh-parity.test.ts`. Most are
+  punctuation or layout, but `practice/05` writes `\text{otherwise}` where en
+  lists deny and approve.
+- [ ] **Two hard-wrapped hyphenated compounds** in `adaptation/04`
+  ("instruction-tuned", "log-probabilities").
+- [ ] **`app/src/reader-mermaid.test.ts` always skips**: it points at a stale page
+  path and the figure it checked is now Graphviz.
 
 ## Open goals: coverage (2026-09-23 audit)
 

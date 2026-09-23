@@ -6,40 +6,6 @@ const chapter = readFileSync(
   "utf8",
 );
 
-test("multimodal chapter separates interfaces, representations, and objectives", () => {
-  const flat = chapter.replace(/\s+/g, " ");
-  const required = [
-    "Multimodality is a problem of interfaces between modalities",
-    "Neither objective requires image and text embeddings to share one distribution",
-    "Visual token count is a serving decision, since it sets both prefill work and cache size",
-    "Guidance scale is not a confidence score",
-    "A latent is not automatically a token",
-    "Compression determines representation cost",
-    "Modularity and representation are separate decisions",
-    "A unified model can still use different losses",
-    "Benchmark the boundary that ships",
-    "rankdir=TB;",
-    "Lower-layer constraint",
-  ];
-  for (const phrase of required) expect(flat).toContain(phrase);
-
-  const rejected = [
-    "The previous chapters separated the engines",
-    "continuous representation fight",
-    "dominant open-weights",
-    "widely written off",
-    "system-level settling",
-    "The 2025 systems moved",
-    "The deepest open question",
-    "The commercial instance",
-    "by 2026 frontier models",
-    "the same lab ran both",
-    "Constraint arrow",
-    "rankdir=LR;",
-  ];
-  for (const phrase of rejected) expect(chapter).not.toContain(phrase);
-});
-
 test("video token example reproduces Movie Gen context arithmetic", () => {
   const cell = chapter.match(/:::: \{\.runnable\}\s*```python\n([\s\S]*?)\n```\s*::::/);
   expect(cell).not.toBeNull();

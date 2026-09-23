@@ -10,18 +10,9 @@ import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
 
 const repoRoot = join(import.meta.dir, "../..");
-const source = readFileSync(join(repoRoot, "zh/references.qmd"), "utf8");
 const summaryOverlay = readFileSync(join(repoRoot, "refs/00-references-summaries-zh.bib"), "utf8");
 const graphviz = await loadGraphviz();
 const wholeBookTimeout = 240_000;
-
-test("the Chinese References page explains its order, labels, notes, and links", () => {
-  const prose = source.replace(/\s+/g, " ");
-  expect(prose).toContain("先按第一作者的姓氏排序，再按出版年份排序");
-  expect(prose).toContain("正文中使用的引用标记");
-  expect(prose).toContain("说明该资料为本书提供了什么");
-  expect(prose).toContain("点击正文中的引用标记，即可跳转到这里的对应条目");
-});
 
 test("the Chinese References summary overlay contains prose only", () => {
   const overlay = parseBib(summaryOverlay, { errorHandler: () => {} });

@@ -43,6 +43,9 @@ reading.
 - The build is the test: `make build` must compile both books. CI (`render.yml`)
   lints the `.qmd` sources, runs the Bun build, and runs `go test`; a broken
   build is a broken commit.
+- `cd app && bun test` checks structure, en/zh parity, rendering, runnable
+  cells, citations, and links, not wording. Do not add tests that pin phrases,
+  heading text, or sentence order; a prose edit should need no test edit.
 
 ## Writing conventions
 

@@ -6,37 +6,6 @@ const chapter = readFileSync(
   "utf8",
 );
 
-test("speech chapter separates alignment, token accounting, and duplex behavior", () => {
-  const flat = chapter.replace(/\s+/g, " ");
-  const required = [
-    "Streaming changes what counts as correct",
-    "p_{\\mathrm{CTC}}",
-    "RNN-T by itself does not guarantee streaming",
-    "Conformer is an encoder architecture, not an alignment objective",
-    "Self-supervision and weak supervision solve different data problems",
-    "R_{\\mathrm{idx}}=fQ",
-    "Token rate is not bitrate",
-    "Semantic” and “acoustic” are roles, not a clean partition",
-    "proactive rather than a universal detector",
-    "Full duplex is a systems contract",
-    "Human conversation is not a 200 ms service-level objective",
-    "rankdir=TB;",
-  ];
-  for (const phrase of required) expect(flat).toContain(phrase);
-
-  const rejected = [
-    "only a few hundred milliseconds before the reply feels late",
-    "the field's three answers",
-    "became the standard",
-    "The frontier folds",
-    "reached reported human parity",
-    "first commercial instance",
-    "forces streaming",
-    "rankdir=LR;",
-  ];
-  for (const phrase of rejected) expect(chapter).not.toContain(phrase);
-});
-
 test("the RVQ example is deterministic and accounts for indices and bits", () => {
   const cell = chapter.match(/:::: \{\.runnable\}\s*```python\n([\s\S]*?)\n```\s*::::/);
   expect(cell).not.toBeNull();

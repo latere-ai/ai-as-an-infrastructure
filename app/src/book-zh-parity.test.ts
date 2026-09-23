@@ -60,6 +60,58 @@ function signature(source: string) {
   };
 }
 
+function displayMath(source: string): string[] {
+  return matches(source, /^\$\$\n([\s\S]*?)\n\$\$$/gm);
+}
+
+// Display math is shared between the trees. Prose inside \text{...} is
+// translated, and alignment markup, explicit spacing, and whitespace are
+// layout, so those are masked before the formulas are compared.
+function canonicalMath(block: string): string {
+  return block
+    .replace(/\\text\{[^{}]*\}/g, "\\text{}")
+    .replace(/\\(?:begin|end)\{(?:aligned|gathered)\}/g, "")
+    .replace(/\\\\/g, "")
+    .replace(/\\quad|\\qquad|&|\{\}/g, "")
+    .replace(/\s+/g, "");
+}
+
+// Pages whose Chinese display math currently differs from the English after
+// canonicalization: trailing punctuation, an added \times, sized delimiters,
+// a two-line \substack label, or equations restated with intermediate
+// variables. The list is exact, so a new divergence and a reconciled page
+// both fail until it is updated.
+const knownMathDivergence = [
+  "foundations/03-tokenization.qmd",
+  "foundations/04-transformer-architecture.qmd",
+  "foundations/05-moe-ssm-hybrids.qmd",
+  "generative/01-diffusion-flow-matching.qmd",
+  "generative/03-speech-and-voice.qmd",
+  "frontiers/03-verification-frontier.qmd",
+  "ecosystem/05-market-structure.qmd",
+  "practice/05-agents-and-sandboxes.qmd",
+  "practice/07-evaluation-and-observability.qmd",
+  "practice/08-wiring-a-2026-stack.qmd",
+  "practice/10-reliability-nondeterministic.qmd",
+];
+
+// An interactive figure is identified by its data-viz name. Its numeric and
+// boolean data-* attributes are the model inputs, and data-family, data-mode,
+// and data-pattern select the model; all must match across trees. Label
+// attributes are translated and are not compared.
+function vizSignature(source: string): string[] {
+  return [...source.matchAll(/<[a-z]+\b[^>]*\bdata-viz="[^"]+"[^>]*>/g)].map(([tag]) => {
+    const name = tag.match(/\bdata-viz="([^"]+)"/)![1];
+    const inputs = [
+      ...tag.matchAll(/\b(data-[\w-]+)="(-?[\d.]+(?:e-?\d+)?|true|false)"/g),
+      ...tag.matchAll(/\b(data-(?:family|mode|pattern))="([^"]*)"/g),
+    ]
+      .map(([, key, value]) => `${key}=${value}`)
+      .sort();
+    return [name, ...inputs].join(" ");
+  });
+}
+
 test("the English and Chinese manifests contain the same 125 pages", () => {
   const english = manifestPages("en");
   const chinese = manifestPages("zh");
@@ -83,6 +135,41 @@ test("every Chinese page preserves the English structural and evidence contract"
 
     for (const term of english.glossary) {
       expect(chinese.glossary, `${page}: glossary term ${term}`).toContain(term);
+    }
+  }
+});
+
+test("every Chinese page carries the English display math", () => {
+  const divergent: string[] = [];
+  for (const page of manifestPages("en")) {
+    const english = displayMath(readFileSync(join(repoRoot, "en", page), "utf8")).map(canonicalMath);
+    const chinese = displayMath(readFileSync(join(repoRoot, "zh", page), "utf8")).map(canonicalMath);
+    expect(chinese.length, `${page}: display math block count`).toBe(english.length);
+    if (knownMathDivergence.includes(page)) {
+      if (chinese.some((block, i) => block !== english[i])) divergent.push(page);
+      continue;
+    }
+    expect(chinese, `${page}: display math`).toEqual(english);
+  }
+  expect(divergent.sort(), "known divergence list is out of date").toEqual([...knownMathDivergence].sort());
+});
+
+test("every Chinese page carries the English interactive figures and their inputs", () => {
+  for (const page of manifestPages("en")) {
+    const english = readFileSync(join(repoRoot, "en", page), "utf8");
+    const chinese = readFileSync(join(repoRoot, "zh", page), "utf8");
+    expect(vizSignature(chinese), `${page}: data-viz figures`).toEqual(vizSignature(english));
+    expect(matches(chinese, /\b(data-chip)=/g).length, `${page}: stepper steps`).toBe(
+      matches(english, /\b(data-chip)=/g).length,
+    );
+  }
+});
+
+test("interactive figures declare the language of the page they are on", () => {
+  for (const lang of ["en", "zh"] as const) {
+    for (const page of manifestPages(lang)) {
+      const declared = matches(readFileSync(join(repoRoot, lang, page), "utf8"), /\bdata-lang="([^"]*)"/g);
+      expect(declared.filter((value) => value !== lang), `${lang}/${page}: data-lang`).toEqual([]);
     }
   }
 });
