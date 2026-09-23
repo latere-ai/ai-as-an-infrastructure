@@ -17,7 +17,7 @@ function uniqueMatches(source: string, pattern: RegExp): string[] {
 
 test("Chapter 12 preserves the complete English section architecture", () => {
   for (const heading of [
-    "## 选择因子分解，而不是选阵营",
+    "## 选择因子分解",
     "## 构造离散扩散过程",
     "## 把调度与预测目标分开",
     "## 把去噪连接到分数、SDE 与 ODE",
@@ -239,6 +239,7 @@ test("the rewrite removes stale and unsupported claims", () => {
     "@dhariwal2021",
     "@gls-score",
     "@sec-scaling-laws",
+    "而不是选阵营",
     "—",
   ]) expect(zh).not.toContain(rejected);
 });
