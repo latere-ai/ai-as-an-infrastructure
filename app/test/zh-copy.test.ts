@@ -646,7 +646,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/adaptation/06-safety-tuning-instruction-hierarchy.qmd",
-      ["后训练改变的是模型行为，不是模型权限", "拒绝只是其中一种动作", "指令层级是一条冲突处理规则", "评测失败本身，而不是拒绝措辞", "基础设施决定模型获准做什么"],
+      ["后训练改变的是模型行为，不是模型权限", "拒绝只是其中一种动作", "指令层级是一条冲突处理规则", "要看回答是否交付了被禁止的能力", "由模型之外的基础设施设定并强制执行"],
     ],
     [
       "en/adaptation/07-synthetic-data-self-improvement.qmd",

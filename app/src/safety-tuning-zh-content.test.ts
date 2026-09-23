@@ -24,24 +24,24 @@ function crossRefs(source: string): string[] {
 }
 
 test("Chapter 22 separates output policy, instruction authority, and runtime authorization", () => {
-  expect(zh).toContain("安全调优必须先作出两个不同的判断");
+  expect(zh).toContain("教模型在回答之前先作出两个不同的判断");
   expect(zh).toContain("后训练改变的是模型行为，不是模型权限");
-  expect(zh).toContain("## 两项判断，三类错误");
+  expect(zh).toContain("## 两项判断，两类错误");
   for (const row of ["| 输出策略 |", "| 指令权限 |", "| 运行时授权 |"]) {
     expect(zh).toContain(row);
   }
-  expect(zh).toContain("越狱与提示注入彼此相关，却不是同一件事");
+  expect(zh).toContain("越狱与提示注入是彼此相关的两类攻击");
   expect(zh).toContain("前两行属于习得行为，第三行必须由模型之外的机制强制执行");
 });
 
 test("refusal calibration measures both unsafe compliance and benign refusal", () => {
-  expect(zh).toContain("## 拒绝校准不是二元分类");
-  expect(zh).toContain("拒绝只是其中一种动作，并不等同于安全本身");
+  expect(zh).toContain("## 拒绝校准与安全补全");
+  expect(zh).toContain("拒绝只是其中一种动作；是否安全，要看模型最终给出的回答");
   expect(zh).toContain(String.raw`\operatorname{UCR}`);
   expect(zh).toContain(String.raw`\operatorname{BRR}`);
   expect(zh).toContain("不安全服从率");
   expect(zh).toContain("无害拒绝率");
-  expect(zh).toContain("平均值可能掩盖真正要紧的失败");
+  expect(zh).toContain("平均值可能掩盖集中在一小部分请求上的失败");
 });
 
 test("safe-completion training retains the proxy and generalization limits", () => {
@@ -55,7 +55,7 @@ test("safe-completion training retains the proxy and generalization limits", () 
 test("instruction hierarchy resolves applicable instructions rather than discarding lower ones", () => {
   expect(zh).toContain("## 指令层级负责解析适用的指令");
   expect(zh).toContain("指令层级是一条冲突处理规则");
-  expect(zh).toContain("不要把角色与可信度混为一谈");
+  expect(zh).toContain("消息的角色与其内容是否可信，是两个独立的属性");
   expect(zh).toContain("Root > System > Developer > User > Guideline");
   expect(zh).toContain("默认无权限");
   expect(zh).toContain("显式委派");
@@ -91,7 +91,7 @@ test("hierarchy training and evaluation include aligned and conflicting cases", 
   }
   expect(zh).toContain("3,538 个样本");
   expect(zh).toContain("从 84.1% 提升到 94.1%");
-  expect(zh).toContain("并不是普适的安全保证");
+  expect(zh).toContain("这项证据只涉及一个模型家族");
 });
 
 test("written-policy supervision distinguishes Constitutional AI and Deliberative Alignment", () => {
@@ -101,13 +101,13 @@ test("written-policy supervision distinguishes Constitutional AI and Deliberativ
   }
   expect(zh).toContain("基于 AI 反馈的强化学习");
   expect(zh).toContain("策略回忆、策略应用与最终输出");
-  expect(zh).toContain("流畅的理由无法挽救错误的判断");
+  expect(zh).toContain("理由写得再流畅，也通不过最终输出这一项评测");
   expect(zh).toContain("不必公开私有思维链");
   expect(zh).toContain("成文策略是监督目标，不是真值");
 });
 
 test("red teaming scores harmful capability rather than refusal wording", () => {
-  expect(zh).toContain("## 评测失败本身，而不是拒绝措辞");
+  expect(zh).toContain("## 红队测试与发布门槛");
   for (const step of [
     "定义策略分类与威胁模型",
     "用人类、模型、变换与工具中介场景生成攻击",
@@ -118,7 +118,7 @@ test("red teaming scores harmful capability rather than refusal wording", () => 
   ]) {
     expect(zh).toContain(step);
   }
-  expect(zh).toContain("判断回答是否真正交付了被禁止的能力");
+  expect(zh).toContain("要看回答是否交付了被禁止的能力");
   expect(zh).toContain("不要在发布集上调参");
 });
 
@@ -153,8 +153,8 @@ test("runtime safety remains a separate enforcement boundary", () => {
 test("the contested claim and lower-layer constraint remain bounded", () => {
   expect(zh).toContain("新模型家族、长上下文、未见语言与工具中介的自适应攻击");
   expect(zh).toContain("都不会在模型内部形成形式化的安全边界");
-  expect(zh).toContain("训练决定模型通常怎样行动");
-  expect(zh).toContain("基础设施决定模型获准做什么");
+  expect(zh).toContain("训练塑造模型通常的行为方式");
+  expect(zh).toContain("由模型之外的基础设施设定并强制执行");
   expect(zh).toContain("一次模型失误不会悄然变成外部副作用");
 });
 

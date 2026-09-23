@@ -35,7 +35,7 @@ test("refusal calibration measures both sides of the boundary", () => {
 
 test("instruction hierarchy separates authority from untrusted data", () => {
   for (const phrase of [
-    "do not confuse role with trust",
+    "a message's role and the trustworthiness of its content are separate properties",
     "root > system > developer > user > guideline",
     "quoted or retrieved text",
     "aligned and conflicting cases",
