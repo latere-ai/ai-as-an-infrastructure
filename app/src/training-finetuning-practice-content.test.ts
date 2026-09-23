@@ -39,7 +39,7 @@ test("the train-or-not gate compares weight changes with cheaper controls", () =
     "structured decoder",
     "durable behavior",
     "must live in the weights",
-    "do not train",
+    "does not justify training",
   ]) expect(flat).toContain(phrase);
 });
 

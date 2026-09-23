@@ -29,13 +29,13 @@ test("Chinese Chapter 84 preserves the complete English structure", () => {
     ["##", "构建经得起审查的数据"],
     ["###", "按可能泄漏的单位划分数据集"],
     ["###", "把格式视为制品的一部分"],
-    ["###", "测量记忆，而不是假定隐私"],
+    ["###", "测量模型记忆"],
     ["##", "选择满足契约的最小权重改动"],
     ["##", "启动前估算训练规模"],
-    ["###", "核算整个项目，而不只是 GPU 时间"],
+    ["###", "核算整个适配项目的成本"],
     ["##", "按能力选择工具"],
     ["##", "让训练过程可复现"],
-    ["##", "评估行为变化，而不是损失曲线"],
+    ["##", "评估行为变化"],
     ["##", "打包并部署完整制品"],
     ["###", "强化学习会在训练内部引入一套服务系统"],
     ["##", "运营适配生命周期"],
@@ -48,8 +48,8 @@ test("Chinese Chapter 84 preserves the complete English structure", () => {
 
 test("the opening defines an adaptation release rather than a training job", () => {
   for (const phrase of [
-    "改变权重不是定制模型的第一步",
-    "训练任务完成也不等于工作结束",
+    "改变权重是靠后的一步",
+    "训练任务完成，也只是走完了其中一个阶段",
     "可测量的行为变化必须写入权重",
     "复现、评估、服务、监控和回滚",
     "适配发布",
@@ -110,7 +110,7 @@ test("training objectives follow the supervision that actually exists", () => {
 
 test("the data pipeline preserves rights lineage and split integrity", () => {
   for (const phrase of [
-    "训练样本不只是一段文本",
+    "每个训练样本除了文本",
     "数据来源记录",
     "稳定的来源 ID",
     "许可证或其他法律依据",
@@ -208,7 +208,7 @@ test("run sizing covers memory recovery and the complete program cost", () => {
   for (const phrase of [
     "检查点大小不等于训练所需内存",
     "激活检查点",
-    "规划下界，不是保证",
+    "但这只是规划下界",
     "保存检查点、中断并恢复的测试",
     "数据准备和审查、训练算力、评估、工程时间和部署工作",
     "等价的质量和运营要求",
@@ -219,7 +219,7 @@ test("run sizing covers memory recovery and the complete program cost", () => {
 
 test("tools are selected by capability instead of volatile rankings", () => {
   for (const phrase of [
-    "框架名称不是架构",
+    "先根据契约建立一张能力矩阵",
     "能力矩阵",
     "官方支持矩阵",
     "检查点可移植性",
@@ -410,7 +410,7 @@ test("the complete Chinese chapter renders through its operating handoff", async
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
   expect(html.match(/class="katex-display"/g)?.length).toBe(8);
-  expect(html).toContain("改变权重不是定制模型的第一步");
+  expect(html).toContain("改变权重是靠后的一步");
   expect(html).toContain("把训练实验变成基础设施中可以运营的一部分");
   expect(renderedHeadings.some(({ text }) => text.includes("\\mathcal"))).toBeFalse();
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();
