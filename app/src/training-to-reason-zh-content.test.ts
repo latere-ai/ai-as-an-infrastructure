@@ -60,7 +60,7 @@ test("the opening defines RLVR and its three prerequisites", () => {
   for (const phrase of [
     "不需要为每道训练题准备一份完整解答",
     "用一套可独立计算的规则评分",
-    "核查器必须反映用户真正关心的任务",
+    "核查器必须反映用户关心的任务",
     "基座模型必须已经能解出足够多的训练题",
     "策略更新既要保留探索能力",
   ]) {
@@ -178,7 +178,7 @@ test("optimizer refinements retain distinct mechanisms and evidence bounds", () 
 
 test("a defensible run records provenance, separates datasets, and measures tails", () => {
   for (const phrase of [
-    "可靠的训练运行应先定义评估约定，而不是先选优化器",
+    "可靠的训练运行应先确定如何评估",
     "训练提示池",
     "留出任务集",
     "对抗性验证器集",
@@ -195,7 +195,7 @@ test("the payoff remains conditional on the verifier boundary", () => {
   for (const phrase of [
     "把核查器变成持续产生新训练数据的来源",
     "可信方面的收益也有前提",
-    "开放式任务不会因为有了一份详细评分量表就突然变得可机械验证",
+    "开放式任务不会因为有了一份详细评分量表就变得可机械验证",
     "能可靠地机械核查时，就使用精确规则",
   ]) {
     expect(flat).toContain(phrase);
