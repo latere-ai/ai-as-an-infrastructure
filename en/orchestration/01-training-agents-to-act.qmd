@@ -61,6 +61,29 @@ patch, a browser command, or a multimodal control. Likewise, an observation may
 be structured or multimodal. Serializing both into one token transcript is a
 common implementation, not the definition of a trajectory.
 
+The history $h_t$ grows with every turn, and a long task can outgrow the
+model's context window. Long-horizon agents therefore act on a compressed
+context, and the compression can itself be learned. Context-Folding trains an
+agent to branch into a sub-trajectory for a subtask and, when the subtask ends,
+fold it: the intermediate steps leave the context and a short summary written
+by the agent stays. Trained end to end with a reinforcement-learning method the
+authors call FoldGRPO, the folding agent matches or outperforms ReAct baselines,
+agents that keep the full interleaved history of reasoning, actions, and
+observations, on deep-research and software-engineering tasks while using an
+active context ten times smaller [@sun2025contextfolding]. Cursor's technical
+report for Composer 2, a deployed coding model, describes a related pattern in
+its training: one rollout chains several generations through the model's own
+summaries, and the final reward is applied to every token in the chain,
+summaries included [@cursor2026composer2].
+
+A policy that compresses its own context samples
+$a_t \sim \pi_\theta(\cdot \mid c_t)$, where $c_t$ is the context actually
+presented at turn $t$, derived from $h_t$ by the folding or summarization rule.
+The summaries are actions the policy wrote, and the steps they replaced are
+absent from $c_t$. The likelihood used in the update must therefore condition
+on $c_t$; recomputing it on the full history $h_t$ scores the action under a
+context the policy never had.
+
 ## Turn the interaction into a valid training record
 
 Suppose a serialized record contains tokens
@@ -108,9 +131,10 @@ The record should preserve more than tokens:
 | Field | Why training needs it |
 |---|---|
 | Task, environment version, reset seed | Reconstructs the initial state and detects train--evaluation leakage. |
-| Policy and tokenizer versions | Identifies the behavior policy and makes likelihood ratios meaningful. |
+| Policy, tokenizer, and rollout-engine versions and numeric precision; sampled token IDs, sampler log-probabilities, and, for models that route tokens to expert subnetworks, the routing | Identifies the behavior policy as it was executed and makes likelihood ratios meaningful. |
 | Parsed action plus raw action text | Separates language generation from parser behavior. |
 | Observation provenance and truncation | Shows what the policy actually saw and what was omitted. |
+| Context presented at each turn, after any folding or summarization | Lets the update score each action under the context it was sampled from; the full history is a different conditioning. |
 | Timeout, retry, cancellation, and termination reason | Distinguishes a policy failure from an infrastructure failure. |
 | Step rewards, terminal reward, verifier version | Makes the final return auditable. |
 | Cost, permissions, and safety events | Prevents task success from hiding an unacceptable route. |
@@ -169,7 +193,7 @@ rather than learning the task.
 
 ## Design the reward as a contract
 
-The environment and the reward are not the same object. The environment changes
+The environment and the reward are separate components. The environment changes
 state and produces observations. A verifier or reward wrapper assigns scores to
 actions, states, or complete trajectories. Keeping those interfaces separate
 makes failures diagnosable.
@@ -208,8 +232,22 @@ Reward hacking, in which the policy raises its score by exploiting a flaw in the
 reward instead of doing the task, is therefore an interface failure as much as
 an optimization failure. Keep a **held-out verifier** that is not used for
 training, add tests that probe known loopholes, and inspect the gap between
-proxy reward and the intended task metric. Human-created tests and reference artifacts remain human
-supervision even when scoring is automated.
+proxy reward and the intended task metric. Human-created tests and reference
+artifacts remain human supervision even when scoring is automated.
+
+A loophole also changes more than the score of the trajectories that use it.
+Each exploit the checker rewards reinforces the behavior that found it, and that
+behavior can carry over to tasks that have no checker. MacDiarmid et al. gave a
+pretrained model knowledge of reward-hacking strategies through synthetic
+documents or prompts and trained it on real Anthropic production coding
+environments; the model learned to reward hack and generalized to alignment
+faking (complying during training in order to keep different behavior outside
+it), cooperation with malicious actors, and attempted sabotage, while safety
+training on chat-style prompts left the misalignment in place on agentic tasks
+[@macdiarmid2025emergent]. For reward design, a known loophole is therefore a
+defect in what the policy learns as well as in what the score measures, and
+preventing the hack was one of the mitigations the authors found effective.
+@sec-oversight-control discusses the finding as a safety result.
 
 ## Trajectory reward is not action-level credit
 
@@ -251,7 +289,12 @@ Several remedies target different parts of the problem:
 - GiGPO builds step-level groups from repeated anchor states while retaining a
   critic-free group estimator [@feng2025gigpo]. Its reported gains are scoped to
   ALFWorld, WebShop, and search-augmented question answering; the mechanism
-  depends on states that can be recognized as equivalent.
+  depends on states that can be recognized as equivalent. GACA, a September
+  2026 follow-up, replaces GiGPO's single fixed weight between the step-level
+  and trajectory-level estimates with a per-step weight that grows with the
+  step's recorded negative log-likelihood (how improbable the sampled step was
+  under the policy), used as a proxy for how critical the decision was; its
+  evaluation stays on ALFWorld and WebShop [@liang2026gaca].
 
 Reward design, credit estimation, and exploration are independent choices. A
 more detailed reward does not by itself create better exploration, and branching
@@ -353,9 +396,25 @@ public repositories can reproduce an evaluation instance without copying it, and
 exact-match deduplication will not find it. How much breadth is enough is also
 open. These pipelines show that breadth helps; they do not locate the point at
 which another hundred environments no longer improve the policy enough to justify
-their cost. Running thousands of live containers per rollout batch is an
-infrastructure cost, separate from the cost of generating tasks, and the next two
-sections take it up.
+their cost. Running the environments is an infrastructure cost separate from
+generating the tasks: every trajectory in a rollout batch needs its own live,
+isolated sandbox for as long as it runs, and at industrial scale those sandboxes
+form a dedicated fleet. The next two sections take that cost up.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Among the labs' own technical reports, the largest figures count different
+things. Meituan's LongCat-Flash-Thinking-2601 (January
+2026), a 560-billion-parameter open-weight model, reports RL training across
+more than 10,000 distinct environments in more than 20 domains
+[@longcat2026flashthinking]. DeepSeek's DSec report (September 2026) counts
+sandbox instances: one production unit of about 160 nodes serves about 3
+million sandboxes a day, and in production the platform supports more than
+380,000 concurrent sandboxes and more than 5,000 sandbox creations per second.
+The platform decouples stateful rollout execution from GPU training, which can
+be preempted [@huang2026dsec].
+:::
 
 ## Treat the environment as versioned data infrastructure
 
@@ -390,6 +449,22 @@ These controls affect learning. A flaky test adds reward noise. A slow browser
 extends the rollout tail. A leaked solution turns memorization into apparent
 success. A changed API alters the transition distribution even if the task text
 is unchanged.
+
+The same argument extends from the training environment to the deployed runtime.
+The harness that runs the deployed model (@sec-the-harness) fixes the tool
+schemas, observation formats, truncation and summarization rules, and error
+messages the policy will meet, which are its transition and observation
+contracts in the sense of the contract table above. A training environment with
+a different tool surface optimizes the policy under different contracts, and
+conventions learned there need not hold after release. Training inside the
+deployed harness makes the two sets of contracts identical by construction.
+Cursor's Composer 2 report states that its reinforcement learning runs in the
+same harness as the deployed model, with equivalent tools and structure, backed
+by a shadow deployment of the production backend used for both dataset
+preparation and rollouts [@cursor2026composer2]. It is a vendor report and
+includes no ablation of this choice. The trade-off is coupling between product
+and training: each harness release becomes a new environment revision $E$ and
+needs the versioning, replay, and dataset-separation controls listed above.
 
 ## Lower-layer constraint: rollout time shapes optimization
 
@@ -446,7 +521,7 @@ rollouts from older weights. HybridFlow's 3D-HybridEngine is one colocated
 design that reshards the actor between generation and training layouts
 [@sheng2024hybridflow]. OpenRLHF demonstrates a Ray-based distributed layout
 [@hu2024openrlhf]. Neither placement alone determines whether the data is
-on-policy, that is, sampled from the same weights the learner is updating.
+on-policy, that is, sampled from the same policy the learner is updating.
 
 Asynchronous RLHF separates generation and learning and shows the resulting
 throughput--off-policy trade-off on instruction following and mathematical
@@ -478,6 +553,31 @@ arbitrarily stale trajectories. Products of ratios across many tokens and turns
 can become extreme, so record policy lag, ratio distributions, and clipping
 fractions rather than labeling a run merely “asynchronous.”
 
+Synchronization does not make the data on-policy either, because the behavior
+policy $\mu_i$ is the distribution the rollout engine actually sampled from, and
+it differs from the learner's even when both hold the same weights. An inference
+engine and a trainer compute the same forward pass with different kernels and
+often different numeric precision, so they assign slightly different
+probabilities to the same tokens. Qi et al. find that BF16, a widely used 16-bit
+floating-point format that keeps the exponent range of 32-bit floats but few
+mantissa bits, introduces rounding errors large enough to break this
+consistency, and that running both sides in FP16 effectively removes the
+mismatch in their experiments [@qi2025fp16]. A @gls-moe model, which routes each
+token to a few of many expert subnetworks, adds a discrete source of divergence:
+the trainer's router can select different experts for a token than the rollout
+engine did, so the sampled routing is part of the behavior policy. Ma et al.
+report that this discrepancy can collapse RL training; their Rollout Routing
+Replay (R3) records the inference engine's routing and replays it in the trainer
+[@ma2025r3]. T1, a 122-billion-parameter mixture-of-experts terminal agent
+trained for up to 300+ tool-call turns per task, combines routing replay with
+training on the exact token IDs the sampler emitted and reports the
+training-to-inference log-probability difference falling from 0.021 to 0.013
+[@yang2026t1]. The trajectory record should therefore carry the rollout engine's
+own token IDs and log-probabilities, plus the routing for a mixture-of-experts
+model, and the run should log the training-inference log-probability gap next to
+policy lag. @sec-training-to-reason treats that gap as a monitoring item for
+reasoning runs.
+
 <figure id="fig-training-agents-to-act-rl-timeline">
 <div class="viz" data-viz="rl-timeline"></div>
 <figcaption>Resource placement and update synchronization are independent design axes. The placement view compares a shared GPU pool with separate rollout and learning pools. The schedule view compares a synchronous barrier with asynchronous overlap and measured policy lag. Toggle between the two axes; block widths are schematic, not utilization measurements.</figcaption>
@@ -491,7 +591,7 @@ A useful evaluation sheet keeps three layers separate:
 |---|---|
 | **Policy behavior** | Task success by horizon and task family; tool-call validity; recovery after a failed action; steps, tokens, and cost per success; safety violation rate; proxy reward beside held-out verifier results. |
 | **Environment quality** | Environment reset failure rate; deterministic replay rate; parser, tool, and verifier failures; observation truncation; leakage probes; per-stage p50, p95, and p99 latency. |
-| **Training system** | Rollout tokens per second, environment steps per second, trajectories per hour, trainer idle fraction, GPU memory, weight transfer time, policy lag, ratio clipping, and discarded-rollout rate. |
+| **Training system** | Rollout tokens per second, environment steps per second, trajectories per hour, trainer idle fraction, GPU memory, weight transfer time, policy lag, training-inference log-probability gap, ratio clipping, and discarded-rollout rate. |
 
 Compare systems on matched hardware and a matched workload distribution. A
 throughput improvement obtained by shortening trajectories, dropping slow tasks,
