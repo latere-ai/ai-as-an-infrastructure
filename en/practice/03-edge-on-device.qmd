@@ -1,16 +1,16 @@
 # Edge and On-Device Deployment {#sec-edge}
 
-An on-device model is not a small server placed inside a phone. It is one
-component of an application that must work across different processors,
-operating-system versions, memory conditions, battery states, and network
-conditions. The relevant unit is therefore a **versioned device deployment**:
-the model, tokenizer, prompt template, compiled graph, quantization scheme,
-runtime, routing policy, and supported device class that produced a result.
+An on-device model is one component of an application that must work across
+different processors, operating-system versions, memory conditions, battery
+states, and network conditions. The unit that is tested and released is
+therefore a **versioned device deployment**: the model, tokenizer, prompt
+template, compiled graph, quantization scheme, runtime, routing policy, and
+supported device class that together produced a result.
 
 Local execution is useful when a feature needs an offline path, a short and
-predictable response loop, or a narrower data boundary. It is justified only
-when the complete feature also meets its quality, memory, energy, thermal, and
-support requirements. The model decision from @sec-choosing-model and the
+predictable response loop, or a narrower data boundary, meaning that user data
+reaches fewer systems. It is justified only when the complete feature also
+meets its quality, memory, energy, thermal, and support requirements. The model decision from @sec-choosing-model and the
 serving contract from @sec-serving-stack still apply; the difference is that
 qualification happens on a heterogeneous fleet rather than a controlled server
 pool.
@@ -35,9 +35,10 @@ digraph {
 
 ## Freeze the device support envelope
 
-Start with the feature, not a parameter count or a runtime. A **device support
-envelope** states where the feature is supported and what “supported” means. It
-turns “run this model locally” into a claim that can be tested and withdrawn.
+A **device support envelope** states where the feature is supported and what
+“supported” means. It is derived from the feature; the parameter count and the
+runtime are chosen afterward to fit it. The envelope turns “run this model
+locally” into a claim that can be tested and withdrawn.
 
 | Concern | What the envelope fixes |
 |---|---|
@@ -59,13 +60,14 @@ Represent the envelope as an **acceptance matrix**. Rows are supported device
 tiers; columns are relevant states such as cold and warm process, model absent
 and installed, normal and low storage, normal and low battery, foreground and
 background load, offline and weak network, and cool and thermally constrained.
-Each cell records pass, fail, or unsupported against the same feature contract.
-This makes gaps visible before a rollout turns them into user reports.
+Each cell records pass, fail, or unsupported against the same envelope. The
+matrix shows gaps before a rollout instead of through user reports after it.
 
 ## Count what must fit
 
 Raw parameter size is only the first term in the memory budget. For a decoder
-model, a useful planning approximation is
+model, which generates its output one token at a time, a useful planning
+approximation is
 
 $$
 \begin{aligned}
@@ -83,41 +85,47 @@ $$
 
 Here $M_{\mathrm{weights}}$ is the stored weight footprint;
 $N_{\mathrm{params}}$ is the number of parameters; $b_w$ is the average stored
-bits per parameter; the constant $8$ converts bits to bytes; and
+bits per parameter after quantization, the conversion of weights to a
+lower-precision number format; the constant $8$ converts bits to bytes; and
 $M_{\mathrm{metadata}}$ covers quantization scales, zero points, block headers,
-tensor alignment, and other format data. The inequality is deliberate: the
-packed-tensor calculation is a lower bound, not an installed-size or resident
-memory guarantee.
+tensor alignment, and other format data. The first line is an inequality
+because the packed-tensor calculation gives a lower bound on both installed
+size and resident memory.
 
-$M_{\mathrm{KV}}$ is the uncompressed planning size of the key-value cache;
-the factor $2$ accounts for keys and values; $B$ is the number of concurrent
-sequences; $L$ is the number of transformer layers; $n_{\mathrm{kv}}$ is the
+$M_{\mathrm{KV}}$ is the uncompressed planning size of the key-value cache,
+the attention state that decoding keeps for every processed token so that
+earlier tokens are not recomputed; the factor $2$ accounts for keys and values;
+$B$ is the number of concurrent sequences; $L$ is the number of transformer
+layers; $n_{\mathrm{kv}}$ is the
 number of key-value heads per layer; $d_h$ is the head dimension; $S$ is the
 number of cached tokens per sequence; and $b_{\mathrm{kv}}$ is the stored bits
 per cache element. Runtime-specific padding, cache layout, sliding windows, or
 cross-layer sharing can change the measured value.
 
-$M_{\mathrm{workspace}}$ covers activations, temporary buffers, compiled
-kernels, and backend workspaces. $M_{\mathrm{runtime}}$ is the inference runtime
-and its loaded libraries. $M_{\mathrm{app}}$ is everything else the application
+$M_{\mathrm{workspace}}$ covers activations (the intermediate values each
+layer produces), temporary buffers, compiled kernels, and backend workspaces.
+$M_{\mathrm{runtime}}$ is the inference runtime and its loaded libraries. $M_{\mathrm{app}}$ is everything else the application
 needs while inference runs. Their sum is peak resident memory
 $M_{\mathrm{peak}}$, which must remain below the memory available to the feature,
-$M_{\mathrm{budget}}$. The budget is not the device's advertised RAM: the OS,
-other processes, graphics, media, and the application already consume it.
+$M_{\mathrm{budget}}$. The budget is smaller than the device's advertised RAM,
+because the OS, other processes, graphics, media, and the application itself
+already use part of that memory.
 
 A 3-billion-parameter model at four bits has a raw packed-weight payload of
-1.5 GB. That arithmetic is useful for rejecting an impossible candidate, but it
-does not prove the candidate fits. Quantization metadata, tensor alignment,
-context-dependent cache growth, runtime allocations, and memory pressure can
-move the actual peak materially. Measure the exported artifact in the real
-process, including its longest supported context and its worst supported input.
+1.5 GB. That arithmetic is a necessary check: it rejects impossible candidates,
+and a candidate that passes it still has to be measured. Quantization metadata,
+tensor alignment, context-dependent cache growth, runtime allocations, and
+memory pressure can move the actual peak materially. Measure the exported
+artifact in the real process, including its longest supported context and its
+worst supported input.
 
-KIVI illustrates why the cache deserves its own line item: its authors found
-different distributions in keys and values and evaluated per-channel key and
-per-token value quantization rather than treating the cache as ordinary model
-weights [@liu2024kivi]. The result belongs to the evaluated models and runtime;
-it is evidence for testing cache quantization, not permission to assume that a
-two-bit cache is lossless everywhere.
+KIVI gives one reason to budget the cache separately from the weights. Its
+authors found different distributions in keys and values and evaluated
+per-channel key and per-token value quantization rather than treating the cache
+as ordinary model weights [@liu2024kivi]. The finding holds for the models and
+runtime they evaluated. It justifies testing cache quantization on the target
+artifact, and it does not show that a two-bit cache is lossless for other
+models or tasks.
 
 :::: {.runnable}
 ```python
@@ -157,12 +165,12 @@ $T_{\mathrm{prefill}}$ processes the input; $O$ is the number of output tokens;
 $T_{\mathrm{decode},k}$ is the time for output token $k$; and
 $T_{\mathrm{post}}$ covers validation, rendering, and any feature-specific
 post-processing. A remote path instead includes upload, network, provider queue,
-remote execution, and download time. Neither path is inherently faster. A cold
-local load can lose to a warm remote service, while a warm local model can avoid
-variable network delay.
+remote execution, and download time. Which path is faster depends on state: a
+cold local load can take longer than a call to a warm remote service, while a
+warm local model avoids variable network delay.
 
-For batch-one autoregressive decode, a bandwidth estimate can expose an upper
-bound:
+For batch-one autoregressive decode, where a single sequence produces one token
+per step, a bandwidth estimate gives an upper bound:
 
 $$
 R_{\mathrm{decode}} \lesssim \frac{BW_{\mathrm{eff}}}{D_{\mathrm{token}}}.
@@ -174,10 +182,11 @@ measured device state; and $D_{\mathrm{token}}$ is bytes moved from memory per
 generated token. This is a bandwidth ceiling, not a prediction. Prefill can be
 compute-bound, some weights or cache blocks may be reused, and unpacking,
 dequantization, unsupported operators, synchronization, or small kernels can
-become the bottleneck. Roofline analysis is a way to form a hypothesis about a
-specific workload. It is a measurement, not a promise that lower precision must
-increase speed
-[@yuan2024llmroofline].
+become the bottleneck. Roofline analysis, which bounds a workload's throughput
+by the device's peak arithmetic rate and its memory bandwidth, turns these
+effects into a hypothesis about a specific workload [@yuan2024llmroofline].
+Whether lower precision increases speed on a given device is then settled by
+measurement.
 
 Measure at least cold start, warm start, time to first token, time per output
 token, end-to-end latency, peak resident memory, error rate, and quality on the
@@ -194,10 +203,11 @@ $P_{\mathrm{idle}}$ is the comparable idle baseline. If the platform exposes
 only energy proxies, label them as proxies and keep the measurement method
 stable across candidates.
 
-Short bursts hide the device's central failure mode. Run a sustained run until
-latency, power, and temperature reach thermal steady state or the test limit.
-Record battery state, charging state, ambient condition, power mode, screen
-state, background load, and frequency throttling. Both Android and Apple expose
+Short bursts hide thermal throttling, the main way a device's performance
+degrades under sustained load. A sustained run continues until latency, power,
+and temperature reach thermal steady state or the test limit. Record battery
+state, charging state, ambient condition, power mode, screen state, background
+load, and frequency throttling. Both Android and Apple expose
 thermal-state signals that applications can observe; those signals should be
 part of a controlled test and, where appropriate, a runtime admission decision
 [@androidThermal; @appleThermal]. MLPerf Mobile likewise treats the model,
@@ -207,11 +217,12 @@ software stack, device, accuracy target, and run rules as one benchmarked system
 ## Compression is a system choice
 
 Compression is valuable only when the resulting artifact retains task quality
-and the target backend executes its representation efficiently. Keep the weight
-format, activation format, and KV-cache format separate in the decision record.
-They affect different memory regions and require different kernel support.
-@sec-quantization-kernels develops the underlying representations and kernels;
-the concern here is qualifying their exported device artifact.
+and the target backend executes its representation efficiently. The weight
+format, activation format, and KV-cache format are recorded as three separate
+decisions, because they affect different memory regions and require different
+kernel support. @sec-quantization-kernels develops the underlying
+representations and kernels; the concern here is qualifying their exported
+device artifact.
 
 | Mechanism | What changes | What it can buy | What must be checked |
 |---|---|---|---|
@@ -223,20 +234,22 @@ the concern here is qualifying their exported device artifact.
 | Low-bit pretraining | The model is trained for a low-bit or discrete representation from the start | A representation designed around the target arithmetic | Lack of a simple conversion path, immature kernels, and evidence at the intended scale |
 | KV-cache quantization | Attention keys and values use fewer bits | Longer context or lower peak memory | Cache layout, accuracy across context lengths, and attention-kernel support |
 
-MobileLLM is useful evidence for designing within a small budget: its authors
-studied deep-and-thin sub-billion models, embedding sharing, grouped-query
-attention, and adjacent-block sharing rather than merely compressing a much
-larger checkpoint [@liu2024mobilellm]. That result motivates architecture search
-in the intended regime; it does not establish one universal mobile shape.
+MobileLLM is evidence for designing within a small budget. Its authors studied
+deep-and-thin sub-billion models, embedding sharing, grouped-query attention (in
+which groups of query heads share one key and value head), and
+adjacent-block sharing instead of compressing a much larger checkpoint
+[@liu2024mobilellm]. That result motivates architecture search in the intended
+size range; the best shape can still differ across tasks and devices.
 
-For post-training quantization, the **calibration set** is part of the artifact.
-It should cover real prompt lengths, languages, modalities, tool schemas, and
-rare but important request classes. AWQ uses observed activations to protect
-salient weight channels in a weight-only method [@lin2024awq]. SmoothQuant moves
-some quantization difficulty from activations into weights to support W8A8
-execution [@xiao2023smoothquant]. These methods solve different problems, so a
-paper's aggregate benchmark does not substitute for task-specific evaluation on
-the exact artifact and exact backend.
+For post-training quantization, the **calibration set**, the sample of inputs
+used to set the quantization ranges, is part of the artifact. It should cover
+real prompt lengths, languages, modalities, tool schemas, and rare but important
+request classes. AWQ uses observed activations to protect salient weight
+channels in a weight-only method [@lin2024awq]. SmoothQuant moves some
+quantization difficulty from activations into weights to support W8A8 execution,
+with 8-bit weights and 8-bit activations [@xiao2023smoothquant]. These methods
+solve different problems, so a paper's aggregate benchmark does not substitute
+for task-specific evaluation on the exact artifact and exact backend.
 
 Quantization-aware training and low-bit pretraining become relevant when
 post-training quality is insufficient. One published Apple model used two-bit
@@ -247,27 +260,30 @@ ternary weights in $\{-1,0,1\}$ for models trained in that representation
 general weight multiplication with selection, sign change, or zero. A deployed
 system still has scales, activation processing, attention, normalization,
 packing, and memory traffic. Zero-valued weights are not automatically
-structured sparsity, and a backend saves work only if its kernel exploits the
-representation. Smaller does not automatically mean faster.
+structured sparsity, a regular pattern of zeros that hardware can skip, and a
+backend saves work only if its kernel exploits the representation.
 
 ## Build a deployable artifact
 
-A source checkpoint is not a mobile artifact. Export and lowering specialize a
-graph to an operator set, memory plan, tensor layout, precision, and backend.
-ExecuTorch, for example, separates export and ahead-of-time lowering from its
-device runtime and produces programs for selected backends [@executorchDocs].
+A source checkpoint has to be converted before a device can run it. Export and
+lowering specialize a graph to an operator set, memory plan, tensor layout,
+precision, and backend. ExecuTorch, for example, separates export and
+ahead-of-time lowering from its device runtime and produces programs for
+selected backends [@executorchDocs].
 Core ML can schedule supported work across CPU, GPU, and Neural Engine, but the
 actual compute plan and compatibility still depend on the converted model and
 target OS [@appleCoreML]. A container such as GGUF can carry tensors and model
 metadata, yet a runtime build must still implement the architecture, tokenizer
-semantics, quantization types, and required operators [@ggufSpec]. Format is not
-compatibility.
+semantics, quantization types, and required operators [@ggufSpec].
+Compatibility is therefore a property of an artifact together with a specific
+runtime build.
 
 Record a **deployment fingerprint** with at least:
 
 - source checkpoint and immutable revision;
 - tokenizer, special tokens, and prompt template;
-- adapter set and merge state;
+- adapter set (small trained weight additions to the base model) and merge
+  state;
 - export graph and exporter version;
 - quantization configuration and calibration-set revision;
 - compiled artifact format and cryptographic digest;
@@ -283,14 +299,17 @@ It also supplies the key for every quality result and device metric.
 Before performance testing, establish semantic parity. Run golden prompts
 through the source graph and compiled artifact; compare tokenization, structured
 output, stop handling, and task results within declared tolerances. Inspect the
-partition plan for unsupported operators. A silent CPU fallback may preserve
-correctness while destroying latency or energy, so the capability probe must
-report the actual backend delegate and every CPU fallback.
+partition plan for unsupported operators; the plan assigns each part of the
+graph either to an accelerator backend (a delegate) or to the CPU. A silent CPU
+fallback may preserve correctness while making latency or energy unacceptable,
+so the capability probe, the on-device check of what the runtime will execute
+where, must report the actual backend delegate and every CPU fallback.
 
 ## Make hybrid routing explicit
 
-Hybrid execution is a policy decision, not a catch-all exception handler. Define
-the route before execution as
+Hybrid execution is governed by a routing policy that chooses the path before a
+request runs, instead of sending whatever fails locally to the cloud. The route
+is a function of four inputs:
 
 $$
 r(x,d,s,p) \in \{\mathrm{local},\ \mathrm{cloud},\ \mathrm{decline}\},
@@ -321,21 +340,24 @@ digraph {
 ```
 
 For a **local-only** request, model unavailable, low storage, or thermal pressure
-must lead to a local error or decline path; never upload it. For a
-**cloud-eligible** request, require the declared legal and product basis and any
+must lead to a local error or decline path, and the request is never uploaded.
+A **cloud-eligible** request needs the declared legal and product basis and any
 explicit consent before transmission. If permission is absent, there is no
-silent fallback. If both routes are allowed, choose using measured quality and
-the remaining deadline, not a vague estimate that the request is “hard.”
+silent fallback. If both routes are allowed, the router chooses by measured
+quality and the remaining deadline rather than by an impression that the
+request is “hard.”
 
-Route before execution whenever possible. Falling back after partial output can
-duplicate text, change semantics, or expose data the user expected to remain
-local. If a local run fails after producing a partial output, terminate it with
-a typed reason and let the product contract decide whether the user may start a
-new cloud attempt. Never append a cloud continuation invisibly. Return execution
-provenance (local, cloud, or declined) so the UI, telemetry, and support tools can
-explain what happened.
+The router should route before execution whenever possible, because falling
+back after partial output can duplicate text, change semantics, or expose data
+the user expected to remain local. If a local run fails after producing a
+partial output, it terminates with a typed reason, an error code from a
+declared set, and the versioned product policy determines whether the user may
+start a new cloud attempt. A cloud continuation is never appended without the
+user seeing it. The result carries its execution provenance (local, cloud, or
+declined) so the UI, telemetry, and support tools can report which path
+produced it.
 
-## Local execution is not automatically private
+## Map the complete data flow
 
 Keeping inference in the app can reduce transmission and server retention, but
 it is not, by itself, a privacy guarantee. Input or output may still reach
@@ -350,15 +372,15 @@ surface works offline. Apply the same security review used for other mobile
 data: app sandbox boundaries, secure storage, authenticated network transport,
 least privilege, log redaction, and dependency review. The OWASP Mobile
 Application Security Verification Standard separates storage, network,
-platform, code, resilience, and privacy controls precisely because “processed
-locally” addresses only part of the system [@owaspMasvs]. See
-@sec-security-authorization for the broader trust and authorization model.
+platform, code, resilience, and privacy controls [@owaspMasvs]; processing
+locally addresses only part of that list. See @sec-security-authorization for
+the broader trust and authorization model.
 
-Default fleet telemetry to **content-free metrics**: deployment fingerprint,
+Fleet telemetry defaults to **content-free metrics**: deployment fingerprint,
 route and reason, device tier, timing buckets, peak-memory bucket, thermal state,
 load error, cancellation, and quality outcome when it can be collected without
-content. Do not collect prompt or completion content by default. If a debugging
-program needs examples, make it separately authorized, narrowly sampled,
+content. Prompt or completion content is not collected by default. A debugging
+program that needs examples must be separately authorized, narrowly sampled,
 redacted, access-controlled, time-bounded, and removable. OpenTelemetry's
 generative-AI conventions warn that model inputs and outputs are likely to
 contain sensitive information [@otelGenAI].
@@ -407,16 +429,16 @@ collection must not delete the active or rollback target, and it must cope with
 an interrupted download.
 
 Use a staged rollout by representative device tier, not only by account
-percentage. Stop or
-rollback when load failures, crashes, quality rejection, p95 latency, peak
-memory, energy, or thermal events cross their declared thresholds. A server-side
+percentage. Stop or roll back when load failures, crashes, quality rejection,
+p95 latency, peak memory, energy, or thermal events cross their declared
+thresholds. A server-side
 kill switch can disable eligibility, but offline behavior must remain defined:
 an installed unsafe version may require local disablement encoded in the app or
 an expiry policy rather than a network response that never arrives.
 
 ## Operate the fleet
 
-The operating loop is short enough to make explicit:
+The procedure has eight steps:
 
 1. **Freeze the envelope.** Record the task class, data boundary, quality
    threshold, supported device tiers, minimum OS, offline behavior, and fallback
@@ -435,18 +457,19 @@ The operating loop is short enough to make explicit:
    background load, and thermal throttling.
 6. **Stage delivery.** Verify the inactive bundle, activate atomically for a
    small device-tier cohort, and compare against the last-known-good release.
-7. **Observe and rollback.** Monitor content-free route, quality, reliability,
-   latency, energy, and thermal signals; rollback on the recorded thresholds.
+7. **Observe and roll back.** Monitor content-free route, quality, reliability,
+   latency, energy, and thermal signals; roll back on the recorded thresholds.
 8. **Register each requalification trigger.** Repeat the affected matrix when
    the model, tokenizer, template, quantization, exporter, runtime, backend,
-   operating system, device policy, or feature contract changes.
+   operating system, device policy, or support envelope changes.
 
 NIST's generative-AI profile treats deployment-context evaluation,
 post-deployment monitoring, incident response, change management, and
 decommissioning as lifecycle work rather than one-time release checks
-[@nist2024gairmf]. The same framing applies here. @sec-eval-practice provides the
-quality and observability method, while @sec-deployment-lifecycle develops staged
-release and rollback in more detail.
+[@nist2024gairmf], and the procedure above applies that view to device
+deployments. @sec-eval-practice provides the quality and observability method,
+while @sec-deployment-lifecycle develops staged release and rollback in more
+detail.
 
 The output is a deployment decision record: the envelope, exact fingerprint,
 acceptance matrix, measured results, privacy data flow, routing policy, delivery
@@ -462,8 +485,9 @@ too. Second, accelerator portability remains limited by operator coverage,
 compiler behavior, and vendor runtimes; a common source model does not imply one
 common executable. Third, very-low-bit training can change the quality-memory
 frontier, but published model-level gains do not guarantee system-level latency
-or energy gains on a target device. Keep these as measured alternatives in the
-acceptance matrix rather than forecasts in the architecture.
+or energy gains on a target device. The acceptance matrix records these as
+alternatives to measure, instead of building forecasts about them into the
+architecture.
 :::
 
 ::: {.callout-tip}
@@ -473,8 +497,8 @@ The device budget reaches backward through the entire stack. Memory and thermal
 limits influence model architecture and context length. Kernel availability
 influences quantization. Export and operator coverage influence training-time
 choices. Privacy and offline policy influence routing and telemetry. The device
-therefore constrains not only where inference runs, but which model can be
-trained, represented, delivered, observed, and safely updated.
+therefore constrains where inference runs and also which model can be trained,
+represented, delivered, observed, and safely updated.
 :::
 
 ## Further reading

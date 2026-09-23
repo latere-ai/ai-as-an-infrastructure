@@ -30,7 +30,7 @@ test("Chinese Chapter 83 preserves the complete English structure", () => {
     ["##", "压缩是一项系统决策"],
     ["##", "构建可部署的制品"],
     ["##", "明确规定混合路由"],
-    ["##", "本地执行不等于自动获得隐私保障"],
+    ["##", "梳理完整的数据流"],
     ["##", "安全交付模型版本"],
     ["##", "运营设备群"],
     ["##", "争议所在"],
@@ -42,7 +42,7 @@ test("Chinese Chapter 83 preserves the complete English structure", () => {
 
 test("the opening defines one versioned device deployment", () => {
   for (const phrase of [
-    "端侧模型不是塞进手机里的一台小服务器",
+    "端侧模型是应用中的一个组件",
     "带版本的设备部署",
     "模型、分词器、提示词模板、编译图、量化方案、运行时、路由策略和支持的设备类别",
     "离线路径",
@@ -56,7 +56,7 @@ test("the opening defines one versioned device deployment", () => {
 test("the support envelope makes device eligibility testable", () => {
   for (const phrase of [
     "设备支持范围",
-    "从功能出发，而不是从参数量或运行时出发",
+    "它从功能推导出来，参数量和运行时随后再按它来选",
     "任务类别",
     "质量门槛",
     "最低操作系统和运行时版本",
@@ -92,7 +92,7 @@ test("memory feasibility accounts for the complete process", () => {
     "峰值常驻内存",
     "内存压力",
     "在真实进程中测量导出的制品",
-    "下界，而不是安装体积或常驻内存的保证",
+    "安装体积和常驻内存的下界",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -111,7 +111,7 @@ test("performance is qualified under sustained device conditions", () => {
     "持续运行",
     "降频",
     "带宽上限，不是预测值",
-    "测量方法，而不是低精度一定能提速的承诺",
+    "低精度能否在某台设备上提速，仍要由测量回答",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -128,15 +128,15 @@ test("compression remains artifact- and backend-specific", () => {
     "算子覆盖",
     "反量化开销",
     "确切制品与后端组合",
-    "越小不一定越快",
+    "只有后端内核利用了这种表示，设备才会少做运算",
     "零值权重不会自动形成结构化稀疏",
   ]) expect(flat).toContain(phrase);
 });
 
 test("the deployment fingerprint crosses export packaging and runtime", () => {
   for (const phrase of [
-    "源检查点不是移动端制品",
-    "格式不等于兼容性",
+    "源检查点要经过转换，设备才能运行",
+    "兼容性是制品与具体运行时构建版本共同决定的属性",
     "部署指纹",
     "不可变修订版本",
     "分词器、特殊词元和提示词模板",
@@ -299,7 +299,7 @@ test("the complete Chinese chapter renders through its operating handoff", async
   const { html, headings: renderedHeadings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("端侧模型不是塞进手机里的一台小服务器");
+  expect(html).toContain("端侧模型是应用中的一个组件");
   expect(html).toContain("记录为何不应在端侧发布");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(3);
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();

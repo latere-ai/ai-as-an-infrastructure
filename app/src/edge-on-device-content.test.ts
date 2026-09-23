@@ -71,7 +71,7 @@ test("performance is qualified under sustained device conditions", () => {
     "frequency throttling",
   ]) expect(flat).toContain(phrase);
   expect(flat).toContain("bandwidth ceiling");
-  expect(flat).toContain("measurement, not a promise");
+  expect(flat).toContain("settled by measurement");
 });
 
 test("compression choices remain artifact- and backend-specific", () => {
@@ -88,7 +88,7 @@ test("compression choices remain artifact- and backend-specific", () => {
     "exact artifact",
     "exact backend",
     "task-specific evaluation",
-    "smaller does not automatically mean faster",
+    "saves work only if its kernel exploits the representation",
   ]) expect(flat).toContain(phrase);
 });
 
