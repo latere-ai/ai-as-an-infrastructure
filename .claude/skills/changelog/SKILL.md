@@ -23,13 +23,13 @@ engineering history into reader-visible change.
 | `ci: run bun test` | "Added bun test to CI" | omit, or fold into the week's opening sentence |
 | `book: split Part IX` | "Split Part IX into two parts" | "Part IX had grown into two parts under one name. Infrastructure and Compute keeps the hardware and software chapters; a new Part X, Frontiers and Limits, takes the three about what compute converts into. Old links redirect." |
 
-A week whose work was entirely internal gets **one honest sentence** saying the
-machinery moved, not a bulleted list of it.
+Internal work in a week that also changed the book gets **one honest sentence**
+in the opening saying the machinery moved, not a bulleted list of it.
 
 ## Steps
 
 1. **Find the boundary.** Read the top entry's date range in `en/changelog.qmd`.
-   The new week starts the day after it ends. Weeks run Monday to Sunday.
+   The new week starts the day after it ends.
 
 2. **Collect the history.**
    ```sh
@@ -45,7 +45,7 @@ machinery moved, not a bulleted list of it.
    opening sentence: "Released as v0.2.0."
 
 4. **Write the entry** in the format below, in English, then write the Chinese
-   twin. Invoke the `prose-style` skill first, and read `CONVENTIONS.md` for
+   twin. Read `CONVENTIONS.md` first for
    voice. The ZH entry is the same entry written natively in Chinese, not a
    translation of the English sentences: same structure, same claims, same bullet
    count, full-width punctuation, code and version numbers byte-verbatim.
