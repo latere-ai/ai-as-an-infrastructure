@@ -46,8 +46,8 @@ test("Chapter 49 preserves the complete English human-evaluation protocol", () =
     "把人类评测写成测量协议 {#sec-human-evaluation-rubrics}",
   ]);
   expect(headings(chapter, 2)).toEqual([
-    "从主张出发，而不是先找标注者",
-    "评分准则是一套可执行界面",
+    "从主张出发",
+    "把评分准则写成可观察的判断",
     "任务分配与界面会改变观测结果",
     "找对视角，也保护参与评测的人",
     "仲裁之前，先保留原始判断",

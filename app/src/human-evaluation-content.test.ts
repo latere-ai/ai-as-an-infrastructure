@@ -23,7 +23,7 @@ test("the opening treats human evaluation as a measurement protocol", () => {
 
 test("the claim determines the construct and rater perspective", () => {
   for (const phrase of [
-    "begin with the claim, not the crowd",
+    "## begin with the claim before recruiting raters",
     "the decision and the construct to be measured",
     "the target rater population follows from the claim",
     "the perspective it samples",

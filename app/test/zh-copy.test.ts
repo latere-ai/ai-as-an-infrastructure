@@ -847,11 +847,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/evaluation/03-human-evaluation-rubrics.qmd",
-      ["A human judgment is not ground truth merely because", "Begin with the Claim, Not the Crowd", "Preserve Raw Judgments Before Adjudication", "Agreement is reliability, not validity"],
+      ["A human judgment is not ground truth merely because", "Begin with the Claim", "Preserve Raw Judgments Before Adjudication", "Agreement is reliability, not validity"],
     ],
     [
       "zh/evaluation/03-human-evaluation-rubrics.qmd",
-      ["人做出的判断，并不会因此自动成为真值", "从主张出发，而不是先找标注者", "仲裁之前，先保留原始判断", "一致性衡量可靠性，而不是效度"],
+      ["人做出的判断，并不会因此自动成为真值", "从主张出发", "仲裁之前，先保留原始判断", "一致性衡量可靠性，而不是效度"],
     ],
     [
       "en/evaluation/04-judging-holistic.qmd",
