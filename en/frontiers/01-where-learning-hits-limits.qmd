@@ -306,7 +306,10 @@ starting checkpoint. It reports gains through a candidate budget of 256,
 including tasks with no observed starting-checkpoint success among 256 samples
 [@prorl2025]. Zero successes in a finite sample do not show failure at every
 possible budget. The two studies disagree empirically, and the comparison does
-not settle whether RL faces an absolute capability boundary.
+not settle whether RL faces an absolute capability boundary. Work since late
+2025 ties whether RL widens or narrows large-$k$ coverage to the training
+setup, in particular to which prompts receive updates and how much headroom
+pretraining left; @sec-training-to-reason reviews that evidence.
 
 ## Test-time compute needs a way to choose
 
@@ -340,12 +343,13 @@ compute always substitutes for parameters.
 <figcaption>Test-time compute is a generate, verify, select, and accept pipeline. Pass@k measures only whether the candidate set contains an accepted result.</figcaption>
 </figure>
 
-## Deployment has three kinds of mutable state
+## Deployment has four kinds of mutable state
 
-A served checkpoint commonly keeps parameters fixed during a request, but
-frozen weights are a release policy, not a theoretical inability to update a
-deployed model. The following formula represents a state model that
-separates parameters, session context, and external memory:
+A served checkpoint commonly keeps its parameters fixed during a request.
+Frozen weights are a release policy: a deployed model's parameters can be
+updated between releases, and some architectures update part of them inside a
+request. The following formula represents a state model that separates
+parameters, session context, and external memory:
 
 $$
 Y_t
@@ -377,9 +381,21 @@ where:
 
 In-context learning, where the model adapts to examples placed in its prompt,
 changes $c_t$. Retrieval or a memory service changes $m_t$.
-Continual pretraining or fine-tuning changes $\theta_t$. Calling all three
-“learning” hides different persistence, privacy, poisoning, evaluation, and
-rollback properties.
+Continual pretraining or fine-tuning changes $\theta_t$.
+
+Test-time training adds a fourth kind of state, which the formula above leaves
+out. While the model answers a request, it trains a designated subset of its
+weights on that request's own context, by gradient steps of the kind that
+training uses. TTT-E2E, for example, updates only the feed-forward layers in a
+quarter of its blocks, starting from an initialization learned in training
+[@tandon2025ttte2e]. The adapted weights, called **fast weights**,
+belong to the request that produced them; RW-TTT calls them request-owned
+state [@yang2026rwttt]. Both are research systems. Fast weights are updated by
+gradient like $\theta_t$ and scoped to one request like $c_t$. Calling all
+four kinds “learning” hides different persistence, privacy, poisoning,
+evaluation, and rollback properties. @sec-inference-time-scaling covers the
+serving consequence: requests in one batch can no longer be assumed to share a
+single static copy of the weights.
 
 Sequential parameter training has long exposed the
 **stability-plasticity** problem: acquiring the new distribution can degrade
@@ -422,6 +438,50 @@ weights), and 11 percent with sparse updates to the memory-layer models
 continual learning, retention of reasoning and safety, or safe learning from
 unreviewed production traffic.
 
+Another mitigation changes where the training samples come from. Supervised
+fine-tuning trains the model to reproduce fixed target text, such as an
+expert's demonstration. On-policy training instead updates the model on
+responses it samples itself. @sec-rlhf reports the RL's Razor result: at
+matched new-task scores, on-policy RL forgot less than supervised fine-tuning,
+and forgetting tracked how far the fine-tuned policy's output distribution had
+moved from the base policy's on the new task. On-policy RL needs a reward
+function, which a set of demonstrations does not provide.
+**Self-distillation fine-tuning** (SDFT) derives an on-policy signal from
+demonstrations. The teacher is the model itself with a demonstration placed in
+its prompt; the student is the same model given only the task prompt. The
+student samples responses, and training moves its token probabilities toward
+the teacher's on those responses [@shenfeld2026sdft].
+
+The paper's main experiments use Qwen2.5-7B-Instruct. Across its
+skill-learning and knowledge-acquisition tasks, the paper reports that SDFT
+gives a larger $A_{\mathrm{new}}$ and a smaller loss in $\Delta_{\mathrm{old}}$
+than supervised fine-tuning, and one model trained on three skills in sequence
+accumulated them without regression on the earlier ones. In the paper's runs,
+generating rollouts during training cost about 2.5 times the FLOPs and 4 times
+the wall-clock time of supervised fine-tuning. The teacher signal depends on
+the base model's in-context learning, so a model that makes poor use of a
+demonstration in its prompt is a poor teacher, and the authors report that
+some loss of the capabilities the model had before training remains.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- SEAL trains a model to write its own fine-tuning data and update settings,
+  called self-edits, using reinforcement learning whose reward is the updated
+  model's downstream performance. Its authors report that performance on
+  earlier tasks declines as self-edits accumulate, and that evaluating one
+  self-edit takes about 30 to 45 seconds [@zweiger2025seal].
+- Google Research's Nested Learning, published at NeurIPS 2025, treats one
+  model as a system of nested learning problems optimized together, with
+  memory modules that update at different frequencies. Its Hope architecture
+  is a self-modifying recurrent variant of the Titans architecture. The announcement reports lower
+  perplexity and higher accuracy than modern recurrent models and standard
+  transformers, without stating model sizes [@behrouz2025nestedlearning].
+- SDFT, SEAL, and Hope are research results. SDFT is a preprint first posted
+  in January 2026, and none of the three reports a deployed system that
+  updates served weights from user traffic.
+:::
+
 Live parameter updates also create a security boundary. In one red-team study,
 ten adversarial fine-tuning examples compromised safety behavior in the tested
 GPT-3.5 Turbo setup; benign fine-tuning also caused smaller regressions
@@ -431,6 +491,46 @@ tests, a **promotion gate** that a candidate checkpoint must pass before it
 serves traffic, checkpoint versioning, canarying, and rollback. A system can
 train candidate checkpoints continuously and still promote one to serving only
 after it passes the gate.
+
+Online reinforcement learning from user feedback runs this loop through
+serving. The reward is a user's response to the served model's own output,
+such as accepting or rejecting a suggestion. A policy-gradient update, which
+raises the probability of rewarded outputs and lowers that of penalized ones,
+is valid in its basic form only for outputs sampled from the policy being
+updated. Each candidate checkpoint therefore has to serve traffic before the
+next update can be computed, so the promotion gate sits inside the training
+loop, and the time to deploy a checkpoint and collect its feedback sets the
+update cadence. The same constraint binds each batch of feedback to the
+checkpoint that produced it: after a rollback, the feedback collected under the
+rejected checkpoint is not on-policy data for the restored one.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Cursor describes such a loop for its Tab code-completion model, which handles
+more than 400 million requests per day, in a September 2025 vendor post
+[@cursor2025tabrl]. Policy-gradient updates use accepted, rejected, and
+withheld suggestions as the signal; the post's illustrative rewards are 0.75,
+$-0.25$, and 0. Rolling out a checkpoint and collecting the data for the next
+step takes 1.5 to 2 hours. The resulting model made 21 percent fewer
+suggestions with a 28 percent higher accept rate. The post does not describe
+the checks a checkpoint passes before it serves traffic.
+:::
+
+Fast weights change what the gate certifies and what rollback restores. Under
+test-time training, the weights that produce a token are the promoted
+checkpoint plus an update computed from that request's context, and no gate
+sees that update. What crosses the gate is the checkpoint together with its
+update procedure: which weights are fast, the loss they are trained on, the
+step size, and the number of steps. The retention and safety suites therefore
+run with the update procedure active, on contexts as long as the ones served,
+instead of on frozen weights alone. Untrusted content in a request can steer
+that request's weights, because the update reads whatever the context
+contains. Since fast weights end with the request, the effect of a bad update
+stays inside one request, and rollback restores the previous checkpoint and
+update procedure as a pair. Reproducing one response needs the full request
+context in addition to both versions, because the weights that produced it
+existed only during that request.
 
 ```{dot}
 //| label: fig-learning-state
