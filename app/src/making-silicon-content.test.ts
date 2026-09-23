@@ -202,7 +202,7 @@ test("the complete chapter renders without swallowing diagrams or late prose", a
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("The durable skill is to reconcile evidence at one unit boundary");
+  expect(html).toContain("Throughout this chapter, evidence is reconciled at one unit boundary");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(4);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });

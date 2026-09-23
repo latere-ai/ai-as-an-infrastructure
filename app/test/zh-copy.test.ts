@@ -1075,7 +1075,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/infrastructure/06-making-the-silicon.qmd",
-      ["moved down the stack from the", "transistor to the package and the memory stack", "silicon interposer can rate-limit", "memory shortage now", "reaches all the way out", "export controls and", "sovereign-compute programs"],
+      ["moved down the stack from the", "transistor to the package and the memory stack", "silicon interposer can rate-limit", "memory shortage reaches laptops", "only when shared", "export controls and", "sovereign-compute programs"],
     ],
     [
       "zh/infrastructure/06-making-the-silicon.qmd",

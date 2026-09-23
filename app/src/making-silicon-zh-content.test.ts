@@ -59,9 +59,9 @@ test("Chapter 67 preserves the complete English silicon-supply contract", () => 
     "造出这块硅：封装、HBM 与算力的地缘政治 {#sec-making-silicon}",
   ]);
   expect(headings(chapter, 2)).toEqual([
-    "封装是一份物料清单，不是一个瓶颈",
+    "封装是一份物料清单",
     "从晶圆投片到已知良品裸片",
-    "HBM 与先进封装彼此耦合，但不能互相替代",
+    "HBM 与先进封装通过同一份产品计划耦合",
     "约束如何向上传导",
     "产能主张需要证据契约",
     "外溢效应通过机会成本传导",
@@ -91,7 +91,7 @@ test("Chapter 67 preserves the complete English silicon-supply contract", () => 
 
 test("the opening scopes supply to one product and time window", () => {
   for (const phrase of [
-    "在指定产品与时间窗口内，究竟能有多少套通过认证的系统实际出货",
+    "在指定产品与时间窗口内，能有多少套通过认证的系统出货",
     "特定产品、季度与配额",
     "并非普遍规律",
     "共享设备、产品组合、库存与合同",
@@ -253,8 +253,8 @@ test("the contested questions and conclusion preserve uncertainty", () => {
   for (const phrase of [
     "哪一道工序构成当前约束",
     "HBM 会在多大程度上挤占普通 DRAM",
-    "复制地理位置是否真的能提高韧性",
-    "出口管制究竟改变了什么",
+    "复制地理位置能否提高韧性",
+    "出口管制改变了什么",
     "产品、客户、厂址、周次与认证状态",
     "规模与滞后时间都是实证问题",
     "需要反事实证据",
