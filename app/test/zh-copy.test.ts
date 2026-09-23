@@ -1035,11 +1035,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/inference/06-serving-multimodal.qmd",
-      ["architecture-dependent", "resource vector", "Cache the stage you intend to skip", "Media generation is a different serving path"],
+      ["architecture-dependent", "resource vector", "Cache the stage a hit skips", "Media generation is a different serving path"],
     ],
     [
       "zh/inference/06-serving-multimodal.qmd",
-      ["从融合契约算起", "容量核算取决于架构", "调度资源向量，而不是提示词长度", "媒体生成是另一条服务路径"],
+      ["从融合契约算起", "容量核算取决于架构", "按资源向量调度", "媒体生成是另一条服务路径"],
     ],
     [
       "en/inference/index.qmd",

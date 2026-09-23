@@ -37,8 +37,8 @@ test("Chapter 36 preserves the complete English multimodal-serving contract", ()
     "从预处理后的输入核算成本",
     "根据实际策略推导视觉长度",
     "下层约束",
-    "调度资源向量，而不是提示词长度",
-    "缓存真正想跳过的阶段",
+    "按资源向量调度",
+    "缓存命中时跳过的阶段",
     "端到端验证媒体输入服务",
     "媒体生成是另一条服务路径",
     "争议所在",
@@ -62,7 +62,7 @@ test("the opening separates media input from media generation", () => {
     "语言模型预填充开始之前",
     "提示词长度不足以完成接纳控制",
     "媒体输入服务",
-    "编码器向语言模型提供证据",
+    "编码器网络把图像、视频或音频转换为特征向量",
     "媒体生成服务",
     "需要另一套成本模型与调度器",
   ]) expect(flat).toContain(phrase);
@@ -158,14 +158,14 @@ test("media-generation serving states its own work and progress contract", () =>
     "文本编码器、迭代去噪器或流模型，以及潜变量解码器",
     "求解器步数或神经函数求值次数",
     "引导分支",
-    "减少步数为何有帮助，却没有声称步数是唯一成本",
+    "减少步数只会缩小中间的求和项",
     "不是 FLOPs 估算",
     "新的质量与延迟取舍点，不是免费的运行时开关",
     "队首阻塞或类似填充的浪费",
     "在迭代之间支持取消",
     "不是通用的 KV 缓存行为",
     "预览频率会增加解码器工作",
-    "因果媒体生成可以提供流式契约",
+    "因果媒体生成可以像文本服务流式输出词元那样",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -178,7 +178,7 @@ test("the contested choices and operating rule remain workload specific", () => 
     "把媒体策略当作服务契约的一部分",
     "接受的格式、字节与尺寸限制、图像和帧数量、时长",
     "调度器执行的契约必须与容量测试使用的契约相同",
-    "可以测试的工程选择，而不是口号",
+    "可以测试的工程选择",
   ]) expect(flat).toContain(phrase);
 });
 
