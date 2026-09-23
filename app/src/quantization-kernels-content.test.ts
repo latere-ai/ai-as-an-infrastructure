@@ -87,10 +87,10 @@ test("methods and tensor roles remain separate decisions", () => {
 test("compression is connected to an executable kernel path", () => {
   for (const phrase of [
     "artifact, kernel, and runtime",
-    "gguf is a container, not a numeric precision",
+    "**gguf** is a container, not a numeric precision",
     "dequantizes after loading compressed blocks",
     "native low-precision matrix multiplication",
-    "supported does not mean fast",
+    "shows functional compatibility",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -111,7 +111,7 @@ test("online softmax defines the complete recurrence and result", () => {
 
 test("deployment guidance measures quality and service behavior together", () => {
   for (const phrase of [
-    "start from the workload, not the format name",
+    "the choice begins with the workload",
     "record the complete numeric contract",
     "compare at matched admitted load",
     "time to first token",

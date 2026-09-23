@@ -1023,7 +1023,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/inference/04-quantization-kernels.qmd",
-      ["从字节数算起", "量化是一份数值契约", "格式不等于执行路径", "FlashAttention 不再物化中间结果", "选择并验证部署方案"],
+      ["从字节数算起", "量化是一份数值契约", "格式标签与执行路径", "FlashAttention 不再物化中间结果", "选择并验证部署方案"],
     ],
     [
       "en/inference/05-structured-long-context.qmd",

@@ -33,7 +33,7 @@ test("Chapter 34 preserves the complete English quantization-and-kernels contrac
   expect(headings(chapter, 2)).toEqual([
     "从字节数算起",
     "量化是一份数值契约",
-    "格式不等于执行路径",
+    "格式标签与执行路径",
     "FlashAttention 不再物化中间结果",
     "选择并验证部署方案",
     "争议所在",
@@ -58,7 +58,7 @@ test("Chapter 34 preserves the complete English quantization-and-kernels contrac
 
 test("the opening separates representation, movement, and service outcome", () => {
   for (const phrase of [
-    "上一章减少了每个词元需要的目标模型周期数",
+    "上一章的方法减少了每个词元需要的目标模型周期数",
     "本章讨论剩余每个周期的成本",
     "量化减少权重、激活或 KV 缓存的表示字节数",
     "IO 感知内核减少数据在内存层次中搬运的字节数",
@@ -75,7 +75,7 @@ test("the byte models separate capacity, decode bandwidth, roofline, and attenti
     "节省容量并不自动等于降低延迟",
     "实测带宽，而不是设备标称峰值",
     "受限于通信",
-    "受内存限制的解码是一种常见运行区间，不是一条定律",
+    "解码往往受内存限制",
     "不会在每个解码步都新建一个完整的 $n\\times n$ 分数矩阵",
     "哪种数值表示能够保持所需质量",
   ]) expect(flat).toContain(phrase);
@@ -102,9 +102,9 @@ test("outliers and tensor targets are scoped without universal claims", () => {
     "权重专用量化",
     "权重与激活量化",
     "KV 缓存量化",
-    "三项独立选择，并不是同一个开关由弱到强的三个档位",
-    "不会让总接纳批量自动翻倍",
-    "缓存格式、缩放因子、模型版本与位置策略必须属于缓存身份",
+    "三项独立选择，各有其目标张量、内核要求与质量检查",
+    "不会让总接纳批量（同时驻留在内存中的请求集合）自动翻倍",
+    "缓存格式、缩放因子、模型版本与位置编码必须属于缓存身份",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -127,10 +127,10 @@ test("formats are connected to artifact, kernel, and runtime contracts", () => {
     "E4M3",
     "E5M2",
     "MXFP4 与 NVFP4",
-    "GGUF 是容器，不是数值精度",
-    "可部署路径包含三份契约：工件、内核与运行时",
-    "功能兼容，并不能证明它会加速",
-    "支持不等于快",
+    "**GGUF** 是容器，不是数值精度",
+    "可部署路径需要三部分彼此一致：工件、内核与运行时",
+    "说明的只是功能兼容",
+    "部署是否更快，要测量实际执行的路径才能确认",
     "论文结果不能充当兼容性保证",
   ]) expect(flat).toContain(phrase);
 });
@@ -144,14 +144,14 @@ test("FlashAttention states exactness, online recurrence, and hardware limits", 
     "未归一化的输出累加器",
     "朴素分块 softmax 所缺少的步骤",
     "报告的加速只属于所声明的硬件、精度、形状与基线",
-    "不是可以迁移的常数",
+    "换一种配置就需要重新测量",
     "测量实际执行的路径",
   ]) expect(flat).toContain(phrase);
 });
 
 test("deployment verification joins path evidence, service metrics, and quality", () => {
   for (const phrase of [
-    "从工作负载出发，不要从格式名称出发",
+    "选择从工作负载出发",
     "记录基线",
     "定位约束",
     "选择张量目标",
@@ -169,12 +169,12 @@ test("the conclusion requires systems and capability evidence together", () => {
   for (const phrase of [
     "不存在脱离硬件的统一排名",
     "有些是校准方法，有些是数值格式，还有一个是容器",
-    "服务系统必须交付两类结果",
-    "系统测量与能力测量",
+    "量化部署需要两类测量",
+    "本章的系统测量",
     "量化降低表示成本",
     "融合与 IO 感知算法减少数据搬运和内核启动开销",
     "工件、内核、运行时、工作负载与质量阈值彼此一致",
-    "完整路径才是部署单位",
+    "部署决策与测量都要覆盖这条完整路径",
   ]) expect(flat).toContain(phrase);
 });
 

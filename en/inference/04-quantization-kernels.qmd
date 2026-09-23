@@ -1,18 +1,26 @@
 # Quantization and Kernels {#sec-quantization-kernels}
 
-The previous chapter reduced the number of target-model cycles needed for a
-token. This chapter asks what each remaining cycle costs. Quantization reduces
-the bytes used to represent weights, activations, or the key-value cache.
-IO-aware kernels reduce the bytes moved through the memory hierarchy. These
-ideas complement each other, but neither guarantees faster service by itself.
-A compressed artifact needs a kernel that can consume its exact layout, and
-the runtime must dispatch that kernel for the shapes produced by the workload.
+The methods of the previous chapter reduce the number of target-model cycles
+needed per generated token, where a cycle is one round of proposing candidate
+tokens and scoring them with the target model. This chapter asks what each
+remaining cycle costs. Quantization reduces the bytes used to represent
+weights, activations (the intermediate values each layer computes from its
+input), or the key-value cache (the attention keys and values retained for
+earlier tokens). A kernel is the program an accelerator runs to execute one
+operation, such as a matrix multiply; IO-aware kernels reduce the bytes that
+operation moves through the memory hierarchy. These ideas complement each
+other, but neither guarantees faster service by itself. A compressed artifact
+needs a kernel that can consume its exact layout, and the runtime must dispatch
+that kernel for the shapes produced by the workload.
 
-That distinction is the chapter's organizing rule: keep the **numeric
-contract**, the **kernel implementation**, and the **serving result** separate.
-It explains why the same four-bit model can be fast in one engine and slow in
-another, why an FP8 path can help prefill more than decode, and why a smaller
-file may save capacity without improving latency.
+The chapter therefore keeps three things separate: the numeric contract, the
+kernel implementation, and the serving result. The **numeric contract** is the
+full specification of how values are stored and reconstructed, including the
+element format, the scales and how they are grouped, zero points, clipping, and
+accumulator precision. Keeping the three apart explains why the same four-bit
+model can be fast in one engine and slow in another, why an FP8 path can help
+prefill more than decode, and why a smaller file may save capacity without
+improving latency.
 
 ## Begin with the bytes
 
@@ -27,15 +35,18 @@ Here $M_{\mathrm{weights}}$ is the number of stored bytes, $P$ is the parameter
 count, $b_w$ is the average number of data bits per parameter, and
 $M_{\mathrm{meta}}$ includes scales, zero points, padding, tensor headers, and
 any weights retained at another precision. Thus a 70-billion-parameter model
-stored entirely in FP16 needs about 140 GB for weights in decimal units. A
-nominal four-bit representation suggests 35 GB of weight data, but its real
-artifact is larger because metadata and mixed-precision tensors are not free.
+stored entirely in FP16, a two-byte floating-point format, needs about 140 GB
+for weights in decimal units. A nominal four-bit representation suggests 35 GB
+of weight data, but the real artifact is larger because metadata and tensors
+kept at higher precision also occupy space.
 
-Capacity is only the first constraint. During small-batch decode, many linear
-layers reuse each loaded weight too little to saturate the accelerator's
-arithmetic units. If a step reads $R_{\mathrm{step}}$ bytes from device memory
-and the achieved high-bandwidth-memory rate is $B_{\mathrm{HBM}}$, then a
-bandwidth lower bound is
+Capacity is only the first constraint. During small-batch decode, the phase
+that generates one new token per request at each step, many linear layers
+(layers that multiply their input by a weight matrix) reuse each loaded weight
+too little to saturate the accelerator's arithmetic units. If a step reads
+$R_{\mathrm{step}}$ bytes from device memory and the achieved rate of
+high-bandwidth memory (HBM, the accelerator's main device memory) is
+$B_{\mathrm{HBM}}$, then a bandwidth lower bound is
 
 $$
 t_{\mathrm{decode}}\gtrsim\frac{R_{\mathrm{step}}}{B_{\mathrm{HBM}}}.
@@ -49,9 +60,10 @@ $R_{\mathrm{step}}$. It lowers latency only if the executed kernel reads the
 compressed representation efficiently. A capacity saving is not automatically
 a latency saving.
 
-The same point can be written as a roofline bound. If an operation performs
-$F$ floating-point operations while transferring $D$ bytes through device
-memory, its arithmetic intensity is $I=F/D$, and
+The same point can be written as a roofline bound, which says that an operation
+takes at least as long as the slower of its arithmetic and its memory traffic.
+If an operation performs $F$ floating-point operations while transferring $D$
+bytes through device memory, its arithmetic intensity is $I=F/D$, and
 
 $$
 t\gtrsim\max\!\left(\frac{F}{P_{\mathrm{kernel}}},
@@ -61,11 +73,14 @@ $$
 Here $P_{\mathrm{kernel}}$ is the measured or supported compute rate for the
 exact operand and accumulator types. Batch size can increase weight reuse and
 therefore $I$; a long decode can increase KV traffic; a mixture-of-experts
-model reads only its active experts; and distributed execution can instead be
-limited by communication. “Memory-bound decode” is a common regime, not a law.
+model, which routes each token through a few of its expert sub-networks, reads
+only the weights of those active experts; and distributed execution can instead
+be limited by communication. Small-batch decode is often memory-bound for the
+reason given above, and each of these factors can move it into another regime.
 
 Attention has a related, but shape-dependent, traffic problem. For query and
-key lengths $n_q$ and $n_k$, the score tensor for one head is
+key lengths $n_q$ and $n_k$, the score tensor for one head (one of the parallel
+attention computations in a layer) is
 
 $$
 S\in\mathbb R^{n_q\times n_k},\qquad
@@ -74,13 +89,14 @@ $$
 
 Here $Q\in\mathbb R^{n_q\times d}$ contains queries,
 $K\in\mathbb R^{n_k\times d}$ contains keys, and $d$ is the head dimension.
-During full-sequence prefill or training, $n_q$ and $n_k$ can both equal the
-sequence length, so materializing $S$ creates a quadratic intermediate. During
+During full-sequence prefill or training, when the whole prompt or training
+sequence is processed in one pass, $n_q$ and $n_k$ can both equal the sequence
+length, so materializing $S$ in memory creates a quadratic intermediate. During
 ordinary decode, one new query attends to the retained keys, so $n_q$ is often
 one while $n_k$ grows with context. Decode therefore does not create a new full
-$n\times n$ score matrix at every decode step. It still benefits from kernels
-that fuse attention operations and avoid unnecessary reads, writes, and
-launches.
+$n\times n$ score matrix at every decode step. It still benefits from kernel
+fusion, which combines several attention operations into fewer kernels and so
+avoids unnecessary reads, writes, and launches.
 
 These two cost models point to different questions:
 
@@ -92,7 +108,7 @@ These two cost models point to different questions:
 
 Integer quantization replaces real values with integer codes and the metadata
 needed to reconstruct approximations. For an element $x_i$ assigned to scale
-group $g$, a general affine rule is
+group $g$, a general affine rule (a scaling followed by an offset) is
 
 $$
 q_i=\operatorname{clip}\!\left(
@@ -105,11 +121,13 @@ $$
 
 Every symbol in these equations belongs to the stored numeric contract:
 
-- $x_i$ is the original real value and $\hat{x}_i$ is its reconstruction.
+- $x_i$ is the original real value and $\hat{x}_i$ is its reconstruction;
+  computing $\hat{x}_i$ from a stored code is called dequantization.
 - $q_i$ is the stored integer code, bounded by $q_{\min}$ and $q_{\max}$.
 - $s_g>0$ is the scale for group $g$, and $z_g$ is its integer zero point.
 - $g$ may identify the whole tensor, one channel, or a small group of adjacent
-  values. The choice is called the quantization granularity.
+  values. A channel is one row or column of a weight or activation matrix. The
+  choice is called the quantization granularity.
 - $\operatorname{round}$ maps to an integer, and
   $\operatorname{clip}$ limits that integer to the representable range.
 
@@ -143,9 +161,10 @@ storing $s_g=1$ and setting every code to zero, to avoid division by zero.
 
 Symmetric quantization is the common special case $z_g=0$. A scale can be
 chosen from the largest absolute value in a group, but production recipes may
-optimize the scale or clipping threshold against calibration data instead.
-Floating-point formats use sign, exponent, and significand fields rather than a
-uniform integer grid. They provide a wider dynamic range, while block-scaled
+instead optimize the scale or clipping threshold against calibration data: a
+small set of representative inputs passed through the model to measure typical
+value ranges. Floating-point formats use sign, exponent, and significand fields
+rather than a uniform integer grid. They provide a wider dynamic range, while block-scaled
 formats add a shared scale to a small block. Each choice changes both numerical
 error and what hardware can execute efficiently.
 
@@ -204,13 +223,15 @@ details are part of the numeric contract.
 | KV cache | FP8 KV, INT8 KV | Cache bytes per retained token and attention-read traffic | Quantize writes and dequantize or consume cache values inside attention | Long-context and generation quality |
 
 Weight-only quantization is often attractive for bandwidth-limited,
-small-batch decode. The kernel reads packed weights, dequantizes after loading
-compressed blocks, and performs the multiply with higher-precision activations
-and accumulators. Weight-and-activation quantization can use native
-low-precision matrix multiplication, which can matter more for large prefills
-or high-throughput batches. KV-cache quantization changes the state accounting
-from @sec-memory-scheduling and the inputs read by attention. These are three
-separate choices, not progressively stronger versions of one switch.
+small-batch decode. The kernel reads packed weights (several low-bit codes
+stored in each machine word), dequantizes after loading compressed blocks, and
+performs the multiply with higher-precision activations and accumulators.
+Weight-and-activation quantization can use native low-precision matrix
+multiplication, which can matter more for large prefills or high-throughput
+batches. KV-cache quantization changes the state accounting from
+@sec-memory-scheduling and the inputs read by attention. These are three
+separate choices, each with its own target tensors, kernel requirement, and
+quality check, as the table lists.
 
 Here $L$ is the number of layers, $n_{\mathrm{kv}}$ the number of KV heads,
 $d_{\mathrm{head}}$ the head dimension, and $b_{\mathrm{kv}}$ the stored bytes
@@ -224,19 +245,21 @@ $$
 
 Here the factor two counts one key and one value. Changing two-byte BF16 or
 FP16 elements to one-byte values halves this logical
-element payload, before scale metadata. It does not double total admitted batch:
-weights, workspaces, allocator tails, reservations, and other state remain.
-KIVI also found different distribution behavior for cached keys and values and
-therefore used different quantization granularities in its evaluated two-bit
-scheme [@liu2024kivi]. The cache format, scales, model revision, and position
-policy must be part of cache identity, or a reused block can be decoded under
-the wrong numeric contract.
+element payload, before scale metadata. It does not double the total admitted
+batch, the set of requests held in memory at once: weights, workspaces,
+allocator tails, reservations, and other state remain. KIVI also found
+different distribution behavior for cached keys and values and therefore used
+different quantization granularities in its evaluated two-bit scheme
+[@liu2024kivi]. The cache format, scales, model revision, and position encoding
+must be part of the cache identity, the key that decides whether a stored KV
+block can be reused; otherwise a reused block can be decoded under the wrong
+numeric contract.
 
 ### GPTQ, AWQ, and SmoothQuant solve different problems
 
 GPTQ and AWQ produce weight-only artifacts. SmoothQuant prepares both weights
-and activations for W8A8 execution. Their names are not interchangeable format
-labels.
+and activations for W8A8 execution. The names identify methods; the format of
+each resulting artifact has to be specified separately.
 
 All three are post-training quantization (PTQ) methods: they start from trained
 weights and use a small calibration set to select scales or approximate the
@@ -247,32 +270,34 @@ calibration data, or dynamic, computed from the current input at runtime. A
 dynamic rule can adapt to range changes, but its reduction and scaling work is
 part of latency.
 
-**GPTQ minimizes layer-output reconstruction error.** Let $\mathbf X$ denote
+GPTQ minimizes layer-output reconstruction error. Let $\mathbf X$ denote
 calibration inputs, $\mathbf W$ the layer weight matrix, and $\mathcal Q$ the
-set of representable quantized matrices. The local objective is
+set of representable quantized matrices. The local objective, the sum of
+squared differences between the original and quantized layer outputs, is
 
 $$
 \min_{\widehat{\mathbf W}\in\mathcal Q}
 \left\|\mathbf X\mathbf W-\mathbf X\widehat{\mathbf W}\right\|_F^2.
 $$
 
-The method uses approximate second-order information to quantize weights in a
-sequence while updating remaining weights to compensate for error already
-introduced. The published experiments showed practical three- and four-bit
-post-training quantization at very large model scales [@frantar2022gptq]. The
-result still depends on the calibration inputs, layout, model, and runtime
-kernel.
+The method uses approximate second-order information (the curvature of this
+error with respect to the weights) to quantize weights in a sequence while
+updating remaining weights to compensate for error already introduced. The
+published experiments showed practical three- and four-bit post-training
+quantization at very large model scales [@frantar2022gptq]. The result still
+depends on the calibration inputs, layout, model, and runtime kernel.
 
-**AWQ uses activation evidence to protect salient weight errors.** The AWQ
-paper observes that retaining about one percent of salient weights at high
-precision can greatly reduce error, but that mixed-precision representation is
-used to motivate the method. AWQ does not store that one percent in FP16.
+AWQ uses calibration activations to identify salient weights, the small
+fraction whose errors most affect the layer output. The AWQ paper observes that
+retaining about one percent of salient weights at high precision can greatly
+reduce error, but that mixed-precision representation is used to motivate the
+method. AWQ does not store that one percent in FP16.
 Instead, it searches for per-channel scaling that reduces the quantization
 error of salient weights while keeping a hardware-friendly weight-only layout.
 It needs calibration data, but not backpropagation or layer reconstruction
 [@lin2023awq].
 
-**SmoothQuant moves scale between activations and weights.** For positive
+SmoothQuant moves scale between activations and weights. For positive
 per-input-channel factors $\mathbf s$,
 
 $$
@@ -291,9 +316,9 @@ chosen from calibration statistics, often with a parameter that balances
 activation and weight ranges [@xiao2022smoothquant].
 
 None of these methods makes quantization lossless. Each chooses where to place
-approximation error and what calibration evidence to use.
+approximation error and which calibration data to use.
 
-## A format is not an execution path
+## Format labels and the execution path
 
 Several labels that appear together in model catalogs describe different
 layers of the stack:
@@ -308,13 +333,13 @@ layers of the stack:
   [@rouhani2023microscaling]. NVFP4 uses smaller scale groups and a hierarchy
   of block and tensor scales on supported NVIDIA hardware
   [@nvidia2025nvfp4].
-- **GGUF is a container, not a numeric precision.** A GGUF file stores tensors
+- **GGUF** is a container, not a numeric precision. A GGUF file stores tensors
   and model metadata; its tensors may use one of several quantization types.
   The llama.cpp ecosystem supplies kernels for many CPU and accelerator
   backends, but support and performance vary by type and backend
   [@llamacpp2023gguf].
 
-The deployable path has three contracts: artifact, kernel, and runtime.
+A deployable path needs three parts to agree: artifact, kernel, and runtime.
 
 ```{dot}
 //| label: fig-quantization-execution-path
@@ -338,23 +363,27 @@ digraph {
 ```
 
 A runtime may accept an artifact by falling back to a generic conversion or
-kernel. That is functional compatibility, not evidence of acceleration.
-Supported does not mean fast. Before conversion, check the engine's current
-compatibility matrix for the exact model architecture, quantization recipe,
-device generation, tensor-parallel layout, and attention backend. Mutable
-engine documentation is useful for that deployment check, but paper results
-should not be treated as a compatibility guarantee.
+kernel. Acceptance through such a fallback shows functional compatibility;
+only a measurement of the executed path shows whether the deployment is faster.
+Before conversion, check the engine's current compatibility matrix for the
+exact model architecture, quantization recipe, device generation,
+tensor-parallel layout (how each layer's weights are split across devices), and
+attention backend.
+Engine documentation, which changes between releases, is the source for that
+deployment check; paper results are not a compatibility guarantee.
 
 ## FlashAttention removes an intermediate
 
 Conventional attention can be implemented as separate kernels that write a
-score block to high-bandwidth memory, read it for softmax, write probabilities,
-and read them again for the value product. FlashAttention instead tiles the
-calculation so query, key, and value blocks fit in fast on-chip @gls-sram. It
-updates the softmax and output online, without materializing the complete score
-tensor in high-bandwidth memory. This computes exact attention up to
-floating-point rounding; it is not a sparse or approximate attention rule
-[@dao2022flashattention].
+score block to high-bandwidth memory, read it for softmax (the normalization
+that turns each row of scores into weights summing to one), write
+probabilities, and read them again for the value product. FlashAttention
+instead tiles the calculation so query, key, and value blocks fit in fast
+on-chip @gls-sram, the small memory beside the compute units. It updates the
+softmax and output online, block by block as each tile is processed, without
+materializing the complete score tensor in high-bandwidth memory. This computes
+exact attention up to floating-point rounding; it is not a sparse or
+approximate attention rule [@dao2022flashattention].
 
 For one query row, divide the keys and values into $J$ blocks. For block $j$,
 let
@@ -420,20 +449,23 @@ FlashAttention-3 overlaps data movement and matrix work on Hopper and adds an
 FP8 path [@shah2024flashattention3]. FlashAttention-4 redesigns the pipeline
 for Blackwell's different balance of tensor throughput, shared-memory traffic,
 and special functions [@zadouri2026flashattention4]. Their reported speedups
-belong to the stated hardware, precision, shapes, and baselines. They are not
-portable constants.
+hold for the stated hardware, precision, shapes, and baselines; another
+configuration needs its own measurement.
 
-FlashAttention is also not the only fusion that matters. Quantized linear
-kernels commonly fuse weight unpacking, scale application, matrix multiply,
-and sometimes bias or activation work. Serving runtimes may fuse normalization,
-rotary position updates, cache writes, or sampling operations. Fusion removes
-traffic and launch overhead, but a larger fused kernel can also suffer from
-register pressure, poor occupancy, unsupported shapes, or extra compilation.
-Measure the executed path.
+Kernel fusion also appears outside attention. Quantized linear kernels
+commonly fuse weight unpacking, scale application, matrix multiply, and
+sometimes bias or activation work. Serving runtimes may fuse normalization,
+rotary position updates (the rotation that encodes token positions into
+queries and keys), cache writes, or sampling operations. Fusion removes traffic
+and launch overhead, but a larger fused kernel can also suffer from register
+pressure, poor occupancy (too few concurrent threads to keep the compute units
+busy), unsupported shapes, or extra compilation, so its net effect has to be
+measured on the executed path.
 
 ## Choose and verify a deployment
 
-Start from the workload, not the format name.
+The choice begins with the workload, and the format is chosen after the
+constraint is located.
 
 1. **Record the baseline.** Fix the model revision, tokenizer, sampling policy,
    engine version, kernel backend, hardware, tensor parallelism, prompt-length
@@ -452,17 +484,20 @@ Start from the workload, not the format name.
    artifact version.
 5. **Prove the path executes.** Confirm the runtime selected the intended
    kernels for prefill and decode. Profile unpacking, dequantization, conversions,
-   graph breaks, compilation, and fallback kernels.
+   graph breaks (points where compilation stops and execution falls back to
+   running operations one at a time), compilation, and fallback kernels.
 6. **Compare at matched admitted load.** Report time to first token, time per
    output token, inter-token latency, end-to-end latency, request and token
-   throughput, goodput, peak device memory, energy or cost when relevant, and
-   both median and tail behavior.
-7. **Re-run quality evaluation.** Compare perplexity where useful, but also
-   task-specific quality, long-context behavior, structured-output validity,
-   safety checks, and any product-critical slice. Use identical prompts,
-   decoding rules, and judge versions. Evaluations of quantized multilingual
-   models, for example, have found task- and language-dependent changes that a
-   single aggregate score can hide [@marchisio2024quantized].
+   throughput, goodput (completed requests that meet their latency targets),
+   peak device memory, energy or cost when relevant, and both median and tail
+   behavior.
+7. **Re-run quality evaluation.** Compare perplexity (a measure of how well the
+   model predicts reference text) where useful, but also task-specific quality,
+   long-context behavior, structured-output validity, safety checks, and any
+   product-critical slice. Use identical prompts, decoding rules, and versions
+   of any judge model that grades outputs. Evaluations of quantized
+   multilingual models, for example, have found task- and language-dependent
+   changes that a single aggregate score can hide [@marchisio2024quantized].
 8. **Keep a rollback.** Fall back to the measured baseline when quality,
    compatibility, latency tails, or operational stability miss the declared
    threshold.
@@ -479,7 +514,7 @@ speedup.
 ## What's contested
 
 There is no hardware-independent ranking of GPTQ, AWQ, SmoothQuant, FP8,
-MXFP4, NVFP4, or GGUF quantization types. They do not even occupy one category:
+MXFP4, NVFP4, or GGUF quantization types. They also fall into different categories:
 some are calibration methods, some are numeric formats, and one is a container.
 Quality and speed depend on the model, calibration set, group size, kernel,
 device, batch, and sequence shape. Claims such as “four bit is lossless” or
@@ -490,10 +525,11 @@ are stated.
 ::: {.callout-tip}
 ## Constraint arrow
 
-Quantization changes logits and KV values, while fused kernels can change
-floating-point reduction order. The serving system therefore owes two results:
-systems measurements from this chapter and capability measurements from
-@sec-benchmarks and @sec-judging-holistic. The next chapter adds structured
+Quantization changes logits (the raw scores the model assigns to each candidate
+next token) and KV values, while fused kernels can change floating-point
+reduction order. A quantized deployment therefore needs two kinds of
+measurement: systems measurements from this chapter and capability measurements
+from @sec-benchmarks and @sec-judging-holistic. The next chapter adds structured
 decoding and long-context cache policies. Both can change shapes, kernel
 selection, and sensitivity to KV quantization, so profile and evaluate the
 combined path rather than multiplying isolated speedup factors.
@@ -503,8 +539,8 @@ combined path rather than multiplying isolated speedup factors.
 
 Quantization reduces representation cost. Fusion and IO-aware algorithms reduce
 movement and launch overhead. The benefit reaches users only when the artifact,
-kernel, runtime, workload, and quality threshold agree. That full path is the
-unit of deployment.
+kernel, runtime, workload, and quality threshold agree, so deployment decisions
+and measurements cover that full path.
 
 ## Further reading
 
