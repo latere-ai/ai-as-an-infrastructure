@@ -168,3 +168,159 @@ backed; none has been decided or started. Sizing is the audit's estimate.
   carries the reticle roadmap and the eleven-fold AI wafer demand figure but no
   capacity number. The numbers check out against other reporting; the citation
   does not support them.
+
+## Open goals: a structure that can be refreshed monthly
+
+Found on 2026-09-23 while running a wording pass over every chapter and a
+coverage check of the English tree. None has been decided or started.
+
+- [ ] **Separate durable explanation from dated evidence**
+
+  Named models, benchmark scores, prices, hardware products, and regulatory
+  dates sit inside the explanatory prose of about ninety chapters. A monthly
+  refresh therefore touches nearly every file, and readers cannot see what
+  changed. Each chapter keeps its Problem, Design, Evolution, and Trade-offs
+  text free of snapshot figures and holds them in one marked "Evidence as of
+  <date>" block. The "Dated release examples" section of `ecosystem/01` is the
+  working model.
+
+- [ ] **Content locks pin structure, not wording**
+
+  About two hundred content-lock tests pin prose phrases, and
+  `app/test/zh-copy.test.ts` pins the opening of every chapter. In the
+  September wording pass nearly every chapter commit needed lock edits. For a
+  monthly cadence, locks pin headings, display math, citation and
+  cross-reference sets, and part handoffs, and dated evidence blocks carry no
+  prose locks.
+
+- [ ] **A dated state-of-the-field edition**
+
+  The book has no page for the current frontier. Choosing a Model became
+  vendor-neutral, and its named-model tree survives only as unused code (the
+  `LEGACY` tree in `app/src/runtime/viz.ts`, which still names Claude Opus 4.8,
+  GPT-5.6 Sol, Gemini 3.1 Pro, DeepSeek-V4-Pro, Kimi K2.6, and GLM-5.1). A
+  monthly edition would cover frontier and open-weight models with access
+  terms and prices, compute supply and geopolitics, capability measurements,
+  mathematics and formal-proof results, policy events, and open problems. Each
+  item links to the chapter that explains its mechanism, and past editions stay
+  at stable URLs so readers can compare months. The unused tree is deleted or
+  moved into the edition.
+
+- [ ] **Technique index**
+
+  `glossary.yml` gains technique entries with a status (emerging, adopted,
+  established, faded), the month the entry was added, and the section that
+  covers it, or "not yet in a chapter". A rendered index lets a new technique
+  enter as a short note and move into a chapter once it settles.
+
+- [ ] **Per-chapter review date and monthly digest**
+
+  Each chapter shows its last review date under the title, read from front
+  matter, and the changelog gains a monthly digest that links every change to
+  its chapter.
+
+- [ ] **A year in a chapter title**
+
+  `practice/08-wiring-a-2026-stack` names a year in its H1. Either it becomes
+  the one chapter that is explicitly a dated snapshot, or it is retitled, which
+  regenerates its share card.
+
+- [ ] **Lint misses `---` inside sentences**
+
+  The reader renders `---` in prose as an em dash, and `tools/lint.sh` checks
+  only for the U+2014 character. Two chapters contained it in September.
+
+## Open goals: coverage (2026-09-23 audit)
+
+Counts are greps over `en/`. Each item needs a sourced research pass before it
+is written.
+
+- [ ] **Latent-space reasoning.** No mention of latent or continuous-thought
+  reasoning, Coconut, or recurrent-depth models in the seven-chapter reasoning
+  part.
+- [ ] **Recursive self-improvement and automated AI research.** No mention of
+  recursive self-improvement, AI R&D, or automated AI research. Self-improvement
+  appears only as synthetic-data training loops in `adaptation/07`, and the
+  frontier safety framework section of `safety/08` does not discuss AI R&D
+  capability thresholds.
+- [ ] **RLCD.** The author refers to "RL calibrated decision" as recent work
+  from TypeSafe AI. Not yet located or verified; no mention in the book.
+- [ ] **Test-time training.** No mention.
+- [ ] **Recent mathematics results.** The only olympiad result is AlphaProof at
+  IMO 2024 (`reasoning/03`). Later olympiad results, AI work on Erdős
+  problems, and current FrontierMath standings are missing.
+- [ ] **Compute geopolitics beyond U.S. export rules.** `infrastructure/06` is
+  titled "the Geopolitics of Compute" but never mentions Huawei Ascend or any
+  Chinese accelerator. TPU v7 and Trainium are not mentioned anywhere.
+- [ ] **Open-weight labs as market actors.** DeepSeek appears mostly as the
+  source of techniques. The market effect of open-weight releases gets about
+  one sentence in `ecosystem/05`, and the dated release examples in
+  `ecosystem/01` stop at Llama 3, Qwen3, DeepSeek-V3, gpt-oss, and Gemma.
+- [ ] **Current model lineup.** `frontiers/02` reports measurements of Claude
+  Opus 4.5 and GPT-5.5, which are valid as dated results, but the book names no
+  current lineup anywhere.
+- [ ] **Coding agents as a deployed system.** SWE-bench appears in five files,
+  but no section treats coding agents as a product category, and Claude Code
+  and Codex are not mentioned.
+
+## Pending factual checks (September 2026 wording pass)
+
+Left unchanged during the wording pass because resolving them needs a source.
+
+- [ ] `orientation/04` (en 20-22): Facebook-only workload measurements are
+  generalized to all production AI of the period.
+- [ ] `foundations/01` (en 179, zh 98): "larger models trained with similar
+  compute"; in Hoffmann et al. only Gopher shares Chinchilla's budget.
+- [ ] Preface (en 126, zh 47): says every chapter has a "What's contested" box;
+  `orientation/01`, `orientation/03`, `orchestration/04`, `practice/06`,
+  `safety/08`, and `infrastructure/06` have none.
+- [ ] `orientation/02` (en 146-152): the compute-only fit after the Kaplan
+  citation carries an irreducible term that Kaplan's compute law does not have.
+- [ ] `orientation/index` (en 66-72, zh 29): the prerequisite sentence
+  contradicts the next one, which says the transformer chapter builds it.
+- [ ] `generative/05` (en 234, zh 140): a literal "Chapter 15" instead of a
+  cross-reference; its Further reading note still cites the "1/200,000"
+  estimate that the body rejects.
+- [ ] `reasoning/01` (en 106-107, zh 62): "early wrong answer" is listed under
+  failing before the first solution step.
+- [ ] `reasoning/06` (en 298, zh 168): "the one change from L_soft"
+  understates the difference; MOPD is never expanded.
+- [ ] `inference/03` (en 255, zh 155) and `inference/05` (en 218, zh 127):
+  literal "Chapter 32" and "Chapter 34's IO model" instead of
+  cross-references.
+- [ ] `inference/06` (en 127, zh 84): "upper-level accounting model" is
+  unclear; (en 353, zh 197) the definition of S conflicts with e_s.
+- [ ] `orchestration/06` (en/zh 145): OSWorld-Human "2.7-4.3 times as many
+  steps" may be 1.4-2.7 in the current version of the paper.
+- [ ] `orchestration/07` (en 330-336, zh 189): the 90.2 percent figure is
+  relative to single-agent Claude Opus 4; name that baseline.
+- [ ] `orchestration/08` (en 537, zh 283): "oracle-context gap" does not name
+  the two conditions it compares.
+- [ ] `safety/01` (en 179-180, zh 96): "held-out feature labels" reads as
+  circular; probably held-out activating examples.
+- [ ] `refs/scalable-oversight-control.bib`: the zh note for
+  `greenblatt2024faking` mixes the compliance rate with the reasoning rate;
+  the zh note for `hubinger2024sleeper` claims more than the chapter does.
+- [ ] `safety/05` (zh 135): names the NIST risk management framework where en
+  names the Generative AI Profile (AI 600-1).
+- [ ] `safety/07` (en 224, zh 105): "trusted assignment" versus zh "trusted
+  physical boundary"; (zh 145) "oblivious HTTP relay" loses its meaning in
+  translation.
+- [ ] `safety/08`: dates after mid-2026 are unchecked (Regulation (EU)
+  2026/1744, the Council of Europe convention ratification, the 2027 and 2028
+  calendar, Colorado SB 26-189, the amended New York RAISE Act).
+- [ ] `infrastructure/02` (en 444): `zhao2023pytorch` is also cited for
+  distributed tensors, which the paper does not cover.
+- [ ] `infrastructure/06` (en 282, zh 156): "TSMC's own 2025 capacity page"
+  cites `tsmc2026fabcapacity`.
+- [ ] `frontiers/02`: "hybrid Time Horizon 1.1 series" (en 165) and "xhigh
+  reasoning" (en 194) are unexplained; "the reported human average" for
+  ARC-AGI-2 (en 279) refers to a figure the book never gives; date formats are
+  mixed.
+- [ ] `ecosystem/01` (en 336, zh 192): the Chinchilla and GQA comparison is
+  uneven because DeepMind is part of Google; the Sardana paper has two
+  bibliography keys.
+- [ ] `ecosystem/07` (en 166-167, zh 85): names Google although the cited
+  filing does not name the partner.
+- [ ] zh terminology: inference is 推断 in `zh/ecosystem/01` and 推理 in the
+  other ecosystem chapters.
