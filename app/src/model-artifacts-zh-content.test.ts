@@ -89,7 +89,7 @@ test("the bundle manifest binds every path and role to exact bytes", () => {
 
 test("the loading boundary states safe defaults and their limits precisely", () => {
   for (const phrase of [
-    "pickle 不是一种只保存数据的格式",
+    "保存的是一段重建对象的程序",
     "torch.save",
     "未压缩的 ZIP64 归档",
     "data.pkl",
@@ -241,7 +241,7 @@ test("the serving handoff and contested claims remain scoped", () => {
     "静态检测器与基于表示的检测器",
     "未知触发条件",
     "可恢复性问题",
-    "镜像可以提高可用性，却不能提高可审计性",
+    "镜像保存的数据块恢复可用性",
     "已准入制品是部署输入，不是安全证书",
   ]) expect(flat).toContain(phrase);
   for (const ref of [
