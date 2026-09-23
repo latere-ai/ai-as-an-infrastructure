@@ -10,6 +10,17 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Added
+
+- Multi-Agent Systems covers large agent populations on shared
+  infrastructure: channels formed through shared services, coordination
+  with no designed topology, state that re-enters later runs, and agents
+  that do not escalate to humans.
+- Scalable Oversight and Control covers the 2026 alignment audits and
+  control research beneath the evaluation incidents; Runtime Safety covers
+  the containment lessons; the State of the Field page adds coordination,
+  containment and disclosure items.
+
 ## v0.6.0 - 2026-09-23
 
 ### Changed
