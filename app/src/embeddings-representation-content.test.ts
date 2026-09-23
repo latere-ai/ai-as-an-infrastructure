@@ -17,7 +17,7 @@ test("the chapter defines an embedding as a bounded scoring contract", () => {
     "versioned scoring interface",
     "fixed-length vector",
     "nearness does not by itself mean",
-    "one ranking contract",
+    "one scoring contract",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -129,7 +129,7 @@ test("instructions and Matryoshka prefixes are versioned interfaces", () => {
     "trained prefix dimensions",
     "independently normalized",
     "only trained dimensions are promised",
-    "multiple training losses are not literally free",
+    "multiple training losses add training cost",
   ]) expect(flat).toContain(phrase);
 });
 

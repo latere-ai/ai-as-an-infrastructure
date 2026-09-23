@@ -76,8 +76,7 @@ test("the opening defines an embedding as one bounded scoring interface", () => 
     "同义",
     "事实正确",
     "获得同一位用户的授权",
-    "一份排序契约",
-    "不是去发现一套通用的意义几何",
+    "一份评分契约",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -200,13 +199,12 @@ test("weak supervision and distillation retain provenance and limits", () => {
 
 test("instructions and Matryoshka dimensions are versioned interfaces", () => {
   for (const phrase of [
-    "并不意味着它会把任意自然语言理解为策略",
     "指令大多当作额外关键词",
     "确切的指令模板",
     "否定、排除条件和相互冲突的约束",
     "独立归一化",
     "只有训练过的维度才有性能承诺",
-    "多个训练损失并非没有成本",
+    "多个训练损失会增加训练成本",
     "每一种对外提供的维度",
   ]) expect(flat).toContain(phrase);
 });
