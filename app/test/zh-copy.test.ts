@@ -666,11 +666,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/reasoning/01-eliciting-reasoning.qmd",
-      ["Changing the weights is not the only way", "inference procedures, not new capabilities installed by training", "Self-consistency samples several chains", "a good candidate must exist and be recognized", "work artifact, not a proof"],
+      ["A model's answer can change while its weights stay fixed", "inference procedures, not new capabilities installed by training", "Self-consistency samples several chains", "a good candidate must exist and be recognized", "work artifact, not a proof"],
     ],
     [
       "zh/reasoning/01-eliciting-reasoning.qmd",
-      ["改变模型回答，不一定要改权重", "属于推断过程，而不是训练写入的新能力", "自一致性会采样多条链，再选择答案众数", "候选集必须先覆盖至少一个可接受的答案，选择器还必须认出它", "可见推理是工作产物，不是证明"],
+      ["模型权重保持不变，回答也可以改变", "属于推断过程，而不是训练写入的新能力", "自一致性会采样多条链，再选择答案众数", "候选集必须先覆盖至少一个可接受的答案，选择器还必须认出它", "可见推理是工作产物，不是证明"],
     ],
     [
       "en/reasoning/02-structured-reasoning-search.qmd",

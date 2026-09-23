@@ -68,13 +68,13 @@ test("citations, cross-references, and glossary terms stay aligned with English"
 
 test("the opening keeps weight changes separate from inference procedures", () => {
   for (const phrase of [
-    "改变模型回答，不一定要改权重",
+    "模型权重保持不变，回答也可以改变",
     "要求模型写出中间过程、生成多个候选、提取答案并相互比较，或在部分解之间搜索",
     "都在请求到达后增加计算",
     "属于推断过程，而不是训练写入的新能力",
     "增加采样可以提高候选集中出现好答案的概率，却不会告诉系统哪个答案好",
     "搜索能从错误分支退回，前提是评估器认得出更好的分支",
-    "真正应该评价的是完整推断流水线，而不是一句「一步一步思考」",
+    "本章考察的是完整推断流水线，「一步一步思考」这类指令只是其中一个组成部分",
   ]) expect(zh).toContain(phrase);
 });
 
@@ -104,7 +104,7 @@ test("one-trace methods retain the evidence and limits of the English account", 
     "只有填充作用的词元并不能复现思维链带来的收益",
     "先要求模型分解问题，再按依赖顺序求解各个子问题",
     "也可能在求解第一个子问题之前就失败",
-    "问题分解是一项设计选择，而不是普遍有效的升级",
+    "是否分解问题，需要按任务逐一决定",
   ]) expect(zh).toContain(phrase);
 });
 
@@ -143,9 +143,9 @@ test("search defines its controller and bounds every empirical claim", () => {
   }
   expect(zh).toContain("搜索会先检查部分工作，再决定下一份计算投向哪里");
   expect(zh).toContain("并不能证明树搜索在任意工作负载上都优于采样");
-  expect(zh).toContain("评估器是方法的一部分，并不是全知的判定器");
+  expect(zh).toContain("评估器都是方法的一部分，自身也会出错");
   expect(zh).toContain("更宽的搜索可能放大评估器误差");
-  expect(zh).toContain("引导信号并不是在没有训练的情况下凭空出现的");
+  expect(zh).toContain("引导信号本身来自训练");
 });
 
 test("selection separates candidate coverage from recognizing a good answer", () => {
@@ -167,7 +167,7 @@ test("selection separates candidate coverage from recognizing a good answer", ()
 test("faithfulness and the lower-layer constraint retain their operational boundaries", () => {
   expect(zh).toContain("表现、因果依赖和忠实性是三个容易混淆的问题");
   expect(zh).toContain("看起来合理或正确的步骤并不能证明忠实性");
-  expect(zh).toContain("只能提供程度不同的证据，不能给出保证");
+  expect(zh).toContain("这些干预给出的是关于忠实性的程度性证据");
   expect(zh).toContain("准确性、因果作用和忠实性必须分别评估");
   expect(zh).toContain("任务所能提供的最廉价可靠证据");
   expect(zh).toContain("开放式任务通常只能退回到习得判断或人工判断");
@@ -191,7 +191,7 @@ test("the production design makes budget, telemetry, stopping, and handoffs expl
     "每个正确答案的成本，以及延迟中位数和尾部延迟",
   ]) expect(zh).toContain(metric);
   expect(zh).toContain("只有当边际收益在与选择器无关的留出集上仍然成立时，才增加预算");
-  expect(zh).toContain("这是工作负载层面的计算，而不是提示与训练之间的普遍竞赛");
+  expect(zh).toContain("要按工作负载根据这些测量来决定");
   expect(zh).toContain("一条轨迹改变模型后续生成所依赖的序列");
   expect(zh).toContain("多条轨迹改变候选覆盖");
   expect(zh).toContain("选择器改变最终返回哪个候选");
