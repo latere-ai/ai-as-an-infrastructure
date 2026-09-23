@@ -2,9 +2,9 @@
 
 A training run becomes distributed for one of two reasons: the model state no
 longer fits on one accelerator, or one accelerator would take too long to
-finish the work. Distribution solves those problems by creating another one.
-Every shard must exchange data with its peers, and every participating worker
-becomes another place where the job can stop.
+finish the work. Distribution addresses both and adds two costs. Every shard
+must exchange data with its peers, and every participating worker becomes
+another place where the job can stop.
 
 The design task is therefore an accounting problem. For each proposed layout,
 ask four questions:
@@ -15,9 +15,9 @@ ask four questions:
 4. What state must survive a restart for the run to continue correctly?
 
 This chapter develops that accounting from a single-device training step to a
-multi-dimensional device mesh. The goal is not a universal recipe. Model shape,
-sequence length, numerical format, and network topology jointly determine the
-best layout.
+multi-dimensional device mesh. Model shape, sequence length, numerical format,
+and network topology jointly determine the best layout, so the accounting is
+repeated for each run.
 
 ## Start with one logical optimizer step
 
@@ -36,7 +36,9 @@ per replica, and $B_\mu$ is the number of sequences in one micro-batch. Token
 counts can differ between sequences, so production runs often track tokens per
 step as well as sequences per step.
 
-With equal local batch sizes, an all-reduce produces the mean gradient
+An *all-reduce* is a collective operation that combines one tensor from every
+replica and returns the combined result to all of them. With equal local batch
+sizes, an all-reduce produces the mean gradient
 
 $$
 g = \frac{1}{D}\sum_{r=1}^{D}g_r,
@@ -51,17 +53,18 @@ $g_r$ and $g$ are the local and global mean gradients. If local batch sizes
 differ, averaging the replica means equally is wrong; the reduction must weight
 each sum by its example or token count.
 
-This equation is the semantic contract. Different sharding schemes may change
-where tensors live and the order of floating-point reductions, but they should
-implement the same intended synchronous update. Bitwise identity is a stronger
-and usually topology-dependent requirement.
+This equation defines the update that every layout must compute. Sharding
+schemes may change where tensors live and the order of floating-point
+reductions while implementing this same synchronous update. Bitwise identity is
+a stronger and usually topology-dependent requirement.
 
 ## Account for model-state memory
 
-Plain distributed data parallelism (DDP) replicates parameters, gradients, and
-optimizer state on every replica. It distributes compute and the batch, but it
-does not shard this persistent model state. @gls-zero removes the replication
-in stages [@rajbhandari2019zero]:
+Plain distributed data parallelism (DDP) divides the batch and the compute
+across replicas and keeps a full copy of the persistent model state on each
+one: parameters, gradients, and optimizer state (the per-parameter statistics
+that an optimizer such as Adam carries between steps). @gls-zero removes this
+replication in stages [@rajbhandari2019zero]:
 
 | Layout | Sharded across the data-parallel group | Persistent bytes per device |
 |---|---|---:|
@@ -74,13 +77,16 @@ Here, $P_\theta$ is the parameter count; $b_w$, $b_g$, and $b_o$ are the bytes
 per parameter used by working parameters, gradients, and all optimizer-related
 state; and $D$ is the data-parallel degree. For one common Adam recipe,
 $b_w=2$, $b_g=2$, and $b_o=12$: a two-byte working parameter and gradient,
-plus a four-byte master parameter and two four-byte moments. That recipe uses
-$16P_\theta$ bytes before activations and temporary storage, but these dtypes
-are choices rather than constants of Adam.
+plus a four-byte master parameter (the FP32 copy that the optimizer updates)
+and two four-byte moments. That recipe uses $16P_\theta$ bytes before
+activations (the intermediate layer outputs saved for the backward pass) and
+temporary storage, but these dtypes are choices rather than constants of Adam.
 
 The table is a *persistent-state* estimate, not a peak-memory estimate. Under
-full sharding, a wrapped module's parameters are gathered before computation
-and gradients are reduced and scattered afterward. A useful lower bound is
+full sharding, parameters are gathered and resharded one wrapped module at a
+time: a module's parameters are gathered before computation (an *all-gather*),
+and its gradients are reduced and scattered back to their shards afterward (a
+*reduce-scatter*). A useful lower bound is
 
 $$
 M_{\mathrm{peak}}
@@ -132,7 +138,8 @@ that each Transformer layer has two all-reduces in its forward pass and the
 corresponding reductions in backward [@shoeybi2019megatron]. TP lowers
 per-rank parameters and arithmetic, but places communication on the critical
 path of every layer. It is therefore usually mapped to the fastest fabric
-domain available. That is a placement rule, not a law: whether a TP group may
+domain available, the set of devices joined by the highest-bandwidth,
+lowest-latency links. This placement is a default: whether a TP group may
 cross nodes depends on message size, topology, and the performance target.
 
 ### Pipeline parallelism: split the layer stack
@@ -141,9 +148,11 @@ cross nodes depends on message size, topology, and the performance target.
 streams micro-batches through them. Stage boundaries carry activations forward
 and their gradients backward. The stages need not coincide with nodes.
 
-At the start and end of a synchronous flush schedule, some stages are idle. For
-balanced stages with negligible communication, GPipe's idealized idle fraction
-is [@huang2019gpipe]
+In a synchronous flush schedule, every micro-batch of a step drains out of the
+pipeline before the optimizer updates the weights. Some stages are therefore
+idle at the start and end of each step, and these idle slots form the pipeline
+*bubble*. For balanced stages with negligible communication, GPipe's idealized
+idle fraction is [@huang2019gpipe]
 
 $$
 f_{\mathrm{bubble}}=\frac{p-1}{m+p-1}.
@@ -151,9 +160,9 @@ $$
 
 Here, $p$ is the number of pipeline stages, $m$ is the number of micro-batches
 per replica per optimizer step, and $f_{\mathrm{bubble}}$ is the fraction of
-aggregate stage slots left idle by fill and drain. This denominator matters:
-the often-quoted $(p-1)/m$ is bubble time relative to ideal compute time, not
-the fraction of total stage capacity.
+aggregate stage slots left idle by fill and drain. The often-quoted $(p-1)/m$
+is bubble time relative to ideal compute time rather than a fraction of total
+stage capacity.
 
 ```{dot}
 //| label: fig-training-bubble
@@ -176,8 +185,10 @@ digraph bubble {
 
 The formula is useful for sizing, not prediction. Unequal stage times,
 communication, optimizer work, and alternative schedules change the result.
-A 1F1B schedule can reduce saved activation memory without changing this
-ideal bubble; interleaved schedules can reduce the bubble but send more
+A 1F1B schedule, which alternates one forward and one backward micro-batch on
+each stage once the pipeline fills, can reduce saved activation memory without
+changing this ideal bubble. Interleaved schedules, which assign each device
+several smaller non-adjacent stages, can reduce the bubble but send more
 point-to-point messages [@narayanan2021efficient]. PipeDream explores
 asynchronous schedules and weight versions, a different optimizer-semantics
 tradeoff from GPipe's synchronous flush [@narayanan2019pipedream].
@@ -222,13 +233,16 @@ These names describe related but distinct mechanisms. Megatron-style
 regions that TP otherwise replicates along the sequence dimension. It reuses
 the TP group and replaces selected all-reduces with reduce-scatter and
 all-gather pairs; it is not usually another multiplier in the device mesh
-[@korthikanti2022reducing]. Selective activation recomputation complements SP
-by recomputing operations that are cheap relative to the memory they save.
+[@korthikanti2022reducing]. Activation recomputation discards some activations
+after the forward pass and recomputes them during backward. Its selective form
+complements SP by recomputing only operations that are cheap relative to the
+memory they save.
 
 *Context parallelism (CP)* divides the sequence through attention itself. Each
 rank owns local queries and passes or gathers key/value blocks needed to compute
-exact attention. Ring Attention streams those blocks around a ring while using
-an online softmax [@liu2023ring]; all-to-all designs are another option. CP
+exact attention. Ring Attention streams those blocks around a ring and uses an
+online softmax, which updates the normalization incrementally as each block
+arrives [@liu2023ring]; all-to-all designs are another option. CP
 reduces local sequence storage, but dense attention still performs
 $O(L^2)$ global arithmetic for context length $L$. Maximum context remains
 bounded by aggregate memory, communication, device count, and the degree to
@@ -246,8 +260,8 @@ dropless kernels are systems concerns as well as modeling choices. The routing
 objective itself is covered in @sec-moe-ssm-hybrids.
 
 @fig-training-axes summarizes what each axis moves. The collective names are
-common implementations, not promises: frameworks can fuse, decompose, or
-schedule them differently.
+common implementations; frameworks can fuse, decompose, or schedule them
+differently.
 
 ```{dot}
 //| label: fig-training-axes
@@ -273,6 +287,8 @@ digraph axes {
 
 ## Map the cuts onto the network
 
+A *device mesh* arranges the workers as a grid with one dimension per
+parallelism axis, so each worker belongs to one communication group per axis.
 For independent data, tensor, pipeline, and context dimensions, a dense-model
 mesh satisfies
 
@@ -287,13 +303,13 @@ model-dependent: its group may be carved from or overlap another mesh
 dimension, so blindly multiplying by an expert degree can double-count
 devices.
 
-The placement principle is simple: put the most frequent and
-latency-sensitive exchanges inside the fastest fabric domain. TP often gets
-that domain because it communicates inside every layer. EP needs strong
-bisection bandwidth for all-to-all traffic. PP message size depends on the
-boundary activation, while ZeRO-3/FSDP repeatedly gathers parameters. Which
-axis crosses a node or rack boundary is therefore a measurement-driven choice,
-not a fixed hierarchy [@narayanan2021efficient].
+The placement principle puts the most frequent and latency-sensitive exchanges
+inside the fastest fabric domain. TP often gets that domain because it
+communicates inside every layer. EP needs strong bisection bandwidth for
+all-to-all traffic. PP message size depends on the boundary activation, while
+ZeRO-3/FSDP repeatedly gathers parameters. Which axis crosses a node or rack
+boundary is therefore decided by measuring candidate layouts on the target
+cluster [@narayanan2021efficient].
 
 ```{dot}
 //| label: fig-training-mesh
@@ -321,10 +337,10 @@ shard to each peer. PP mostly uses point-to-point send and receive. Libraries
 such as NCCL implement several algorithms for these operations and select among
 them according to the hardware and message shape [@nvidia2024nccl].
 
-Communication is necessary work, but only its *exposed* part extends the step's
-critical path. FSDP can gather the next unit while the current unit computes;
-gradient buckets can reduce during backward; PP and EP messages can overlap
-nearby kernels. Overlap is not free: communication may contend with compute for
+Communication is necessary work, but only its *exposed* part, the time not
+hidden behind computation, extends the step's critical path. FSDP can gather
+the next unit while the current unit computes; gradient buckets can reduce
+during backward; PP and EP messages can overlap nearby kernels. Overlapped communication can still contend with compute for
 memory bandwidth, execution resources, or the network. A step trace, rather
 than a list of enabled flags, shows whether the overlap worked.
 
@@ -341,17 +357,21 @@ portable to another.
 
 ## Choose numerical formats per operation
 
-Mixed precision is not one global dtype. A common recipe performs large matrix
-multiplications in a low-precision format, accumulates reductions more
-carefully, and keeps sensitive operations or optimizer state in a wider format.
-The original mixed-FP16 recipe used FP32 master parameters, FP32 accumulation,
-and loss scaling [@micikevicius2017mixed]. BF16 has eight exponent bits and
-therefore roughly FP32's normal range, so it usually avoids FP16's loss scaling;
-its seven fraction bits still make accumulation and small updates precision
-problems.
+Mixed precision assigns a numerical format to each operation. A common recipe
+performs large matrix multiplications in a low-precision format, accumulates
+reductions more carefully, and keeps sensitive operations or optimizer state in
+a wider format. The original mixed-FP16 recipe used FP32 master parameters,
+FP32 accumulation, and loss scaling [@micikevicius2017mixed]. Loss scaling
+multiplies the loss by a scale factor so that small gradients stay
+representable in FP16, then divides the gradients by that factor before the
+update. BF16
+has eight exponent bits and therefore roughly FP32's normal range, so it
+usually avoids FP16's loss scaling; its seven fraction bits still make
+accumulation and small updates precision problems.
 
-FP8 offers two common layouts: E4M3 spends more bits on precision, while E5M2
-spends more on range [@micikevicius2022fp8]. Values must be scaled into the
+FP8 offers two common layouts, named by their exponent (E) and mantissa (M)
+bit counts: E4M3 spends more bits on precision, while E5M2 spends more on range
+[@micikevicius2022fp8]. Values must be scaled into the
 representable interval, and the scaling granularity, whether tensor, tile, or block, is
 part of the recipe. Hopper-class hardware can have twice BF16's peak dense
 matmul rate for FP8 and FP8 operands use half as many payload bytes, but casts,
@@ -398,10 +418,10 @@ A robust update has an explicit order: accumulate all micro-batches; unscale
 FP16 gradients if loss scaling is active; check finite values across all ranks;
 compute any global gradient norm over the logical, fully sharded gradient; clip
 if configured; then update every shard or skip the update everywhere. Scaling
-state, including FP8 amax history or a dynamic loss scaler, belongs in the
-checkpoint. Narrow formats can cause underflow, saturation, Inf/NaN values,
-skipped steps, divergence, or quiet quality drift. Validation must look for all
-of them.
+state, including the FP8 amax history (recent maximum absolute values used to
+choose scale factors) or a dynamic loss scaler, belongs in the checkpoint.
+Narrow formats can cause underflow, saturation, Inf/NaN values, skipped steps,
+divergence, or quiet quality drift. Validation must look for all of them.
 
 ::: {.callout-important}
 ## What's contested
@@ -409,9 +429,8 @@ of them.
 The lowest reliable training format remains recipe-dependent. Published FP8
 and FP4 runs establish that particular models, scaling rules, accumulation
 paths, and hardware can work; they do not establish a universal precision
-floor. The useful question is therefore not "Does FP4 work?" but "Which tensors
-and operations can use this format for this run, under which validation
-thresholds?"
+floor. The useful question for a given run is therefore which tensors and
+operations can use the format, and under which validation thresholds.
 :::
 
 ## Measure throughput without hiding assumptions
@@ -435,14 +454,15 @@ precision peak used, and the measurement window.
 Hardware FLOPs utilization (HFU) instead counts executed FLOPs, including
 activation recomputation. HFU can therefore exceed MFU even when useful-token
 throughput is unchanged. Neither metric proves training quality or reliability.
-Steady-state MFU commonly excludes restart time; end-to-end goodput should also
-charge failed steps, checkpoints, evaluation pauses, and input stalls.
+Steady-state MFU commonly excludes restart time; end-to-end goodput, the useful
+training tokens per wall-clock second over the whole run, should also charge
+failed steps, checkpoints, evaluation pauses, and input stalls.
 
 When MFU is low, inspect a trace before changing the mesh. The usual causes are
 small or poorly shaped kernels, stage imbalance, exposed communication,
 excessive recomputation, input stalls, and synchronization behind a straggler.
-Peak memory, collective duration by group, tokens per second, step-time tails,
-and time lost to recovery complete the operational picture.
+Alongside MFU, a run should record peak memory, collective duration by group,
+tokens per second, step-time tails, and time lost to recovery.
 
 ## Make restart a correctness property
 
@@ -485,8 +505,8 @@ interruptions, and $\tau^\star$ is the approximate minimizing interval
 omits correlated outages, recovery delay, and storage contention. Asynchronous
 checkpointing lowers exposed $C$, but still consumes device links, host memory,
 network capacity, and storage bandwidth. CheckFreq demonstrates adaptive
-cadence and pipelined snapshot/persist phases rather than a free write
-[@mohan2021checkfreq].
+cadence and pipelined snapshot/persist phases, and its writes still consume
+those resources [@mohan2021checkfreq].
 
 ## Verify the layout before a long run
 
@@ -510,10 +530,11 @@ tests:
 - **Goodput:** run long enough to include checkpoints, input loading, and at
   least one recovery. Report useful tokens per wall-clock second alongside MFU.
 
-FlashAttention illustrates why every layer of this accounting matters. It
-computes exact attention without materializing the full score matrix in HBM
-[@dao2022flashattention]. For batch size $B$, head count $H$, context length
-$L$, and $b$ bytes per score element, materializing the scores alone would use
+FlashAttention shows this accounting applied to a single tensor. It computes
+exact attention without materializing the full score matrix in the
+accelerator's high-bandwidth memory (HBM) [@dao2022flashattention]. For batch
+size $B$, head count $H$, context length $L$, and $b$ bytes per score element,
+materializing the scores alone would use
 
 $$
 M_{\mathrm{score}} = BHL^2b.
@@ -526,10 +547,10 @@ to shard a context that exceeds aggregate memory.
 
 ![Exact byte accounting for a materialized attention-score tensor versus one token-state tensor, using B=1, H=32, hidden width 4096, and BF16 storage. The linear token-state line is a reference, not a model of FlashAttention's complete peak memory.](/figures/training-at-scale-2.svg){#fig-training-at-scale-2}
 
-The same discipline applies to the whole run: name the tensor, count its bytes,
-identify when it exists, and state which communication or recovery step follows.
-That turns a collection of parallelism acronyms into an engineering design that
-can be checked.
+The same accounting applies to every tensor in the run: name it, count its
+bytes, identify when it exists, and state which communication or recovery step
+follows. A layout described this way can be checked against measured memory,
+communication, and recovery behavior.
 
 ## Further reading
 

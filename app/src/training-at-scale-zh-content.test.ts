@@ -47,7 +47,7 @@ test("tensor parallelism defines its layer cut and placement boundary", () => {
   expect(zh).toContain(String.raw`H_r &= \phi(XW_1^{(r)})`);
   expect(zh).toContain(String.raw`Z &= \sum_{r=1}^{T}H_rW_2^{(r)}`);
   expect(zh).toContain("每个 Transformer 层的前向传播需要两次 all-reduce");
-  expect(zh).toContain("这是一条放置原则，不是一条定律");
+  expect(zh).toContain("这是默认的放置方式");
 });
 
 test("pipeline parallelism keeps the exact bubble denominator and scope", () => {
@@ -149,7 +149,7 @@ test("the lower-layer constraint remains topology-dependent", () => {
 
 test("numerical formats are selected per operation with bounded evidence", () => {
   expect(zh).toContain("## 按操作选择数值格式");
-  expect(zh).toContain("混合精度不是一种全局 dtype");
+  expect(zh).toContain("混合精度为不同操作分别选择数值格式");
   expect(zh).toContain("通常无需 FP16 那样的损失缩放");
   expect(zh).toContain("E4M3 把更多位用于精度，E5M2 把更多位用于范围");
   expect(zh).toContain("缩放粒度也是配方的一部分");
