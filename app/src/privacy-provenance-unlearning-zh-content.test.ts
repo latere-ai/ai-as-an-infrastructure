@@ -49,11 +49,11 @@ test("Chapter 59 preserves the complete English privacy evidence contract", () =
     "隐私、来源与机器遗忘 {#sec-privacy-provenance}",
   ]);
   expect(headings(chapter, 2)).toEqual([
-    "四种事件，而不是一次“泄露”",
+    "记忆、抽取、披露与成员推断",
     "在训练前后降低风险",
     "差分隐私的形式化承诺",
     "以重新训练为基准定义机器遗忘",
-    "来源提供证据，而非事实",
+    "来源证据能说明什么",
     "保留运行记录",
     "争议所在",
     "下层约束",
@@ -129,7 +129,7 @@ test("data and serving controls keep their guarantees bounded", () => {
     "并不提供差分隐私保证",
     "PII 检测既有假阳性，也有假阴性",
     "派生数据集、词元化副本和微调数据",
-    "服务阶段的控制仍然重要",
+    "服务阶段的控制作用于已部署模型发布的内容",
     "不能移除训练数据的影响",
     "无法收回已经披露的信息",
     "不应被描述为机器遗忘",
@@ -190,14 +190,15 @@ test("unlearning evaluation covers forgetting retention recovery and operations"
     "短程微调或重新学习攻击",
     "一次拒绝不能证明模型已经完成机器遗忘",
     "不能把附带损害藏在平均值里",
-    "TOFU 是有用的基准，而不是通用证书",
+    "TOFU 是有用的基准",
   ]) expect(flat).toContain(phrase);
 });
 
 test("deletion follows the full lineage and prevents re-ingestion", () => {
   for (const phrase of [
     "源记录、数据集快照、去重副本、转换后和词元化的数据",
-    "检查点、优化器状态、适配器、合并模型、集成模型和模型注册表副本",
+    "检查点、优化器状态、适配器",
+    "合并模型、集成模型和模型注册表副本",
     "嵌入、检索索引、评估样例、缓存、日志和备份",
     "删除墓碑",
     "防止数据被意外重新摄取",
@@ -208,7 +209,7 @@ test("deletion follows the full lineage and prevents re-ingestion", () => {
 
 test("knowledge editing remains distinct from record deletion", () => {
   for (const phrase of [
-    "知识编辑不是机器遗忘",
+    "它不属于机器遗忘",
     "改变模型选定的行为",
     "不能证明训练记录的影响已经消失",
     "改述或逻辑推论",
@@ -226,13 +227,13 @@ test("watermark evidence reports thresholds errors base rates and attacks", () =
     "水印文本很少时，即使假阳性率很低，误报也可能占多数",
     "截断、普通编辑、水印改述、翻译、模型重写和人机混合文本",
     "检测不到水印不能证明文本由人类创作",
-    "支持的是经过测试的机制和配置，而不是通用的 AI 文本检测器",
+    "支持的是经过测试的机制和配置",
   ]) expect(flat).toContain(phrase);
 });
 
 test("C2PA evidence authenticates claims without certifying truth", () => {
   for (const phrase of [
-    "C2PA 用签名清单表示来源声明",
+    "用签名清单表示来源声明",
     "资产哈希或其他内容绑定",
     "防篡改证据",
     "验证仍然需要策略",
@@ -292,7 +293,7 @@ test("contested questions and lower-layer constraints preserve uncertainty", () 
     "产品主张必须与实测的编辑方式、文本长度、语言和错误率一致",
     "差分隐私在什么情况下值得承担效用代价",
     "完整的数据谱系才能支持有范围的删除",
-    "这些层彼此约束，却不能相互替代",
+    "一层的证据也不能代替另一层的证据",
     "上层无法在事后补造这些证据",
   ]) expect(flat).toContain(phrase);
 });

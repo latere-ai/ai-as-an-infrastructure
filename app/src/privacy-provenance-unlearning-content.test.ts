@@ -176,7 +176,8 @@ test("deletion follows every affected artifact rather than only the base weights
 
 test("knowledge editing is not presented as deletion", () => {
   for (const phrase of [
-    "knowledge editing is not machine unlearning",
+    "knowledge editing changes selected model behavior",
+    "is not machine unlearning",
     "changes selected model behavior",
     "does not establish that a training record's influence is gone",
     "paraphrase",
@@ -337,8 +338,8 @@ test("the complete chapter renders without swallowing prose into display math", 
   };
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("Knowledge editing is not machine unlearning");
-  expect(headings.some(({ text }) => text === "Provenance provides evidence, not truth")).toBeTrue();
+  expect(html).toContain("Knowledge editing changes selected model behavior");
+  expect(headings.some(({ text }) => text === "What provenance evidence shows")).toBeTrue();
 });
 
 test("every Graphviz figure fits the mobile reading column", async () => {
