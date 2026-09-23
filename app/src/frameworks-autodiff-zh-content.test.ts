@@ -61,7 +61,7 @@ test("Chapter 63 preserves the complete English framework contract", () => {
     "线性化是核心接口",
     "反向累积如何工作",
     "可微性是算子契约的一部分",
-    "反向模式以时间换内存",
+    "反向模式的内存与重新计算",
     "即时执行、追踪与编译是不同维度",
     "框架必须明确什么",
     "分布式布局属于张量语义",
@@ -142,7 +142,7 @@ test("JVP and VJP define dimensions geometry and mode choice", () => {
 
 test("the cheap-gradient result keeps its arithmetic-model boundary", () => {
   for (const phrase of [
-    "廉价梯度结论属于算术模型，不是墙钟时间的服务级目标",
+    "廉价梯度结论说的是运算次数，不约束墙钟时间",
     "有理直线程序",
     "特定的操作计数约定",
     "反向算术成本为 $O(C_f)$",
@@ -229,7 +229,7 @@ test("execution modes remain separate axes rather than a winner myth", () => {
     "Chainer 和 PyTorch",
     "普通 Python 控制流",
     "JAX 采用另一条路径",
-    "这段历史并不是一场赢家通吃的框架战争",
+    "当前系统把这些做法结合起来",
     "即时执行",
     "追踪或分阶段执行",
     "带守卫的计算图捕获",
@@ -322,7 +322,7 @@ test("the conclusion preserves lower-layer and portability limits", () => {
     "持久的抽象边界应该放在哪里",
     "调试自由度、编译范围、自定义内核控制和后端可移植性",
     "都不能免除明确导数、副作用、布局和失败行为的责任",
-    "目标系统上真正可用的实现",
+    "这些契约在目标系统上有多少可工作的实现",
   ]) expect(flat).toContain(phrase);
 });
 
