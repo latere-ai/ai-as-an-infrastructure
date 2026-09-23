@@ -215,8 +215,10 @@ limits:
 2. **KV capacity.** Resident keys and values grow with retained tokens, layers,
    heads, batch, and element width. This can cap admitted concurrency.
 3. **Attention traffic.** Even when the full cache fits, decode attention may
-   read an increasingly large state for every new query. Chapter 34's IO model
-   applies directly.
+   read an increasingly large state for every new query. The bandwidth bound
+   from @sec-quantization-kernels applies: a decode step takes at least the
+   bytes it reads, now including the retained KV, divided by the achieved
+   memory bandwidth.
 4. **Information retention.** A policy that drops or skips state may remove the
    evidence a later query needs. Stable perplexity (a measure of how well the
    model predicts each next token) or fluent generation is not proof of
@@ -244,7 +246,7 @@ padding. The formula describes resident decode state. A method that compresses
 only after processing a full prompt may still pay prompt-prefill peak memory
 and compute for all $T$ tokens.
 
-## Three policy families, three failure modes
+## Four policy families, four failure modes
 
 The table compares long-context methods by what they store and what they read
 for each query; the subsections that follow define each row's terms.
@@ -255,13 +257,16 @@ for each query; the subsections that follow define each row's terms.
 | H2O-style eviction | Bounded by recency and historical heavy hitters | All retained entries | Updated during generation | Past attention may not predict future importance |
 | SnapKV prompt compression | Compressed prompt plus generated state | All retained entries | End-of-prompt observation window | Prompt evidence outside selected per-head positions is discarded |
 | Query-aware page selection | Full cache plus page summaries | Selected pages | Recomputed for each query | Relevant pages may not enter the top-$k$ read set |
+| Trained sparse or compressed attention | Full or learned-compressed KV plus selector keys | Entries or blocks a trained selector picks, usually with a local window | Learned in training, scored for each query | The selector misses needed evidence, and the same weights offer no full-attention baseline |
 
 The first three reduce resident KV by deleting entries. Eviction is
 irreversible unless the system stores enough source state to recompute them.
 Query-aware page selection instead keeps the full cache and reduces attention
 traffic by reading a subset. Selected pages can change at the next query, so an
 unselected page remains recoverable even though the current attention result is
-still approximate.
+still approximate. The trained family can do either, and the checkpoint fixes
+which: selection alone reduces reads, while learned compression also shrinks
+the stored cache.
 
 ### Sinks and a recent window
 
@@ -312,10 +317,65 @@ to full KV plus summaries, while device-memory traffic and attention work can
 fall. This changes the failure from permanent deletion to query-specific
 omission, but it does not guarantee that every relevant page is selected.
 
-Native sparse-attention architectures make token selection part of training,
-so they fall outside the fixed-model inference policies above. Retrofitting an
-eviction or selection rule onto a dense-attention checkpoint and training a
-model to use sparse attention are different interventions.
+### Trained sparse and compressed attention
+
+The three families above retrofit a policy onto a checkpoint trained with
+dense attention. The fourth moves the policy into the model: training teaches
+the model which past tokens each query reads and, in some designs, how to merge
+the keys and values of several tokens into one stored entry. The attention
+designs themselves, including native sparse attention and DeepSeek Sparse
+Attention, are described in @sec-transformer-architecture; this section covers
+what they change for serving.
+
+Two mechanisms recur. A trained selector, often called an indexer, is a small
+scoring network with low-dimensional keys of its own. It ranks past tokens or
+blocks for the current query, and the main attention reads only the top-$k$ of
+them, often together with a local window of recent tokens. The selector still
+scores every candidate for each query, at a lower dimension than the main
+attention, so its work grows with context length while the main attention's
+stays near $k$. Learned compression
+replaces each run of consecutive tokens' keys and values with one entry
+computed by trained weights, so the stored cache for those layers shrinks by
+about the run length. Selection alone cuts KV reads and attention arithmetic
+while the full cache can stay resident; compression reduces the stored cache
+as well. The model is trained with these reads, so the approximation is part of
+its learned behavior rather than an error introduced at serving time.
+
+For the serving engine the policy is fixed by the checkpoint. The engine stores
+and schedules the selector's keys, which belong in $M_{\mathrm{policy}}$ above
+alongside page summaries; runs sparse gather kernels over paged blocks; and
+keeps compressed entries, windows, and selector state consistent through prefix
+reuse and eviction. The evaluation baseline changes too. The same weights have
+no full-attention mode, so a long-context check compares the model with a
+dense predecessor or variant and still reports retrieval accuracy by evidence
+position.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Several open-weight flagship models use this family as their long-context
+mechanism.
+
+- DeepSeek-V4 combines Compressed Sparse Attention, which merges the KV
+  entries of every $m$ tokens into one and uses a trained indexer to pick the
+  top-$k$ merged entries for each query, with Heavily Compressed Attention,
+  which compresses further and attends to all merged entries; both add an
+  uncompressed sliding window. At one million tokens, DeepSeek-V4-Pro needs
+  27 percent of the single-token FLOPs and 10 percent of the KV cache of
+  DeepSeek-V3.2 [@deepseek2026v4].
+- DeepSeek-V4.1-Flash (17 September 2026) adds cross-layer KV reuse and FP4 KV
+  caching, bringing its global KV cache, held in HBM, to 890 bytes per token,
+  about a quarter of DeepSeek-V4-Flash's [@deepseek2026v41flash].
+- MiniMax-M3 uses MiniMax Sparse Attention, in which an index branch scores KV
+  blocks and selects a top-$k$ subset for each group of query heads that share
+  keys and values [@lai2026msa]. Its model card reports 9 times faster prefill
+  and 15 times faster decode than MiniMax-M2 at a one-million-token context
+  [@minimax2026m3card].
+- GLM-5 adopts DeepSeek Sparse Attention [@glm5team2026glm5], and the GLM-5.3
+  repository carries the `glm_moe_dsa` architecture tag [@zai2026glm53card].
+  Neither source reports FLOP or cache reductions.
+- All figures above are the labs' own measurements.
+:::
 
 ## Cache state must remain internally consistent
 
@@ -360,9 +420,10 @@ For structured generation:
 
 For long-context inference:
 
-1. Compare with a full-KV baseline inside the model's supported context length.
-   Sweep prompt length, generation length, cache budget, and page-selection
-   budget.
+1. Compare with a full-KV baseline inside the model's supported context length;
+   for a model trained with sparse attention, the baseline is a dense
+   predecessor or variant. Sweep prompt length, generation length, cache
+   budget, and page-selection budget.
 2. Report retrieval accuracy by evidence position, multi-hop answer quality,
    long-generation quality, and adversarial cases where a low-attention fact is
    needed later. Perplexity alone is insufficient. Comparative studies find
@@ -382,7 +443,9 @@ There is no workload-independent best cache policy. Streaming generation may
 tolerate a sink-plus-window budget while question answering fails on one
 evicted sentence. Attention-history scores can work well on one model and miss
 a future dependency on another. Query-aware selection preserves stored KV but
-still approximates the pages read for each query. Report the model, task,
+still approximates the pages read for each query. Trained selection moves the
+approximation into the model, so its quality can be compared only with a
+different model, such as a dense predecessor. Report the model, task,
 prompt distribution, generation length, budget, kernel, and full-cache baseline
 with every quality or speed claim.
 :::

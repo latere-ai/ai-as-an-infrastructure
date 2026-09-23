@@ -220,7 +220,8 @@ details are part of the numeric contract.
 |---|---|---|---|---|
 | Weights only | W4A16, W8A16 | Weight capacity and weight-read traffic | Load packed weights, dequantize near the matrix multiply, accumulate safely | Task quality and layer-output error |
 | Weights and activations | W8A8, FP8 | Weight and activation traffic; potentially faster matrix multiplication | Native or optimized low-precision matrix multiply with suitable accumulation | Calibration coverage, overflow, task quality |
-| KV cache | FP8 KV, INT8 KV | Cache bytes per retained token and attention-read traffic | Quantize writes and dequantize or consume cache values inside attention | Long-context and generation quality |
+| KV cache | FP8 KV, INT8 KV, NVFP4 KV | Cache bytes per retained token and attention-read traffic | Quantize writes and dequantize or consume cache values inside attention | Long-context and generation quality |
+| Weights trained in the release format | FP4 experts | Weight capacity and reads, with no post-training conversion | Native or emulated four-bit multiply that follows the trained block and scale layout | Kernel agreement with the trained numeric contract; task quality of the release |
 
 Weight-only quantization is often attractive for bandwidth-limited,
 small-batch decode. The kernel reads packed weights (several low-bit codes
@@ -231,7 +232,8 @@ multiplication, which can matter more for large prefills or high-throughput
 batches. KV-cache quantization changes the state accounting from
 @sec-memory-scheduling and the inputs read by attention. These are three
 separate choices, each with its own target tensors, kernel requirement, and
-quality check, as the table lists.
+quality check, as the table lists. The last row is a weight format fixed during
+training, which the section on format labels returns to.
 
 Here $L$ is the number of layers, $n_{\mathrm{kv}}$ the number of KV heads,
 $d_{\mathrm{head}}$ the head dimension, and $b_{\mathrm{kv}}$ the stored bytes
@@ -254,6 +256,34 @@ different quantization granularities in its evaluated two-bit scheme
 must be part of the cache identity, the key that decides whether a stored KV
 block can be reused; otherwise a reused block can be decoded under the wrong
 numeric contract.
+
+Four-bit KV formats apply block scaling to the cache. NVFP4, one of the
+block-scaled four-bit formats listed with the format labels below, stores each
+key or value element as a four-bit floating-point code, with an FP8 scale for
+every 16 elements and one FP32 scale for the tensor [@lmsys2026nvfp4kv]. With
+$b=4$, $g=16$, $b_s=8$, and no zero point, the effective payload formula above
+gives 4.5 bits
+per element before the tensor scale, about 56 percent of FP8's eight bits. The
+saving reaches the service in two ways: attention reads fewer bytes at each
+decode step, and more sequences fit in the same cache capacity. Every later
+query in a sequence reads the stored keys and values, so the quality check for
+a KV format has to cover long generations and long-context tasks.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- The SGLang, Qwen, and NVIDIA teams report NVFP4 KV against FP8 KV on one RTX
+  PRO 6000 Blackwell GPU: decode throughput 26 to 30 percent higher at matched
+  concurrency for 32K to 1M-token contexts, and 37 to 78 percent higher when
+  the freed memory admits more requests [@lmsys2026nvfp4kv].
+- Accuracy against FP8 KV in the same report: Qwen3.8-27B lost 0.31 points on
+  GSM8K, 1.01 on GPQA-Diamond, and 1.60 on SWE-bench Verified (381 against 389
+  of 500 tasks), with AIME 2025 unchanged; Qwen3.5-397B-A17B lost 0.08 points on
+  GSM8K, with GPQA-Diamond and AIME 2025 unchanged. The report calls SGLang's
+  NVFP4 KV support experimental [@lmsys2026nvfp4kv].
+- DeepSeek-V4.1-Flash (17 September 2026) uses FP4 KV caching in a released
+  model, together with cross-layer KV reuse [@deepseek2026v41flash].
+:::
 
 ### GPTQ, AWQ, and SmoothQuant solve different problems
 
@@ -332,12 +362,41 @@ layers of the stack:
   Microscaling formats pair narrow elements with a shared block scale
   [@rouhani2023microscaling]. NVFP4 uses smaller scale groups and a hierarchy
   of block and tensor scales on supported NVIDIA hardware
-  [@nvidia2025nvfp4].
+  [@nvidia2025nvfp4inference].
 - **GGUF** is a container, not a numeric precision. A GGUF file stores tensors
   and model metadata; its tensors may use one of several quantization types.
   The llama.cpp ecosystem supplies kernels for many CPU and accelerator
   backends, but support and performance vary by type and backend
   [@llamacpp2023gguf].
+
+Four-bit formats also appear as release formats chosen during training. When a
+lab applies quantization-aware training to some tensors, the checkpoint it
+publishes is already the low-precision artifact, and the numeric contract is
+part of the model instead of a deployment choice. In a large mixture-of-experts
+model the routed experts hold most of the parameters, so a four-bit expert
+format shrinks most of the footprint while attention and shared layers stay at
+higher precision. The deployment question that remains is whether the target
+hardware has a kernel for that exact layout, block size and scale type
+included. Hardware without a faster four-bit multiply can still keep the
+capacity and weight-read savings by converting values before the multiply, but
+it does not gain arithmetic speed.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- DeepSeek-V4 stores routed expert parameters in FP4 and most other parameters
+  in FP8, and its report describes FP4 quantization-aware training in
+  post-training; the base checkpoint is published in FP8 mixed precision
+  [@deepseek2026v4; @deepseek2026v4procard]. The report adds that FP4-by-FP8
+  multiplication currently has the same peak rate as FP8-by-FP8 on existing
+  hardware [@deepseek2026v4].
+- Kimi K3 uses MXFP4 weights with MXFP8 activations and applies
+  quantization-aware training from the supervised fine-tuning stage onward
+  [@moonshot2026kimik3card].
+- Neither model card compares the four-bit release with a higher-precision
+  version of the same model; the published scores are those of the four-bit
+  release.
+:::
 
 A deployable path needs three parts to agree: artifact, kernel, and runtime.
 

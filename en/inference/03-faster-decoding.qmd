@@ -25,9 +25,15 @@ heads, extra output layers on the target that predict tokens further ahead
 [@cai2024medusa; @ankner2024hydra]; the EAGLE family learns a feature or token
 drafter, a small model that drafts from the target's internal features
 [@li2024eagle; @li2024eagle2; @li2025eagle3]; lookahead decoding builds
-candidates through iteration [@fu2024lookahead]; and multi-token prediction
-trains future-token modules with the model [@gloeckle2024multi]. These are
-design choices, not stages in a required lineage.
+candidates through iteration [@fu2024lookahead]; multi-token prediction
+trains future-token modules with the model [@gloeckle2024multi]; and parallel
+drafters propose a whole block of tokens in one forward pass. A parallel
+drafter can be a small block diffusion model (@sec-nar-lm), which fills every
+masked position of a block together instead of one position after another
+[@chen2026dflash],
+or a semi-autoregressive design, which adds a light sequential module to a
+parallel backbone so that later positions can depend on earlier ones
+[@cheng2026dspark]. These are design choices, not stages in a required lineage.
 
 ## Verification can be parallel even when generation is sequential
 
@@ -178,6 +184,7 @@ does not by itself make sampling exact.
 | Prompt lookup [@saxena2023prompt] | An index or search over repeated prompt and output spans | One or more retrieved suffixes | It helps only when the workload contains useful repetition; verification supplies the correctness contract. |
 | Lookahead decoding [@fu2024lookahead] | A Jacobi window, n-gram pool, and custom masks | Multiple n-gram continuations | It removes a learned drafter, not proposal compute or temporary state. |
 | Multi-token prediction module [@gloeckle2024multi; @deepseek2024deepseekv3] | Future-token heads trained with the base model | Linear or branched proposals | The training objective supplies candidates; it is not an acceptance theorem. |
+| Parallel block drafter [@chen2026dflash; @cheng2026dspark] | A small drafter conditioned on target features; DSpark adds a sequential module | Linear block from one forward pass | Positions drafted together do not see each other's sampled tokens, so acceptance falls along the block unless the drafter models those dependencies. |
 
 Which row fits depends on the deployment. A deployer may already have a
 compatible small model, while another model may ship with useful heads.
@@ -246,16 +253,32 @@ Paper results demonstrate feasibility in their evaluated settings, not portable
 multipliers. Leviathan and colleagues reported twofold to threefold improvement
 on their T5 experiments [@leviathan2023fast], while EAGLE reported 2.7 to 3.5
 times lower latency on its evaluated LLaMA2-Chat configurations
-[@li2024eagle]. Those numbers used different models, hardware, software,
-sampling settings, and baselines. Reproduce the configuration before comparing
-them.
+[@li2024eagle]. DFlash reported more than sixfold lossless acceleration across
+its evaluated models and tasks, and up to 2.5 times the speedup of EAGLE-3
+[@chen2026dflash]. Those numbers used different models, hardware, software,
+sampling settings, and baselines, so comparing them requires reproducing each
+configuration.
+
+Benchmark results raise the same question once their rules admit speculation.
+The reported throughput then depends on acceptance on the benchmark's own
+prompts, so a comparison has to state whether speculation was enabled and which
+proposal source it used.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- With the MLPerf Inference v6.1 results (16 September 2026), MLCommons states
+  that speculative decoding "is now supported in the interactive scenario for
+  two of the inference benchmarks, with added support in the GPT-OSS task"
+  [@mlcommons2026inferencev61]. The announcement does not list the benchmarks.
+:::
 
 ## The scheduler must plan speculative work
 
-Chapter 32's reserve, execute, and commit protocol applies directly. Before a
-cycle begins, the scheduler should reserve candidate positions and workspace.
-A linear proposal needs room for its candidate suffix; a
-tree needs room for all scored nodes. Admission must use that planned maximum,
+The reserve, execute, and commit protocol from @sec-memory-scheduling applies
+directly. Before a cycle begins, the scheduler should reserve candidate
+positions and workspace. A linear proposal needs room for its candidate suffix;
+a tree needs room for all scored nodes. Admission must use that planned maximum,
 not the expected accepted length.
 
 After verification, commit target KV only for the accepted draft prefix and
@@ -272,6 +295,37 @@ preserve each request's positions, masks, stop state, and cache ownership while
 repacking work. Under memory pressure or rising concurrency, it may shorten
 $\gamma$, narrow a tree, select a cheaper proposal, or fall back to ordinary
 one-token decoding. No universal batch cutoff chooses among those policies.
+
+A scheduler can instead make that choice for each request at every step, using
+the prefix survival $s_k$ defined at the start of this chapter. DSpark trains a
+small confidence head that predicts, for each draft position, the probability
+that its token survives verification given that every earlier position did; the
+running product of these estimates approximates $s_k$ [@cheng2026dspark]. The
+scheduler pools the candidate positions of all active requests, ranks them by
+estimated survival, and admits them to the verification batch while expected
+system throughput still rises. That throughput is the expected number of
+accepted tokens times the engine's profiled steps per second at the resulting
+batch size. At low load the rule admits long blocks; at high load it admits
+mostly early positions, whose survival is high, and leaves batch capacity to
+other requests. Exactness still holds under two conditions the paper states:
+verification uses the rejection rule above, and the decision to stop admitting
+a request's positions depends only on the prefix examined so far, not on the
+candidates after it.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- The DSpark authors report running it in the DeepSeek-V4 serving system under
+  live traffic. Against the previous production setup, multi-token prediction
+  with one draft token (MTP-1), per-user generation speed rose 60 to 85 percent
+  for DeepSeek-V4-Flash and 57 to 78 percent for DeepSeek-V4-Pro at matched
+  throughput. The preprint does not state the hardware [@cheng2026dspark].
+- The same paper gives the reason for the one-token baseline: a static
+  multi-token drafter "strictly degrades aggregate throughput under high
+  concurrency due to excessive verification overhead" [@cheng2026dspark].
+- vLLM added DSpark and DFlash drafters in release v0.25.0 (11 July 2026)
+  [@vllm2026v025].
+:::
 
 ## Choose from workload evidence
 
