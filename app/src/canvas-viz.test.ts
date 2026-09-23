@@ -633,14 +633,14 @@ test("evaluation precision visual localizes every visible label in Chinese", () 
 });
 
 test("the viz runtime registers expanded reasoning components", () => {
-  for (const name of ["reasoning-search-budget", "rlvr-boundary", "ttc-budget"]) {
+  for (const name of ["reasoning-search-budget", "ttc-budget"]) {
     expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
   }
 });
 
 test("reasoning-search budget reports exact node growth instead of invented quality", () => {
   const start = rt.indexOf("R['reasoning-search-budget']");
-  const end = rt.indexOf("R['rlvr-boundary']", start);
+  const end = rt.indexOf("R['ttc-budget']", start);
   const searchBudget = rt.slice(start, end);
   expect(searchBudget).toContain("fullNodes");
   expect(searchBudget).toContain("beamNodes");
@@ -665,7 +665,6 @@ test("test-time compute budget exposes its synthetic status to assistive technol
 test("expanded reasoning chapters use the new interactive visualizations in both languages", () => {
   const uses: [string, string][] = [
     ["reasoning/02-structured-reasoning-search", "reasoning-search-budget"],
-    ["reasoning/05-training-to-reason", "rlvr-boundary"],
     ["reasoning/07-inference-time-scaling", "ttc-budget"],
   ];
   for (const [path, viz] of uses) {

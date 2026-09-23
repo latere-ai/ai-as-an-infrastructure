@@ -15,4 +15,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "speculative-sampling": () => import("./speculative-sampling.ts"),
   "candidate-tree": () => import("./candidate-tree.ts"),
   "group-relative-rl": () => import("./group-relative-rl.ts"),
+  "pass-at-k-boundary": () => import("./pass-at-k-boundary.ts"),
 };

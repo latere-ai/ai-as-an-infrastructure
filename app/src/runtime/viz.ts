@@ -1806,63 +1806,6 @@
     watchTheme(host, draw);
   };
 
-  // RLVR boundary explorer: pass@k can improve because RL concentrates mass on
-  // known-good paths, because it expands support, or both. CoT-pass@k is drawn
-  // lower when path correctness is stricter than answer correctness.
-  R['rlvr-boundary'] = function (host) {
-    var lang = host.getAttribute('data-lang') === 'zh' ? 'zh' : 'en';
-    var L = lang === 'zh' ? {
-      coverage: '基座覆盖', sharp: 'RL 集中度', strict: '链路严格度',
-      base: '基座 pass@k', rl: 'RLVR pass@k', cot: 'CoT-pass@k',
-      k: '样本数 k', pass: '通过概率'
-    } : {
-      coverage: 'base coverage', sharp: 'RL concentration', strict: 'CoT strictness',
-      base: 'base pass@k', rl: 'RLVR pass@k', cot: 'CoT-pass@k',
-      k: 'samples k', pass: 'pass probability'
-    };
-    var coverage = 0.72, sharp = 0.62, strict = 0.35;
-    var cv = canvas(host, 300);
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 48 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var xs = [], i;
-      for (i = 0; i <= 180; i++) xs.push(Math.exp(Math.log(1) + (Math.log(256) - Math.log(1)) * i / 180));
-      var baseCap = 0.48 + 0.48 * coverage;
-      var baseP = 0.01 + 0.08 * coverage;
-      var rlP = baseP * (1.8 + 4.4 * sharp);
-      var rlCap = Math.min(0.99, baseCap * (1.04 - 0.30 * sharp) + 0.08 * (1 - sharp));
-      function pass(p, cap, k) { return cap * (1 - Math.pow(1 - Math.min(0.95, p), k)); }
-      function cotPenalty(k) { return 1 - strict * (0.12 + 0.30 * (1 - Math.exp(-Math.log(k + 1) / 2.2))); }
-      function X(k) { return pd + Math.log(k) / Math.log(256) * (W - 2 * pd); }
-      function Y(v) { return H - pd - v * (H - 2 * pd); }
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
-      function line(fn, color, dash) {
-        if (dash) ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); else ctx.setLineDash([]);
-        ctx.strokeStyle = color; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
-        xs.forEach(function (k, i) { var x = X(k), y = Y(fn(k)); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
-        ctx.stroke(); ctx.setLineDash([]);
-      }
-      line(function (k) { return pass(baseP, baseCap, k); }, t.ink, true);
-      line(function (k) { return pass(rlP, rlCap, k); }, t.accent, false);
-      line(function (k) { return pass(rlP, rlCap, k) * cotPenalty(k); }, t.accent2, true);
-      var leg = [[L.base, t.ink, true], [L.rl, t.accent, false], [L.cot, t.accent2, true]];
-      leg.forEach(function (r, i) {
-        var x = pd + 10 * cv.dpr, y = pd + 16 * cv.dpr + i * 18 * cv.dpr;
-        ctx.strokeStyle = r[1]; ctx.lineWidth = 2 * cv.dpr; if (r[2]) ctx.setLineDash([5 * cv.dpr, 4 * cv.dpr]); else ctx.setLineDash([]);
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 24 * cv.dpr, y); ctx.stroke(); ctx.setLineDash([]);
-        ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left'; ctx.fillText(r[0], x + 30 * cv.dpr, y + 4 * cv.dpr);
-      });
-      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(L.k, W / 2, H - 12 * cv.dpr);
-      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.pass, 0, 0); ctx.restore();
-    }
-    host.appendChild(slider(L.coverage, 0.2, 1, 0.01, coverage, function (v) { coverage = v; draw(); }).wrap);
-    host.appendChild(slider(L.sharp, 0, 1, 0.01, sharp, function (v) { sharp = v; draw(); }).wrap);
-    host.appendChild(slider(L.strict, 0, 1, 0.01, strict, function (v) { strict = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Adaptive test-time compute: hard prompts need longer useful thinking, while
   // easy prompts hit the overthinking side earlier. The marker chooses the
   // synthetic utility optimum after a small latency penalty.
