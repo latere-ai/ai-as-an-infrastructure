@@ -57,7 +57,7 @@ test("the sparse-autoencoder formulation defines its tensors and objective", () 
     "w_{\\mathrm{dec}} \\in \\mathbb{r}^{d \\times m}",
     "encoder bias",
     "decoder bias",
-    "at most k nonzero entries",
+    "at most $k$ nonzero entries",
     "unit-norm decoder columns",
     "scale degeneracy",
     "mean squared reconstruction error",
