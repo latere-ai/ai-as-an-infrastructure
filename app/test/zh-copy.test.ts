@@ -911,11 +911,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/04-runtime-safety.qmd",
-      ["Runtime safety is the request-time contract", "the model may propose; only trusted code may authorize and commit", "A score is not a decision", "Successful injection is not yet a successful exploit", "Buffer executable outputs even when prose streams"],
+      ["Runtime safety is the request-time contract", "only trusted code outside the model can authorize an action and commit its effect", "A score is not a decision", "Successful injection is not yet a successful exploit", "Buffer executable outputs even when prose streams"],
     ],
     [
       "zh/safety/04-runtime-safety.qmd",
-      ["运行时安全是请求处理时的契约", "模型可以提出动作，只有可信代码可以授权并提交", "分数不是决定", "注入成功还不等于利用成功", "正文可以流式传输，可执行输出必须缓冲"],
+      ["运行时安全是请求处理时的契约", "授权动作并提交效果的只能是模型之外的可信代码", "分数不是决定", "注入成功还不等于利用成功", "正文可以流式传输，可执行输出必须缓冲"],
     ],
     [
       "en/safety/05-adversarial-robustness.qmd",

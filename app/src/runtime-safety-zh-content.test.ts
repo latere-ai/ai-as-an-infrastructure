@@ -42,7 +42,7 @@ test("Chapter 57 preserves the complete English runtime-safety contract", () => 
     "运行时安全：护栏与内容审核 {#sec-runtime-safety}",
   ]);
   expect(headings(chapter, 2)).toEqual([
-    "五项工作，不是一个守卫模型",
+    "护栏的五项工作",
     "从检测器分数到策略决定",
     "提示注入改变了威胁模型",
     "在每项实际效果前设置确定性闸门",
@@ -71,13 +71,13 @@ test("the opening defines a request-time enforcement contract", () => {
     "训练可以降低有害行为出现的概率",
     "已对齐模型自身的拒绝既有必要，却并不充分",
     "输入和输出必须分别筛查",
-    "筛查只是答案的一部分",
-    "策略条件分类器可以检测有害证据",
-    "不能授权付款、隔离进程，也不能证明外部 API 做了什么",
+    "筛查只是多项控制中的一项",
+    "策略条件分类器把书面策略与待检内容一起作为输入，能够检测有害证据",
+    "授权付款、隔离进程和证明外部 API 做了什么，则由其他组件负责",
     "运行时安全是请求处理时的契约",
     "检测证据、交由策略决定、让强制执行点落实决定",
     "遏制仍然发生的问题，并记录实际经过",
-    "模型可以提出动作，只有可信代码可以授权并提交",
+    "授权动作并提交效果的只能是模型之外的可信代码",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -128,7 +128,7 @@ test("input and output checks keep their placement limits", () => {
 test("policy-conditioned moderation is configurable but bounded", () => {
   for (const phrase of [
     "学习危害类别，而不只是匹配关键词",
-    "有用的配置能力，不是任意可编程性",
+    "传入分类法是在配置分类器",
     "策略文字不能让不受支持的类别变得可靠",
     "带版本的策略包",
     "声明明确的模式、受支持类别、阈值和失效行为",
@@ -193,7 +193,7 @@ test("prompt injection is decomposed into influence proposal and enforcement", (
 
 test("learned defenses and structural controls make different claims", () => {
   for (const phrase of [
-    "指令层级",
+    "@gls-instruction-hierarchy",
     "聚光标记",
     "学习得到的防御",
     "不能建立安全边界",
@@ -291,7 +291,7 @@ test("the release suite exercises moderation and effect boundaries", () => {
     "跨租户资源引用",
     "沙箱逃逸探测",
     "不完整的工具调用绝不能执行",
-    "红队结果补充这些契约，但不能取代它们",
+    "红队结果是对这些检查的补充",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -310,7 +310,7 @@ test("contested choices preserve learned-guard autonomy and availability limits"
 
 test("the conclusion keeps detector policy enforcement containment and evidence separate", () => {
   for (const phrase of [
-    "不要求相信某一个守卫模型牢不可破",
+    "假定任何守卫模型都可能出错",
     "检测器负责估计",
     "策略负责决定",
     "强制执行仲裁每一项实际效果",

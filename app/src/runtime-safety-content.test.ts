@@ -20,7 +20,7 @@ test("the opening defines runtime safety as an enforced request contract", () =>
     "enforcement point",
     "contains what still goes wrong",
     "records what happened",
-    "the model may propose; only trusted code may authorize and commit",
+    "only trusted code outside the model can authorize an action and commit its effect",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -91,7 +91,7 @@ test("prompt injection is modeled as untrusted data influencing privileged effec
 
 test("learned prompt-injection defenses are separated from structural controls", () => {
   for (const phrase of [
-    "instruction hierarchy",
+    "@gls-instruction-hierarchy",
     "spotlighting",
     "learned defenses",
     "do not establish a security boundary",
