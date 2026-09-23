@@ -1,18 +1,24 @@
 # Memory and Scheduling {#sec-memory-scheduling}
 
 @sec-serving-problem established the scheduler's central safety rule: reserve
-the state required by a token plan before executing it. This chapter follows
-that rule down to physical KV-cache blocks. The allocator must account for
-growing sequences, shared prefixes, cancellations, and memory pressure. The
-scheduler must choose work that fits those blocks without losing sight of
-latency, fairness, or progress.
+the state required by a token plan before executing it. A token plan is the
+scheduler's choice, for one model iteration, of which requests advance and by
+how many token positions. This chapter follows that rule down to physical
+KV-cache blocks. The KV cache holds the attention keys and values a request
+retains for every prompt and generated token, so that later steps need not
+recompute them. The allocator must account for growing sequences, shared
+prefixes, cancellations, and memory pressure. The scheduler must choose work
+that fits those blocks without losing sight of latency, fairness, or progress.
 
 Several systems established the main techniques. Orca introduced
-iteration-level scheduling in 2022 [@yu2022orca]. vLLM's PagedAttention applied
-block-based allocation to KV state in 2023 [@kwon2023pagedattention]. SGLang
-organized reusable prefixes with RadixAttention in 2024
-[@zheng2024sglang]. Sarathi-Serve bounded prefill work within a colocated
-scheduler, while DistServe separated prefill and decode pools
+iteration-level scheduling in 2022: after each model iteration, the server
+re-forms the running batch [@yu2022orca]. vLLM's PagedAttention applied block-based
+allocation to KV state in 2023 [@kwon2023pagedattention]. SGLang organized
+reusable prefixes with RadixAttention in 2024 [@zheng2024sglang]. Each request
+runs in two phases: prefill processes the whole prompt and creates its KV
+state, and decode then produces one new token per step. Sarathi-Serve bounded
+prefill work within a colocated scheduler, one that runs both phases on the
+same devices, while DistServe separated prefill and decode pools
 [@agrawal2024sarathi; @zhong2024distserve]. Mooncake later extended the
 placement problem into a storage-backed, cluster-wide KV hierarchy
 [@qin2024mooncake]. These mechanisms compose. They are not stages in a required
@@ -29,12 +35,13 @@ $$
 $$
 
 Here $L$ is the number of transformer layers, $n_{\mathrm{kv}}$ is the number
-of key-value heads per layer, $d_{\mathrm{head}}$ is one head's dimension,
+of key-value heads per layer (the parallel attention units that each store
+their own keys and values), $d_{\mathrm{head}}$ is one head's dimension,
 $b_{\mathrm{kv}}$ is the bytes per cached element, and the factor two accounts
 for keys and values. The quantity $\kappa$ is logical bytes per token before
 sharding, alignment, metadata, or allocator overhead.
 
-Here one allocation block holds the state for $B$ token positions. For a
+Suppose one allocation block holds the state for $B$ token positions. For a
 request $i$ retaining $T_i$ prompt and generated tokens, $q_i$ denotes its
 logical block count, $M_i^{\mathrm{alloc}}$ its allocated KV capacity in bytes,
 and $w_i$ the unused token capacity in its final block. Then
@@ -48,12 +55,14 @@ w_i=q_iB-T_i,
 \end{gathered}
 $$
 
-The bound shows exactly what fixed blocks guarantee: tail waste is less than
-one block per unshared sequence. Paging does not eliminate block tables,
-alignment, reference counts, reserved capacity, or unused memory elsewhere in
-the process.
+The bound states what fixed blocks guarantee: tail waste, the unused capacity
+in a sequence's final block, is less than one block per unshared sequence.
+Allocating in fixed blocks, called paging after the operating-system technique,
+leaves other overheads in place: block tables, alignment, reference counts,
+reserved capacity, and unused memory elsewhere in the process.
 
-Three kinds of waste should not be conflated:
+Three kinds of waste have different causes, and fixed blocks change each one
+differently:
 
 | Waste | Cause | What fixed blocks change |
 |---|---|---|
@@ -64,8 +73,9 @@ Three kinds of waste should not be conflated:
 The runnable below performs exact discrete accounting. Four requests retain
 `[37, 81, 130, 211]` tokens and each declares a maximum of 256. It reports
 allocated token slots and tail waste for several block sizes. It does not turn
-block-table entries into a synthetic runtime cost; kernel measurements are
-needed for that side of the trade-off.
+block-table entries into a synthetic runtime cost; that side of the trade-off
+needs measurements of the kernels, the compiled accelerator routines that run
+attention and the other model operations.
 
 :::: {.runnable}
 ```python
@@ -133,7 +143,8 @@ a hardware-independent multiplier for block allocation alone.
 
 @gls-continuous-batching lets the active set change between iterations, but an
 iteration does not have to advance every resident request. A plan may include
-decode steps, prefill chunks, or no work for a particular request because of
+decode steps, prefill chunks (slices of one prompt's prefill, discussed in the
+chunked-prefill section below), or no work for a particular request because of
 priority, capacity, or fairness policy. If the plan schedules $s_i\ge0$ new
 positions for request $i$, the additional blocks it needs are
 
@@ -199,9 +210,10 @@ flowchart TD
 
 Two requests may share a physical prefix block when their corresponding KV
 state is identical. Equal visible text is not enough. A cache identity normally
-includes at least the token IDs, model weights or revision, active adapters,
-position treatment, attention and cache format, and any multimodal state that
-affects the prefix. Tenant and isolation policy may forbid sharing even when the
+includes at least the token IDs, model weights or revision, active adapters
+(small trained weight sets that specialize a base model), position treatment
+(how token positions are encoded), attention and cache format, and any
+multimodal state that affects the prefix. Tenant and isolation policy may forbid sharing even when the
 mathematics matches.
 
 Here $\mathcal B_i\subseteq\mathcal P$ denotes the physical blocks referenced
@@ -216,7 +228,7 @@ q_{\mathrm{live}}
 q_{\mathrm{live}}\le q_{\mathrm{capacity}},
 $$
 
-Here the union counts a shared block once. For each physical block $p$, a
+where the union counts a shared block once. For each physical block $p$, a
 reference count $r_p$ records all live and retained-cache owners. A block is
 reclaimable only after its relevant references are removed and $r_p=0$.
 
@@ -255,15 +267,16 @@ $\sum_i\Delta q_i$; the system must choose among distinct actions:
 | Offload and reload | Live or cached blocks | Transfer, storage queueing, and synchronization |
 | Reject or fail explicitly | Waiting or active request, according to contract | Lost request; must be visible in service metrics |
 
-These actions are not interchangeable. Evicting an unpinned cache entry does
-not alter a live request. Preempting live work does. Offloading preserves state
+These actions are not interchangeable. Evicting an unpinned cache entry leaves
+live requests untouched, whereas preempting live work discards state that a
+running request still needs. Offloading preserves state
 but adds a data path that can become slower than recomputation. Priority can
 protect interactive traffic while starving an older batch request, so victim
 selection needs age or fairness constraints as well as a memory score.
 
-A retry after a pressure-policy action is a policy boundary, not permission to
-spin forever. If capacity cannot be recovered, the scheduler must defer, reject,
-or surface a failure. An invisible retry loop converts a known allocation
+The pressure policy must also bound how many times a plan is retried after one
+of these actions. If capacity cannot be recovered, the scheduler must defer,
+reject, or surface a failure. An invisible retry loop converts a known allocation
 failure into unbounded queueing.
 
 ## Chunked prefill shares an iteration budget
@@ -282,7 +295,8 @@ $$
 \le K.
 $$
 
-Without multi-token decoding, $d_i$ is usually one. Token count is only a proxy
+Without multi-token decoding, the methods in @sec-faster-decoding that emit more
+than one token per model pass, $d_i$ is usually one. Token count is only a proxy
 for execution time: context length, kernels, phase mix, parallel layout, and
 hardware change the work per token.
 
@@ -290,14 +304,14 @@ Chunking bounds how much prefill work enters one plan; it does not remove all
 prefill-decode interference. Small chunks can add launches, repeated scheduling,
 and less efficient kernels. Decode-first policies can protect token cadence but
 starve new prefills and worsen time to first token. The scheduler therefore
-needs per-class queue age and latency measurements, not only a target batch
-size.
+needs per-class queue age and latency measurements in addition to a target
+batch size.
 
 ## Move KV state only when the data path earns its cost
 
 Prefill/decode disaggregation gives each phase its own device pool. It removes
 colocated kernel contention and uncouples some resource and parallelism choices,
-but decode cannot use a request until the required KV state reaches its pool.
+but a request cannot begin decoding until its KV state reaches the decode pool.
 Here $\tau_{\mathrm{fixed}}$ denotes setup and synchronization latency, $S$ the
 transferred KV payload in bytes, and $\beta$ the path's achieved bandwidth. The
 isolated transfer time obeys
@@ -308,13 +322,14 @@ $$
 \tau_{\mathrm{fixed}}+\frac{S}{\beta}.
 $$
 
-The model uses achieved rather than advertised link bandwidth. End-to-end delay
+The bound uses achieved rather than advertised link bandwidth. End-to-end delay
 also includes source and destination queues, contention, retries, and
 backpressure. Transfer can overlap other work, but the consumer still needs a
 clear readiness and ownership protocol.
 
-DistServe optimizes separate prefill and decode resources under chosen TTFT and
-TPOT attainment targets [@zhong2024distserve]. Mooncake extends the same state
+DistServe optimizes separate prefill and decode resources under chosen
+attainment targets, the fraction of requests that must meet a limit on time to
+first token (TTFT) and on time per output token (TPOT) [@zhong2024distserve]. Mooncake extends the same state
 movement problem across GPU memory, CPU @gls-dram, SSD, and network links
 [@qin2024mooncake]. These systems demonstrate particular designs and measured
 workloads. They do not establish disaggregation or tiering as the universal
@@ -342,11 +357,12 @@ fault domains, prediction error, and tenant isolation can override it.
 
 No allocation or placement policy dominates every workload. Small blocks bound
 tail waste more tightly but create more table entries. Prefix retention helps
-only when compatible reuse arrives before eviction. Recompute can beat offload
-when the storage path is slow; offload can win when compute is scarce.
-Colocation avoids KV transfer, while disaggregation can isolate phase queues and
-size pools independently. Prompt and output distributions, offered load, SLOs,
-parallelism, topology, and failure policy determine the crossover.
+only when compatible reuse arrives before eviction. Recomputation can be
+faster than offload when the storage path is slow; offload can cost less when
+compute is scarce. Colocation avoids KV transfer, while disaggregation can
+isolate phase queues and size pools independently. Prompt and output
+distributions, offered load, service-level objectives (SLOs), parallelism,
+topology, and failure policy determine the crossover.
 :::
 
 ## Verify the allocator and scheduler together
@@ -372,8 +388,10 @@ Under load, report four groups of measurements:
   reuse distance, recomputed tokens, offloaded bytes, and reload latency.
 - **Scheduling:** queue age by request class, prefill chunk sizes, decode batch
   composition, preemptions, rejections, and fairness outcomes.
-- **Service result:** TTFT, inter-token gaps, TPOT, goodput, acceptance, KV
-  transfer bytes and latency, accelerator time, and cost.
+- **Service result:** TTFT, inter-token gaps, TPOT, goodput (completed
+  requests that meet their latency objectives), acceptance rate (the share of
+  arriving requests admitted rather than rejected), KV transfer bytes and
+  latency, accelerator time, and cost.
 
 @sec-serving-problem gives the matched-load evaluation protocol. The additional
 requirement here is conservation: reconcile every scheduled token and every
@@ -382,28 +400,31 @@ physical block from admission through release.
 ::: {.callout-tip}
 ## Constraint arrow
 
-@sec-transformer-architecture determines logical KV bytes per token through
-layer count, KV-head count, head dimension, and cache precision. This chapter
-decides how that state is allocated, shared, reclaimed, and moved.
-@sec-faster-decoding changes how many accepted tokens a model pass can produce,
-which changes the token plan and future block demand. @sec-quantization-kernels
-can reduce cache bytes or change attainable kernel performance. A memory policy
-must be remeasured when any of those lower-level facts change.
+The architecture in @sec-transformer-architecture fixes logical KV bytes per
+token through layer count, KV-head count, head dimension, and cache precision.
+The allocator and scheduler in this chapter determine how that state is
+allocated, shared, reclaimed, and moved. The decoding methods in
+@sec-faster-decoding change how many accepted tokens a model pass can produce,
+which changes the token plan and future block demand. The formats and kernels in
+@sec-quantization-kernels can reduce cache bytes or change attainable kernel
+performance. A memory policy must be remeasured when any of those lower-level
+facts change.
 :::
 
 ## Payoff and boundary
 
-Block allocation gives the scheduler a precise feasibility test. Reference
+Block allocation gives the scheduler an exact feasibility test. Reference
 counts make prefix sharing safe. Pressure policies state which work may be
 discarded, moved, delayed, or refused. Chunk budgets control colocated phase
-interference, and transfer models expose the price of separating state from
-compute.
+interference, and transfer-time estimates show the cost of separating state
+from compute.
 
-These mechanisms are independently useful and often combined. The allocator's
-job is to preserve memory and ownership invariants. The scheduler's job is to
-choose among safe plans using the workload's latency, fairness, acceptance, and
-cost contract. Confusing those responsibilities produces systems that are fast
-only until the first cancellation, cache miss, burst, or exhausted block pool.
+These mechanisms are independently useful and often combined. The allocator
+preserves memory and ownership invariants, and the scheduler chooses among the
+plans that satisfy them according to the workload's latency, fairness,
+acceptance-rate, and cost contract. A design that mixes the two responsibilities
+can run fast under steady load and then break at the first cancellation, cache
+miss, burst, or exhausted block pool.
 
 ## Further reading
 

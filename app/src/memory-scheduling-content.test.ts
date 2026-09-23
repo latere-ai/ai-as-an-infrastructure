@@ -121,7 +121,7 @@ test("pressure and chunking policies state costs, fairness, and limits", () => {
     "\\le K",
   ]) expect(chapter).toContain(expression);
   for (const phrase of [
-    "not permission to spin forever",
+    "bound how many times a plan is retried",
     "does not remove all prefill-decode interference",
     "starve new prefills",
   ]) expect(flat).toContain(phrase);

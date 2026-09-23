@@ -125,7 +125,7 @@ test("pressure and chunking policies state actions, fairness, and limits", () =>
     "明确拒绝或报错",
     "这些操作不能互换",
     "选择被抢占的受害请求时，还必须考虑等待时间或公平性约束",
-    "不是允许调度器无限重试",
+    "执行这些操作之后一个计划最多重试多少次",
     "并不能消除预填充与解码之间的全部干扰",
     "只保护解码的策略可能让新预填充长期得不到执行",
   ]) expect(flat).toContain(phrase);
