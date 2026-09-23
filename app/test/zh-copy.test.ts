@@ -650,11 +650,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/adaptation/07-synthetic-data-self-improvement.qmd",
-      ["generation is cheap", "evidence makes a generated record safe to train on", "Methods compose across these columns", "Sampling creates opportunity", "independent holdout"],
+      ["generation is cheap", "evidence makes a generated record safe to train on", "Methods compose across these columns", "Candidate coverage and selection precision", "independent holdout"],
     ],
     [
       "zh/adaptation/07-synthetic-data-self-improvement.qmd",
-      ["合成数据有用，是因为生成成本低", "什么证据足以让一条生成记录安全地进入训练", "这些列中的选择可以自由组合", "采样创造机会，不创造正确性", "独立留出集必须位于数据构造之外"],
+      ["合成数据有用，是因为生成成本低", "什么证据足以让一条生成记录安全地进入训练", "这些列中的选择可以自由组合", "候选覆盖率与选择精确率", "独立留出集必须位于数据构造之外"],
     ],
     [
       "en/adaptation/index.qmd",

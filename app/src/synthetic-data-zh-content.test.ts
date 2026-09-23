@@ -32,12 +32,12 @@ test("Chapter 23 starts from evidence for admission rather than cheap generation
 });
 
 test("synthetic data is provenance rather than a training algorithm", () => {
-  expect(zh).toContain("## 合成数据描述来源，不描述算法");
+  expect(zh).toContain("## 合成数据是一种来源标签");
   expect(zh).toContain("说明的是记录从哪里来，而不是它将怎样使用");
-  for (const use of ["SFT 目标", "偏好对的一侧", "强化学习的 rollout", "评测候选"]) {
+  for (const use of ["监督微调（SFT）的目标", "偏好对的一侧", "强化学习的 rollout", "评测候选"]) {
     expect(zh).toContain(use);
   }
-  expect(zh).toContain("彼此相关，却不是同一条历史阶梯上的不同阶段");
+  expect(zh).toContain("彼此相关，却不是同一种方法先后演进的几个阶段");
   expect(zh).toContain("LIMA 并没有测试自训练回路");
 });
 
@@ -53,7 +53,7 @@ test("the six-axis design review keeps provenance, signal, objective, and schedu
     expect(zh).toContain(row);
   }
   expect(zh).toContain("这些列中的选择可以自由组合");
-  expect(zh).toContain("掩盖了真正决定系统行为的区别");
+  expect(zh).toContain("掩盖了决定系统行为的那些区别");
 });
 
 test("the audit-loop diagram separates validation from data selection", () => {
@@ -72,7 +72,7 @@ test("the audit-loop diagram separates validation from data selection", () => {
 });
 
 test("sampling creates candidate coverage rather than correctness", () => {
-  expect(zh).toContain("## 采样创造机会，不创造正确性");
+  expect(zh).toContain("## 候选覆盖率与选择精确率");
   expect(zh).toContain(String.raw`p_x = \Pr_{y \sim q_\theta(\cdot \mid x)}[z(x,y)=1]`);
   expect(zh).toContain(String.raw`C_n(x) = 1 - (1 - p_x)^n`);
   expect(zh).toContain("候选覆盖率");
@@ -93,7 +93,7 @@ test("selection precision exposes both false acceptance and false rejection", ()
   expect(zh).toContain(String.raw`\frac{\alpha_x p_x}{\alpha_x p_x + \beta_x(1-p_x)}`);
   expect(zh).toContain("即使 $\\beta_x$ 很小");
   expect(zh).toContain("假阴性会造成相反的问题");
-  expect(zh).toContain("筛选只是重新加权生成器，并不会凭空创造正确性");
+  expect(zh).toContain("筛选只能对生成器已经产生的回答重新加权");
   expect(zh).toContain(String.raw`\widetilde q_\theta(y \mid x)`);
   expect(zh).toContain(String.raw`Z_\theta(x)=\mathbb{E}`);
 });
@@ -130,11 +130,11 @@ test("task synthesis and filtered self-training retain provenance and policy tim
 
 test("AI feedback remains a learned proxy with human choices still present", () => {
   expect(zh).toContain("监督阶段生成批判与修订");
-  expect(zh).toContain("RLAIF 阶段生成 AI 偏好");
+  expect(zh).toContain("（RLAIF）阶段生成 AI 偏好");
   expect(zh).toContain("没有移除人类编写的原则、提示");
   expect(zh).toContain("位置偏差、冗长偏差、自我偏好与领域偏差");
   expect(zh).toContain("独立指标反而下降");
-  expect(zh).toContain("不能证明训练后的模型真的改善了");
+  expect(zh).toContain("不能证明训练后的模型已经改善");
 });
 
 test("verifier-guided learning separates exact checks, learned process rewards, RLVR, and self-play", () => {
@@ -175,7 +175,7 @@ test("recursive failure checks cover acceptance, diversity, contamination, curri
 
 test("the auditable loop versions every round and isolates its holdout", () => {
   expect(zh).toContain("## 建立可审计的回路");
-  expect(zh).toContain("生产中的基本单位不是「合成数据集」");
+  expect(zh).toContain("生产中的基本工作单位是带有接纳记录和退出决策的版本化轮次");
   expect(zh).toContain("输入：冻结的任务规格、来源混合 R、生成器 M_r、接纳流水线 A_r");
   for (const step of [
     "排除私有评测材料",
@@ -206,7 +206,7 @@ test("round-level provenance and promotion metrics remain operational", () => {
     expect(zh).toContain(field);
   }
   expect(zh).toContain("必须位于数据构造之外");
-  expect(zh).toContain("选择和认证都使用同一个评判者，只能测到自洽性");
+  expect(zh).toContain("如果选择和认证都使用同一个评判者，就只能测到自洽性");
   for (const row of ["| 数据构成 |", "| 过滤器行为 |", "| 覆盖范围 |", "| 外部结果 |"]) {
     expect(zh).toContain(row);
   }
