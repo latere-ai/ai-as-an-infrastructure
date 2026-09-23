@@ -194,7 +194,7 @@ coverage check of the English tree. None has been decided or started.
   citations, and links. Remaining known divergences are listed as allow-lists
   in the tests and as open items below.
 
-- [ ] **A dated state-of-the-field edition**
+- [x] **A dated state-of-the-field edition** (done 2026-09-23: `field/2026-09`)
 
   The book has no page for the current frontier. Choosing a Model became
   vendor-neutral, and its named-model tree survives only as unused code (the
@@ -207,14 +207,14 @@ coverage check of the English tree. None has been decided or started.
   at stable URLs so readers can compare months. The unused tree was deleted on
   2026-09-23.
 
-- [ ] **Technique index**
+- [x] **Technique index** (done 2026-09-23: Techniques section on the glossary page)
 
   `glossary.yml` gains technique entries with a status (emerging, adopted,
   established, faded), the month the entry was added, and the section that
   covers it, or "not yet in a chapter". A rendered index lets a new technique
   enter as a short note and move into a chapter once it settles.
 
-- [ ] **Per-chapter review date and monthly digest**
+- [ ] **Per-chapter review date and monthly digest** (review dates done 2026-09-23 in `app/src/data/review-dates.json`; the monthly digest is open)
 
   Each chapter shows its last review date under the title, read from front
   matter, and the changelog gains a monthly digest that links every change to
@@ -253,14 +253,14 @@ reduced motion, and a static fallback when scripts do not run.
 
 ## Open goals: rendering and parity defects found by the new tests
 
-- [ ] **Bold renders as literal `**` on 12 zh pages.** `**标签：**正文` does not
+- [x] **Bold renders as literal `**` on 12 zh pages.** Fixed 2026-09-23 in the pipeline. `**标签：**正文` does not
   close under CommonMark when full-width punctuation meets a CJK letter
   (visible in `zh/foundations/scaling-laws`). Fix in the pipeline, not page by
   page; the pages are listed as `knownBoldLeaks` in
   `app/src/chapter-render.test.ts`.
 - [ ] **39 Graphviz figures are wider than the mobile column** (34 en, 5 zh) and
   scroll sideways; listed as `knownWideFigures`.
-- [ ] **Display math differs between en and zh on 9 pages**; listed as
+- [x] **Display math differs between en and zh on 9 pages** (fixed 2026-09-23; the allow-list is empty); listed as
   `knownMathDivergence` in `app/src/book-zh-parity.test.ts`. Most are
   punctuation or layout. `practice/05` and `practice/08` were fixed on
   2026-09-23.
