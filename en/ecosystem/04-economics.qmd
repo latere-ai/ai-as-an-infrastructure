@@ -152,22 +152,67 @@ to estimate realized throughput, but that estimate must be checked against
 production telemetry.
 
 Token-based reporting is useful only with the token categories and request mix
-attached. Providers may price input tokens, cached tokens, and output tokens
-differently. Self-hosted prefill and decode stress hardware differently:
-prefill processes the whole prompt at once, while decode generates the output
-one token at a time. Tool calls, speculative work, rejected outputs, and
-internal reasoning may add work that is absent from the visible response.
-Report prompt and output-length distributions, cache-hit rate, batch and
-concurrency policy, p50, p95, and p99 latency, errors, and accepted-result
-throughput on the same line as unit cost.
+attached. Self-hosted prefill and decode stress hardware differently: prefill
+processes the whole prompt at once, while decode generates the output one token
+at a time. Tool calls, speculative work, rejected outputs, and internal
+reasoning may add work that is absent from the visible response.
+
+Provider price lists divide the same work into more categories. Input is
+charged at one rate when the provider computes it and at a lower rate when it
+is served from a prompt cache. A cache write stores the attention state (the
+key-value cache) that prefill computed for a prompt prefix and keeps it for a
+stated lifetime; a later request that begins with the same prefix reads that
+state instead of recomputing it (@sec-memory-scheduling). Writes are priced at
+or above ordinary input and reads far below it, so the saving depends on how
+many reads a prefix receives before it expires. With write and read prices $w$
+and $\rho$ written as multiples of the uncached input price, a prefix read $n$
+times within its lifetime costs less than $n+1$ uncached passes when
+$w + n\rho < 1 + n$. Output is charged per generated token. For reasoning
+models, which generate hidden reasoning tokens before the visible answer, the
+count includes those tokens even though they never reach the response
+(@sec-inference-time-scaling). Other terms change the rate of a whole request:
+a long-context surcharge raises the rate of every token once the prompt passes
+a length threshold, time-of-day pricing lowers the rate outside the provider's
+peak hours, a regional-processing premium applies when the request is pinned to
+one processing region, and the service tier, described in the next section,
+scales the rates by the scheduling guarantee bought. These multipliers stack,
+and the effective price of a request is the result of applying all of them to
+its mix of token categories.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- Anthropic charges 1.25 times the base input price for a cache write that
+  lives five minutes, twice the base price for one that lives an hour, and 0.1
+  times for a read, lowered to 0.05 times on Claude Opus 5.5 and 0.025 times on
+  Claude Fable 5.1 and Claude Mythos 5.1. The cache multipliers stack with the
+  batch discount and with the 1.1 times multiplier for US-only inference
+  [@anthropic2026pricing].
+- OpenAI charges 1.25 times the uncached input rate for cache writes and 0.1
+  times for reads on GPT-5.6 and later models, whose only lifetime setting is
+  a minimum of 30 minutes; earlier models carry no write charge
+  [@openai2026promptcaching].
+- OpenAI prices GPT-6 Sol prompts longer than 272K input tokens at twice the
+  input and cache rates and 1.5 times the output rate for the full request
+  [@openai2026gpt6sol]. Anthropic bills Claude 4.6 and later models at one rate
+  across the full 1M-token context window [@anthropic2026pricing].
+- DeepSeek charges half its peak rates off-peak. Its peak hours are 01:00 to
+  04:00 and 06:00 to 10:00 UTC on weekdays, excluding Chinese public holidays
+  [@deepseek2026pricing].
+:::
+
+A unit cost is reported with the mix it was measured on: prompt and
+output-length distributions, cache-hit rate and reads per cached prefix, batch
+and concurrency policy, service tier, p50, p95, and p99 latency, errors, and
+accepted-result throughput, all on the same line as the unit cost.
 
 The serving chapters in Part V explain the technical levers. Batching in
 @sec-memory-scheduling can raise realized throughput; decoding and kernel work
 in @sec-faster-decoding and @sec-quantization-kernels can reduce billed hours
-for the same accepted workload. These Part V serving levers improve economics
-only when the quality and service gates still pass. Evaluate serving optimizations in Part V
-against the complete ledger, because engineering time, larger replicas, or a
-lower cache-hit rate can offset an isolated kernel gain.
+for the same accepted workload. These levers improve economics only when the
+quality and service gates still pass, and each one is evaluated against the
+complete ledger, because engineering time, larger replicas, or a lower
+cache-hit rate can offset an isolated kernel gain.
 
 ## Compute is sold with different promises
 
@@ -186,10 +231,50 @@ rate is lower:
 AWS documentation, for example, distinguishes on-demand, spot, savings
 commitments, capacity reservations, and scheduled accelerator capacity; spot
 instances can be interrupted with a two-minute notice [@aws2026purchasing].
-That product detail should not be generalized to every provider. The method is
-general: convert the quote into effective cost after unused commitments,
-interruptions, checkpoint and restart cost, regional constraints, storage,
-network, and egress.
+That product detail is specific to AWS. The general method converts the quote
+into effective cost after unused commitments, interruptions, checkpoint and
+restart cost, regional constraints, storage, network, and egress.
+
+Hosted model APIs sell the same kinds of promise per request. A provider can
+serve one model at several service tiers that run the same weights and differ
+in how the request is scheduled. A batch tier completes requests
+asynchronously, a flex tier serves them more slowly and may turn them away when
+capacity is short, the standard tier serves them on a best-effort basis, and a
+fast tier generates output at higher speed for a per-token premium. Committed
+priority capacity, which serves a contracted token rate ahead of other traffic,
+is a reservation in the sense of the table above. The price therefore covers
+the scheduling guarantee as well as the tokens. Providers do not publish how
+each tier is served. The price ordering is consistent with the batching
+trade-off in @sec-serving-problem: a request that may wait lets the server form
+larger batches and fill otherwise idle capacity, while a request that must
+stream quickly limits how many sequences share each decode step. Batch and flex
+accept delay, and flex also accepts possible refusal, in exchange for a lower
+price, as spot capacity accepts interruption. The same test applies to both: a
+deferred-tier rate is the right comparison only for work whose deadline that
+tier can meet. The tier served can also differ from the tier requested, so the
+evidence record keeps the tier and speed reported with each response.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- OpenAI prices Batch and Flex processing for GPT-6 Astra, Sol, and Luna at
+  half the Standard rates and Fast mode at twice them [@openai2026pricing].
+  Fast mode, the name Priority processing took on 30 July 2026, offers up to
+  2.5 times faster speeds and has no latency SLA on GPT-6 Astra; when traffic
+  ramps too fast, some requests may be served at standard speed and standard
+  rates. Flex requests can fail with a `429 Resource Unavailable` error, which
+  is not charged [@openai2026fastmode; @openai2026flex].
+- Anthropic discounts Batch API input and output tokens by 50 percent. Its fast
+  mode, a research preview for Claude Opus 5.5, Opus 5, and Opus 4.8, charges
+  USD 8 and USD 40 per million input and output tokens on Opus 5.5, twice the
+  standard USD 4 and USD 20, for up to 2.5 times more output tokens per second;
+  the gain is in output speed, not time to first token. It runs the same model
+  on a faster inference configuration, and requests at different speeds do not
+  share cached prefixes [@anthropic2026pricing; @anthropic2026fastmode].
+  Anthropic's Priority Tier, a one- to twelve-month commitment to a token rate
+  with a 99.5 percent uptime target, is no longer sold; existing commitments
+  run to their end dates [@anthropic2026servicetiers].
+:::
 
 Power and cooling belong in the ledger. The IEA's 2025 analysis separates
 servers, storage and networking, and facility infrastructure when it models
@@ -231,14 +316,56 @@ as the authors' stated resource account; it is not an audited total development
 cost or evidence that another team can obtain the same outcome at the same
 price.
 
-API price trends require the same discipline. An Epoch AI analysis compared
-the listed price of reaching a fixed capability threshold on six benchmarks
-and found sharply different declines by task over its observation window
-[@epoch2025inferenceprices]. That is stronger than comparing model names, but
-it remains task-dependent and uses a stated weighting of input and output
-prices. Listed price is not provider production cost, and a benchmark threshold
-is not an application's accepted result. Record capability drift and do not
-extrapolate a short historical decline as a guaranteed forecast.
+API price trends require the same discipline. A March 2025 Epoch AI analysis
+compared the listed price of reaching a fixed capability threshold on six
+benchmarks and found sharply different declines by task over its observation
+window [@epoch2025inferenceprices]. That is stronger than comparing model
+names, but it remains task-dependent and uses a stated weighting of input and
+output prices. Listed price is not provider production cost, and a benchmark
+threshold is not an application's accepted result. Record capability drift and
+do not extrapolate a short historical decline as a guaranteed forecast.
+
+A comparison at a fixed capability threshold still prices tokens, and the
+number of tokens one task consumes varies widely. Reasoning models spend a
+variable number of output tokens before they answer, and both the model version
+and the effort setting, a request parameter that scales how long the model
+reasons, change that number (@sec-inference-time-scaling). Two models with the
+same list price and the same benchmark score can therefore differ severalfold
+in cost per task, and a per-token price cut can be absorbed by a new version
+that reasons longer than the one it replaces. The token count per accepted
+result belongs in the ledger next to the rate, measured on the application's
+own workload, because token use depends on the task.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+The cost-per-task figures below are third-party measurements by Artificial
+Analysis on its own Intelligence Index task suite. Its articles may use
+different index versions, so each comparison stays within one article.
+
+- GPT-6 Astra and Claude Fable 5.1 are both listed at USD 10 per million input
+  and USD 50 per million output tokens [@openai2026pricing;
+  @anthropic2026pricing]. At max effort both scored 53. Astra used about
+  27,000 output tokens per task and cost USD 3.26 per task; Fable 5.1, run with
+  fallback, a setting that retries declined requests on another Claude model,
+  used about 78,000 and cost USD 7.63 [@artificialanalysis2026astra;
+  @anthropic2026fallback].
+- Claude Opus 5.5 is listed 20 percent below Opus 5 per token. At max effort it
+  used about 119,000 output tokens per task against about 73,000 for Opus 5,
+  and its cost per task was level with Opus 5 [@artificialanalysis2026opus55].
+  GPT-6 Sol and Luna show the opposite outcome: they used more output tokens per
+  task than GPT-5.6 Sol and Luna, yet their price cuts lowered cost per task by
+  about 50 and 60 percent [@artificialanalysis2026solluna].
+- Epoch AI's data-insight index lists no price-trend analysis newer than the
+  March 2025 insight, which reported declines from 9 to 900 times per year
+  depending on the threshold and cautioned that the fastest declines had
+  occurred in the preceding year [@epoch2025inferenceprices]. A March 2026
+  single-author preprint that groups listed prices from 2020 to 2026 into model
+  tiers reports price half-lives of 1.10 years for economy-tier and 1.55 years
+  for mid-tier models, and an exponential fit that explains almost none of the
+  variance in flagship-tier prices, which it attributes to a price premium on
+  reasoning models [@du2026tiered].
+:::
 
 ::: {.callout-important}
 ## What's contested
