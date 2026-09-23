@@ -147,7 +147,7 @@ test("dense retrieval and approximate search keep their empirical limits", () =>
     "并不证明稠密检索优于稀疏检索",
     "精确向量搜索",
     "近似最近邻搜索",
-    "分层可导航小世界图",
+    "@gls-hnsw是一种常见设计",
     "不提供通用的逐查询召回下界",
     "先测量 ANN 相对精确向量搜索的邻居召回率",
     "持久化、复制、元数据过滤、删除、压缩和一致性",

@@ -119,7 +119,7 @@ test("RLVR is separated from capability claims", () => {
     "reinforcement learning with verifiable rewards",
     "automatic checker",
     "reward coverage",
-    "reward hacking",
+    "@gls-reward-hacking",
     "math, coding, and visual reasoning",
     "neurips 2025",
     "prolonged rl",
