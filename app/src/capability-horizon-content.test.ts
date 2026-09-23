@@ -22,7 +22,7 @@ test("the thesis treats the frontier as a measurement contract", () => {
   for (const phrase of [
     "frontier is no longer a leaderboard number",
     "moving horizon",
-    "not one scalar",
+    "measurement problem",
     "measurement contract",
     "snapshot date",
     "durable progress",
