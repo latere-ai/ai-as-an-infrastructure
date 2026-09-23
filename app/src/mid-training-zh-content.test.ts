@@ -38,7 +38,7 @@ test("phase boundaries depend on role and supervision rather than one label", ()
   expect(zh).toContain("继续预训练是一种方法");
   expect(zh).toContain("中段训练可以采用继续预训练");
   expect(zh).toContain("必须明确写出混合比例，不能从名称反推");
-  expect(zh).toContain("更窄也更可靠的说法是：选得合适的桥接阶段，可以缩小后训练需要跨越的分布差距");
+  expect(zh).toContain("选得合适的桥接阶段，可以缩小后训练需要跨越的分布差距");
 });
 
 test("the boundary figure preserves the English operational handoff", () => {
@@ -58,8 +58,8 @@ test("the distributional bridge accounts for cumulative specialist dose", () => 
   expect(zh).toContain(String.raw`\mathcal D_t=(1-\alpha_t)P+\alpha_t Q`);
   expect(zh).toContain(String.raw`\bar\alpha=\frac{1}{T}\sum_{t=1}^{T}\alpha_t`);
   expect(zh).toContain(String.raw`\bar\alpha=\frac{a(1-s)}{2}`);
-  expect(zh).toContain("最终混合权重并不能说明专门数据的累计剂量");
-  expect(zh).toContain("这个线性斜坡只用于核算，并不表示它是最佳调度");
+  expect(zh).toContain("专门数据的累计剂量指这一阶段一共训练了多少专门数据词元");
+  expect(zh).toContain("这个线性斜坡只用来说明核算方法");
   expect(zh).toContain("不能把「越早越好」当成普遍规律");
 });
 
@@ -123,7 +123,7 @@ test("long-context mid-training separates position, data, and systems", () => {
   expect(zh).toContain("位置方法、在新长度上包含依赖关系的数据，以及承担更长注意力的训练系统");
   expect(zh).toContain(String.raw`s=\frac{L_{\mathrm{ext}}}{L_{\mathrm{train}}}`);
   expect(zh).toContain(String.raw`m'=\frac{m}{s}`);
-  expect(zh).toContain("YaRN 并不只是同一套线性映射");
+  expect(zh).toContain("YaRN 会区别处理 RoPE 的不同频带");
   expect(zh).toContain("允许输入的长度，不等于训练长度或有效长度");
   for (const row of [
     "| 训练长度 | 梯度更新中实际出现过的最大序列长度 |",
