@@ -10,6 +10,7 @@ import type { ChapterData } from "./types.ts";
 import { wrapTables } from "./runtime/tables.ts";
 import { mountRunnable } from "./runtime/live.ts";
 import { mountViz } from "./runtime/viz.ts";
+import { mountFigures } from "./figures/runtime/client.ts";
 
 declare global {
   interface Window {
@@ -17,12 +18,14 @@ declare global {
     __rdrTables?: () => void;
     __rdrLive?: () => void;
     __rdrViz?: () => void;
+    __rdrFigures?: () => void;
   }
 }
 
 window.__rdrTables = wrapTables;
 window.__rdrLive = mountRunnable;
 window.__rdrViz = mountViz;
+window.__rdrFigures = mountFigures;
 
 const root = document.getElementById("root");
 if (root && window.__CHAPTER__) {

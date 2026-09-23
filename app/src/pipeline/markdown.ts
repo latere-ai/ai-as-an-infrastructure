@@ -15,6 +15,7 @@ import type { Bibliography } from "./citations.ts";
 import type { CrossrefMap } from "./crossref.ts";
 import { resolveXrefsInText } from "./crossref.ts";
 import { renderDot, renderMermaid, type GraphvizInstance } from "./diagrams.ts";
+import { renderFigureBlock } from "./figures.ts";
 import { cjkEmphasis } from "./cjk.ts";
 import { expandDivs } from "./divs.ts";
 import { highlightCode } from "./highlight.ts";
@@ -131,7 +132,7 @@ function createMd(ctx: RenderContext): MarkdownIt {
     glossaryFirstUses: ctx.glossaryFirstUses,
   });
 
-  // Diagram fences: ```{dot}``` and ```{mermaid}```.
+  // Diagram fences: ```{dot}```, ```{mermaid}```, and ```{figure}```.
   const defFence = md.renderer.rules.fence!.bind(md.renderer.rules);
   md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     const info = tokens[idx].info.trim();
@@ -140,6 +141,13 @@ function createMd(ctx: RenderContext): MarkdownIt {
     if (info === "rdrhtml") return tokens[idx].content; // Pandoc raw HTML block
     if (info === "rdrdot" || info === "dot") return renderDot(ctx.graphviz, tokens[idx].content, ctx.xref, ctx.currentHref, ctx.prefix);
     if (info === "rdrmermaid" || info === "mermaid") return renderMermaid(tokens[idx].content, ctx.xref, ctx.currentHref, ctx.prefix);
+    // Figure modules: static SVG of the opening state, hydrated on the client.
+    // The caption is inline markdown, so math, citations, and @refs render.
+    if (info === "rdrfigure") {
+      return renderFigureBlock(tokens[idx].content, ctx.lang,
+        (cap) => md.renderInline(cap),
+        (id) => ctx.xref.get(id)?.label ?? "");
+    }
     return defFence(tokens, idx, options, env, self);
   };
   return md;
@@ -215,7 +223,7 @@ export function renderMarkdown(src: string, ctx: RenderContext): RenderedChapter
   const { titleLine, body } = splitTitle(src);
   // Rename curly diagram fences to bare language tokens so markdown-it-attrs
   // leaves the info intact for our fence renderer.
-  const normalized = body.replace(/^(`{3,})\{(dot|mermaid)\}[ \t]*$/gm, (_m, ticks, kind) => `${ticks}rdr${kind}`);
+  const normalized = body.replace(/^(`{3,})\{(dot|mermaid|figure)\}[ \t]*$/gm, (_m, ticks, kind) => `${ticks}rdr${kind}`);
   const expanded = expandDivs(normalized);
   const { headings, tokens } = collectHeadings(md, expanded);
   const html = postProcess(md.renderer.render(tokens, (md as any).options, {}), ctx);

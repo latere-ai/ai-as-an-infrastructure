@@ -231,6 +231,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     const boot = () => {
       if (cancelled) return;
       w.__rdrViz?.();
+      w.__rdrFigures?.();
       w.__rdrLive?.();
       w.__rdrTables?.();
       w.__rdrMermaid?.();
