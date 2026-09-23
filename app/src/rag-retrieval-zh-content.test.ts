@@ -50,7 +50,7 @@ test("Chapter 44 preserves the complete English retrieval contract", () => {
     "授权约束每一条候选路径",
     "单次检索只是一种策略",
     "检索文本是不可信数据",
-    "长上下文改变边界，不改变契约",
+    "长上下文与检索",
     "争议所在",
     "下层约束",
     "评估必须定位故障发生在哪一层",
@@ -172,7 +172,7 @@ test("fusion reranking packing and citations preserve evidence", () => {
 
 test("authorization constrains every search path and fails closed", () => {
   for (const phrase of [
-    "授权不是排序特征，也不是清理阶段",
+    "它不能实现为排序特征，也不能实现为检索之后的清理阶段",
     "检索子查询都继承",
     "文本、分数或标识符离开候选生成阶段之前",
     "服务器构造的前置过滤条件",
@@ -220,7 +220,7 @@ test("long context changes the frontier without erasing the contract", () => {
   for (const phrase of [
     "最佳的质量、时效、延迟和单次查询成本",
     "相关证据位于长输入中间时",
-    "警示，不是对架构的普遍排序",
+    "都应检测的一种失效模式",
     "长上下文基线",
     "直接上下文",
     "语料超过窗口、频繁变化",

@@ -87,7 +87,7 @@ test("rank fusion and reranking define their contracts and limits", () => {
 test("authorization constrains the searchable set and fails closed", () => {
   for (const phrase of [
     "authorized candidate set",
-    "authorization is not a ranking feature",
+    "cannot be implemented as a ranking feature",
     "prefilter",
     "postfilter",
     "fail closed",
