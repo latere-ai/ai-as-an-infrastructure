@@ -10,6 +10,51 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- Every chapter was reread for wording in English and Chinese: definitions are
+  stated positively, slogans and contrast headings are plain claims, terms are
+  defined at first use, and second-person address and emphasis-only bold are
+  gone. The English text uses American spelling.
+- The chapters on fast-moving topics carry evidence checked against primary
+  sources as of September 2026, in marked "As of September 2026" blocks that a
+  monthly refresh replaces. New material covers latent-space reasoning,
+  test-time training, calibration rewards and TypeSafe AI's RLCD, recursive
+  self-improvement and AI R&D thresholds, olympiad grading and formal
+  verification at scale, evaluation incidents, coding agents, trained sparse
+  attention, FP4 caches, current accelerators and export inputs, and the grid
+  registration of large computing loads.
+
+### Added
+
+- A dated State of the Field page, `field/2026-09`, after the Epilogue, with
+  every item linked to the chapter that explains it. Page URLs strip only a
+  two-digit chapter ordinal, so monthly editions keep distinct addresses.
+- A review date under every chapter title, read from
+  `app/src/data/review-dates.json`, and a Techniques index on the glossary page
+  driven by new `status`, `added` and `section` fields in `glossary.yml`.
+
+### Fixed
+
+- Chinese pages no longer show literal asterisks where bold closes next to
+  full-width punctuation; the pipeline applies CJK-aware emphasis rules.
+- Citation keys that named two different works are split, so each citation
+  renders its own source; a test now fails when one key names two works.
+  Reference summaries no longer stop at a percent sign.
+- Factual corrections, among them METR's corrected time horizon for Claude
+  Opus 4.5 (293 minutes, not 320), the compute-matched Chinchilla comparison,
+  Kaplan's compute law, the vLLM PagedAttention kernel's removal, Hopper's
+  confidential multi-GPU limits, and Chinese display math that now matches
+  the English on every page.
+
+### Tests
+
+- Tests check English and Chinese parity (headings, anchors, citations,
+  cross-references, display math, interactive figures), that every page
+  renders without leaking markup, runnable cells, citations, and links. The
+  roughly two hundred tests that pinned prose wording were removed, so a
+  wording edit needs no test edit. Nothing changes for a reader.
+
 ## v0.5.0 - 2026-09-19
 
 - The comment store serves through the family's database pooler. Serving
