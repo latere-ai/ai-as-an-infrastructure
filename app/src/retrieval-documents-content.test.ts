@@ -60,9 +60,9 @@ test("ingestion is an explicit publication protocol", () => {
 });
 
 test("OCR and vision-language parsing are defined locally", () => {
-  expect(flat).toContain("@gls-ocr, optical character recognition");
+  expect(flat).toContain("an @gls-ocr engine recognizes text from pixels");
   expect(flat).toContain("recognizes text from pixels");
-  expect(flat).toContain("@gls-vlm, a vision-language model");
+  expect(flat).toContain("a @gls-vlm reads page images and text together");
   expect(flat).toContain("reads page images and text together");
   for (const phrase of ["digital text layer", "layout", "table", "equation", "coordinates"])
     expect(flat).toContain(phrase);

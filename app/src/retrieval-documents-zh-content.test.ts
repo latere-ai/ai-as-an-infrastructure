@@ -41,10 +41,10 @@ test("Chinese Chapter 86 preserves the complete English structure", () => {
     "## 对在线查询先授权",
     "## 根据实测效果选择表示方式",
     "### 固定嵌入兼容性契约",
-    "### 融合排名，但不要假装分数可比",
+    "### 按名次融合排名列表",
     "## 发布新一代索引",
     "### 新鲜度与删除必须覆盖每一份副本",
-    "## 返回证据，而不是没有来源的文本",
+    "## 返回证据包",
     "### 检索到的文档不受信任",
     "## 按层级和故障模式评估",
     "## 运营发布生命周期",
@@ -58,7 +58,7 @@ test("Chinese Chapter 86 preserves the complete English structure", () => {
 
 test("the opening defines a retrieval release and its operating contract", () => {
   for (const phrase of [
-    "检索不是附加在模型上的数据库功能",
+    "检索是一项证据服务",
     "证据服务",
     "检索发布",
     "带版本的语料库",
@@ -105,8 +105,8 @@ test("ingestion is an authorized and atomic publication process", () => {
 
 test("OCR VLM and document operations are defined locally", () => {
   for (const phrase of [
-    "@gls-ocr，也就是光学字符识别，从像素中识别文字",
-    "@gls-vlm，也就是视觉语言模型，同时读取页面图像和文本",
+    "@gls-ocr 引擎从像素中识别文字",
+    "@gls-vlm 同时读取页面图像和文本",
     "数字文本层",
     "恢复阅读顺序",
     "重建表格",
@@ -164,7 +164,7 @@ test("segmentation preserves retrieval citation and authorization boundaries", (
     "父元素",
     "源修订版本与源位置",
     "标题路径",
-    "分块大小不存在通用常量",
+    "合适的分块大小取决于语料和查询",
     "边界与重叠策略",
     "重复结果",
     "不能跨越授权或保留边界",
