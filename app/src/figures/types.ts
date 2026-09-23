@@ -30,7 +30,9 @@ export interface ChoiceParam<V extends string | number = string | number> {
   label: Text;
   options: ReadonlyArray<{ value: V; label: Text }>;
   default: V;
-  control?: boolean;
+  // Segmented buttons up to four options, a select beyond; "buttons" keeps a
+  // longer list as a wrapping row (for example, the tokens of a sentence).
+  control?: boolean | "buttons" | "select";
 }
 
 export interface ToggleParam {

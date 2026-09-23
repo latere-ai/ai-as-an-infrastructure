@@ -42,6 +42,21 @@ export function textBox(x: number, y: number, s: string, size: number, anchor: "
   return { x0, y0: y - size * 0.78, x1: x0 + w, y1: y + size * 0.22 };
 }
 
+// Obstacle boxes along a polyline, so labels also keep clear of lines and
+// curves, not only of other text: one small box every `step` pixels.
+export function lineObstacles(pts: Array<[number, number]>, step = 6, pad = 2): Box[] {
+  const out: Box[] = [];
+  for (let i = 1; i < pts.length; i++) {
+    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+    const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / step));
+    for (let k = 0; k <= n; k++) {
+      const x = x0 + ((x1 - x0) * k) / n, y = y0 + ((y1 - y0) * k) / n;
+      out.push({ x0: x - pad, y0: y - pad, x1: x + pad, y1: y + pad });
+    }
+  }
+  return out;
+}
+
 export type Side = "right" | "left" | "above" | "below" | "above-right" | "below-right" | "above-left" | "below-left";
 
 export interface LabelRequest {
@@ -75,7 +90,7 @@ function candidate(req: LabelRequest, side: Side, dist: number, size: number) {
 }
 
 // Place labels greedily. Each label tries its sides at the base gap, then at
-// 2.2x the gap with a leader line back to the anchor. A label that fits
+// 2.4x and 4x the gap with a leader line back to the anchor. A label that fits
 // nowhere is dropped (returned in `dropped`) so the figure can surface it in a
 // tooltip or readout instead of printing it over another mark.
 export function placeLabels(reqs: LabelRequest[], bounds: Box, obstacles: Box[] = []): { placed: PlacedLabel[]; dropped: LabelRequest[] } {
@@ -87,7 +102,7 @@ export function placeLabels(reqs: LabelRequest[], bounds: Box, obstacles: Box[] 
     const size = req.size ?? 12;
     const gap = req.gap ?? 6;
     let done = false;
-    for (const [dist, leader] of [[gap, false], [gap * 2.4, true]] as const) {
+    for (const [dist, leader] of [[gap, false], [gap * 2.4, true], [gap * 4, true]] as const) {
       for (const side of req.sides ?? DEFAULT_SIDES) {
         const c = candidate(req, side, dist, size);
         const box = textBox(c.x, c.y, req.text, size, c.anchor);

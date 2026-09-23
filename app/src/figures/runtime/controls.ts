@@ -5,8 +5,8 @@
 //
 //   range            <input type="range"> with the value and unit beside it;
 //                    log ranges move in hundredths of a decade
-//   choice (<= 4)    a segmented radio group
-//   choice (> 4)     a <select>
+//   choice (<= 4)    a segmented radio group (or any length with "buttons")
+//   choice (> 4)     a <select> (or any length with "select")
 //   toggle           a checkbox
 
 import type { AnyFigure, Lang, ParamSpec, RangeParam } from "../types.ts";
@@ -76,8 +76,8 @@ export function buildControls(fig: AnyFigure, lang: Lang, p: ParamRecord, set: (
       });
       wrap.append(name, input, out);
       root.append(wrap);
-    } else if (spec.kind === "choice" && spec.options.length <= 4) {
-      const fs = h("fieldset", "fig-ctl fig-seg");
+    } else if (spec.kind === "choice" && spec.control !== "select" && (spec.options.length <= 4 || spec.control === "buttons")) {
+      const fs = h("fieldset", spec.options.length > 4 ? "fig-ctl fig-seg fig-seg-chips" : "fig-ctl fig-seg");
       fs.append(h("legend", "fig-ctl-name", spec.label[lang]));
       const group = h("div", "fig-seg-options");
       const radios: HTMLInputElement[] = [];
