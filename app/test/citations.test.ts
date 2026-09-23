@@ -62,7 +62,7 @@ test("every inline [@key] resolves in the merged refs/ bibliography", () => {
 // that cites it (nvidia2025nvfp4 once pointed an inference chapter at a
 // pretraining paper). Copies may differ in URL (arXiv versus proceedings) and
 // in title spelling, but the titles must still name the same work.
-const knownKeyCollisions = new Set(["mcp2026rc"]);
+const knownKeyCollisions = new Set<string>();
 
 function titleWords(title: string): Set<string> {
   return new Set(title.replace(/[{}\\]/g, "").toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
