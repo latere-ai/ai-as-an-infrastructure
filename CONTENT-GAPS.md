@@ -204,8 +204,8 @@ coverage check of the English tree. None has been decided or started.
   terms and prices, compute supply and geopolitics, capability measurements,
   mathematics and formal-proof results, policy events, and open problems. Each
   item links to the chapter that explains its mechanism, and past editions stay
-  at stable URLs so readers can compare months. The unused tree is deleted or
-  moved into the edition.
+  at stable URLs so readers can compare months. The unused tree was deleted on
+  2026-09-23.
 
 - [ ] **Technique index**
 
@@ -254,30 +254,14 @@ coverage check of the English tree. None has been decided or started.
 Counts are greps over `en/`. Each item needs a sourced research pass before it
 is written.
 
-- [ ] **Latent-space reasoning.** No mention of latent or continuous-thought
-  reasoning, Coconut, or recurrent-depth models in the seven-chapter reasoning
-  part.
-- [ ] **Recursive self-improvement and automated AI research.** No mention of
-  recursive self-improvement, AI R&D, or automated AI research. Self-improvement
-  appears only as synthetic-data training loops in `adaptation/07`, and the
-  frontier safety framework section of `safety/08` does not discuss AI R&D
-  capability thresholds.
-- [ ] **RLCD.** The author refers to "RL calibrated decision" as recent work
-  from TypeSafe AI. Not yet located or verified; no mention in the book.
-- [ ] **Test-time training.** No mention.
-- [ ] **Recent mathematics results.** The only olympiad result is AlphaProof at
-  IMO 2024 (`reasoning/03`). Later olympiad results, AI work on Erdős
-  problems, and current FrontierMath standings are missing.
-- [ ] **Compute geopolitics beyond U.S. export rules.** `infrastructure/06` is
-  titled "the Geopolitics of Compute" but never mentions Huawei Ascend or any
-  Chinese accelerator. TPU v7 and Trainium are not mentioned anywhere.
-- [ ] **Open-weight labs as market actors.** DeepSeek appears mostly as the
-  source of techniques. The market effect of open-weight releases gets about
-  one sentence in `ecosystem/05`, and the dated release examples in
-  `ecosystem/01` stop at Llama 3, Qwen3, DeepSeek-V3, gpt-oss, and Gemma.
-- [ ] **Current model lineup.** `frontiers/02` reports measurements of Claude
-  Opus 4.5 and GPT-5.5, which are valid as dated results, but the book names no
-  current lineup anywhere.
+- [x] **Latent-space reasoning.** Done 2026-09-23 in `reasoning/07` (mechanism, dated evidence) with a pointer from `reasoning/01`.
+- [x] **Recursive self-improvement and automated AI research.** Done 2026-09-23: definition in `adaptation/07`, measurement in `frontiers/02`, AI R&D thresholds in `safety/08`, research systems as claim sources in `frontiers/03`.
+- [x] **RLCD.** Done 2026-09-23: TypeSafe AI's "Reinforcement Learning for Calibrated Decisions" is a dated vendor claim in `adaptation/05`, beside calibration as a reward (RLCR).
+- [x] **Test-time training.** Done 2026-09-23 in `reasoning/07` (serving cost) and `frontiers/01` (request-scoped state).
+- [x] **Recent mathematics results.** Done 2026-09-23 in `reasoning/03` (olympiad grading and statement authorship) and `frontiers/03` (formalization, Erdős review, research benchmarks).
+- [x] **Compute geopolitics beyond U.S. export rules.** Done 2026-09-23 in `infrastructure/05` and `06` (Huawei Ascend as vendor claims, TPU7x and TPU 8, Trainium3, tariffs and destination groups). Other Chinese vendors remain unverified.
+- [x] **Open-weight labs as market actors.** Done 2026-09-23 in `ecosystem/01` (hosting carve-outs, release tiers) and `ecosystem/05` (measured open-closed gap).
+- [x] **Current model lineup.** Partly done 2026-09-23: OpenAI and Anthropic lineups in a dated block in `practice/01`; the full lineup belongs in the state-of-the-field edition.
 - [ ] **Coding agents as a deployed system.** SWE-bench appears in five files,
   but no section treats coding agents as a product category, and Claude Code
   and Codex are not mentioned.
@@ -302,14 +286,14 @@ Left unchanged during the wording pass because resolving them needs a source.
   estimate that the body rejects.
 - [ ] `reasoning/01` (en 106-107, zh 62): "early wrong answer" is listed under
   failing before the first solution step.
-- [ ] `reasoning/06` (en 298, zh 168): "the one change from L_soft"
+- [x] `reasoning/06` (en 298, zh 168): "the one change from L_soft"
   understates the difference; MOPD is never expanded.
-- [ ] `inference/03` (en 255, zh 155) and `inference/05` (en 218, zh 127):
+- [x] `inference/03` (en 255, zh 155) and `inference/05` (en 218, zh 127):
   literal "Chapter 32" and "Chapter 34's IO model" instead of
   cross-references.
 - [ ] `inference/06` (en 127, zh 84): "upper-level accounting model" is
   unclear; (en 353, zh 197) the definition of S conflicts with e_s.
-- [ ] `orchestration/06` (en/zh 145): OSWorld-Human "2.7-4.3 times as many
+- [x] `orchestration/06` (en/zh 145): OSWorld-Human "2.7-4.3 times as many
   steps" may be 1.4-2.7 in the current version of the paper.
 - [ ] `orchestration/07` (en 330-336, zh 189): the 90.2 percent figure is
   relative to single-agent Claude Opus 4; name that baseline.
@@ -317,7 +301,7 @@ Left unchanged during the wording pass because resolving them needs a source.
   the two conditions it compares.
 - [ ] `safety/01` (en 179-180, zh 96): "held-out feature labels" reads as
   circular; probably held-out activating examples.
-- [ ] `refs/scalable-oversight-control.bib`: the zh note for
+- [x] `refs/scalable-oversight-control.bib`: the zh note for
   `greenblatt2024faking` mixes the compliance rate with the reasoning rate;
   the zh note for `hubinger2024sleeper` claims more than the chapter does.
 - [ ] `safety/05` (zh 135): names the NIST risk management framework where en
@@ -325,14 +309,15 @@ Left unchanged during the wording pass because resolving them needs a source.
 - [ ] `safety/07` (en 224, zh 105): "trusted assignment" versus zh "trusted
   physical boundary"; (zh 145) "oblivious HTTP relay" loses its meaning in
   translation.
-- [ ] `safety/08`: dates after mid-2026 are unchecked (Regulation (EU)
+- [x] `safety/08`: dates after mid-2026 are unchecked (Regulation (EU)
   2026/1744, the Council of Europe convention ratification, the 2027 and 2028
-  calendar, Colorado SB 26-189, the amended New York RAISE Act).
+  calendar, Colorado SB 26-189, the amended New York RAISE Act). Checked
+  against the primary texts on 2026-09-23.
 - [ ] `infrastructure/02` (en 444): `zhao2023pytorch` is also cited for
   distributed tensors, which the paper does not cover.
-- [ ] `infrastructure/06` (en 282, zh 156): "TSMC's own 2025 capacity page"
+- [x] `infrastructure/06` (en 282, zh 156): "TSMC's own 2025 capacity page"
   cites `tsmc2026fabcapacity`.
-- [ ] `frontiers/02`: "hybrid Time Horizon 1.1 series" (en 165) and "xhigh
+- [x] `frontiers/02`: "hybrid Time Horizon 1.1 series" (en 165) and "xhigh
   reasoning" (en 194) are unexplained; "the reported human average" for
   ARC-AGI-2 (en 279) refers to a figure the book never gives; date formats are
   mixed.
