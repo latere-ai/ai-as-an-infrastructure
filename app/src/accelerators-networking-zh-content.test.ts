@@ -53,11 +53,11 @@ test("Chapter 62 preserves the complete English accelerator contract", () => {
   ]);
   expect(headings(chapter, 2)).toEqual([
     "加速器究竟加速什么",
-    "屋顶线是上界，不是诊断",
+    "屋顶线上界",
     "容量、带宽、延迟与流量",
     "互连是一套分层协议栈",
     "集合通信既有语义，也有算法",
-    "要放置的是通信图，不是缩写",
+    "把通信图映射到拓扑",
     "TPU v4：一个边界明确的案例",
     "精度与可移植性是两份不同的契约",
     "MFU 是一个核算比率",
@@ -93,7 +93,7 @@ test("the opening makes performance a workload-and-system claim", () => {
 
 test("the accelerator model separates host lanes memory and matrix engines", () => {
   for (const phrase of [
-    "加速器并不是一个巨大的算术单元",
+    "在主机 CPU 的控制下运行",
     "主机 CPU 启动程序",
     "通用并行执行单元、内存控制器、缓存和专用矩阵引擎",
     "单指令多线程",
@@ -106,7 +106,7 @@ test("the accelerator model separates host lanes memory and matrix engines", () 
 
 test("kernel performance keeps shape memory branching and sparsity conditions", () => {
   for (const phrase of [
-    "内核是把硬件变成实际工作的可执行单元",
+    "内核是由主机发起、在设备上运行的程序",
     "张量维度是否适合可用的分块形状",
     "内存访问是否合并",
     "分支是否发散",
@@ -124,7 +124,7 @@ test("the roofline section defines its boundary and limitations", () => {
     "$P_{\\mathrm{peak}}$ 表示所选指令和精度下的峰值算术吞吐量",
     "$B_{\\mathrm{mem}}$ 表示同一边界上的可持续带宽",
     "屋脊点",
-    "并不意味着运行时吞吐量就等于这个上界",
+    "实际吞吐量还可能因为模型没有刻画的因素而低于这个上界",
     "HBM 流量、主机与设备之间的流量，还是网络流量",
     "实测的可持续带宽",
   ]) expect(flat).toContain(phrase);
@@ -192,7 +192,7 @@ test("communication overlap remains an observed scheduling property", () => {
   for (const phrase of [
     "只有依赖图暴露出独立工作",
     "运行时成功地并发调度两者",
-    "分桶大小、内核持续时间、流优先级、内存压力和并发流量",
+    "分桶大小（一次集合通信携带多少梯度数据）、内核持续时间、流优先级、内存压力和并发流量",
     "$T_{\\mathrm{comp}}$ 表示独立测得的计算时间",
     "$T_{\\mathrm{comm}}$ 表示独立测得的通信时间",
     "$T_{\\mathrm{overlap}}$ 表示两者重叠的时间",
@@ -222,7 +222,7 @@ test("the parallelism table preserves seven distinct communication graphs", () =
 
 test("placement is measured rather than derived from an acronym", () => {
   for (const phrase of [
-    "Megatron 最初的张量并行布局是一个重要案例，不是普遍规律",
+    "Megatron 最初的张量并行布局是一个具体案例",
     "每一层的前向传播使用两次全归约",
     "后续组合会改变操作与重叠调度",
     "流水线流量会随微批次重复出现",
@@ -234,8 +234,8 @@ test("placement is measured rather than derived from an acronym", () => {
 
 test("TPU v4 remains a generation-scoped case study", () => {
   for (const phrase of [
-    "@gls-tpu pod，也就是由 Google 张量处理单元组成的集群",
-    "@gls-ici，也就是连接 TPU 芯片的芯片间互连",
+    "@gls-tpu pod，也就是由 Google TPU 芯片组成的集群",
+    "TPU v4 用 @gls-ici 连接各块芯片",
     "光路交换机",
     "三维环面切片",
     "扭转环面",
@@ -243,7 +243,7 @@ test("TPU v4 remains a generation-scoped case study", () => {
     "GSPMD 是一套编译器分区系统",
     "逻辑设备网格",
     "不会自行让物理拓扑变快",
-    "@gls-gpu 集群，也就是使用图形处理器作为加速器的集群",
+    "同样，@gls-gpu 集群可以在",
     "必须把加速器架构、逻辑分片和物理拓扑放在一起理解",
   ]) expect(flat).toContain(phrase);
 });
@@ -344,9 +344,9 @@ test("regression scenarios cover performance failure and capacity edges", () => 
 test("the conclusion preserves moving boundaries and a vector of constraints", () => {
   for (const phrase of [
     "scale-up 边界正在变化",
-    "不存在张量并行必须在某个固定设备数停止的永恒规则",
+    "张量并行最多扩展到多少设备，并没有固定的数值",
     "工作负载与实际部署系统的实测属性",
-    "硬件确实会限制上层算法，但它通过一组约束共同限制",
+    "硬件通过一组约束共同限制上层算法",
     "可用内存、可持续本地流量、集合通信延迟、对分带宽、拓扑、功耗和故障域",
     "纸面上的并行方案只是一项假设",
     "指明边界、定义口径、测量真实形状，并保留上下文",

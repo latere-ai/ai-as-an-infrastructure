@@ -14,13 +14,14 @@ belong to @sec-orchestration-data-infra.
 
 ## What an accelerator actually accelerates
 
-An accelerator is not one large arithmetic unit. A host CPU starts the program,
-manages operating-system work, and launches device kernels. The device combines
-general-purpose parallel lanes, memory controllers, caches, and specialized
-matrix engines. On NVIDIA GPUs, groups of threads execute through the
-single-instruction, multiple-thread (SIMT) programming model. Other vendors use
-different names and execution details, so SIMT should not be treated as a
-universal accelerator instruction set [@nvidia2026cuda].
+An accelerator combines several kinds of hardware and runs under the control of
+a host CPU. The host starts the program, manages operating-system work, and
+launches device kernels. The device contains general-purpose parallel lanes,
+memory controllers, caches, and specialized matrix engines. On NVIDIA GPUs,
+groups of threads execute through the single-instruction, multiple-thread (SIMT)
+programming model. Other vendors use different names and execution details, so
+SIMT should not be treated as a universal accelerator instruction set
+[@nvidia2026cuda].
 
 A matrix engine performs tiled matrix multiply-accumulate operations. The tile
 shape, accepted input formats, accumulation precision, and instruction semantics
@@ -30,18 +31,19 @@ TPU used a documented systolic matrix unit, but that fact does not establish the
 physical implementation of every GPU matrix engine or later accelerator
 [@kung1982systolic; @jouppi2017tpu].
 
-The kernel is the executable unit that turns this hardware into useful work.
-Performance depends on whether its tensor dimensions fit the available tile
+A kernel is a program that the host launches to run on the device. Its
+performance depends on whether its tensor dimensions fit the available tile
 shapes, memory accesses coalesce, branches diverge, and enough independent work
 exists to occupy the device. Lower-precision inputs can reduce storage and
 traffic, and native low-precision matrix instructions can raise peak arithmetic.
 Those gains require compatible kernels and shapes. Casts, scaling, non-matrix
 operations, and numerical safeguards remain real costs [@micikevicius2022fp8].
-Likewise, a structured sparsity peak applies only when the required sparsity
-pattern and supported instruction path are actually used. Dense and sparse
-peaks are not interchangeable.
+Likewise, a structured sparsity peak, the rate quoted for matrices whose zeros
+follow a hardware-supported pattern, applies only when that pattern and the
+supported instruction path are used. Dense and sparse peaks are not
+interchangeable.
 
-## The roofline is a bound, not a diagnosis
+## The roofline bound
 
 The roofline model relates arithmetic to data movement at one named memory
 boundary [@williams2009roofline], where $F$ denotes the number of floating-point
@@ -69,9 +71,9 @@ I^*=\frac{P_{\mathrm{peak}}}{B_{\mathrm{mem}}}.
 $$
 
 Below $I^*$, data movement bounds throughput; above it, arithmetic can become
-the tighter bound. This does not make runtime equal to the bound. Launch cost,
-dependencies, occupancy, cache misses, imbalance, power limits, and unsupported
-tile shapes can all lower achieved throughput.
+the tighter bound. Achieved throughput can still fall below the bound for
+reasons the model does not represent: launch cost, dependencies, occupancy,
+cache misses, imbalance, power limits, and unsupported tile shapes.
 
 The byte count also needs a boundary. A kernel may have high intensity when
 traffic is counted at high-bandwidth memory (HBM), but low intensity at a cache
@@ -82,13 +84,14 @@ substituting the vendor peak.
 ## Capacity, bandwidth, latency, and traffic
 
 Inside a typical GPU, data can move among registers, software-managed shared
-memory, cache, and device memory. The @gls-hbm, high-bandwidth memory packaged
-beside the accelerator, provides the large device-memory pool. These levels do
+memory, cache, and device memory. The @gls-hbm stacks packaged beside the
+accelerator provide the large device-memory pool. These levels do
 different jobs:
 
 - **Capacity** decides whether weights, gradients, optimizer states,
   activations, temporary workspaces, collective buffers, and allocator headroom
-  fit at all. Serving adds the KV cache described in @sec-serving-problem.
+  fit at all. Serving adds the KV cache, per-request state that the model keeps
+  from tokens it has already processed, described in @sec-serving-problem.
 - **Bandwidth** limits how many bytes can cross a boundary per second under a
   given access pattern.
 - **Latency** is the delay before a dependent access can be used. Parallelism
@@ -121,17 +124,19 @@ directionality, endpoint injection, and sustained throughput.
    diversity, failure domains, endpoint injection, bisection bandwidth, and
    oversubscription. A fast endpoint link does not make an oversubscribed fabric
    non-blocking.
-2. **Transport.** PCIe and NVLink move data within some systems; InfiniBand or
-   Ethernet with RoCE move it across a scale-out fabric. The physical domain of
-   each transport is product-specific. Some NVSwitch systems connect a small
-   server, while newer designs can extend an NVLink domain across a rack
+2. **Transport.** PCIe and NVLink move data within some systems, forming a
+   scale-up domain of directly linked accelerators; InfiniBand or Ethernet with
+   RoCE move it across a scale-out fabric that joins such domains. The physical
+   domain of each transport is product-specific. Some NVSwitch systems connect a
+   small server, while newer designs can extend an NVLink domain across a rack
    [@nvidia2026nvl72].
-3. **Collective library.** Software such as NCCL maps logical operations onto
+3. **Collective library.** Software such as NCCL maps collectives,
+   communication operations among a group of processes called ranks, onto
    available paths and algorithms. It is topology-aware, but it cannot create
    bisection bandwidth or repair a poor rank placement [@nvidia2026nccl].
 
-@gls-rdma, remote direct memory access, lets a network adapter transfer data
-between registered memory regions without putting the host CPU on the data path.
+Through @gls-rdma, a network adapter transfers data between registered memory
+regions without putting the host CPU on the data path.
 RoCE supplies RDMA semantics over Ethernet; InfiniBand supplies them in its own
 network stack. GPU-direct variants can expose GPU memory to a peer device, but
 memory registration, PCIe placement, drivers, and synchronization still matter
@@ -184,11 +189,12 @@ traffic pattern. Real results also include protocol choice, chunking, reduction
 work, routing, congestion, and unequal links.
 
 Communication overlaps compute only when the dependency graph exposes
-independent work and the runtime schedules both successfully. Bucket size,
-kernel duration, stream priority, memory pressure, and concurrent traffic alter
-the overlap window. Here, $T_{\mathrm{comp}}$ denotes isolated compute time,
-$T_{\mathrm{comm}}$ denotes isolated communication time, and
-$T_{\mathrm{overlap}}$ denotes their overlap. The accounting identity is
+independent work and the runtime schedules both successfully. Bucket size (how
+much gradient data one collective carries), kernel duration, stream priority,
+memory pressure, and concurrent traffic alter the overlap window. Here,
+$T_{\mathrm{comp}}$ denotes isolated compute time, $T_{\mathrm{comm}}$ denotes
+isolated communication time, and $T_{\mathrm{overlap}}$ denotes their overlap.
+The accounting identity
 
 $$
 T_{\mathrm{step}}=T_{\mathrm{comp}}+T_{\mathrm{comm}}-T_{\mathrm{overlap}},
@@ -200,10 +206,14 @@ $$
 makes the condition explicit. A profile may show a collective fully hidden in
 one model shape and exposed after a batch-size, placement, or software change.
 
-## Place a communication graph, not an acronym
+## Mapping communication graphs onto topology
 
-Each parallelism method creates a different communication graph. The table gives
-common patterns, not fixed operation counts.
+Each parallelism method divides a model's work across devices along a different
+axis, such as the batch, the layers, the matrices inside a layer, the token
+sequence, or the experts. Experts are the parallel subnetworks of a
+mixture-of-experts model, each of which processes only the tokens routed to it.
+Each division creates a different communication graph. The table gives common
+patterns, not fixed operation counts.
 
 | Method | Common traffic | Placement question |
 |---|---|---|
@@ -215,54 +225,57 @@ common patterns, not fixed operation counts.
 | Fully sharded data parallelism | Parameter all-gathers and gradient reduce-scatters, with optimizer state sharded | Does lower memory use justify repeated parameter traffic and prefetch buffers? |
 | Pipeline parallelism | Forward activations and backward gradients for every microbatch at stage boundaries | Do stage balance, boundary tensor size, and the pipeline bubble justify more stages? |
 
-The original Megatron tensor-parallel layout is an important example, not a
-universal law: its transformer formulation uses two all-reduces in the forward
-pass and corresponding reductions in backward for each layer
-[@shoeybi2019megatron]. Later compositions change the operations and overlap
-schedule. Data-parallel systems may use all-reduce, or reduce-scatter and
-all-gather under ZeRO and fully sharded designs [@rajbhandari2020zero]. Pipeline
-traffic repeats with microbatches rather than appearing as one hand-off per
-step [@narayanan2021efficient]. Expert parallelism and its all-to-all behavior
-are developed in @sec-moe-ssm-hybrids.
+The original Megatron tensor-parallel layout is one concrete case: its
+transformer layer uses two all-reduces in the forward pass and corresponding
+reductions in backward [@shoeybi2019megatron]. Later compositions change the
+operations and overlap schedule. Data-parallel systems may use all-reduce, or
+reduce-scatter and all-gather under ZeRO and fully sharded designs
+[@rajbhandari2020zero]. Pipeline traffic repeats with microbatches rather than
+appearing as one hand-off per step [@narayanan2021efficient]. Expert parallelism
+and its all-to-all behavior are developed in @sec-moe-ssm-hybrids.
 
 A practical mapper measures or estimates bytes, frequency, latency sensitivity,
 memory saved, and available overlap for every edge. It then maps the heaviest or
-most latency-sensitive mesh dimensions onto the fastest adequate physical
-dimensions. “TP inside, DP outside” is often a useful starting heuristic. It is
-not a proof, especially on rack-scale fabrics, asymmetric networks, or workloads
-whose context and expert traffic dominate.
+most latency-sensitive mesh dimensions, the axes of the logical device grid that
+the parallelism methods occupy, onto the fastest adequate physical dimensions.
+“TP inside, DP outside,” which keeps tensor parallelism within the fastest domain
+and spreads data parallelism across domains, is often a useful starting
+heuristic. It still has to be checked against measurements, especially on
+rack-scale fabrics, asymmetric networks, or workloads whose context and expert
+traffic dominate.
 
 ## TPU v4 as one bounded case study
 
-The @gls-tpu pod, a cluster of Google tensor processing units, illustrates why
-topology claims need a generation. TPU v4 used an @gls-ici, the inter-chip
-interconnect joining TPU chips, plus optical circuit switches to configure
-three-dimensional torus slices. A twisted torus was one supported choice; the
-switches also helped reconfigure around unavailable components
-[@jouppi2023tpuv4]. This is a TPU v4 statement, not a claim that every TPU pod
-uses the same torus.
+The @gls-tpu pod, a cluster of Google's TPU chips, illustrates why topology
+claims must name a hardware generation. TPU v4 joined its chips with an
+@gls-ici and used optical circuit switches to configure three-dimensional torus
+slices. A twisted torus was one supported
+choice; the switches also helped reconfigure around unavailable components
+[@jouppi2023tpuv4]. These statements describe TPU v4 and do not imply that every
+TPU pod uses the same torus.
 
 GSPMD is a compiler partitioning system. It propagates user sharding annotations
 through a computation graph and targets a logical device mesh
 [@xu2021gspmd]. It does not by itself make a physical topology fast or remove
-multi-hop communication. Similarly, a @gls-gpu cluster, a cluster that uses
-graphics processors as accelerators, may expose several logical meshes over
+multi-hop communication. Similarly, a @gls-gpu cluster may expose several
+logical meshes over
 PCIe, NVLink, InfiniBand, or Ethernet. In both cases, the compiler and runtime
 need an accurate physical map.
 
-The lesson is generation-specific: accelerator architecture, logical sharding,
-and physical topology must be read together.
+Topology conclusions are therefore generation-specific, and accelerator
+architecture, logical sharding, and physical topology have to be analyzed
+together.
 
 ## Precision and portability are separate contracts
 
-Precision changes more than one number. Input storage, multiplication,
-accumulation precision, output format, scaling policy, and reduction precision
-may all differ. FP8, for example, defines E4M3 and E5M2 interchange formats, but
-an accurate training recipe also chooses which tensors use them and where wider
-accumulation or scaling is required [@micikevicius2022fp8]. Compare peak rates
-only for the same dense or structured sparsity convention and an instruction
-path the workload actually uses. @sec-quantization-kernels covers the numerical
-and kernel consequences.
+A precision setting combines several separate choices. Input storage,
+multiplication, accumulation precision, output format, scaling policy, and
+reduction precision may all differ. FP8, for example, defines E4M3 and E5M2
+interchange formats, but an accurate training recipe also chooses which tensors
+use them and where wider accumulation or scaling is required
+[@micikevicius2022fp8]. Compare peak rates only for the same dense or structured
+sparsity convention and an instruction path the workload actually uses.
+@sec-quantization-kernels covers the numerical and kernel consequences.
 
 Portability also has layers: source compatibility, numerical correctness,
 feature availability, and performance portability. A framework backend may run
@@ -295,18 +308,20 @@ explicit active-parameter and routed-token convention.
 
 Hardware FLOPs utilization (HFU) uses an estimate of executed arithmetic in the
 numerator, which can include rematerialization, also called activation
-recomputation. With consistent accounting, rematerialization can make HFU
-higher than MFU because the hardware repeats forward work. Neither ratio is a
-hardware counter, and MFU is not a diagnosis. Low MFU can come from memory
-traffic, exposed collectives, pipeline bubbles, small kernels, input stalls,
-thermal throttling, failures, or an inconsistent FLOP estimate. Pair it with
-tokens per second, step-time distributions, achieved memory and collective
-bandwidth, kernel timelines, power, clocks, and error telemetry.
+recomputation: intermediate results of the forward pass are discarded and
+recomputed during the backward pass to save memory. With consistent accounting,
+rematerialization can make HFU higher than MFU because the hardware repeats
+forward work. Neither ratio is a hardware counter, and MFU is not a diagnosis.
+Low MFU can come from memory traffic, exposed collectives, pipeline bubbles,
+small kernels, input stalls, thermal throttling, failures, or an inconsistent
+FLOP estimate. Pair it with tokens per second, step-time distributions, achieved
+memory and collective bandwidth, kernel timelines, power, clocks, and error
+telemetry.
 
 ## Measure from components to the run
 
-Use a ladder of evidence. A full-model benchmark alone tells you that something
-changed; component measurements locate the changed boundary.
+Use a ladder of evidence. A full-model benchmark alone shows that something
+changed; component measurements locate the boundary where it changed.
 
 <figure id="fig-accelerators-networking-stepper">
 <div class="viz" data-viz="stepper" data-lang="en">
@@ -379,14 +394,14 @@ The scale-up boundary is moving. Rack-scale fabrics can enlarge the domain in
 which frequent model-parallel traffic is affordable, but they also change cost,
 power density, failure domains, and software assumptions. Scale-out fabrics are
 also improving, while parallelism methods reduce, reshape, or overlap traffic.
-There is no timeless device count at which tensor parallelism must stop. The
-answer is a measured property of a workload and a deployed system.
+No fixed device count marks where tensor parallelism must stop; that limit is a
+measured property of a workload and a deployed system.
 :::
 
 ::: {.callout-tip}
 ## Lower-layer constraint
 
-Hardware does constrain the algorithm above it, but through a vector rather
+Hardware constrains the algorithm above it through a vector of limits rather
 than one bandwidth ratio: usable memory, sustainable local traffic, collective
 latency, bisection bandwidth, topology, power, and failure domains. The mapping
 chosen in @sec-training-at-scale must fit all of them. The operating system and
@@ -395,9 +410,9 @@ scheduler must then preserve device locality and memory headroom, as
 until the measured communication graph fits the physical machine.
 :::
 
-The durable method is simple: name the boundary, define the accounting, measure
-the real shape, and preserve the context. Peak FLOPs, link rate, and MFU are
-useful only after those four steps make their meaning explicit.
+The method of this chapter has four steps: name the boundary, define the
+accounting, measure the real shape, and preserve the context. Peak FLOPs, link
+rate, and MFU have a definite meaning only after those steps.
 
 ## Further reading
 
