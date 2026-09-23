@@ -18,7 +18,6 @@ test("the opening scopes a model judge as a second measurement instrument", () =
     "cannot turn an underspecified idea of quality into truth",
     "for which decision, criterion, cases, and failure costs",
     "a second instrument calibrated against those observations",
-    "not a replacement source of ground truth",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -36,7 +35,7 @@ test("grader choice follows the property and available evidence", () => {
 test("holistic evaluation preserves coverage instead of one score", () => {
   for (const phrase of [
     "broad, standardized coverage across scenarios and metrics",
-    "does not mean that one judge should compress every property into one score",
+    "rather than having one judge compress every property into one score",
     "scenario-by-metric matrix",
     "an undocumented average is not holistic",
   ]) expect(flat).toContain(phrase);
@@ -160,7 +159,7 @@ test("the operating contract preserves validation and training handoffs", () => 
     "what exact `judgespec` and evidence policy",
     "which locked reference set validated that revision",
     "which model, judge, rubric, or domain changes require revalidation",
-    "a reward model is not literally the same object as a prompted model judge",
+    "a reward model is a different object from a prompted model judge",
     "another learned scoring instrument",
   ]) expect(flat).toContain(phrase);
 });

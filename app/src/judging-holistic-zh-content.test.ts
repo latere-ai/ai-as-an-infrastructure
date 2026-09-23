@@ -49,7 +49,7 @@ test("Chapter 50 preserves the complete English judge-evaluation contract", () =
     "选择刚好够用的最窄评分器",
     "把评判者冻结为有版本的测量工具",
     "先验证，再扩大规模",
-    "测量残余偏差，而不是要求模型保持中立",
+    "用受控探针测量残余偏差",
     "把成对投票变成有条件的排名",
     "整体评测要保留结果向量",
     "把确认集守成一道信息边界",
@@ -76,7 +76,6 @@ test("the opening defines a model judge as a second measurement instrument", () 
     "却不能把含糊的质量概念变成真值",
     "哪些决策、准则、案例和错误代价",
     "第二件测量工具",
-    "不能取代真值来源",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -95,7 +94,7 @@ test("grader choice follows the property and available evidence", () => {
 test("holistic evaluation preserves coverage rather than one score", () => {
   for (const phrase of [
     "跨场景和指标的广泛、标准化覆盖",
-    "并不是让一个评判者把所有性质压成一个分数",
+    "而不是让一个评判者把所有性质压成一个分数",
     "场景与指标组成的矩阵",
     "没有写明规则的平均值并不整体",
   ]) expect(flat).toContain(phrase);
@@ -220,7 +219,7 @@ test("the operating contract preserves validation and training handoffs", () => 
     "哪些模型、评判者、评分准则或领域变化需要重新验证",
     "奖励模型并不等同于通过提示调用的模型评判者",
     "另一件学习得到的评分工具",
-    "自己的数据、目标函数和验证契约",
+    "自己的数据、目标函数和验证要求",
   ]) expect(flat).toContain(phrase);
 });
 
