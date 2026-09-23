@@ -8,11 +8,11 @@ encoder-decoder system [@vaswani2017attention]. Modern causal language models
 reuse that basic pattern, but differ in normalization, position handling,
 feed-forward design, attention heads, and cache representation.
 
-Those choices are not cosmetic. They determine which positions can exchange
-information, how gradients travel through depth, how many parameters sit in
-each block, and how much state a serving process retains for every active
-sequence. A useful architecture description therefore needs tensor shapes,
-mask semantics, and memory units, not only a box labeled “Transformer.”
+Those choices determine which positions can exchange information, how
+gradients travel through depth, how many parameters sit in each block, and how
+much state a serving process retains for every active sequence. A useful
+architecture description therefore states tensor shapes, mask semantics, and
+memory units.
 
 ## Scope: a causal decoder
 
@@ -20,8 +20,10 @@ Here a batch contains $B$ sequences of length $S$, and the model width is
 $d$. The tokenizer emits integer ids
 $T\in\{0,\ldots,V-1\}^{B\times S}$ for a vocabulary of size $V$. An embedding
 table maps them to the initial residual stream
-$X_0\in\mathbb{R}^{B\times S\times d}$. After $L$ blocks and a final
-normalization, an output matrix produces logits over the vocabulary:
+$X_0\in\mathbb{R}^{B\times S\times d}$, one width-$d$ vector per position that
+every block reads and updates. After $L$ blocks and a final normalization, an
+output matrix produces logits over the vocabulary, the unnormalized scores that
+softmax converts into next-token probabilities:
 
 $$
 \widehat{X}_L=\operatorname{Norm}_{f}(X_L),
@@ -31,19 +33,21 @@ Z=\widehat{X}_LW_U,
 p(t_{i+1}=v\mid t_{\le i})=\operatorname{softmax}(Z_i)_v.
 $$
 
-Here $X_L$ is the last block's output, $\operatorname{Norm}_{f}$ is the final
-normalization, $W_U\in\mathbb{R}^{d\times V}$ is the output or *unembedding*
-matrix, $Z_i\in\mathbb{R}^{V}$ contains the logits at position $i$, and $v$ is
-a candidate next-token id. The causal condition $t_{\le i}$ means that position
+Here $X_L$ is the last block's output; $\operatorname{Norm}_{f}$ is the final
+normalization, which rescales each position's vector to a controlled size;
+$W_U\in\mathbb{R}^{d\times V}$ is the output or *unembedding* matrix;
+$Z_i\in\mathbb{R}^{V}$ contains the logits at position $i$; and $v$ is a
+candidate next-token id. The causal condition $t_{\le i}$ means that position
 $i$ may depend only on tokens at positions up to $i$. Encoder-only models use
-bidirectional masks; encoder-decoder models also add cross-attention. Those
-architectures share components with this one, but they do not share its exact
-information-flow contract.
+bidirectional masks, so every position can read every other position;
+encoder-decoder models also add cross-attention, in which decoder positions
+read the encoder's outputs. Those architectures share components with this
+one but route information between positions differently.
 
 The input embedding and $W_U^\top$ may share parameters, a design called
-weight tying [@press2017tying]. Tying removes one $Vd$ matrix, but also forces
-the input and output roles to use the same rows. It is an architecture choice,
-not a rule for large or small models.
+weight tying [@press2017tying]. Tying removes one $Vd$ matrix at the cost of
+making the input and output roles use the same rows. It is an architecture
+choice, not a rule for large or small models.
 
 ## A block updates one residual stream twice
 
@@ -64,9 +68,9 @@ feed-forward network (FFN) transforms each position independently. Both return
 a tensor with the same shape as the residual stream so that addition is
 defined.
 
-The **@gls-residual-stream** is the width-$d$ state carried through the stack.
-Calling it a stream is helpful, but it is not a separate memory module. It is
-the sequence of hidden vectors that every sublayer reads and updates.
+The **@gls-residual-stream** is the width-$d$ state carried through the stack:
+the sequence of hidden vectors that every sublayer reads and updates. The word
+“stream” names this data path; the stream is not a separate memory module.
 
 ```{dot}
 //| label: fig-transformer-block
@@ -111,10 +115,11 @@ $$
 Here the symbols have the same shapes as in the pre-normalized block, but the
 normalizers now act after each addition. Xiong et al.
 showed why pre-normalization has better-behaved gradients at initialization and
-can reduce reliance on learning-rate warmup [@xiong2020prenorm]. That evidence
-does not make post-normalization invalid: initialization, residual scaling,
-depth, and optimizer settings change the comparison. Record the exact block
-equation rather than relying on the labels “pre-norm” or “post-norm.”
+can reduce reliance on learning-rate warmup [@xiong2020prenorm].
+Post-normalization remains a workable choice, because initialization,
+residual scaling, depth, and optimizer settings change the comparison. Record
+the exact block equation rather than relying on the labels “pre-norm” or
+“post-norm.”
 
 ## Normalization controls scale
 
@@ -137,13 +142,14 @@ and whether a learned bias is present. These details can affect checkpoint
 compatibility and low-precision stability.
 
 Some architectures also normalize queries and keys before their dot product.
-That *QK normalization* solves a different problem from normalizing the
-residual stream: it bounds attention-score scale. A model manifest should
+That *QK normalization* bounds the scale of attention scores, a different
+problem from normalizing the residual stream. A model manifest should
 state both locations independently.
 
 ## The feed-forward network supplies per-position capacity
 
-The original block used two matrices with a ReLU between them. A common gated
+The original block used two matrices with a ReLU, the element-wise function
+$\max(0,z)$, between them. A common gated
 alternative is **@gls-swiglu** [@shazeer2020glu]:
 
 $$
@@ -167,10 +173,17 @@ equal wall-clock time across kernels or hardware.
 
 Attention and the FFN play different roles, but claims that one stores
 “knowledge” while the other only “routes” it are interpretations, not tensor
-invariants. Ablations can localize behavior; the forward equations alone do
-not assign semantic ownership.
+invariants. Ablations, which disable a component and measure the change, can
+localize behavior; the forward equations alone do not say which component
+holds which behavior.
 
 ## Causal self-attention with explicit shapes
+
+Self-attention gives each position three learned projections of its vector: a
+query, a key, and a value. A position's query is compared with the keys of the
+positions it may read, and the normalized comparison scores weight a sum of
+those positions' values. The computation is split into several heads, parallel
+attention operations that each use their own narrower projections.
 
 Here, for one sequence, let
 $X\in\mathbb{R}^{S\times d}$. Assume equal query, key, and value head widths.
@@ -212,9 +225,12 @@ update for the residual addition.
 
 When $H_qd_h=d$ and biases are omitted, the query and output projections hold
 $2d^2$ parameters. The key and value projections hold
-$2dH_{kv}d_h$. Standard MHA with $H_{kv}=H_q$ therefore uses $4d^2$ projection
-parameters. GQA and MQA reduce the K/V term as well as the cache, while dense
-query-key interaction still scales with $S^2H_qd_h$.
+$2dH_{kv}d_h$. Standard multi-head attention (MHA), with $H_{kv}=H_q$,
+therefore uses $4d^2$ projection parameters. Grouped-query and multi-query
+attention (GQA and MQA, defined later in this chapter) let several query heads
+share one key-value head. They reduce the K/V term and the key-value cache
+described below, while dense query-key interaction still scales with
+$S^2H_qd_h$.
 
 <figure id="fig-transformer-architecture-stepper">
 <div class="viz" data-viz="stepper">
@@ -224,7 +240,7 @@ query-key interaction still scales with $S^2H_qd_h$.
 <div data-chip="softmax" data-title="4 · Normalize">Softmax turns each unmasked score row into non-negative weights that sum to one.</div>
 <div data-chip="αV → Z" data-title="5 · Mix values">Each head takes a weighted sum of values, then all query heads are concatenated and projected.</div>
 </div>
-<figcaption>The mathematical stages of causal self-attention. The mask is part of the operation, not cleanup applied after attention.</figcaption>
+<figcaption>The mathematical stages of causal self-attention. The mask is part of the operation: it enters the scores before softmax.</figcaption>
 </figure>
 
 <figure id="fig-transformer-architecture-attention-heatmap">
@@ -276,10 +292,11 @@ RoPE does not make the complete attention score a function of distance alone;
 the content vectors still matter.
 
 The frequency base, the fraction of dimensions rotated, and any scaling used
-for context extension belong in the checkpoint contract. Changing them after
-training is an adaptation experiment, not a metadata edit. @gls-rope is common,
-but it is not the only valid scheme. ALiBi instead adds a head-specific linear
-distance penalty to each causally valid score [@press2022alibi]:
+for context extension belong in the architecture specification recorded with
+the checkpoint. Changing them after training is an adaptation experiment, not
+a metadata edit. @gls-rope is common; an alternative, ALiBi, adds a
+head-specific linear distance penalty to each causally valid score
+[@press2022alibi]:
 
 $$
 s_{ij}^{(a)}=
@@ -295,21 +312,23 @@ adaptation, and the evaluation distribution.
 
 ## Prefill creates the cache; decode reuses it
 
-Autoregressive serving exposes a distinction that a full-sequence training
-diagram hides. The first pass is **@gls-prefill**: it reads the entire prompt
-under the causal mask, produces logits at its positions, and populates keys and
-values for the prompt. The logits at the last prompt position predict the first
-generated token. The positions can run in parallel, although serving systems
-may split a long prefill into chunks. The second phase is
+Autoregressive serving generates one token at a time and feeds each generated
+token back as input. That loop has two phases that a full-sequence training
+diagram does not show. The first pass is **@gls-prefill**: it reads the entire
+prompt under the causal mask, produces logits at its positions, and populates
+keys and values for the prompt. The logits at the last prompt position predict
+the first generated token. The positions can run in parallel, although serving
+systems may split a long prefill into chunks. The second phase is
 **@gls-decode**: it processes one new position per sequence, attends from
 that new query to stored past keys and values, selects or samples a token,
 appends that position's keys and values, and repeats.
 
 In standard causal self-attention with a fixed prefix, a past position's key
-and value at a given layer do not change during later decode steps. Reusing
-them avoids projecting the whole prefix again. A dense decode step still reads
-the retained cache, making it a bandwidth cost as well as a capacity cost. For
-a ragged batch, the persistent key-value (KV) tensor payload is
+and value at a given layer do not change during later decode steps. Storing
+them in a key-value (KV) cache and reusing them avoids projecting the whole
+prefix again. A dense decode step still reads the retained cache, making it a
+bandwidth cost as well as a capacity cost. For a ragged batch, whose sequences
+have different cached lengths, the persistent KV tensor payload is
 
 $$
 M_{\mathrm{KV}}
@@ -336,8 +355,7 @@ projection; it does not make long decode constant-time.
 
 The cache scales linearly with resident tokens. Whether it exceeds model
 weights depends on all the quantities above, plus weight and cache precision.
-It is therefore incorrect to present one crossover as a property of
-Transformers in general.
+Therefore no single crossover length is a property of Transformers in general.
 
 @fig-transformer-architecture-1 uses explicit assumptions: 32 layers,
 128-wide heads, two bytes per KV element, batch size one, and 7 billion
@@ -395,9 +413,10 @@ $1<H_{kv}<H_q$ and assigns several query heads to each KV head
 Under the dense-payload formula, changing MHA to GQA reduces cache bytes by
 $H_q/H_{kv}$ when all other dimensions stay fixed. Changing MHA to MQA reduces
 them by $H_q$. These are exact storage ratios, not quality claims. Ainslie et
-al. reported that an MHA checkpoint could be uptrained into GQA using 5% of its
-original pretraining compute, with quality close to MHA and speed comparable
-to MQA in their experiments [@ainslie2023gqa]. The result supports GQA as a
+al. reported that an MHA checkpoint could be converted to GQA and trained
+further, or uptrained, using 5% of its original pretraining compute, with
+quality close to MHA and speed comparable to MQA in their experiments
+[@ainslie2023gqa]. The result supports GQA as a
 useful design point; it does not prove one KV-head count is optimal for every
 model and context length.
 
@@ -440,13 +459,15 @@ digraph kv {
 
 ## MLA changes the cached representation
 
-Multi-head latent attention (MLA), introduced in DeepSeek-V2, does not obtain
-its main saving by sharing a conventional KV head [@deepseek2024v2]. It
-projects each residual vector into a low-dimensional latent
-$c_i^{KV}\in\mathbb{R}^{d_c}$, from which content keys and values are derived.
+Multi-head latent attention (MLA), introduced in DeepSeek-V2, obtains its main
+saving from a compressed cached representation rather than from sharing KV
+heads [@deepseek2024v2]. It projects each residual vector into a
+low-dimensional latent $c_i^{KV}\in\mathbb{R}^{d_c}$, from which content keys
+and values are derived.
 A separate small RoPE key component is retained because applying a
 position-dependent rotation prevents the full key projection from being
-absorbed into later matrix multiplications.
+absorbed into later matrix multiplications, that is, merged ahead of time into
+another weight matrix.
 
 In the DeepSeek-V2 construction, the per-position payload is
 
@@ -473,7 +494,7 @@ Several techniques called “efficient attention” act on different resources:
 
 | Technique | Changes attention result? | Main resource changed | What remains |
 |---|---|---|---|
-| FlashAttention | No; exact dense attention up to numerical ordering | HBM traffic and temporary score storage | Dense quadratic attention arithmetic and the persistent KV cache |
+| FlashAttention | No; exact dense attention up to numerical ordering | High-bandwidth memory (HBM) traffic and temporary score storage | Dense quadratic attention arithmetic and the persistent KV cache |
 | MQA / GQA | Yes; query heads share K and V projections | KV parameters, cache payload, and decode bandwidth | Every query still attends to every allowed cached position |
 | MLA | Yes; K/V content uses a latent factorization | Cached representation and associated bandwidth | Dense position coverage unless combined with sparsity |
 | Trained sparse attention | Yes; only selected positions or blocks enter the main attention | Main score/value arithmetic and memory traffic | Selector work and cache footprint depend on the design |
@@ -501,10 +522,10 @@ cache.
 There is no single efficiency frontier independent of workload. GQA has a
 simple dense computation and an exact head-count storage formula. MLA changes
 the factorization and may reduce cache further under a matched recipe. Learned
-sparsity attacks position coverage, but adds a selector whose recall and
-hardware efficiency must be measured. Training loss, long-context task
-quality, prefill throughput, decode latency, resident batch size, and
-implementation maturity can rank the same candidates differently.
+sparsity reduces the number of positions each query covers, but adds a
+selector whose recall and hardware efficiency must be measured. Training loss,
+long-context task quality, prefill throughput, decode latency, resident batch
+size, and implementation maturity can rank the same candidates differently.
 :::
 
 ::: {.callout-tip}
@@ -557,9 +578,9 @@ serving engine must agree on the same contract.
 8. **Benchmark end to end.** Report training throughput, prefill latency,
    decode latency, maximum resident batch, and quality on the target workload.
 
-The block is compact enough to draw on one page, but its contract reaches from
-token ids to serving memory. Precision comes from keeping the mathematical
-operation, its tensor layout, and its runtime representation distinct.
+The block fits in one diagram, and its specification spans from token ids
+to serving memory. A precise description states the mathematical
+operation, its tensor layout, and its runtime representation separately.
 
 ## Further reading
 
