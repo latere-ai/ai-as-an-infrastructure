@@ -40,11 +40,11 @@ test("the GitHub MCP incident is presented as a scoped proof of concept", () => 
 
 test("an authorization query and decision are formally defined", () => {
   for (const phrase of [
-    "subject s",
-    "action a",
-    "resource r",
-    "context c",
-    "policy revision v",
+    "subject $s$",
+    "action $a$",
+    "resource $r$",
+    "context $c$",
+    "policy revision $v$",
     "allow, deny, or challenge",
     "unknown or missing inputs deny by default",
   ]) expect(flat).toContain(phrase);

@@ -42,7 +42,7 @@ test("Chapter 56 preserves the complete English security-and-authorization contr
     "安全与授权 {#sec-security-authorization}",
   ]);
   expect(headings(chapter, 2)).toEqual([
-    "概念验证，而非普遍规律",
+    "GitHub MCP 概念验证",
     "先定义授权决定，再选择令牌",
     "从请求到实际效果",
     "委派不能扩大权限",
@@ -273,7 +273,7 @@ test("tenant isolation is defense in depth with explicit negative tests", () => 
 
 test("budget enforcement reserves one shared upper bound before spending", () => {
   for (const phrase of [
-    "提供商收费后的警告只是证据，不是强制措施",
+    "提供商收费后的警告只能记录已经发生的支出",
     "原子地预留",
     "保守成本上界",
     "已结算用量",
