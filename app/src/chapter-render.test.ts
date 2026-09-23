@@ -233,7 +233,6 @@ const knownWideFigures = [
   "en:fig-safety-tuning-hierarchy",
   "en:fig-sft-peft-masking",
   "en:fig-slc-structured-loop",
-  "en:fig-training-mesh",
   "en:fig-training-wiring",
   "en:fig-verifiable-rewards-map",
   "en:fig-vlm-connectors",

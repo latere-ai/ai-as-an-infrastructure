@@ -18,4 +18,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "pass-at-k-boundary": () => import("./pass-at-k-boundary.ts"),
   "pipeline-schedule": () => import("./pipeline-schedule.ts"),
   "float-formats": () => import("./float-formats.ts"),
+  "device-mesh": () => import("./device-mesh.ts"),
 };
