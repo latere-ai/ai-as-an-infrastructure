@@ -33,10 +33,10 @@ test("BPE separates training from encoding and preserves deterministic ranks", (
 });
 
 test("byte coverage, fallback, decoding, and normalization have explicit limits", () => {
-  expect(zh).toContain("## 字节覆盖不等于高效覆盖");
+  expect(zh).toContain("## 字节覆盖与长度代价");
   expect(zh).toContain("全部 256 个字节值");
   expect(zh).toContain("覆盖保证并不意味着编码一定很短");
-  expect(zh).toContain("字节回退与字节级 BPE 有关，但两者并不相同");
+  expect(zh).toContain("字节回退只把字节当作最后手段");
   expect(zh).toContain("替换、严格失败和保留字节显示，是三种不同的契约");
   expect(zh).toContain("### 规范化会改变往返转换能保留什么");
   expect(zh).toContain("\\operatorname{Decode}(\\operatorname{Encode}(x))=N(x)");
@@ -99,7 +99,7 @@ test("changing a tokenizer is treated as a checkpoint migration", () => {
   expect(zh).toContain("只追加的扩展可以保留所有旧 ID");
   expect(zh).toContain("仍需要初始化新增行并继续训练");
   expect(zh).toContain("必须精确重排相应的嵌入行和输出行");
-  expect(zh).toContain("迁移需要证据，不能当作普通配置修改");
+  expect(zh).toContain("每条路径都是一次迁移，都需要评估证据");
   expect(zh).toContain("仅有词元 ID 分片，无法恢复规范化、未知词元或解码清理已经抹掉的差异");
 });
 

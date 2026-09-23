@@ -485,7 +485,7 @@ test("tokenization defines a reproducible interface rather than only a vocabular
   for (const heading of [
     "## The artifact is more than a vocabulary",
     "## BPE learns merge priorities",
-    "## Byte coverage is not efficient coverage",
+    "## Byte coverage and its length cost",
     "## Unigram scores complete segmentations",
     "## Vocabulary size changes both sequence and model cost",
     "## Measure languages and domains, not only compression",
