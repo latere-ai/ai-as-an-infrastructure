@@ -10,9 +10,10 @@ import { renderMarkdown } from "./markdown.ts";
 import { stripCjkSoftBreaks } from "./cjk.ts";
 import { renderBibliography, type Bibliography } from "./citations.ts";
 import { renderFurtherReading } from "./further-reading.ts";
-import type { CrossrefMap } from "./crossref.ts";
+import { relHref, type CrossrefMap } from "./crossref.ts";
 import type { GraphvizInstance } from "./diagrams.ts";
-import { renderGlossaryPage, type Glossary, type GlossFirstUseMap } from "./glossary.ts";
+import { renderGlossaryPage, renderTechniqueIndex, type Glossary, type GlossFirstUseMap } from "./glossary.ts";
+import { formatDate, loadReviewDates, reviewKey, type ReviewDates } from "./dates.ts";
 import type { ChapterData, Lang } from "../types.ts";
 
 export interface CompileContext {
@@ -91,6 +92,23 @@ function gitDate(lang: string, qmdPath: string): string {
   return out;
 }
 
+// Review date from app/src/data/review-dates.json, localized. Loaded once per
+// process; a page with no entry renders without one and warns once, and the
+// review-dates test fails until the entry is added.
+let reviewDates: ReviewDates | null = null;
+const missingReview = new Set<string>();
+export function reviewedLabel(lang: Lang, srcRel: string): string {
+  reviewDates ??= loadReviewDates();
+  const key = reviewKey(srcRel);
+  const iso = reviewDates.get(key);
+  if (!iso) {
+    if (!missingReview.has(key)) console.warn(`  review-dates: no entry for ${key}`);
+    missingReview.add(key);
+    return "";
+  }
+  return formatDate(iso, lang);
+}
+
 export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext): ChapterData {
   let src = readFileSync(ch.qmdPath, "utf8");
   if (book.lang === "zh") src = stripCjkSoftBreaks(src);
@@ -119,8 +137,19 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
   }
   // Glossary page: fill the ::: {#glossary} slot with every term used in the book.
   // book order ends with the back matter, so glossaryUsed is complete by here.
+  // The Techniques index follows the term list in the same slot; its headings
+  // join the page's mini-TOC. Each technique links to the chapter its section
+  // id names, labeled like a first-occurrence link ("Chapter 12 · Title").
   if (ch.href === "glossary") {
-    html = fillSlot(html, "glossary", () => renderGlossaryPage(ctx.glossary, ctx.glossaryUsed, ctx.glossaryFirstUses, book.lang));
+    const sectionLink = (id: string) => {
+      const target = ctx.xref.get(id);
+      if (!target || target.kind !== "sec") return null;
+      const owner = book.chapters.find((c) => target.href === `${c.href}#${id}`);
+      return { href: relHref(target, ch.href, prefix), label: owner?.num ? `${target.label} · ${owner.title}` : target.label };
+    };
+    const techniques = renderTechniqueIndex(ctx.glossary, ctx.glossaryUsed, book.lang, sectionLink);
+    html = fillSlot(html, "glossary", () => renderGlossaryPage(ctx.glossary, ctx.glossaryUsed, ctx.glossaryFirstUses, book.lang) + techniques.html);
+    headings = [...headings, ...techniques.headings];
   }
   // Chapter "Further reading": fill the ::: {#further-reading} slot from
   // refs/<slug>.bib (the per-chapter literature store).
@@ -147,6 +176,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     title: ch.title,
     author: book.author,
     updated: gitDate(book.lang, ch.qmdPath),
+    reviewed: reviewedLabel(book.lang, ch.srcRel),
     readtime: readingTime(book.lang, html),
     contentHtml: html,
     headings,

@@ -44,7 +44,8 @@ export interface ChapterData {
   crumbChapter: string; // breadcrumb tail, "Chapter 6" / "第 6 章"
   title: string;
   author: string;
-  updated: string; // last-modified date, localized
+  updated: string; // last-modified date from git, localized ("" without .git)
+  reviewed?: string; // last review date from app/src/data/review-dates.json, localized
   readtime: string; // "~14 min" / "约 14 分钟"
   contentHtml: string; // compiled article body
   headings: Heading[];

@@ -5,8 +5,12 @@
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadGlossary, renderGloss, renderGlossaryPage, type GlossEntry, type GlossFirstUseMap } from "./glossary.ts";
+import { parse as parseYaml } from "yaml";
+import { loadGlossary, renderGloss, renderGlossaryPage, renderTechniqueIndex, TECHNIQUE_STATUSES, type GlossEntry, type GlossFirstUseMap, type SectionLink } from "./glossary.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { loadBook } from "./book.ts";
+import { buildCrossref, type CrossrefMap } from "./crossref.ts";
+import { isIsoMonth } from "./dates.ts";
 
 const moe: GlossEntry = { key: "moe", en: "mixture-of-experts", zh: "混合专家", abbr: "MoE" };
 const rh: GlossEntry = { key: "reward-hacking", en: "reward hacking", zh: "奖励欺骗" };
@@ -228,6 +232,81 @@ test("book-level glossary audit terms are defined and introduced", () => {
     expect(glossary.get(term.key)).toMatchObject({ en: term.en, zh: term.zh });
     for (const rel of term.files) {
       expect(readFileSync(join(repoRoot, rel), "utf8")).toContain(`@gls-${term.key}`);
+    }
+  }
+});
+
+// Technique index: entries with a status, grouped by how settled they are, each
+// linked to the chapter its section id names and labeled with the month added.
+
+test("the techniques index groups by status, links each entry, and skips plain terms", () => {
+  const g = new Map<string, GlossEntry>([
+    ["old", { key: "old", en: "old trick", zh: "旧技巧", defEn: "Superseded.", defZh: "已被取代。", status: "faded", added: "2026-06", section: "sec-a" }],
+    ["std", { key: "std", en: "standard trick", zh: "标准技巧", abbr: "ST", defEn: "Settled.", defZh: "已定型。", status: "established", added: "2026-06", section: "sec-a" }],
+    ["new", { key: "new", en: "new trick", zh: "新技巧", defEn: "Just published.", defZh: "刚发表。", status: "emerging", added: "2026-09", section: "" }],
+    ["plain", { key: "plain", en: "plain term", zh: "普通术语", defEn: "Not a technique.", defZh: "不是技术。" }],
+  ]);
+  const link: SectionLink = (id) => (id === "sec-a" ? { href: "part/a#sec-a", label: "Chapter 3 · A & B" } : null);
+  const { html, headings } = renderTechniqueIndex(g, new Set(["std"]), "en", link);
+
+  expect(headings.map((h) => [h.id, h.level])).toEqual([["techniques", 2], ["techniques-emerging", 3], ["techniques-established", 3], ["techniques-faded", 3]]);
+  expect(html).toContain('<h2 id="techniques">');
+  expect(html.indexOf('id="tech-new"')).toBeLessThan(html.indexOf('id="tech-std"'));
+  expect(html.indexOf('id="tech-std"')).toBeLessThan(html.indexOf('id="tech-old"'));
+  expect(html).not.toContain("tech-plain");
+  expect(html).not.toContain("techniques-adopted"); // empty groups are omitted
+  expect(html).toContain('<a href="part/a#sec-a">Chapter 3 · A &amp; B</a>');
+  expect(html).toContain("September 2026");
+  expect(html).toContain('href="#gls-std"'); // a term in the term list links to its entry
+  expect(html).not.toContain('href="#gls-new"');
+  const item = (id: string) => html.slice(html.indexOf(`id="tech-${id}"`), html.indexOf("</li>", html.indexOf(`id="tech-${id}"`)));
+  expect(item("new")).not.toContain("<a "); // no chapter covers it yet
+  expect(item("new")).toContain('<p class="rdr-gls-explain">Just published.</p>');
+
+  const zh = renderTechniqueIndex(g, new Set(), "zh", link).html;
+  expect(zh).toContain("2026 年 9 月");
+  expect(zh.indexOf("新技巧")).toBeLessThan(zh.indexOf("new trick")); // zh term leads
+  expect(renderTechniqueIndex(new Map([["plain", g.get("plain")!]]), new Set(), "en", link)).toEqual({ html: "", headings: [] });
+});
+
+const techniqueKeys = [
+  "latent-reasoning", "test-time-training", "rlvr", "rlcr", "on-policy-distillation", "on-policy-self-distillation",
+  "speculative-decoding", "parallel-block-drafter", "pd-disaggregation", "trained-sparse-attention", "fp4",
+  "pagedattention", "moe", "recursive-self-improvement",
+];
+
+test("technique entries carry a known status, a month, and a section both books define", () => {
+  const repoRoot = new URL("../../../", import.meta.url).pathname;
+  const raw = parseYaml(readFileSync(join(repoRoot, "glossary.yml"), "utf8")) as Record<string, Record<string, unknown>>;
+  const xref: Record<"en" | "zh", CrossrefMap> = {
+    en: buildCrossref(loadBook("en", repoRoot)),
+    zh: buildCrossref(loadBook("zh", repoRoot)),
+  };
+  const problems: string[] = [];
+  for (const [key, v] of Object.entries(raw)) {
+    if (!("status" in v || "added" in v || "section" in v)) continue;
+    if (!(TECHNIQUE_STATUSES as readonly unknown[]).includes(v.status)) problems.push(`${key}: status ${v.status}`);
+    if (!isIsoMonth(String(v.added ?? ""))) problems.push(`${key}: added ${v.added}`);
+    const section = String(v.section ?? "");
+    for (const lang of ["en", "zh"] as const) {
+      if (section && xref[lang].get(section)?.kind !== "sec") problems.push(`${key}: ${lang} has no ${section}`);
+    }
+  }
+  expect(problems).toEqual([]);
+  expect(techniqueKeys.filter((k) => !raw[k]?.status)).toEqual([]);
+
+  // Both languages render every technique with a link to its chapter.
+  const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
+  for (const lang of ["en", "zh"] as const) {
+    const link: SectionLink = (id) => {
+      const t = xref[lang].get(id);
+      return t ? { href: t.href, label: t.label } : null;
+    };
+    const { html } = renderTechniqueIndex(glossary, new Set(), lang, link);
+    for (const e of glossary.values()) {
+      if (!e.status) continue;
+      expect(html).toContain(`id="tech-${e.key}"`);
+      if (e.section) expect(html).toContain(`href="${xref[lang].get(e.section)!.href}"`);
     }
   }
 });

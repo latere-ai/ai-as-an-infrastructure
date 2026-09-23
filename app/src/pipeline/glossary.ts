@@ -8,7 +8,12 @@
 
 import { parse as parseYaml } from "yaml";
 import { readFileSync, existsSync } from "node:fs";
-import type { Lang } from "../types.ts";
+import type { Heading, Lang } from "../types.ts";
+import { formatMonth } from "./dates.ts";
+
+// How settled a technique is, in the order the Techniques index lists them.
+export const TECHNIQUE_STATUSES = ["emerging", "adopted", "established", "faded"] as const;
+export type TechniqueStatus = (typeof TECHNIQUE_STATUSES)[number];
 
 export interface GlossEntry {
   key: string;
@@ -17,6 +22,10 @@ export interface GlossEntry {
   abbr?: string; // language-neutral abbreviation, e.g. "MoE"
   defEn?: string; // one-line definition, English
   defZh?: string; // one-line definition, Chinese
+  // Technique fields. An entry with a status is listed in the Techniques index.
+  status?: TechniqueStatus;
+  added?: string; // YYYY-MM the entry was added
+  section?: string; // sec- id of the chapter that explains it; "" = not yet in a chapter
 }
 export type Glossary = Map<string, GlossEntry>;
 
@@ -36,6 +45,9 @@ export function loadGlossary(path: string): Glossary {
   for (const [key, v] of Object.entries(raw)) {
     if (!v || typeof v !== "object") continue;
     const def = v.def && typeof v.def === "object" ? v.def : null;
+    const status = v.status != null ? String(v.status) : undefined;
+    const known = (TECHNIQUE_STATUSES as readonly string[]).includes(status ?? "");
+    if (status && !known) console.warn(`  glossary: ${key} has unknown status "${status}" (${TECHNIQUE_STATUSES.join(", ")})`);
     m.set(key, {
       key,
       en: String(v.en ?? ""),
@@ -43,6 +55,9 @@ export function loadGlossary(path: string): Glossary {
       abbr: v.abbr != null ? String(v.abbr) : undefined,
       defEn: def?.en != null ? String(def.en) : undefined,
       defZh: def?.zh != null ? String(def.zh) : undefined,
+      status: known ? (status as TechniqueStatus) : undefined,
+      added: v.added != null ? String(v.added) : undefined,
+      section: v.section != null ? String(v.section).replace(/^@/, "") : undefined,
     });
   }
   return m;
@@ -115,4 +130,71 @@ export function renderGlossaryPage(gloss: Glossary, used: Set<string>, firstUses
     return `<li class="rdr-gls-entry" id="gls-${e.key}"><div><span class="rdr-gls-term">${lead}</span> <span class="rdr-gls-alt">${trail}</span></div>${firstMeta}${sentence}</li>`;
   });
   return `<ul class="rdr-gls-list">${items.join("\n")}</ul>`;
+}
+
+const STATUS_LABEL: Record<Lang, Record<TechniqueStatus, string>> = {
+  en: { emerging: "Emerging", adopted: "Adopted", established: "Established", faded: "Faded" },
+  zh: { emerging: "新兴", adopted: "已采用", established: "成熟", faded: "淡出" },
+};
+
+const TECHNIQUE_TEXT: Record<Lang, { heading: string; intro: string; coveredIn: string; notYet: string; added: (m: string) => string }> = {
+  en: {
+    heading: "Techniques",
+    intro: "Techniques grouped by how settled they are. Each entry links to the chapter that explains it and gives the month the entry was added. A technique no chapter covers yet is listed as a short note until one does.",
+    coveredIn: "Covered in: ",
+    notYet: "Not yet in a chapter",
+    added: (m) => `Added ${m}`,
+  },
+  zh: {
+    heading: "技术索引",
+    intro: "以下技术按成熟程度分组。每个条目链接到讲解它的章节，并注明条目加入的月份。尚无章节讲解的技术先以简短说明列出，待有章节讲解后再补上链接。",
+    coveredIn: "讲解章节：",
+    notYet: "尚未写入章节",
+    added: (m) => `${m}加入`,
+  },
+};
+
+export type SectionLink = (secId: string) => { href: string; label: string } | null;
+
+// The Techniques index on the glossary page: every entry with a status, grouped
+// emerging → adopted → established → faded, newest first within a group. Unlike
+// the term list it does not depend on @gls use, so a technique can enter as a
+// short note before any chapter covers it. A term that is also in the term list
+// links to its entry there. Returns the HTML and the headings for the mini-TOC.
+export function renderTechniqueIndex(gloss: Glossary, used: Set<string>, lang: Lang, sectionLink: SectionLink): { html: string; headings: Heading[] } {
+  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escAttr = (s: string) => esc(s).replace(/"/g, "&quot;");
+  const text = TECHNIQUE_TEXT[lang];
+  const techniques = [...gloss.values()].filter((e) => e.status);
+  if (!techniques.length) return { html: "", headings: [] };
+  const name = (e: GlossEntry) => (lang === "zh" ? e.zh : e.en);
+  const headings: Heading[] = [{ id: "techniques", text: text.heading, level: 2 }];
+  const groups: string[] = [];
+  for (const status of TECHNIQUE_STATUSES) {
+    const entries = techniques
+      .filter((e) => e.status === status)
+      .sort((a, b) => (b.added ?? "").localeCompare(a.added ?? "") || name(a).localeCompare(name(b), lang));
+    if (!entries.length) continue;
+    const id = `techniques-${status}`;
+    headings.push({ id, text: STATUS_LABEL[lang][status], level: 3 });
+    const items = entries.map((e) => {
+      const enLabel = e.abbr && e.abbr !== e.en ? `${esc(e.en)} (${esc(e.abbr)})` : esc(e.en);
+      const lead = lang === "zh" ? esc(e.zh) : enLabel;
+      const trail = lang === "zh" ? enLabel : esc(e.zh);
+      const term = used.has(e.key)
+        ? `<a class="rdr-gls-term" href="#gls-${e.key}">${lead}</a>`
+        : `<span class="rdr-gls-term">${lead}</span>`;
+      const link = e.section ? sectionLink(e.section) : null;
+      if (e.section && !link) console.warn(`  glossary: ${e.key} names unknown section "${e.section}"`);
+      const where = link ? `${text.coveredIn}<a href="${escAttr(link.href)}">${esc(link.label)}</a>` : text.notYet;
+      const month = e.added ? formatMonth(e.added, lang) : "";
+      const meta = `<div class="rdr-gls-meta">${where}${month ? ` · ${text.added(month)}` : ""}</div>`;
+      const def = lang === "zh" ? e.defZh : e.defEn;
+      const note = def ? `<p class="rdr-gls-explain">${esc(def)}</p>` : "";
+      return `<li class="rdr-tech-entry" id="tech-${e.key}"><div>${term} <span class="rdr-gls-alt">${trail}</span></div>${meta}${note}</li>`;
+    });
+    groups.push(`<h3 id="${id}">${STATUS_LABEL[lang][status]}</h3>\n<ul class="rdr-gls-list">${items.join("\n")}</ul>`);
+  }
+  const html = `<h2 id="techniques">${text.heading}</h2>\n<p>${text.intro}</p>\n${groups.join("\n")}`;
+  return { html, headings };
 }

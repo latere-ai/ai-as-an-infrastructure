@@ -17,7 +17,7 @@ type Strings = {
   palette: string; ink: string; clay: string; rose: string; theme: string; light: string; dark: string;
   body: string; sans: string; kai: string; size: string; layout: string;
   codex: string; manuscript: string; atlas: string; prev: string; next: string; language: string; resize: string;
-  author: string; updated: string; readtimeLabel: string; noResults: string;
+  author: string; updated: string; reviewed: string; readtimeLabel: string; noResults: string;
   aboutAuthor: string; aboutLatere: string; sourceRepo: string;
   contributePrompt: string; reportIssue: string; editPage: string;
 };
@@ -28,7 +28,7 @@ const STRINGS: Record<Lang, Strings> = {
     palette: "配色", ink: "墨纸", clay: "靛蓝", rose: "玫瑰", theme: "主题", light: "浅色", dark: "深色",
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
     codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", language: "语言", resize: "拖动调整宽度",
-    author: "作者", updated: "更新于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
+    author: "作者", updated: "更新于", reviewed: "审阅于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
     aboutAuthor: "关于作者", aboutLatere: "关于 Latere AI", sourceRepo: "GitHub 源码仓库",
     contributePrompt: "本书在 GitHub 上公开写作。发现错误或有不清楚的地方：", reportIssue: "提交问题", editPage: "编辑本页",
   },
@@ -37,7 +37,7 @@ const STRINGS: Record<Lang, Strings> = {
     palette: "Palette", ink: "Ink", clay: "Azure", rose: "Rose", theme: "Theme", light: "Light", dark: "Dark",
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
     codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", language: "Language", resize: "Drag to resize",
-    author: "Author", updated: "Updated", readtimeLabel: "Reading time", noResults: "No matching results",
+    author: "Author", updated: "Updated", reviewed: "Reviewed", readtimeLabel: "Reading time", noResults: "No matching results",
     aboutAuthor: "About Author", aboutLatere: "About Latere AI", sourceRepo: "Source on GitHub",
     contributePrompt: "This book is written in the open. Found an error, or something unclear?", reportIssue: "Report an issue", editPage: "Edit this page",
   },
@@ -465,9 +465,11 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 }
 
 function MetaRow({ chapter, t }: { chapter: ChapterData; t: Strings }) {
+  // One date per page: the review date when the chapter has one, else the git
+  // modification date (empty in the production build, which has no .git).
   const items = [
     { l: t.author, v: chapter.author },
-    { l: t.updated, v: chapter.updated },
+    chapter.reviewed ? { l: t.reviewed, v: chapter.reviewed } : { l: t.updated, v: chapter.updated },
     { l: t.readtimeLabel, v: chapter.readtime },
   ].filter((i) => i.v);
   if (!items.length) return null;
