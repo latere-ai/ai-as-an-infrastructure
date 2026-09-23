@@ -26,14 +26,14 @@ function crossRefs(source: string): string[] {
 test("Chapter 18 treats preference labels as designed measurements", () => {
   expect(zh).toContain("偏好训练的起点不同：它使用的是对一个回答优于另一个回答的判断");
   expect(zh).toContain("偏好标签是一项测量结果，不是事实");
-  expect(zh).toContain("人类标注者和 AI 评判者都只是在执行这套经过设计的流程");
-  expect(zh).toContain("两者都接触不到独立于这套流程的真值");
+  expect(zh).toContain("人类标注者和 AI 评判者都在执行这套流程");
+  expect(zh).toContain("两者都无法越过它直接接触「人类意图」的真值");
 });
 
 test("the behavioral contract separates hard rules from softer goals", () => {
   expect(zh).toContain("## 先写行为契约，再写评分准则");
   expect(zh).toContain("硬性禁止事项、指令层级、处理歧义请求时的默认规则");
-  expect(zh).toContain("硬性安全边界不只是另一项风格偏好");
+  expect(zh).toContain("硬性安全边界会直接排除违规回答");
   expect(zh).toContain("更高权限的指令也不会因为回答足够有用就失效");
 });
 
@@ -41,14 +41,14 @@ test("public specifications remain versioned requirements rather than proof", ()
   expect(zh).toContain("人仍然选择原则并评测结果");
   expect(zh).toContain("从 Root、System、Developer、User 到 Guideline");
   expect(zh).toContain("广义安全、广义伦理、Anthropic 的准则和有用性");
-  expect(zh).toContain("公开的是预期行为，不是模型一定会如此行动的证明");
+  expect(zh).toContain("陈述的是作者希望发布后的模型表现出的行为");
   expect(zh).toContain("规格是一项带版本的要求");
 });
 
 test("governance remains visible after participation", () => {
   expect(zh).toContain("约一千名美国成年人");
-  expect(zh).toContain("参与扩大了价值来源，却没有消除编辑判断");
-  expect(zh).toContain("却不能单凭透明度回答「应该由谁的策略来治理」");
+  expect(zh).toContain("参与扩大了价值来源，而研究人员的审核与转化仍是一道编辑环节");
+  expect(zh).toContain("应该由谁的策略来治理，则是公开本身无法回答的另一个问题");
 });
 
 test("policy language becomes an explicit five-step decision procedure", () => {
@@ -61,7 +61,7 @@ test("policy language becomes an explicit five-step decision procedure", () => {
     "只有实质标准都满足后，才比较清晰度与简洁度等风格属性",
     "证据不足以区分候选回答时，允许平局或弃权",
   ]) expect(zh).toContain(phrase);
-  expect(zh).toContain("这套顺序只是示例，不是普适宪章");
+  expect(zh).toContain("这套顺序只是一个示例");
 });
 
 test("the local utility rule defines its symbols and limits", () => {
@@ -109,7 +109,7 @@ test("prompt and candidate sampling expose deployment boundaries", () => {
     "合成提示",
   ]) expect(zh).toContain(source);
   expect(zh).toContain("按来源和近重复簇划分数据");
-  expect(zh).toContain("静态数据集会随着策略学会生成评判者从未见过的回答而过时");
+  expect(zh).toContain("静态数据集会随着被训练的模型学会生成评判者从未见过的回答而过时");
   expect(zh).toContain("尽可能隐藏候选回答的来源，并随机安排两个回答的展示顺序");
 });
 
@@ -124,7 +124,7 @@ test("the collection loop preserves immutable lineage", () => {
     "写入一条与 S、R、Q、G 关联的不可变记录",
     "按切片审计；下一轮开始前修订 S、R、Q 或 G",
   ]) expect(zh).toContain(phrase);
-  expect(zh).toContain("这套循环建立的是数据血缘，并不声称每个最终判断都正确");
+  expect(zh).toContain("这套循环建立的是数据血缘，让每个最终判断都能追溯到它的输入");
 });
 
 test("a pairwise label preserves only one bit of judgment", () => {
@@ -165,7 +165,7 @@ test("population evidence and preference shortcuts remain bounded", () => {
   expect(zh).toContain("1,500 名参与者、75 个国家、8,011 段对话和 21 个模型");
   expect(zh).toContain("不是为了再提供一个普适平均值");
   expect(zh).toContain("有说服力的迎合回答，而不是正确答案");
-  expect(zh).toContain("把正确性、标注一致性和回答长度分开测量");
+  expect(zh).toContain("把正确性、对用户既有观点的附和程度和回答长度分开测量");
 });
 
 test("annotation operations are part of quality and governance", () => {
@@ -178,7 +178,7 @@ test("annotation operations are part of quality and governance", () => {
 test("AI feedback changes the measurement instrument", () => {
   expect(zh).toContain("## AI 反馈改变的是谁来执行评分准则");
   expect(zh).toContain("评判模型、评判提示、策略文本、候选顺序与解码设置");
-  expect(zh).toContain("这些结果只证明了对应设置，不保证 AI 评判者在每个领域都与人一致");
+  expect(zh).toContain("AI 评判者在其他领域是否与人一致，需要在那个领域单独测量");
   expect(zh).toContain("位置偏差、冗长度偏差与自我偏好");
   expect(zh).toContain("针对大语言模型评判者与 RLAIF 流水线的实验已经演示过此类提示注入攻击");
 });
@@ -192,7 +192,7 @@ test("AI judge controls match the observed failure modes", () => {
     "部署后继续进行随机人工审计",
     "归档评判者的原始输入与输出",
   ]) expect(zh).toContain(control);
-  expect(zh).toContain("AI 反馈扩展的是评分准则的执行规模");
+  expect(zh).toContain("AI 反馈扩大了评分准则能覆盖的比较数量");
 });
 
 test("the released dataset includes its measurement context", () => {
@@ -213,7 +213,7 @@ test("the released dataset includes its measurement context", () => {
 test("pre-training gates cover distribution shortcuts and lineage", () => {
   for (const gate of [
     "提示覆盖是否与目标用户、语言、任务和策略边界相符",
-    "候选回答是否覆盖当前策略及其可能的失败方式",
+    "候选回答是否覆盖当前正在训练的模型及其可能的失败方式",
     "平局、弃权、标注一致性与仲裁如何随切片变化",
     "交换回答顺序是否会改变标签",
     "即使不看回答内容，回答长度、格式、模型身份或其他捷径能否预测胜者",
