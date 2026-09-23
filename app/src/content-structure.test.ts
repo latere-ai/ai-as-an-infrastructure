@@ -417,7 +417,7 @@ test("infrastructure-before separates inherited practice from workload differenc
   for (const heading of [
     "## One request through the older stack",
     "## What transferred",
-    "## Offline improvement is not product improvement",
+    "## From offline score to deployment decision",
     "## Why serving changed",
     "## What remains outside this book's scope",
     "## Where the stacks are beginning to combine",

@@ -36,17 +36,17 @@ test("transferred practices preserve operational and measurement boundaries", ()
   expect(zh).toContain("数据依赖、反馈回路、配置和外围代码");
   expect(zh).toContain("训练与服务使用一致的转换");
   expect(zh).toContain("移动搜索广告量减少了 50%");
-  expect(zh).toContain("共同教训更窄");
+  expect(zh).toContain("两个案例的共同点只在于");
 });
 
 test("Netflix example separates three deployment gates", () => {
-  expect(zh).toContain("## 离线改进不等于产品改进");
+  expect(zh).toContain("## 从离线分数到部署决策");
   expect(zh).toContain("2007 年进展奖");
   expect(zh).toContain("后来大奖方案增加的方法并未采用");
   for (const gate of ["**离线质量：**", "**系统可行性：**", "**产品价值：**"]) {
     expect(zh).toContain(gate);
   }
-  expect(zh).toContain("更好的离线数字只是证据，不是部署决定");
+  expect(zh).toContain("更好的离线数字只通过了第一道门槛");
 });
 
 test("serving comparison keeps workload-specific state and cost explicit", () => {
