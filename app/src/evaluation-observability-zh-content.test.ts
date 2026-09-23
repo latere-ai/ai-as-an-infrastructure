@@ -36,7 +36,7 @@ test("Chinese Chapter 87 preserves the complete English structure", () => {
     "## 固定发布契约",
     "### 三项不同的工作",
     "## 构建评测数据集",
-    "### 用例不是试验",
+    "### 用例与重复试验",
     "## 评分时不要掩盖失败",
     "### 比较完整的系统修订版本",
     "### 预先声明发布门槛",
@@ -59,7 +59,7 @@ test("Chinese Chapter 87 preserves the complete English structure", () => {
 
 test("the opening defines one evaluation release and its decision", () => {
   for (const phrase of [
-    "评测不是从排行榜或工具开始",
+    "评测从一次",
     "评测发布",
     "完整系统某个版本",
     "系统指纹",
@@ -90,7 +90,7 @@ test("the release contract versions the whole evaluated system", () => {
 test("evaluation observability and monitoring remain different jobs", () => {
   for (const phrase of [
     "评测要回答",
-    "@gls-observability，也就是可观测性",
+    "@gls-observability 记录足够的结构化事件",
     "监控会持续比较",
     "运行中的系统做了什么",
     "部分证据",
@@ -165,7 +165,7 @@ test("the paired estimand and uncertainty are self-contained", () => {
     "部署权重加权后的配对变化",
     "置信区间",
     "对用例重采样",
-    "分层 bootstrap",
+    "层级 bootstrap",
     "按行 bootstrap 会凭空增加信息",
   ]) expect(flat).toContain(phrase);
 });
@@ -323,7 +323,7 @@ test("replay fidelity and side effects stay bounded", () => {
 
 test("monitoring alerts are contracts rather than causal claims", () => {
   for (const phrase of [
-    "告警定义是一份运营契约",
+    "告警定义也是一份契约",
     "分子",
     "分母",
     "聚合窗口",
@@ -389,12 +389,12 @@ test("constraints and contested automation remain explicit", () => {
     "服务架构决定了哪些内容可以评测和重放",
     "稳定的组件标识",
     "受限的评测器凭据",
-    "追踪不会因此变得完整",
+    "追踪是否完整、裁判是否有效",
     "多少判断应该交给自动化",
     "模型裁判可以扩大规模",
     "人类带来专业能力",
     "保留弃权和不确定性",
-    "哪项证据真正支撑了发布决策",
+    "发布决策依据的是哪项证据",
   ]) expect(flat).toContain(phrase);
 });
 
