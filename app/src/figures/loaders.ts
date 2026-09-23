@@ -19,4 +19,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "pipeline-schedule": () => import("./pipeline-schedule.ts"),
   "float-formats": () => import("./float-formats.ts"),
   "device-mesh": () => import("./device-mesh.ts"),
+  "coverage-selection": () => import("./coverage-selection.ts"),
 };
