@@ -80,7 +80,7 @@ test("atomicity preserves context and remains auditable", () => {
     "a self-contained statement conveying one independently checkable piece",
     "atomicity is a protocol choice, not a unique linguistic truth",
     "resolving pronouns, dates, units, and local context",
-    "turns one conjunction into several easy wins",
+    "splits one conjunction into several easily scored claims",
     "measure extraction recall on human-marked samples",
     "reasonable re-splitting materially changes the result",
   ]) expect(flat).toContain(phrase);
