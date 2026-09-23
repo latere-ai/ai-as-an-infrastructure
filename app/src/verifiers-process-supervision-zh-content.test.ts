@@ -77,7 +77,7 @@ test("the opening defines a verifier without treating it as an oracle", () => {
 test("the taxonomy keeps three independent design choices separate", () => {
   for (const phrase of [
     "有些属性彼此不同，却被放在同一条尺度上",
-    "有用的分类不是一条阶梯",
+    "分类由三个彼此独立的问题构成",
     "信号附着在哪里",
     "判断如何产生",
     "返回什么",

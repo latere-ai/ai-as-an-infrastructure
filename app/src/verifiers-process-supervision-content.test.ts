@@ -17,7 +17,7 @@ test("verifier taxonomy keeps independent design choices separate", () => {
     "where is the signal attached?",
     "how is judgment produced?",
     "what does it return?",
-    "not a ladder",
+    "not inherently stronger than a unit test",
   ]) {
     expect(flat).toContain(phrase);
   }
