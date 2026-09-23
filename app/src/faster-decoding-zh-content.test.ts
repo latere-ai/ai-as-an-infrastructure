@@ -104,7 +104,7 @@ test("proposal source, topology, and authorization remain independent", () => {
     "提示词查找",
     "前瞻解码",
     "多词元预测模块",
-    "这张表不是排名",
+    "哪一行合适，取决于具体部署",
     "树注意力掩码只是让联合打分成为可能，并不会自动让验证器保持精确",
   ]) expect(flat).toContain(phrase);
 });
@@ -166,7 +166,7 @@ test("correctness tests cover distribution, batching, memory, and failure paths"
 
 test("the conclusion states both the payoff and the full-cycle price", () => {
   for (const phrase of [
-    "候选生成与验证并没有消除自回归",
+    "候选生成与验证保留了生成的自回归性质",
     "只提交明确接受契约授权的输出",
     "收益是每个输出词元所需的昂贵目标周期更少",
     "代价是候选生成、更宽的验证、临时内存和更复杂的状态对账",

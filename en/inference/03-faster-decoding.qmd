@@ -3,47 +3,53 @@
 The previous two chapters separated request timing from memory allocation. They
 also established a rule for execution: reserve the state required by a token
 plan before launching it. Faster decoding changes that plan. Instead of asking
-the target model for exactly one new token, a proposer supplies several
-candidates and the target scores them together. A successful cycle can return
-more than one token, but it also consumes proposal time, verification work, and
-temporary KV state.
+the target model, the model whose outputs the service returns, for exactly one
+new token, a proposer (often a smaller draft model) supplies several candidates
+and the target scores them together. One round of proposing and scoring is a
+cycle. A successful cycle can return more than one token, but it also consumes
+proposal time, verification work, and temporary KV state.
 
 This trade is attractive when target decoding is underutilizing the
-accelerator, as low-batch dense decoding often does when weight traffic is the
-main cost. It is not a universal property of decoding. Long contexts add KV
-traffic; model parallelism adds communication; and larger batches may make
-verification compute-bound. The proposal must therefore be judged as part of
-the measured serving regime.
+accelerator, as low-batch dense decoding often does when weight traffic,
+reading the model's weights from memory at every step, is the main cost. Other
+regimes shift that balance. Long contexts add KV traffic; model parallelism
+adds communication; and larger batches may make verification compute-bound.
+The proposal must therefore be judged as part of the measured serving regime.
 
-Two 2023 papers established exact versions of this idea: speculative
-decoding by Leviathan, Kalman, and Matias [@leviathan2023fast], and speculative
-sampling by Chen and colleagues [@chen2023accelerating]. Later work changed
-where candidates come from and how they are arranged. Medusa and Hydra add
-draft heads [@cai2024medusa; @ankner2024hydra], the EAGLE family learns a
-feature or token drafter [@li2024eagle; @li2024eagle2; @li2025eagle3],
-lookahead decoding builds candidates through iteration [@fu2024lookahead], and
-multi-token prediction trains future-token modules with the model
-[@gloeckle2024multi]. These are design choices, not stages in a required
-lineage.
+Two 2023 papers established exact versions of this idea, which leave the output
+distribution identical to the target model's own: speculative decoding by
+Leviathan, Kalman, and Matias [@leviathan2023fast], and speculative sampling by
+Chen and colleagues [@chen2023accelerating]. Later work changed where
+candidates come from and how they are arranged. Medusa and Hydra add draft
+heads, extra output layers on the target that predict tokens further ahead
+[@cai2024medusa; @ankner2024hydra]; the EAGLE family learns a feature or token
+drafter, a small model that drafts from the target's internal features
+[@li2024eagle; @li2024eagle2; @li2025eagle3]; lookahead decoding builds
+candidates through iteration [@fu2024lookahead]; and multi-token prediction
+trains future-token modules with the model [@gloeckle2024multi]. These are
+design choices, not stages in a required lineage.
 
 ## Verification can be parallel even when generation is sequential
 
 Autoregressive generation still has a sequential dependency: token $i+1$
 depends on token $i$. A proposed suffix makes those dependencies available as
-inputs. Under a causal mask, one target pass can then score every position in
-that suffix in parallel. The target remains authoritative; the proposal only
-creates candidate work.
+inputs. Under a causal mask, which lets each position attend only to the
+positions before it, one target pass can then score every position in that
+suffix in parallel. The target still decides which tokens are emitted, and the
+proposal determines only which continuations the target checks.
 
-Here $\gamma$ is the length of a linear proposal. Define $A_k$ as the event that
-draft position $k$ is accepted after every earlier position was accepted, and
-let
+Here $\gamma$ is the length of a linear proposal, a single chain of candidate
+tokens. Define $A_k$ as the event that draft position $k$ is accepted after
+every earlier position was accepted, and let
 
 $$
 s_k=\Pr(A_1\cap\cdots\cap A_k),\qquad s_0=1.
 $$
 
-If a cycle emits the accepted prefix plus one corrected or bonus token, and no
-stop condition truncates that output, its token yield $Y$ satisfies
+If a cycle emits the accepted prefix plus one token from the target (a
+corrected token after a rejection, or a bonus token when every candidate is
+accepted), and no stop condition truncates that output, its token yield $Y$
+satisfies
 
 $$
 \mathbb E[Y]=1+\sum_{k=1}^{\gamma}s_k.
@@ -67,8 +73,9 @@ verification cycle, not a latency speedup. It says nothing yet about the time
 or memory spent on that cycle.
 
 Here the runnable compares heterogeneous conditional probabilities with an IID
-estimate formed from their arithmetic mean. The two results differ even in this
-small deterministic example.
+(independent and identically distributed) estimate, which applies their
+arithmetic mean at every position. The two results differ even in this small
+deterministic example.
 
 :::: {.runnable}
 ```python
@@ -95,9 +102,10 @@ print(f"iid estimate at alpha={alpha:.2f}: {iid_estimate:.4f}")
 @gls-speculative-decoding is proposal-and-verification with a correction rule
 that leaves the target model's output distribution unchanged. Consider one
 position after applying the intended decoding policy, including temperature,
-logit constraints, and any top-$k$ or top-$p$ truncation. Here $p$ denotes the
-target distribution, $q$ the proposal distribution, and $\mathcal V$ their
-common token space. A candidate $X\sim q$ is accepted with probability
+logit constraints, and any top-$k$ or top-$p$ truncation, which keeps only the
+most likely tokens before sampling. Here $p$ denotes the target distribution,
+$q$ the proposal distribution, and $\mathcal V$ their common token space. A
+candidate $X\sim q$ is accepted with probability
 
 $$
 a(v)=\min\!\left(1,\frac{p(v)}{q(v)}\right).
@@ -147,11 +155,14 @@ compared: temperature, truncation, constraints, and token mapping cannot be
 silently different. EOS, stop sequences, and maximum length may shorten a
 cycle and suppress the bonus token.
 
-Greedy verification is a separate deterministic contract. It can accept the
-longest run that matches the target's greedy tokens and then take the target's
-first mismatch. Relaxed rules, such as a typical-acceptance mode, deliberately
-trade distribution equality for another quality or speed criterion. A system
-must label these contracts separately.
+Exact sampling is one output contract, a stated guarantee about what the
+service returns. Greedy verification is a separate deterministic contract for
+greedy decoding, which always takes the target's most likely token. It can
+accept the longest run that matches the target's greedy tokens and then take
+the target's first mismatch. Relaxed rules, such as a typical-acceptance mode
+that accepts any candidate the target rates as sufficiently likely,
+deliberately trade distribution equality for another quality or speed
+criterion. A system must label these contracts separately.
 
 ## Proposal source, candidate topology, and acceptance policy are separate choices
 
@@ -168,17 +179,18 @@ does not by itself make sampling exact.
 | Lookahead decoding [@fu2024lookahead] | A Jacobi window, n-gram pool, and custom masks | Multiple n-gram continuations | It removes a learned drafter, not proposal compute or temporary state. |
 | Multi-token prediction module [@gloeckle2024multi; @deepseek2024deepseekv3] | Future-token heads trained with the base model | Linear or branched proposals | The training objective supplies candidates; it is not an acceptance theorem. |
 
-This table is not a ranking. A deployer may already have a compatible small
-model, while another model may ship with useful heads. Proposal quality can
-also change with domain, context length, sampling settings, and quantization.
-The cheapest proposal is the one that reduces measured target-cycle cost for
-the actual workload.
+Which row fits depends on the deployment. A deployer may already have a
+compatible small model, while another model may ship with useful heads.
+Proposal quality can also change with domain, context length, sampling
+settings, and quantization. The proposal to prefer is the one that most reduces
+measured target-cycle cost for the actual workload.
 
 ### Linear chains and candidate trees spend work differently
 
-Here a linear suffix contains $\gamma$ candidate positions. If an early token is
+A linear suffix contains $\gamma$ candidate positions. If an early token is
 rejected, its later positions cannot be emitted in that cycle. A candidate tree
-hedges by carrying several continuations. A tree attention mask packs branches
+carries several continuations, so one early rejection does not end every path
+in the cycle. A tree attention mask packs branches
 into one target operation while ensuring that each node attends only to its own
 ancestry.
 
@@ -194,8 +206,8 @@ flowchart TD
 The mask makes joint scoring possible; it does not make a verifier exact.
 Greedy tree search, distribution-preserving tree sampling, and relaxed tree
 acceptance are different algorithms. Tree width can improve the chance of
-finding a useful path, but verification time and temporary KV grow with the
-number of scored nodes. Rejected branches are real work, not free alternatives.
+finding a useful path, but every scored node, including those on branches that
+are later rejected, adds verification time and temporary KV.
 
 ## Speedup is a wall-clock measurement
 
@@ -224,11 +236,11 @@ $$
 
 Verification time grows with candidate positions, tree nodes, context length,
 KV traffic, batch composition, kernels, and communication. In a low-batch,
-weight-bandwidth-bound regime, that growth may be small enough that fewer
-target synchronizations win. At higher utilization, rejected candidate work
-can compete with other requests. Compute-bound operation can reduce the
-advantage, but it does not prove that every proposal must lose; proposal
-placement, overlap, kernels, and synchronization still matter.
+weight-bandwidth-bound regime, that growth may be small enough that the saved
+target synchronizations lower average token time. At higher utilization,
+rejected candidate work can compete with other requests. Compute-bound
+operation can reduce the advantage; whether a given proposal still pays off
+then depends on proposal placement, overlap, kernels, and synchronization.
 
 Paper results demonstrate feasibility in their evaluated settings, not portable
 multipliers. Leviathan and colleagues reported twofold to threefold improvement
@@ -255,11 +267,11 @@ reservations back on cancellation or failure before the same blocks are
 offered elsewhere.
 
 Different requests accept different prefix lengths, so the next batch is
-ragged. The scheduler must preserve each request's positions, masks, stop state,
-and cache ownership while repacking work. Under memory pressure or rising
-concurrency, it may shorten $\gamma$, narrow a tree, select a cheaper proposal,
-or fall back to ordinary one-token decoding. No universal batch cutoff chooses
-among those policies.
+ragged: its requests sit at different sequence positions. The scheduler must
+preserve each request's positions, masks, stop state, and cache ownership while
+repacking work. Under memory pressure or rising concurrency, it may shorten
+$\gamma$, narrow a tree, select a cheaper proposal, or fall back to ordinary
+one-token decoding. No universal batch cutoff chooses among those policies.
 
 ## Choose from workload evidence
 
@@ -268,7 +280,7 @@ A deployment decision starts with a contract and ends with a load test.
 1. **Fix the output contract.** Decide whether the service promises exact
    sampling, greedy sequence equality, or a documented relaxed rule. Confirm
    the target, tokenizer, vocabulary mapping, model revision, adapters,
-   sampling transforms, constraints, and stopping behavior. Here the named
+   sampling transforms, constraints, and stopping behavior. The sampling
    transforms include top-$k$ and top-$p$.
 2. **Profile proposal budgets.** Sweep chain length or tree-node budget across
    representative context lengths, output types, batch shapes, and sampling
@@ -285,17 +297,18 @@ A deployment decision starts with a contract and ends with a load test.
    baseline decoding, when capacity cannot be reserved, or when compatibility
    checks fail. Record when and why fallback occurs.
 
-No single acceptance rate or paper speedup answers whether the deployment wins.
-For example, two systems can accept the same fraction of candidates but place
-rejections at different positions, producing different $\mathbb E[Y]$. They
-can also have the same yield but very different target verification times.
+No single acceptance rate or paper speedup answers whether speculation helps a
+deployment. For example, two systems can accept the same fraction of candidates
+but place rejections at different positions, producing different
+$\mathbb E[Y]$. They can also have the same yield but different target
+verification times.
 
 ### Correctness and failure tests
 
 Test the sampler and the memory protocol independently, then together.
 
 - On a tiny vocabulary, compare empirical output frequencies with the target
-  distribution for $p=q$, partial overlap, and disjoint support. Here partial
+  distribution for $p=q$, partial overlap, and disjoint support. Partial
   overlap means that only part of the proposal's probability mass matches the
   target. Force first rejection, later rejection, and full acceptance.
 - Compare greedy output token for token with baseline decoding. Exercise EOS,
@@ -321,8 +334,8 @@ cutoff. Exact stochastic sampling, exact greedy sequences, and quality-tolerant
 acceptance are also different product contracts. Cross-paper speedups are not
 comparable without the target and draft models, hardware, parallelism, batch,
 context, sampling policy, baseline, and load. The open operational question is
-not whether speculative methods can work, but where their full cycle wins for a
-particular service.
+where the full speculative cycle outperforms ordinary decoding for a particular
+service.
 :::
 
 ::: {.callout-tip}
@@ -338,11 +351,11 @@ combination rather than multiplying isolated speedup factors.
 
 ## Payoff and boundary
 
-Proposal-and-verification does not remove autoregression. It supplies candidate
-dependencies so the target can verify several positions in parallel, then
-commits only output authorized by an explicit acceptance contract. Its payoff
-is fewer expensive target cycles per output token; its price is proposal work,
-wider verification, temporary memory, and more complex reconciliation.
+Proposal-and-verification keeps generation autoregressive. It supplies
+candidate dependencies so the target can verify several positions in parallel,
+then commits only output authorized by an explicit acceptance contract. Its
+payoff is fewer expensive target cycles per output token; its price is proposal
+work, wider verification, temporary memory, and more complex reconciliation.
 
 The next chapter changes a complementary quantity. Quantization reduces the
 bytes used to represent model state, while fused kernels reduce data movement
