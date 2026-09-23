@@ -55,7 +55,7 @@ test("practical guidance covers failure modes and evaluation", () => {
     "A practical DPO run",
     "Failure modes and checks",
     "chosen-response log-probability",
-    "held-out preference accuracy",
+    "Held-out preference accuracy",
     "response length",
     "held-out task quality",
     "@li2026posttraining",

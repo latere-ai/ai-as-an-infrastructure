@@ -101,7 +101,7 @@ test("the localized derivation stepper preserves all six necessary steps", () =>
 
 test("relative movement is not confused with absolute response probability", () => {
   expect(zh).toContain("## 如何理解相对变化");
-  expect(zh).toContain("并不只是要求选中回答的概率高于被拒回答");
+  expect(zh).toContain("很容易被误读成绝对概率的比较");
   expect(zh).toContain("正的 DPO 间隔并不能保证");
   expect(zh).toContain(String.raw`\pi_\theta(y_w\mid x)>\pi_\theta(y_l\mid x)`);
   expect(zh).toContain("相对比较中胜出，却仍然拥有很低的绝对概率");
@@ -153,7 +153,7 @@ test("the runnable demonstrates loss geometry rather than model quality", () => 
 
 test("KTO keeps pointwise labels reference baseline estimation and bounded psychology claims", () => {
   expect(zh).toContain("### KTO：用合意与不合意样本取代成对比较");
-  expect(zh).toContain("**@gls-kto改从好/坏标签学习，去掉成对数据要求。**");
+  expect(zh).toContain("@gls-kto改从好/坏标签学习，去掉成对数据要求。");
   expect(zh).toContain("同一提示不必同时提供一个正例和一个负例");
   expect(zh).toContain(String.raw`z_0(x)=\mathrm{KL}`);
   expect(zh).toContain(String.raw`\lambda_D`);
@@ -249,7 +249,7 @@ test("failure checks cover offline support shortcuts and external quality", () =
 });
 
 test("the closing names the static-data limit and online coverage tradeoff", () => {
-  expect(zh).toContain("模型在发生变化时从不请求新的比较");
+  expect(zh).toContain("策略在变化过程中不会得到新的比较");
   expect(zh).toContain("迭代式或在线方法会用当前策略刷新候选回答");
   expect(zh).toContain("代价是重新把采样与反馈基础设施带回训练回路");
   expect(zh).toContain("@sec-rlhf");

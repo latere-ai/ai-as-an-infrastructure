@@ -2,13 +2,13 @@
 
 Suppose a team already has prompts with two candidate responses and a judgment about which
 response is better. Classical RLHF would fit an explicit reward model, generate new responses,
-and optimize a policy against that reward. Direct Preference Optimization (@gls-dpo) takes a
+and optimize a policy (the model being trained) against that reward. Direct Preference Optimization (@gls-dpo) takes a
 shorter route. DPO fits a preference classifier without an explicit reward model. Under a
 specific model of preferences, its loss trains the language model directly [@rafailov2023dpo].
 
-This simplification matters. DPO collapses the reward-model and policy-optimization
+DPO collapses the reward-model and policy-optimization
 apparatus into a single classification loss over a static dataset. It does not, however,
-turn alignment into ordinary supervised fine-tuning or make the assumptions behind RLHF
+turn alignment into ordinary supervised fine-tuning (SFT) or make the assumptions behind RLHF
 disappear. DPO still needs paired judgments, a frozen reference policy, a model of how
 preferences arise, and evaluation outside the training pairs.
 
@@ -29,13 +29,13 @@ Compared with PPO-based RLHF in @sec-rlhf, DPO removes three components from the
 loop:
 
 - no separately trained scalar reward model;
-- no rollouts from the changing policy during the preference-training stage;
+- no rollouts (fresh responses sampled from the changing policy) during the preference-training stage;
 - no critic or policy-gradient optimizer.
 
-What remains is important. The reference policy defines what counts as movement, the data
+Three components remain. The reference policy defines what counts as movement, the data
 contains only the candidate responses that were collected, and the pairwise loss specifies
 how one observed comparison should constrain the policy. The language model is an implicit
-reward model only in the precise sense derived below. It is not a general-purpose judge that
+reward model only in the sense derived below. It is not a general-purpose judge that
 can be queried independently of its reference.
 
 ```{dot}
@@ -77,7 +77,9 @@ digraph {
 
 ## The derivation and its assumptions
 
-The derivation starts from a KL-regularized reward objective. For one prompt $x$, consider
+The derivation starts from a KL-regularized reward objective, which trades expected reward
+against the Kullback-Leibler (KL) divergence, a measure of how far the policy's distribution
+over responses has moved from the reference distribution. For one prompt $x$, consider
 all probability distributions $\pi(\cdot\mid x)$ over possible responses:
 
 $$
@@ -90,7 +92,8 @@ $$
 
 where $r(x,y)$ is a scalar reward, $\beta>0$ is the KL coefficient, and
 $\pi_{\mathrm{ref}}$ is the reference policy. If the reward is finite, its normalizer exists,
-and $\pi$ puts probability only on the support of the reference policy, the maximizing distribution is
+and $\pi$ puts probability only on the support of the reference policy (the responses to which
+the reference assigns nonzero probability), the maximizing distribution is
 
 $$
 \pi^*(y\mid x)
@@ -120,7 +123,7 @@ $$
 The last term depends on the prompt but not on the response. More generally, reward is
 identified only up to a prompt-only constant: adding any $c(x)$ to every response reward for
 the same prompt changes neither pairwise reward differences nor the optimal normalized policy.
-The policy-to-reference log-ratio is therefore one representative of an equivalent class of
+The policy-to-reference log-ratio is therefore one representative of an equivalence class of
 rewards, not a uniquely recovered human utility.
 
 DPO next assumes a Bradley-Terry preference model:
@@ -175,10 +178,9 @@ neural models, misspecified preferences, or finite off-support data.
 
 ## Interpreting relative movement
 
-The margin equation is easy to misread. DPO does not merely ask whether the chosen response
-has a larger probability than the rejected response. It asks whether training has moved the
-chosen response upward *relative to the reference* more than it has moved the rejected response.
-Consequently, a positive DPO margin does not guarantee
+The margin equation is easy to misread as a comparison of absolute probabilities. It measures
+whether training has moved the chosen response upward *relative to the reference* more than it
+has moved the rejected response. Consequently, a positive DPO margin does not guarantee
 $\pi_\theta(y_w\mid x)>\pi_\theta(y_l\mid x)$. A response that was already unlikely under the
 reference can win the relative comparison while remaining unlikely in absolute terms.
 
@@ -216,16 +218,17 @@ increase with response length.
 
 The role of $\beta$ also has two layers. In the KL-regularized objective, larger $\beta$ means stronger
 theoretical regularization toward the reference. In the implemented DPO loss, $\beta$ also
-sets the logit temperature and multiplies the gradient. Finite-step training need not produce
+sets the logit temperature, which controls how sharply a given margin is turned into a
+probability, and multiplies the gradient. Finite-step training need not produce
 a monotonic relationship between $\beta$ and measured policy drift. Tune it, then report the
 achieved policy/reference divergence and task quality rather than treating the configured value
 as the achieved constraint.
 
 ## The four variants solve different constraints
 
-IPO, KTO, ORPO, and SimPO are often arranged as a sequence of upgrades. That framing hides
-their actual purpose. Each changes a different part of the problem: the loss shape, the label
-format, the use of an SFT term, or the response score. They also require different data and
+IPO, KTO, ORPO, and SimPO are often arranged as a sequence of upgrades. Each instead changes
+a different part of the problem: the loss shape, the label format, the use of an SFT term, or
+the response score. They also require different data and
 different training resources.
 
 ```{dot}
@@ -263,7 +266,7 @@ itself is bounded below by zero; the *optimizing margin* is what tends toward in
 separable comparisons [@azar2023ipo].
 
 IPO bypasses the pointwise Bradley-Terry reward assumption and regresses the policy/reference
-log-ratio gap to a finite target. With
+log-ratio gap to a finite target. Define
 
 $$
 h_\theta(x,y_w,y_l)=
@@ -274,7 +277,7 @@ h_\theta(x,y_w,y_l)=
 },
 $$
 
-Here $h_\theta$ denotes the chosen-versus-rejected gap in policy/reference log-ratios. The
+where $h_\theta$ denotes the chosen-versus-rejected gap in policy/reference log-ratios. The
 sampled IPO objective is
 
 $$
@@ -285,7 +288,7 @@ $$
 \right].
 $$
 
-Here this chapter uses $\beta$ for the paper's positive KL-regularization parameter $\tau$.
+This chapter writes $\beta$ for the paper's positive KL-regularization parameter $\tau$.
 The target is therefore fixed by the theory as $1/(2\beta)$, not chosen independently. IPO
 still needs paired responses and a frozen reference. Its source paper demonstrates the behavior
 mainly in illustrative bandit problems, so the derivation should not be read as evidence that
@@ -336,9 +339,8 @@ plt.show()
 
 ### KTO: replace pairs with desirable and undesirable examples
 
-**@gls-kto drops the paired-data requirement by learning from good/bad labels.**
-Kahneman-Tversky Optimization changes the data requirement. Each example is a
-triple $(x,y,d)$, where $d$ says whether response $y$ is desirable or undesirable. A positive
+@gls-kto drops the paired-data requirement by learning from good/bad labels. In
+Kahneman-Tversky Optimization, each example is a triple $(x,y,d)$, where $d$ says whether response $y$ is desirable or undesirable. A positive
 and a negative response for the same prompt are not required [@ethayarajh2024kto]. This fits
 logs built from approvals, rejections, or thresholded ratings, although the meaning and
 calibration of those labels still matter.
@@ -353,7 +355,7 @@ z_0(x)=\mathrm{KL}\!\left(
 \right),
 $$
 
-Here $r_\theta$ represents the response's policy/reference log-ratio, while $z_0$ denotes the
+where $r_\theta$ represents the response's policy/reference log-ratio and $z_0$ denotes the
 KL reference point. KTO then scores the example relative to that point:
 
 $$
@@ -368,15 +370,16 @@ $$
 
 Its loss is $\mathcal{L}_{\mathrm{KTO}}=\mathbb{E}[\lambda_d-v(x,y)]$, where $\lambda_D$
 and $\lambda_U$ weight the desirable and undesirable classes. In practice, exact computation
-of $z_0$ is expensive. The paper uses a stopped-gradient, biased microbatch estimate constructed
-from mismatched prompts and responses. Class imbalance therefore affects both the weights and
+of $z_0$ is expensive. The paper uses a biased microbatch estimate constructed from
+mismatched prompts and responses, with its gradient stopped so that backpropagation treats it
+as a constant. Class imbalance therefore affects both the weights and
 the quality of the baseline estimate.
 
-The prospect-theory connection supplies an inductive bias: gains and losses are evaluated
-relative to a reference point with a saturating value function. It is not evidence that this
-formula is a faithful psychological model of how people judge text. KTO's practical advantage
-is narrower and useful: it can train from independently labeled responses without pretending
-that those labels form same-prompt pairs.
+The prospect-theory connection supplies an inductive bias, a structural assumption built into
+the objective: gains and losses are evaluated relative to a reference point with a saturating
+value function. It is not evidence that this formula is a faithful psychological model of how
+people judge text. KTO's practical advantage is that it can train from independently labeled
+responses without requiring those labels to form same-prompt pairs.
 
 ### ORPO: combine chosen-response SFT with a preference penalty
 
@@ -393,7 +396,7 @@ P_\theta(y\mid x)=
 \right),
 $$
 
-Here $P_\theta(y\mid x)$ represents the geometric mean of the token probabilities. Its odds are
+where $P_\theta(y\mid x)$ represents the geometric mean of the token probabilities. Its odds are
 $\operatorname{odds}_\theta(y\mid x)=P_\theta(y\mid x)/(1-P_\theta(y\mid x))$.
 The objective is
 
@@ -406,7 +409,7 @@ $$
 \right],
 $$
 
-Here $\mathcal{L}_{\mathrm{SFT}}$ denotes chosen-response negative log-likelihood and $\lambda$
+where $\mathcal{L}_{\mathrm{SFT}}$ denotes chosen-response negative log-likelihood and $\lambda$
 sets the weight of the odds-ratio term, defined as
 
 $$
@@ -486,8 +489,8 @@ treated as conditional on scale, data, initialization, tuning, and evaluation. B
 comparisons likewise find rankings that vary by setting [@spangher2025rlhf; @saeidi2025systematic].
 :::
 
-The defensible conclusion is not that the losses are interchangeable. It is that there is no
-established universal winner. Compare them with the same starting checkpoint, data, optimization
+The losses differ in their data requirements and behavior, and none of them is an established
+universal winner. Compare them with the same starting checkpoint, data, optimization
 budget, decoding settings, and external evaluator. Report uncertainty across seeds when the
 decision matters.
 
@@ -509,7 +512,7 @@ Use this table as a filter, not a leaderboard:
   baseline and keeps SFT separate from preference learning.
 - Consider IPO when separable comparisons drive margins upward and reference anchoring is still
   desirable. Validate the theory-derived target in the actual model regime.
-- Consider KTO when feedback is genuinely pointwise. Audit label semantics, class balance, and
+- Consider KTO when feedback arrives as pointwise labels rather than pairs. Audit label semantics, class balance, and
   the microbatch KL estimate before comparing quality with pairwise methods.
 - Consider ORPO when a one-stage SFT-plus-preference recipe is operationally useful. Measure how
   $\lambda$ trades chosen imitation against rejection rather than assuming the two cooperate.
@@ -578,7 +581,7 @@ coverage. No loss variant can infer missing behavior requirements from absent da
 
 Track at least the following on a held-out split and on generated responses:
 
-- **Measure held-out preference accuracy and margin.** These show whether the loss generalizes to unseen
+- **Held-out preference accuracy and margin.** These show whether the loss generalizes to unseen
   pairs, but they do not by themselves measure open-ended generation quality.
 - **Chosen-response log-probability and rejected-response log-probability.** A widening relative
   margin can coexist with falling likelihood for both responses. That may be acceptable, but it
@@ -598,8 +601,8 @@ the learning rate. Then inspect data leakage, contradictory labels, length short
 drift. Switching objectives before diagnosing those causes can merely move the same failure to a
 different loss.
 
-Static preference optimization is valuable precisely because it is simple. Its limit is the same
-simplicity: the model never asks for a new comparison while it changes. Iterated or online methods
+Static preference optimization is simple to run because it trains on a fixed set of comparisons,
+and for the same reason no new comparison is collected while the policy changes. Iterated or online methods
 refresh candidates from the current policy and collect or generate new judgments, improving
 coverage at the cost of bringing sampling and feedback infrastructure back into the loop. That
 tradeoff connects this chapter to the online RLHF system in @sec-rlhf.
