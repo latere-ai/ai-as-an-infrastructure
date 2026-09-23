@@ -318,9 +318,9 @@ test("every Graphviz figure parses and fits the mobile reading column", () => {
   expect(wide.sort(), "figures wider than the mobile reading column").toEqual([...knownWideFigures].sort());
 });
 
-test("every Graphviz figure is laid out in the layout font", () => {
-  // Layout and page must measure text with the same metrics, whatever font
-  // the source names.
+test("every Graphviz figure is laid out in the layout font and colored by theme class", () => {
+  // Layout and page must measure text with the same metrics, and every color
+  // must follow the theme, whatever the source wrote.
   const failures: string[] = [];
   for (const page of pages) {
     fenceBodies(page.source, "dot").forEach((body, index) => {
@@ -328,6 +328,13 @@ test("every Graphviz figure is laid out in the layout font", () => {
       const html = renderDot(graphviz, body, new Map(), page.href, "");
       for (const m of html.matchAll(/<text\b[^>]*>/g)) {
         if (!m[0].includes(`font-family="${LAYOUT_FONT}`)) failures.push(`${page.path}: ${label} text not in ${LAYOUT_FONT}`);
+        if (!/class="[^"]*dg-f-/.test(m[0])) failures.push(`${page.path}: ${label} text without a color class`);
+      }
+      for (const m of html.matchAll(/<(?:polygon|polyline|path|ellipse)\b[^>]*>/g)) {
+        for (const [, prop, value] of m[0].matchAll(/\s(fill|stroke)="([^"]*)"/g)) {
+          if (value === "none" || value === "transparent") continue;
+          if (!new RegExp(`class="[^"]*dg-${prop[0]}-`).test(m[0])) failures.push(`${page.path}: ${label} ${prop}="${value}" without a class`);
+        }
       }
     });
   }

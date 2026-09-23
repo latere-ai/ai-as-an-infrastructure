@@ -72,9 +72,13 @@ test("graphviz diagrams keep their intrinsic width inside horizontal scroll", ()
   expect(graphvizSvgRule).not.toContain("max-width: 100%");
 });
 
-test("dark mode remaps Graphviz inline SVG light fills and muted strokes", () => {
-  expect(css).toContain(':root[data-theme="dark"] .rdr-diagram svg [fill="#f1ece1"]');
-  expect(css).toContain(':root[data-theme="dark"] .rdr-diagram svg [fill="#ffffff"]');
-  expect(css).toMatch(/\[fill="#f1ece1"\][\s\S]*fill:\s*var\(--bg-surface\)\s*!important/);
-  expect(css).toMatch(/\[stroke="#6b7280"\][\s\S]*stroke:\s*var\(--fg-3\)\s*!important/);
+test("graphviz colors come from theme tokens by class, not a list of hex values", () => {
+  // Dark mode remapped about ten literal fills; any other color stayed light.
+  expect(css).not.toMatch(/\.rdr-diagram[^{]*\[(?:fill|stroke)="#/);
+  const roles = ["paper", "panel", "ink", "ink2", "ink3", ...[1, 2, 3, 4, 5, 6, 7, 8].flatMap((i) => [`c${i}`, `c${i}t`])];
+  for (const role of roles) {
+    expect(css).toMatch(new RegExp(`\\.rdr-diagram svg \\.dg-f-${role} \\{ fill: var\\(--(?:fig|dg)-`));
+    expect(css).toMatch(new RegExp(`\\.rdr-diagram svg \\.dg-s-${role} \\{ stroke: var\\(--(?:fig|dg)-`));
+  }
+  for (let i = 1; i <= 8; i++) expect(css).toContain(`--dg-c${i}t: color-mix(in srgb, var(--fig-c${i}) 18%, var(--fig-paper));`);
 });

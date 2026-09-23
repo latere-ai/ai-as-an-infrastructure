@@ -1,4 +1,6 @@
 import { test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
+import { CATEGORICAL_HEX, colorRole, themeClasses } from "./diagram-color.ts";
 import { LAYOUT_FONT, prepareDot } from "./diagram-source.ts";
 import { loadGraphviz, renderDot } from "./diagrams.ts";
 
@@ -53,4 +55,39 @@ test("Graphviz SVGs expose the figure caption as an accessible name", () => {
   ].join("\n");
   const html = renderDot(gv, code, new Map(), "chapter.html", "../");
   expect(html).toContain('<svg role="img" aria-label="Artifact &amp; kernel compatibility."');
+});
+
+test("colors map to theme roles by job, for any color", () => {
+  expect(colorRole("#f1ece1", "fill")).toBe("panel");
+  expect(colorRole("#ffffff", "fill")).toBe("paper");
+  expect(colorRole("white", "fill")).toBe("paper");
+  expect(colorRole("#6b7280", "stroke")).toBe("ink3");
+  expect(colorRole("#6b7280", "text")).toBe("ink2");
+  expect(colorRole("black", "text")).toBe("ink");
+  expect(colorRole("#3b82f6", "stroke")).toBe("c1");
+  expect(colorRole("#dbeafe", "fill")).toBe("c1t");
+  expect(colorRole("#bfe3c0", "fill")).toBe("c6t");
+  expect(colorRole("#f2c2c2", "fill")).toBe("c8t");
+  expect(colorRole("#8b5cf6", "text")).toBe("c7");
+  expect(colorRole("lightblue", "fill")).toBe("c1t");
+  expect(colorRole("none", "fill")).toBeNull();
+  expect(colorRole("transparent", "stroke")).toBeNull();
+});
+
+test("the categorical hues match the figure tokens in theme.css", () => {
+  const css = readFileSync(new URL("../theme.css", import.meta.url), "utf8");
+  const root = css.match(/:root \{\s*--fig-ink:[\s\S]*?\}/)?.[0] ?? "";
+  CATEGORICAL_HEX.forEach((hex, i) => expect(root).toContain(`--fig-c${i + 1}: ${hex};`));
+});
+
+test("every painted shape and text run gets a theme class", () => {
+  const svg = gv.dot('digraph { a [style=filled, fillcolor="#ffe9b3", color="#123456"]; b [fontcolor="#e0936b"]; a -> b [color=gray, label="x"]; }', "svg");
+  const out = themeClasses(svg);
+  for (const m of out.matchAll(/<(polygon|path|ellipse|text)\b[^>]*>/g)) {
+    const tag = m[0];
+    const painted = /\s(fill|stroke)="(?!none|transparent)[^"]+"/.test(tag) || m[1] === "text";
+    if (painted) expect(tag).toMatch(/class="[^"]*dg-[fs]-/);
+  }
+  expect(out).toContain("dg-f-c4t");
+  expect(out).toContain("dg-f-c2");
 });

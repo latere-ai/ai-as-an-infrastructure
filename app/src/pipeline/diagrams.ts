@@ -7,6 +7,7 @@
 import { Graphviz } from "@hpcc-js/wasm";
 import type { CrossrefMap } from "./crossref.ts";
 import { resolveXrefsInText } from "./crossref.ts";
+import { themeClasses } from "./diagram-color.ts";
 import { prepareDot } from "./diagram-source.ts";
 
 export type GraphvizInstance = Awaited<ReturnType<typeof Graphviz.load>>;
@@ -64,7 +65,7 @@ export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap,
     const i = svg.indexOf("<svg"); // drop the <?xml?> + DOCTYPE preamble for inline HTML
     if (i > 0) svg = svg.slice(i);
     const accessibleName = escapeAttribute(cap || label || "Diagram");
-    svg = svg.replace("<svg", `<svg role="img" aria-label="${accessibleName}"`);
+    svg = themeClasses(svg.replace("<svg", `<svg role="img" aria-label="${accessibleName}"`));
   } catch (e) { svg = `<pre class="rdr-diagram-error">graphviz error: ${String(e)}</pre>`; }
   return figureWrap(`<div class="rdr-diagram">${svg}</div>`, label, cap, xref, currentHref, prefix);
 }
