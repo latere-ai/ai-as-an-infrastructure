@@ -29,4 +29,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "hybrid-retrieval": () => import("./hybrid-retrieval.ts"),
   "compute-optimal-allocation": () => import("./compute-optimal-allocation.ts"),
   "scaling-fit-extrapolation": () => import("./scaling-fit-extrapolation.ts"),
+  "continuous-batching": () => import("./continuous-batching.ts"),
 };
