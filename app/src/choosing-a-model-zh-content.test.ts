@@ -25,7 +25,7 @@ function refs(source: string) {
 test("Chinese Chapter 81 preserves the complete English structure", () => {
   expect(chinese).toMatch(/^# 选择模型 \{#sec-choosing-model\}/);
   expect(headings(chinese)).toEqual([
-    ["##", "选择系统，而不是名称"],
+    ["##", "确定线上服务系统的身份"],
     ["##", "排序之前先审查准入资格"],
     ["###", "只有“开放”二字，信息仍然不足"],
     ["###", "托管、代管和自托管是不同的部署选择"],
@@ -35,7 +35,7 @@ test("Chinese Chapter 81 preserves the complete English structure", () => {
     ["##", "围绕实际工作负载设计评测"],
     ["##", "比较每项合格任务的总成本"],
     ["###", "托管与自托管的成本交叉点"],
-    ["##", "选择帕累托前沿，而不是单项冠军"],
+    ["##", "从帕累托前沿中选择"],
     ["##", "通过系统接线维持选择的有效性"],
     ["##", "延伸阅读"],
   ]);
@@ -44,7 +44,7 @@ test("Chinese Chapter 81 preserves the complete English structure", () => {
 
 test("the thesis chooses a served system under one workload contract", () => {
   for (const phrase of [
-    "模型选型是生产决策，不是查排行榜",
+    "为生产环境选择模型",
     "带版本的线上服务系统",
     "特定模型修订版",
     "供应商或服务构建",
@@ -57,7 +57,7 @@ test("the thesis chooses a served system under one workload contract", () => {
     "质量、成本、延迟、可用性和运营风险",
     "没有适用于所有场景的赢家",
     "已经声明的工作负载和时间范围",
-    "从闭源到开放权重只是一个输入条件，不是决策流程",
+    "只是流程中的一个输入条件",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -160,7 +160,7 @@ test("the contested boundary requires a target population and uncertainty", () =
     "不确定性也可能不同",
     "目标总体",
     "不确定性区间",
-    "还不能作为采购事实",
+    "才能支撑采购决策",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -186,7 +186,7 @@ test("internal evaluation freezes strata pairing repetition and precision", () =
     "非劣效界值",
     "置信区间下界",
     "样本量",
-    "没有站得住脚的万能样本数",
+    "不存在适用于所有评测的固定题目数",
     "盲化候选身份",
     "裁判分歧",
     "位置偏差",
@@ -215,11 +215,11 @@ test("cost is measured per accepted task over one accounting horizon", () => {
   for (const marker of ["C_m=", "K_{msr}", "A_{msr}", "\\sum_s", "\\sum_r"])
     expect(compact).toContain(marker);
   for (const phrase of [
-    "词元价格只是输入，不是经济结果",
+    "词元价格只是成本的一个输入",
     "每项合格任务的总成本",
     "同一个核算期和工作负载",
-    "工作负载层 $s$",
-    "重复试验 $r$",
+    "用 $s$ 标记工作负载层",
+    "用 $r$ 标记重复试验",
     "加权合格数量为零时",
     "输入词元、输出词元、缓存写入与读取、工具调用、重试、网络费用、人工复核和预期事故成本",
     "加速器、CPU 与内存、存储、闲置容量、运维人力、值班工作和软件",
@@ -264,7 +264,7 @@ test("selection preserves the Pareto tradeoff and controlled rollout", () => {
     "删除被支配的候选系统",
     "关键故障率上界",
     "数据驻留",
-    "不要把判断藏进任意设置的归一化权重",
+    "任意设置的归一化权重会把这种判断藏起来",
     "取舍、负责人、证据和到期日期",
     "路由器本身也是一个带版本的系统",
     "错误路由、验证器错误、重复工作、回退延迟和外部影响",
@@ -318,7 +318,7 @@ test("the final rollout pins revisions records drift and remains replaceable", (
     "反复发生的容量故障",
     "决策记录到期",
     "工作负载契约、候选系统身份、准入证据、带不确定性的评测结果、成本账、帕累托取舍、发布负责人、回滚规则和重新评测触发条件",
-    "今天可以解释，明天也可以替换",
+    "当前的选择可以解释",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -390,8 +390,8 @@ test("the complete Chinese chapter renders through its final handoff", async () 
   const { html, headings: renderedHeadings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("模型选型是生产决策，不是查排行榜");
-  expect(html).toContain("今天可以解释，明天也可以替换");
+  expect(html).toContain("为生产环境选择模型");
+  expect(html).toContain("当前的选择可以解释");
   expect(html.match(/<figure[^>]*class="rdr-figure/g)?.length).toBe(4);
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();
 });

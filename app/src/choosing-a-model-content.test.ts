@@ -76,7 +76,7 @@ test("artifact access, legal permission, and service terms stay separate", () =>
     "service terms",
     "data retention",
     "training on customer data",
-    "do not infer rights from the word open",
+    "the word open does not by itself establish any right",
     "not legal advice",
   ]) expect(flat).toContain(phrase);
 });
