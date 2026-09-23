@@ -1103,7 +1103,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/frontiers/01-where-learning-hits-limits.qmd",
-      ["推动现代语言模型进步的廉价资源", "合成数据、推理强化学习、测试时算力", "模仿有限语料", "哪些方法真正改变了答案"],
+      ["推动现代语言模型进步的廉价资源", "合成数据、推理强化学习、测试时算力", "模仿有限语料", "哪些方法改变了答案"],
     ],
     [
       "en/frontiers/02-the-capability-horizon.qmd",

@@ -116,7 +116,7 @@ test("fixed-data and production-synthetic results stay source-scoped", () => {
 
 test("RLVR is separated from capability claims", () => {
   for (const phrase of [
-    "reinforcement learning with verifiable rewards",
+    "@gls-rlvr",
     "automatic checker",
     "reward coverage",
     "@gls-reward-hacking",

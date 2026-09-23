@@ -19,7 +19,7 @@ const references = (source: string) =>
 test("Chinese Chapter 70 preserves the complete English structure", () => {
   expect(chinese).toMatch(/^# 学习在哪里遇到极限 \{#sec-learning-limits\}/);
   expect([...chinese.matchAll(/^## (.+)$/gm)].map((match) => match[1])).toEqual([
-    "语料存量预测不是耗尽倒计时",
+    "公开文本的条件性预测",
     "约束如何向上传导",
     "合成数据改变的是生成协议",
     "可验证经验改变监督瓶颈",
@@ -28,7 +28,7 @@ test("Chinese Chapter 70 preserves the complete English structure", () => {
     "幻觉问题需要证据边界",
     "让每条突破路径都可以证伪",
     "争议所在",
-    "极限是一道接口",
+    "极限主张必须说明什么",
     "延伸阅读",
   ]);
   expect(references(chinese)).toEqual(references(english));
@@ -130,10 +130,10 @@ test("the Chinese RLVR section separates coverage from deployed selection", () =
     "\\frac{\\binom{n-c_x}{k}}{\\binom{n}{k}}",
   ]) expect(chinese).toContain(marker);
   for (const phrase of [
-    "可验证奖励强化学习",
+    "@gls-rlvr",
     "自动检查器",
     "奖励覆盖率",
-    "奖励投机",
+    "钻检查器的漏洞拿到奖励",
     "至少有一个",
     "覆盖率指标",
     "选择规则",
