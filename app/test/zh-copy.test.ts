@@ -827,7 +827,7 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "zh/evaluation/index.qmd",
-      ["评测看起来像结尾处的打分", "而把它当作系统的一部分来读", "哪些数字足以推动决策"],
+      ["评测的结果会一路回流", "把评测当作它所测量的系统的一部分来读", "哪些数字足以推动决策"],
     ],
     [
       "en/evaluation/01-benchmarks.qmd",
