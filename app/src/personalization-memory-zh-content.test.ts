@@ -31,12 +31,12 @@ function textFences(source: string): string[] {
 
 test("Chapter 40 preserves the complete English personalization contract", () => {
   expect(headings(chapter, 2)).toEqual([
-    "记忆是证据，不是权限",
-    "状态保存在哪里，不等于它如何进入模型",
+    "记忆作为不可信证据",
+    "持久化位置与应用路径",
     "一条用户记忆，就是一项有范围的主张",
     "完整生命周期需要写入门和适用性门",
     "解决冲突，不能凭空改写用户经历",
-    "用户控制是状态转移，不是界面标签",
+    "用户控制及其状态转移",
     "隐私义务决定系统架构",
     "个性化带来独有的安全与完整性风险",
     "评估完整生命周期",
@@ -95,7 +95,7 @@ test("persistence location and application path remain independent axes", () => 
     "提示词上下文",
     "查询时检索或工具调用",
     "确定性处理",
-    "异构批处理并非不可能",
+    "异构批处理仍然可行",
     "只有获准的应用路径读取并提供记录",
   ]) expect(flat).toContain(phrase);
 });
@@ -135,7 +135,7 @@ test("the default write policy is conservative and purpose-bound", () => {
 
 test("the lifecycle has separate admission and applicability gates", () => {
   for (const phrase of [
-    "不是“抽取、嵌入、检索”",
+    "涉及的阶段不止“抽取、嵌入、检索”",
     "写入门",
     "拒绝、缩短、脱敏、请求确认",
     "适用性门",
@@ -246,7 +246,7 @@ test("lower layers contested choices and the operational contract stay explicit"
     "哪位经过身份验证的行为者",
     "为何为这次请求选中",
     "检查、更正、暂停、删除和导出",
-    "积累了用户数据，而不是可靠的个性化记忆",
+    "缺少可靠的个性化记忆所需的来源、范围和控制",
   ]) expect(flat).toContain(phrase);
 });
 
