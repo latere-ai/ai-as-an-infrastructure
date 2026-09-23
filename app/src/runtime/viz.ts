@@ -1629,8 +1629,8 @@
     watchTheme(host, draw);
   };
 
-  // Decision tree: the current model-selection chapter uses a product-neutral
-  // contract. The legacy tree remains available for older embeds.
+  // Decision tree: a product-neutral walk through the model-selection gates
+  // (the selection-contract tree), in English or Chinese.
   R['decision-tree'] = function (host) {
     var mode = host.getAttribute('data-mode');
     var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
@@ -1661,29 +1661,10 @@
         ] } }
       ] } }
     ] };
-    var TASK = { q: 'Task shape?', opts: [
-      { a: 'Agentic coding', r: 'Claude Opus 4.8 / GPT-5.6 Sol' },
-      { a: 'Heavy multimodal', r: 'Gemini 3.1 Pro' },
-      { a: 'High-volume cheap', r: 'Grok 4.1 Fast, DeepSeek V3.2, Gemini Flash-Lite, Haiku 4.5' },
-      { a: 'Enterprise RAG', r: 'Cohere Command A + Embed v4, frontier model on top' }
-    ] };
-    var LEGACY = { q: 'Hard governance or sovereignty constraint?', opts: [
-      { a: 'Yes (EU residency, strict data)', r: 'EU regions, Mistral, or self-hosted open weights' },
-      { a: 'No', next: { q: 'Rent or own?', opts: [
-        { a: 'Rent (hosted API)', next: { q: 'Where are you already billed?', opts: [
-          { a: 'AWS', r: 'Bedrock: Claude, Nova, now OpenAI' },
-          { a: 'Azure', r: 'Azure OpenAI: GPT-5.x' },
-          { a: 'GCP', r: 'Vertex: Gemini, Claude' },
-          { a: 'Cloud-agnostic', next: TASK }
-        ] } },
-        { a: 'Own (open weights)', next: { q: 'Hardware budget?', opts: [
-          { a: 'Laptop / 16-24GB', r: 'Gemma 4, Ministral 3, Qwen3.5 small, gpt-oss-20b' },
-          { a: 'Single 80GB GPU', r: 'gpt-oss-120b, Gemma 4 31B, Qwen3.5-35B-A3B, OLMo 3-Think 32B' },
-          { a: 'Cluster', r: 'DeepSeek-V4-Pro, Kimi K2.6, Mistral Large 3, GLM-5.1' }
-        ] } }
-      ] } }
-    ] };
-    var TREE = mode === 'selection-contract' ? (zh ? SELECTION_ZH : SELECTION_EN) : LEGACY;
+    // Only the selection-contract tree exists; a missing or unknown data-mode
+    // falls back to it.
+    var TREES = { 'selection-contract': zh ? SELECTION_ZH : SELECTION_EN };
+    var TREE = Object.prototype.hasOwnProperty.call(TREES, mode) ? TREES[mode] : TREES['selection-contract'];
     var wrap = el('div', 'viz-dt'), path = el('div', 'viz-dt-path'), qEl = el('div', 'viz-dt-q'), opts = el('div', 'viz-ce-chips');
     var resetBtn = el('button', 'viz-pa-toggle'); resetBtn.type = 'button'; resetBtn.textContent = zh ? '重新开始' : 'start over';
     wrap.appendChild(path); wrap.appendChild(qEl); wrap.appendChild(opts); host.appendChild(wrap); host.appendChild(resetBtn);
@@ -1694,7 +1675,7 @@
         var b = el('button', 'viz-ce-chip'); b.type = 'button'; b.textContent = o.a;
         b.addEventListener('click', function () {
           crumbs.push(o.a); path.textContent = crumbs.join('  ›  ');
-          if (o.r) { qEl.textContent = mode === 'selection-contract' ? (zh ? '结果' : 'Outcome') : 'Recommended'; opts.textContent = ''; var res = el('div', 'viz-dt-result'); res.textContent = o.r; opts.appendChild(res); }
+          if (o.r) { qEl.textContent = zh ? '结果' : 'Outcome'; opts.textContent = ''; var res = el('div', 'viz-dt-result'); res.textContent = o.r; opts.appendChild(res); }
           else show(o.next);
         });
         opts.appendChild(b);
