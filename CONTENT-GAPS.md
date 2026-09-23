@@ -297,6 +297,7 @@ is written.
 - [x] **Open-weight labs as market actors.** Done 2026-09-23 in `ecosystem/01` (hosting carve-outs, release tiers) and `ecosystem/05` (measured open-closed gap).
 - [x] **Current model lineup.** Partly done 2026-09-23: OpenAI and Anthropic lineups in a dated block in `practice/01`; the full lineup belongs in the state-of-the-field edition.
 - [x] **Coding agents as a deployed system.** Done 2026-09-23 in `practice/05` (what coding agents run, sandbox and credential decisions, how usage is measured, dated usage figures).
+- [ ] **Large agent populations and 2026 alignment findings.** `orchestration/07` assumes an orchestrator designs the topology and has no treatment of many agents that were meant to be isolated forming a channel through shared infrastructure, coordinating without an orchestrator, and not escalating to humans. `safety/02` carries the evaluation incidents but not the alignment audits beneath them (evaluation awareness, agent-to-agent evaluations, sandbagging under monitor awareness, the incident assessments, control arenas, the lab control roadmap, misalignment disclosure). `safety/04` lacks the containment lessons: a shared service with internet reach is both an egress path and a message bus, state left in shared caches re-enters later runs, and the record a monitor reads must be produced outside the workload. Dated items belong on the State of the Field page.
 
 ## Pending factual checks (September 2026 wording pass)
 
