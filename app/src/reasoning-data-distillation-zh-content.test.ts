@@ -210,12 +210,12 @@ test("weak supervision retains its measured conditions", () => {
 test("a defensible corpus records boundaries, lineage, and matched evaluation", () => {
   for (const phrase of [
     "生成前登记提示家族",
-    "固定并版本化生成约定",
+    "固定并版本化生成设置",
     "保存每一项决定，而不只是胜出的样本",
     "拆开记录各项验收标准",
     "拆分前去重，生成后再去重",
     "明确决定权重",
-    "评估学生模型，而不是语料库的故事",
+    "用训练出的学生模型评判语料库",
     "答案监督微调",
     "算力匹配的非蒸馏基线",
     "许可证和删除谱系",
@@ -231,8 +231,8 @@ test("the contested claim, lower constraint, and payoff stay bounded", () => {
     "教师、学生、筛选器、词元预算和评测",
     "验收过程造成的提示重加权",
     "只有系统记录了足以复现故障的上下文",
-    "真正的资产不只是文本",
-    "并不假装每条被接受的解释都是证明",
+    "可复用的资产是提示、教师、轨迹",
+    "记录为通过了某项具名检查的样本",
   ]) {
     expect(flat).toContain(phrase);
   }
