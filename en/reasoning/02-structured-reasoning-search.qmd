@@ -7,10 +7,12 @@ depth. A tree can revisit alternatives, while a graph can also reuse or combine 
 work. The model still generates tokens in every case; the search procedure allocates
 model calls around those generations.
 
-This chapter isolates inference-time control. The proposal model's weights need not
-change during a request, but that does not mean the whole system was obtained without
-training. A partial-state scorer, value model, or outcome model may have been trained
-separately. Keeping that boundary explicit prevents a prompted tree and a trained
+This chapter isolates inference-time control. The proposal model, the language model
+that generates candidate steps, keeps its weights fixed during a request. Other parts of
+the system may still have been trained separately: a partial-state scorer, a value model
+that predicts the eventual outcome from an unfinished state, or an outcome model that
+scores finished answers. Keeping the boundary between inference-time control and
+components trained for the search explicit prevents a prompted tree and a trained
 AlphaZero-like system from being treated as the same method.
 
 ![Four structures for allocating generation. A chain retains one continuation, tree
@@ -20,8 +22,8 @@ a progression in model capability.](/figures/structured-reasoning-search-1.svg){
 
 ## A search problem needs an interface
 
-Calling intermediate text a “thought” does not yet define a search problem. The
-controller needs a task-specific interface:
+Treating intermediate text as “thoughts” to search over requires a task-specific
+interface that fixes each of the following decisions for the controller:
 
 | Component | Required decision | Example |
 |---|---|---|
@@ -36,15 +38,15 @@ controller needs a task-specific interface:
 A **state** is the task information used to predict valid continuations and outcomes. A
 **search node** is bookkeeping: it can also hold a parent pointer, incoming action,
 depth, path cost, score, and visit count. Different nodes may represent the same state.
-That distinction matters once the controller tries to merge duplicate work.
+Merging duplicate work, discussed with graphs below, depends on this distinction.
 
 Let $x$ be the request, $s_0$ its initial state, $a$ a thought-sized action, and
 $T(s,a)$ the successor state. The proposal distribution
 $\pi_\theta(a\mid s)$ supplies possible actions from model parameters $\theta$; it does
 not choose which search node to expand. The frontier policy makes that choice.
 
-Suppose $\mathcal{T}_B(x)$ is the collection of terminal states actually evaluated
-before budget $B$ is exhausted. An oracle objective would be
+Suppose $\mathcal{T}_B(x)$ is the collection of terminal states evaluated before budget
+$B$ is exhausted. An oracle objective would be
 
 $$
 s^\star \in \arg\max_{s\in\mathcal{T}_B(x)} q(s),
@@ -84,10 +86,10 @@ D+1, & b=1,\\
 $$
 
 Here $b$ is the effective branching factor after proposal filtering, $D$ is the maximum
-depth, $d$ indexes a depth, and $N_{\text{full}}$ counts the root and every generated
-node. At $b=4$ and $D=8$, the total is 87,381 nodes. The relevant $b$ is not the model's
-vocabulary size. It is the number of thought units or actions the expansion function
-actually admits at each node, and the total above counts all generated nodes.
+depth, $d$ indexes a depth, and $N_{\text{full}}$ counts the root and all generated
+nodes. At $b=4$ and $D=8$, the total is 87,381 nodes. The relevant $b$ is the number of
+thought units or actions the expansion function admits at each node, not the model's
+vocabulary size.
 
 A beam of width $w$ limits retained states, not necessarily proposals. Under the
 simplifying assumptions that every retained state produces exactly $b$ distinct
@@ -103,7 +105,7 @@ $w$. This linear bound is the reason beam search is practical. It does not guara
 that a valid path remains in the beam. A small $w$ controls work by making pruning
 irreversible.
 
-Token counts alone also miss part of the bill. A more honest total-work account is
+Token counts alone also omit scoring and checking costs. A fuller total-work account is
 
 $$
 W_B
@@ -116,8 +118,9 @@ In this expression, $E_B$ is the set of generated state-action expansions, $Q_B$
 the set of scored states, and $C_B$ is the set of checked terminal states within budget
 $B$. The three $c$ terms are their measured costs. Generation cost depends on prefix
 length, output length, cache reuse, and batching. A prompted evaluator can cost another
-decode, while an executable check may be cheap per call but expensive to engineer.
-Parallel calls can reduce wall time when capacity exists; they do not reduce $W_B$.
+model generation, while an executable check may be cheap per call but expensive to
+engineer. Parallel calls can reduce wall time when capacity exists; they do not reduce
+$W_B$.
 
 <figure id="fig-reasoning-search-budget">
 <div class="viz" data-viz="reasoning-search-budget" data-lang="en"></div>
@@ -128,8 +131,9 @@ use a logarithmic scale so large trees remain visible; it models work, not accur
 
 ## Frontier policies make different sacrifices
 
-“Tree search” names a data structure, not one algorithm. The frontier rule determines
-what gets explored and what can be lost.
+“Tree search” names a data structure that many algorithms share. The frontier rule
+distinguishes one algorithm from another and determines what gets explored and what can
+be lost.
 
 | Policy | Next node | Main advantage | Important limitation |
 |---|---|---|---|
@@ -140,10 +144,13 @@ what gets explored and what can be lost.
 | Best-first | Highest-priority node across depths | Can focus work wherever a comparable heuristic points | Scores across depths must mean the same thing; a bad heuristic can starve alternatives |
 | Monte Carlo tree search | A node selected from visit counts and estimated returns | Balances repeated exploration and exploitation | Needs meaningful rollouts or leaf values and repeated backup |
 
-Breadth-first and depth-first search do not require a learned value. Beam and
-best-first search do. Monte Carlo tree search (MCTS) repeats selection, expansion, leaf
-evaluation or simulation, and backup. A common selection form from UCT is
-[@kocsis2006uct]
+Breadth-first and depth-first search order the frontier by depth alone. Beam and
+best-first search need a partial-state score, whether a learned value, a prompted
+confidence, or a hand-written heuristic. Monte Carlo tree search (MCTS) repeats
+selection, expansion, leaf evaluation or simulation, and backup. A simulation, or
+rollout, continues from a leaf to a terminal state to estimate its return; backup
+propagates that estimate to every node on the path. A common selection form from UCT
+(upper confidence bounds applied to trees) is [@kocsis2006uct]
 
 $$
 a_{\text{UCT}}
@@ -156,10 +163,10 @@ $$
 
 Here $\mathcal{A}(s)$ is the set of currently available actions, $Q(s,a)$ is the
 backed-up mean return for action $a$, $N(s)$ is the visit count of state $s$,
-$N(s,a)$ is the action visit count, and $c>0$ controls the exploration bonus. An
-implementation must also force or otherwise handle unvisited actions. AlphaZero-style
-PUCT adds a proposal-policy prior; it is not merely best-first search under another
-name.
+$N(s,a)$ is the action visit count, and $c>0$ controls the exploration bonus, the
+square-root term that grows for rarely visited actions. An implementation must also
+force or otherwise handle unvisited actions. AlphaZero-style PUCT adds a proposal-policy
+prior; it is not best-first search under another name.
 
 Classical guarantees depend on assumptions that language-model controllers often
 break. Breadth-first completeness assumes finite branching and a solution at finite
@@ -212,20 +219,22 @@ The output is `width=1: no verified solution` and
 cannot return to the pruned alternative. Width two
 retains both branches long enough for the terminal check to distinguish them. A wider
 beam raises candidate coverage, but it also raises work. It helps only if the expansion
-function proposes the useful branch and the partial-state evaluator keeps it alive.
+function proposes the useful branch and the partial-state evaluator keeps it in the
+beam.
 
 ## Graphs mean two different things here
 
 A state-space graph and a thought workflow solve different problems.
 
 In graph search, a **transposition** occurs when different paths reach the same task
-state. A reached table can then avoid expanding that state twice. This requires a
-canonical state key that preserves everything relevant to future actions and outcomes.
+state. A reached table, which records every state already generated, can then avoid
+expanding that state twice. This requires a canonical state key that preserves
+everything relevant to future actions and outcomes.
 The same text can refer to a different hidden state when tool versions, files, database
 contents, permissions, or prior side effects differ. Conversely, two differently worded
 traces may encode the same symbolic state. Merging by surface text alone is therefore
-unsafe. Cyclic state spaces also require cycle detection, a closed set, or explicit
-reopening rules.
+unsafe. Cyclic state spaces also require cycle detection, a closed set of states already
+expanded, or explicit reopening rules.
 
 Graph of Thoughts (GoT) uses “graph” in a broader dataflow sense. Its vertices are
 thought units, while edges can encode generation, aggregation, refinement, or feedback
@@ -238,9 +247,10 @@ baselines reported in the paper. That evidence supports programmable composition
 those tasks. It does not demonstrate automatic semantic merging or a general-purpose
 graph-search algorithm.
 
-## Value guidance is a bet on partial evidence
+## Value guidance depends on partial evidence
 
-For a rollout policy $\rho$, the ideal state value is
+For a rollout policy $\rho$, the rule used to continue from a state until it terminates,
+the ideal state value is
 
 $$
 v^\rho(s)=\mathbb{E}[R(s_T)\mid s,\rho],
@@ -248,9 +258,9 @@ $$
 
 where $s$ is the current state, $s_T$ is the terminal state reached by continuing under
 $\rho$, $R(s_T)$ is its terminal return, and the expectation averages over stochastic
-proposals or environment outcomes. A prompted confidence score, a local process score,
-and an estimate of remaining path cost are not automatically estimates of this same
-quantity. Their scales can also drift with depth.
+proposals or environment outcomes. A prompted confidence score, a local process score
+that judges one intermediate step, and an estimate of remaining path cost are not
+automatically estimates of this same quantity. Their scales can also drift with depth.
 
 Let a controller observe
 
@@ -261,25 +271,25 @@ $$
 where $v^*(s)$ is the true continuation value for the controller's objective,
 $\widehat v(s)$ is its observed score, and $\varepsilon(s)$ is evaluator error. Search
 selects states with the highest observed score, so it also selects unusually positive
-errors. This selection bias becomes more important as the controller compares more
-states or optimizes the same scorer more aggressively [@gao2023overoptimization]. A
-score calibrated on ordinary traces may also become out-of-distribution on prefixes
-created by deeper search. False pruning is the opposite error: one underestimated state
-is removed before its delayed payoff becomes visible.
+errors. This selection bias grows as the controller compares more states or optimizes
+the same scorer more aggressively [@gao2023overoptimization]. A scorer calibrated on
+ordinary traces may also face out-of-distribution inputs, prefixes unlike those it was
+calibrated on, once deeper search creates them. False pruning is the opposite error: one
+underestimated state is removed before its delayed payoff becomes visible.
 
 Prompted self-evaluation illustrates the dependency. Self-evaluation-guided stochastic
 beam search used the same language model under different generation and evaluation
 prompts, combining step confidence with model likelihood [@xie2023selfeval]. It improved
 the reported arithmetic settings, but matched-budget results were not uniformly better
-on commonsense tasks. The method is useful evidence that partial scoring can guide a
-beam, not evidence that the model supplies an exact verifier of its own work.
+on commonsense tasks. The method is useful evidence that partial scoring can guide a beam, not evidence that the model
+supplies an exact verifier of its own work.
 
 ## The published systems are not interchangeable
 
 Several influential systems share a generator-evaluator loop, but their controllers and
 training assumptions differ.
 
-| System | What it actually adds | Scope of the evidence |
+| System | What it adds | Scope of the evidence |
 |---|---|---|
 | Tree of Thoughts | Task-designed thought units, proposal prompts, state evaluation, and breadth-first or depth-first traversal | Reported gains on Game of 24, Creative Writing, and Mini Crosswords; prompts and evaluator calls were part of the method [@yao2023tree] |
 | Reasoning via Planning | An LM used for proposals and simulated transitions inside MCTS with task-specific rewards | Evaluated on selected planning, arithmetic, and logical-reasoning tasks; the LM “world model” can still predict a wrong transition [@hao2023rap] |
@@ -287,21 +297,23 @@ training assumptions differ.
 | ReAct | One trajectory interleaving reasoning, actions, and observations | Grounds later steps in external observations, but ReAct is not itself a search algorithm unless another controller retains alternatives and revisits them [@yao2022react] |
 
 Tree of Thoughts does not establish that trees dominate repeated sampling on arbitrary
-tasks. Its Game of 24 result is striking, but the task exposes compact intermediate
+tasks. Its Game of 24 gain is large, but the task exposes compact intermediate
 equations that can be judged before completion. GoT likewise selected tasks where
-aggregation and refinement were meaningful. TS-LLM shows what trained critics can add,
-but those critics cross the training boundary established at the start of this chapter.
+aggregation and refinement were meaningful. TS-LLM shows what trained critics, its
+learned value and outcome-reward models, can add, but those critics cross the training
+boundary established at the start of this chapter.
 
 AlphaEvolve offers a related, broader example. It performs evaluator-guided evolutionary
 search over programs, not beam search or MCTS over natural-language thoughts. Its white
 paper reports a rank-48 procedure for multiplying $4\times4$ complex matrices and a Borg
 scheduling heuristic that Google reports recovers an average 0.7 percent of fleet-wide
-compute [@novikov2025alphaevolve]. Automated evaluation made those searches actionable.
+compute [@novikov2025alphaevolve]. Automated evaluation made those searches feasible.
 The result is not evidence that language tree search is generally superior.
 
 ## Operating a search controller
 
-A production implementation needs more than an algorithm name.
+A production implementation needs the following decisions and controls in addition to
+the search algorithm.
 
 1. Define the state schema, legal action schema, canonicalization rule, terminal test,
    and final output contract. Reject unparsable states before they enter the frontier.
@@ -315,7 +327,7 @@ A production implementation needs more than an algorithm name.
    permits it.
 5. Define a fallback for an empty frontier, parser failure, evaluator timeout, no
    accepted terminal, and conflicting checkers. A service may return a direct answer,
-   abstain, or escalate, but the choice should not be implicit.
+   abstain, or escalate, and the implementation should state which one it does.
 
 Tool-using search needs one more boundary: speculative branches should not commit
 irreversible external effects. Run checks in sandboxes or transactions, separate
@@ -338,12 +350,12 @@ flattened, making selection rather than generation the bottleneck
 [@brown2024monkeys]. Structured search becomes attractive when partial states expose
 informative feedback and early pruning saves substantial downstream work.
 
-Matched compute can reverse a leaderboard. Snell et al. found that best-of-$n$ and
-process-reward-guided search occupied different favorable regimes across problem
-difficulty and budget [@snell2024scaling]. Katz et al. showed another boundary: on
-classical planning tasks, using an LM to construct symbolic successor and goal-test code,
-then running conventional search, could be both more efficient and easier to reason
-about than calling the LM at every node [@katz2024thoughtsearch]. Claims that search is
+Matching compute can change which method ranks first. Snell et al. found that
+best-of-$n$ and process-reward-guided search occupied different favorable regimes across
+problem difficulty and budget [@snell2024scaling]. Katz et al. found that on classical
+planning tasks, using an LM to construct symbolic successor and goal-test code, then
+running conventional search, could be both more efficient and easier to reason about
+than calling the LM at every node [@katz2024thoughtsearch]. Claims that search is
 sound, complete, or optimal must therefore be traced to the implemented transition,
 goal test, heuristic, and pruning rule. Borrowing the name of a classical algorithm is
 not sufficient.
@@ -353,16 +365,18 @@ not sufficient.
 ## Constraint Arrow
 
 Search consumes generated tokens, scorer calls, checker calls, memory, and wall-clock
-latency. @sec-serving-problem determines how many branches can actually run in parallel
-without damaging batching or tail latency. The constraint also runs upward. If
-@sec-verifiers-process-supervision cannot supply reliable intermediate evidence, wider
-search creates more opportunities for evaluator error. In that regime, a simpler
-candidate sampler and a strong terminal checker may be the better system.
+latency. The serving limits in @sec-serving-problem determine how many branches can run
+in parallel without damaging batching or tail latency. Evidence quality imposes a second
+constraint. If the verifiers of @sec-verifiers-process-supervision cannot supply
+reliable intermediate evidence, wider search creates more opportunities for evaluator
+error. In that regime, a simpler candidate sampler and a strong terminal checker may be
+the better system.
 :::
 
-Structured reasoning search is an allocation layer. The proposal model supplies
-possible actions; the controller chooses where to spend work; the evaluator changes
-which branches survive; and the checker determines what evidence can stop the search.
+Structured reasoning search is a layer that allocates model calls. The proposal model
+generates candidate actions. The controller spends the budget, choosing which nodes to
+expand, pruning branches by their evaluator scores, and stopping when a checker accepts
+a result or a limit is reached.
 The next chapter changes the state representation itself by moving some work from
 natural-language traces into programs, solvers, and proof checkers.
 

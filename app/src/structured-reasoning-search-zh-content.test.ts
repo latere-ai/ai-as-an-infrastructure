@@ -38,7 +38,7 @@ test("Chapter 25 preserves the complete English artifact contract", () => {
     "不同前沿策略舍弃的东西不同",
     "被剪掉的分支无法挽回",
     "这里的「图」有两种含义",
-    "价值引导押注于局部证据",
+    "价值引导依赖局部证据",
     "已发表的系统不能混为一谈",
     "如何运行搜索控制器",
     "争议：结构化搜索何时胜过增加采样",
@@ -205,7 +205,7 @@ test("the contested boundary and lower-layer constraint preserve operational con
   for (const phrase of [
     "不存在与任务无关的赢家",
     "选择而不是生成成了瓶颈",
-    "预算匹配可能改变排行榜",
+    "预算匹配可能改变各方法的排序",
     "借用经典算法的名称并不够",
     "搜索会消耗生成词元、评分器调用、检查器调用、内存和墙钟延迟",
     "更宽的搜索只会制造更多让评估器犯错的机会",
