@@ -257,7 +257,7 @@ test("the complete chapter renders through its final handoff", async () => {
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("Capability is potential. Productivity is a measured change in accepted work");
+  expect(html).toContain("accepted and accountable work result, not one token or one model call");
   expect(html.match(/<figure/g)?.length).toBe(2);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });

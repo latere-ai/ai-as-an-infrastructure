@@ -40,7 +40,7 @@ test("Chinese Chapter 78 preserves the complete English structure", () => {
 
 test("the opening defines productivity as a counterfactual change in accepted work", () => {
   for (const phrase of [
-    "能力代表潜力",
+    "模型的能力描述它在一项任务上能做到什么",
     "生产率衡量的则是通过验收的工作发生了多少变化",
     "让起草者更快，却让审核者更慢",
     "堵塞共享队列",
@@ -172,7 +172,7 @@ test("task experiments preserve the exact population outcome and boundary", () =
     "速度快 25.1%",
     "正确率低 19 个百分点",
     "不能为其他模型、工作者或工作流定义永久边界",
-    "旧版合成曲线已经删除",
+    "作者把这种模式称为锯齿状边界",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -204,7 +204,7 @@ test("broader outcomes remain distinct from local task savings", () => {
     "收入或记录工时的平均影响",
     "工作者和工作场所层面超过 2% 的效应",
     "ChatGPT 发布两年后",
-    "没有否认局部节省时间",
+    "局部节省了时间与总量指标没有可测变化，两者可以同时存在",
     "任务时间、工作变化、工时、收入和总体生产率是不同的结果",
   ]) expect(flat).toContain(phrase);
 });
@@ -243,12 +243,12 @@ test("the evidence matrix states what each design cannot establish", () => {
 
 test("the contested boundary keeps every result attached to its design", () => {
   for (const phrase of [
-    "不存在一个稳定不变的「AI 辅助工作」类别",
+    "「AI 辅助工作」这个类别本身会随时间变化",
     "工具能力会变化",
     "工作者会学习",
     "任务组合会改变",
     "正向平均效应可能掩盖高严重度任务中的伤害",
-    "早期变慢既可能是投资，也可能是真正的失败",
+    "早期变慢既可能是投资，也可能就是失败",
     "群体、处理方案版本、结果、审核边界和日期",
     "异质性本身是需要估计的结果",
   ]) expect(flat).toContain(phrase);
@@ -289,11 +289,10 @@ test("the constraint handoff preserves the accepted accountable work unit", () =
   for (const phrase of [
     "可信替代方案",
     "模型与基础设施成本",
-    "推断契约",
+    "区间与停止规则",
     "权利与合规条件",
     "一个通过验收且可问责的工作结果",
     "不是一个词元或一次模型调用",
-    "能力代表潜力，生产率衡量的则是通过验收的工作发生了多少变化",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -348,7 +347,7 @@ test("the complete Chinese chapter renders through its final handoff", async () 
   const { html, headings: renderedHeadings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("能力代表潜力，生产率衡量的则是通过验收的工作发生了多少变化");
+  expect(html).toContain("经济单位始终是一个通过验收且可问责的工作结果");
   expect(html.match(/<figure/g)?.length).toBe(2);
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();
 });
