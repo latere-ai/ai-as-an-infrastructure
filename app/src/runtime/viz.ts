@@ -1606,46 +1606,6 @@
     render();
   };
 
-  // Ideal GPipe bubble for a balanced synchronous flush schedule with negligible
-  // communication. Real traces also include stage imbalance and message time.
-  R['pipeline-bubble'] = function (host) {
-    var p = 4, m = 6;
-    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
-    var zh = lang === 'zh';
-    var L = zh ? {
-      stage: '阶段 ', summary: '理想 GPipe', stages: '个阶段', microbatches: '个微批', bubble: '气泡',
-      stageSlider: '流水线阶段数 p', microbatchSlider: '微批数 m'
-    } : {
-      stage: 'stage ', summary: 'ideal GPipe', stages: 'stages', microbatches: 'micro-batches', bubble: 'bubble',
-      stageSlider: 'pipeline stages p', microbatchSlider: 'micro-batches m'
-    };
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); read.setAttribute('aria-live', 'polite'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 240);
-    cv.c.setAttribute('role', 'img');
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 26 * cv.dpr, lx = 60 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var laneH = (H - 2 * pd) / p, slots = m + p - 1, sw = (W - lx - pd) / slots;
-      for (var s = 0; s < p; s++) {
-        var y = pd + s * laneH;
-        ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right'; ctx.fillText(L.stage + (s + 1), lx - 6 * cv.dpr, y + laneH / 2 + 3 * cv.dpr);
-        for (var mb = 0; mb < m; mb++) {
-          var col = s + mb; // wavefront slot
-          var x = lx + col * sw;
-          ctx.fillStyle = t.accent;
-          ctx.fillRect(x + cv.dpr, y + 2 * cv.dpr, sw - 2 * cv.dpr, laneH - 4 * cv.dpr);
-        }
-      }
-      var bub = (p - 1) / (m + p - 1);
-      read.textContent = L.summary + ' · p=' + p + ' ' + L.stages + ' · m=' + m + ' ' + L.microbatches + ' · ' + L.bubble + ' ' + Math.round(bub * 100) + '%';
-      cv.c.setAttribute('aria-label', read.textContent);
-    }
-    host.appendChild(slider(L.stageSlider, 2, 8, 1, p, function (v) { p = Math.round(v); draw(); }).wrap);
-    host.appendChild(slider(L.microbatchSlider, 1, 16, 1, m, function (v) { m = Math.round(v); draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Accuracy precision screen: this deliberately shows only the rough Wald
   // half-width for one iid binomial proportion. It is not a power calculation,
   // a paired A/B interval, or a release rule.

@@ -465,7 +465,7 @@ test("expanded adaptation chapters use the post-training visualizations in both 
 
 // Wave 5: the deep-catalog tail of bespoke components.
 test("the viz runtime registers the wave-5 components", () => {
-  for (const name of ["ssm-vs-attention", "rl-timeline", "rrf-fusion", "decision-tree", "float-bits", "pipeline-bubble"]) {
+  for (const name of ["ssm-vs-attention", "rl-timeline", "rrf-fusion", "decision-tree", "float-bits"]) {
     expect(rt).toMatch(new RegExp("R\\['" + name + "'\\]\\s*=\\s*function"));
   }
 });
@@ -477,7 +477,6 @@ test("wave-5 components are used in their chapters, both languages", () => {
     ["orchestration/08-rag-retrieval", "rrf-fusion"],
     ["practice/01-choosing-a-model", "decision-tree"],
     ["foundations/06-training-at-scale", "float-bits"],
-    ["foundations/06-training-at-scale", "pipeline-bubble"],
   ];
   for (const [path, viz] of uses) {
     for (const lang of ["en", "zh"]) {
@@ -488,29 +487,17 @@ test("wave-5 components are used in their chapters, both languages", () => {
 
 test("Chapter 10 visualizations localize labels, controls, and accessible summaries", () => {
   const floatStart = rt.indexOf("R['float-bits']");
-  const floatEnd = rt.indexOf("R['pipeline-bubble']", floatStart);
+  const floatEnd = rt.indexOf("  R['", floatStart + 1);
   const floatBits = rt.slice(floatStart, floatEnd);
-  const bubbleStart = rt.indexOf("R['pipeline-bubble']");
-  const bubbleEnd = rt.indexOf("R['eval-power']", bubbleStart);
-  const bubble = rt.slice(bubbleStart, bubbleEnd);
 
-  for (const component of [floatBits, bubble]) {
-    expect(component).toContain("host.getAttribute('data-lang')");
-    expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
-  }
+  expect(floatBits).toContain("host.getAttribute('data-lang')");
+  expect(floatBits).toContain("document.documentElement.lang.indexOf('zh') === 0");
   for (const phrase of ["符号", "指数（范围）", "尾数（精度）", "位 = 1 位符号"]) {
     expect(floatBits).toContain(phrase);
   }
   expect(floatBits).toContain("b.setAttribute('aria-pressed'");
   expect(floatBits).toContain("bits.setAttribute('role', 'img')");
   expect(floatBits).toContain("bits.setAttribute('aria-label'");
-
-  for (const phrase of ["阶段 ", "理想 GPipe", "个阶段", "个微批", "气泡", "流水线阶段数 p", "微批数 m"]) {
-    expect(bubble).toContain(phrase);
-  }
-  expect(bubble).toContain("read.setAttribute('aria-live', 'polite')");
-  expect(bubble).toContain("cv.c.setAttribute('role', 'img')");
-  expect(bubble).toContain("cv.c.setAttribute('aria-label'");
 });
 
 test("the RL systems view separates placement from synchronization", () => {
