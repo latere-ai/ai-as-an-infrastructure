@@ -1,39 +1,47 @@
 import { test, expect } from "bun:test";
-import { renderDot, withNodeMargin } from "./diagrams.ts";
+import { LAYOUT_FONT, prepareDot } from "./diagram-source.ts";
+import { loadGraphviz, renderDot } from "./diagrams.ts";
 
-// Graphviz's default node margin crowds multi-line labels against rounded/filled
-// box borders. withNodeMargin injects a roomier default right after the graph's
-// opening brace, so every {dot} diagram gets breathing room from one knob.
+const gv = await loadGraphviz();
 
-test("injects a default node margin after the graph opening brace", () => {
-  const out = withNodeMargin('digraph {\n  a -> b;\n}');
-  expect(out).toBe('digraph {\n  node [margin="0.2,0.12"];\n  a -> b;\n}');
+test("injects the layout font, a transparent background, and a node margin after the graph brace", () => {
+  const out = prepareDot("digraph {\n  a -> b;\n}");
+  expect(out.startsWith("digraph {")).toBe(true);
+  expect(out).toContain(`graph [fontname="${LAYOUT_FONT}", bgcolor="transparent"];`);
+  expect(out).toContain(`node [fontname="${LAYOUT_FONT}", margin="0.2,0.12"];`);
+  expect(out.indexOf("fontname")).toBeLessThan(out.indexOf("a -> b"));
 });
 
-test("handles named, strict, and undirected graph headers", () => {
-  for (const header of ["digraph G {", "strict digraph {", "graph {"]) {
-    expect(withNodeMargin(`${header}\n}`)).toContain('node [margin="0.2,0.12"];');
-    // margin lands inside the graph, immediately after the brace.
-    expect(withNodeMargin(`${header}\n}`).indexOf("margin")).toBeGreaterThan(
-      header.length - 1,
-    );
+test("handles named, strict, undirected, and commented graph headers", () => {
+  for (const header of ["digraph G {", "strict digraph {", "graph {", "// a note\ndigraph {"]) {
+    const out = prepareDot(`${header}\n}`);
+    expect(out.indexOf(`fontname="${LAYOUT_FONT}"`)).toBeGreaterThan(header.length - 1);
   }
+  expect(prepareDot("not a graph")).toBe("not a graph");
 });
 
-test("leaves non-graph input untouched", () => {
-  expect(withNodeMargin("not a graph")).toBe("not a graph");
+test("every font is laid out with the layout font, not the one the source names", () => {
+  // Graphviz sized boxes with Helvetica metrics while the page draws Inter,
+  // which is wider, so labels crowded or crossed their box edges.
+  const src = 'digraph { node [fontname="Helvetica"]; subgraph cluster_x { label="cluster"; a [label="node", fontname="PingFang SC"]; } a -> b [label="edge"]; }';
+  const html = renderDot(gv, src, new Map(), "x", "");
+  const fonts = [...html.matchAll(/<text\b[^>]*font-family="([^"]*)"/g)].map((m) => m[1]);
+  expect(fonts.length).toBeGreaterThanOrEqual(4);
+  for (const f of fonts) expect(f.startsWith(LAYOUT_FONT)).toBe(true);
+});
+
+test("attribute rewrites leave label text alone", () => {
+  const out = prepareDot('digraph { a [label="size=3, fontname=x", fontname=Helvetica]; }');
+  expect(out).toContain('label="size=3, fontname=x"');
+  expect(out).toContain(`fontname="${LAYOUT_FONT}"];`);
 });
 
 test("Graphviz SVGs expose the figure caption as an accessible name", () => {
-  const graphviz = {
-    dot: () => '<?xml version="1.0"?><svg width="10pt" height="10pt"><g></g></svg>',
-  } as any;
   const code = [
     "//| label: fig-path",
     '//| fig-cap: "Artifact & kernel compatibility."',
     "digraph { A -> B }",
   ].join("\n");
-  const html = renderDot(graphviz, code, new Map(), "chapter.html", "../");
-
+  const html = renderDot(gv, code, new Map(), "chapter.html", "../");
   expect(html).toContain('<svg role="img" aria-label="Artifact &amp; kernel compatibility."');
 });

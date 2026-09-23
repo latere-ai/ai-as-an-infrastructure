@@ -13,6 +13,7 @@ import { loadBook } from "./pipeline/book.ts";
 import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { stripCjkSoftBreaks } from "./pipeline/cjk.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
+import { LAYOUT_FONT } from "./pipeline/diagram-source.ts";
 import { loadGraphviz, renderDot } from "./pipeline/diagrams.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
 import { renderMarkdown } from "./pipeline/markdown.ts";
@@ -210,7 +211,9 @@ function sampleOf(masked: string | null, lang: Lang): string | null {
 // and a listed figure that now fits, both fail until the list is updated.
 const MOBILE_COLUMN_PT = 235;
 const knownWideFigures = [
+  "en:fig-agent-control-loop",
   "en:fig-behavior-specs-supply-chain",
+  "en:fig-ce-pipeline",
   "en:fig-compilers-kernels-lowering",
   "en:fig-compilers-kernels-validation",
   "en:fig-compute-frontier-domain",
@@ -219,8 +222,10 @@ const knownWideFigures = [
   "en:fig-dpo-variants-map",
   "en:fig-dpo-variants-reduction",
   "en:fig-eliciting-reasoning-structure",
+  "en:fig-embedding-contract",
   "en:fig-embodied-data-loop",
   "en:fig-frameworks-autodiff-contract",
+  "en:fig-frameworks-autodiff-tape",
   "en:fig-harness-state-machine",
   "en:fig-kv-sharing",
   "en:fig-mid-training-boundary",
@@ -228,22 +233,36 @@ const knownWideFigures = [
   "en:fig-orchestration-checkpoint-commit",
   "en:fig-orchestration-control-loop",
   "en:fig-orchestration-data-resume",
+  "en:fig-powering-critical-path",
   "en:fig-quantization-kernels-flashattention",
   "en:fig-rlhf-pipeline",
+  "en:fig-runtime-control-path",
   "en:fig-safety-tuning-hierarchy",
   "en:fig-sft-peft-masking",
   "en:fig-slc-structured-loop",
+  "en:fig-synthetic-data-loop",
+  "en:fig-tooling-protocols",
   "en:fig-training-wiring",
   "en:fig-verifiable-rewards-map",
+  "en:fig-verification-queue",
   "en:fig-vlm-connectors",
   "en:fig-voice-cascade-vs-e2e",
   "en:fig-whole-stack-loops",
   "en:fig-whole-stack-pipeline",
   "en:fig-world-model-loop",
   "zh:fig-compilers-kernels-lowering",
+  "zh:fig-compute-frontier-domain",
   "zh:fig-data-curation-pipeline",
+  "zh:fig-diffusion-lineage",
+  "zh:fig-frameworks-autodiff-contract",
+  "zh:fig-frameworks-autodiff-tape",
+  "zh:fig-horizon-thresholds",
+  "zh:fig-moe-routing",
+  "zh:fig-orchestration-checkpoint-commit",
   "zh:fig-orchestration-control-loop",
+  "zh:fig-orchestration-data-resume",
   "zh:fig-quantization-kernels-flashattention",
+  "zh:fig-slc-structured-loop",
   "zh:fig-whole-stack-pipeline",
 ];
 
@@ -276,6 +295,22 @@ test("every Graphviz figure parses and fits the mobile reading column", () => {
   }
   expect(failures).toEqual([]);
   expect(wide.sort(), "figures wider than the mobile reading column").toEqual([...knownWideFigures].sort());
+});
+
+test("every Graphviz figure is laid out in the layout font", () => {
+  // Layout and page must measure text with the same metrics, whatever font
+  // the source names.
+  const failures: string[] = [];
+  for (const page of pages) {
+    fenceBodies(page.source, "dot").forEach((body, index) => {
+      const label = body.match(/^\s*\/\/\|\s*label:\s*(\S+)/m)?.[1] ?? `${page.href}#${index}`;
+      const html = renderDot(graphviz, body, new Map(), page.href, "");
+      for (const m of html.matchAll(/<text\b[^>]*>/g)) {
+        if (!m[0].includes(`font-family="${LAYOUT_FONT}`)) failures.push(`${page.path}: ${label} text not in ${LAYOUT_FONT}`);
+      }
+    });
+  }
+  expect([...new Set(failures)]).toEqual([]);
 });
 
 test("every page compiles without leaking markdown syntax or unresolved references", () => {

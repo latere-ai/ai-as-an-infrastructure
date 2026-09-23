@@ -7,6 +7,7 @@
 import { Graphviz } from "@hpcc-js/wasm";
 import type { CrossrefMap } from "./crossref.ts";
 import { resolveXrefsInText } from "./crossref.ts";
+import { prepareDot } from "./diagram-source.ts";
 
 export type GraphvizInstance = Awaited<ReturnType<typeof Graphviz.load>>;
 
@@ -47,13 +48,6 @@ function figureWrap(inner: string, label: string | undefined, cap: string | unde
   return `<figure class="rdr-figure"${id}>${inner}${caption}</figure>`;
 }
 
-// Graphviz's default node margin (0.11,0.055") crowds multi-line labels against
-// rounded/filled box borders. Inject a roomier default right after the graph's
-// opening brace. DOT `node [...]` statements are cumulative, so a diagram's own
-// node defaults keep this margin unless they set their own; `fixedsize` nodes
-// ignore it. One central knob instead of repeating margin in every diagram.
-const NODE_MARGIN = '\n  node [margin="0.2,0.12"];';
-
 function escapeAttribute(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -62,17 +56,11 @@ function escapeAttribute(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
-export function withNodeMargin(body: string): string {
-  const open = body.match(/^\s*(?:strict\s+)?(?:di)?graph\b[^{]*\{/);
-  if (!open) return body;
-  return body.slice(0, open[0].length) + NODE_MARGIN + body.slice(open[0].length);
-}
-
 export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap, currentHref: string, prefix: string): string {
   const { body, label, cap } = extractDirectives(code, "//|");
   let svg: string;
   try {
-    svg = gv.dot(withNodeMargin(body), "svg");
+    svg = gv.dot(prepareDot(body), "svg");
     const i = svg.indexOf("<svg"); // drop the <?xml?> + DOCTYPE preamble for inline HTML
     if (i > 0) svg = svg.slice(i);
     const accessibleName = escapeAttribute(cap || label || "Diagram");
