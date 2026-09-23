@@ -3,7 +3,8 @@
 // hydrates through the same map, so a figure is registered exactly once here.
 
 import type { AnyFigure } from "./types.ts";
+import pagedKvBatching from "./paged-kv-batching.ts";
 
-const ALL: AnyFigure[] = [];
+const ALL: AnyFigure[] = [pagedKvBatching];
 
 export const FIGURES: ReadonlyMap<string, AnyFigure> = new Map(ALL.map((f) => [f.name, f]));

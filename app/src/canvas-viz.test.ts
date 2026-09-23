@@ -12,7 +12,7 @@ test("the viz runtime registers the superposition component", () => {
 
 test("superposition localizes its control and accessible live summary", () => {
   const start = rt.indexOf("R['superposition']");
-  const end = rt.indexOf("R['paged-attention']", start);
+  const end = rt.indexOf("R['moe-routing']", start);
   const component = rt.slice(start, end);
 
   expect(component).toContain("host.getAttribute('data-lang')");
@@ -61,38 +61,6 @@ test("ch32 mechanistic-interpretability uses superposition in both languages", (
   expect(src("zh/safety/01-mechanistic-interpretability.qmd")).toContain('data-viz="superposition"');
 });
 
-test("the viz runtime registers the paged-attention component", () => {
-  expect(rt).toMatch(/R\['paged-attention'\]\s*=\s*function/);
-});
-
-test("paged attention is localized, accessible, and reports allocation efficiency", () => {
-  const start = rt.indexOf("R['paged-attention']");
-  const end = rt.indexOf("R['moe-routing']", start);
-  const component = rt.slice(start, end);
-
-  expect(component).toContain("host.getAttribute('data-lang')");
-  expect(component).toContain("document.documentElement.lang.indexOf('zh') === 0");
-  expect(component).toContain("allocation efficiency");
-  expect(component).toContain("分配效率");
-  expect(component).toContain("grid.setAttribute('role', 'img')");
-  expect(component).toContain("grid.setAttribute('aria-label'");
-  expect(component).toContain("read.setAttribute('aria-live', 'polite')");
-  expect(component).toContain("Math.round(used / reserved * 100)");
-  expect(component).not.toContain("Math.round(used / B * 100) + '%'   (");
-});
-
-test("paged attention stops animation for reduced motion, focus, and detached hosts", () => {
-  const start = rt.indexOf("R['paged-attention']");
-  const end = rt.indexOf("R['moe-routing']", start);
-  const component = rt.slice(start, end);
-
-  expect(component).toContain("prefers-reduced-motion: reduce");
-  expect(component).toContain("if (reduceMotion) return");
-  expect(component).toContain("host.addEventListener('focusin', pause)");
-  expect(component).toContain("host.addEventListener('focusout', restart)");
-  expect(component).toContain("if (!host.isConnected) { pause(); return; }");
-});
-
 test("the KV-cache calculator exposes localized labels and an accessible summary", () => {
   const start = rt.indexOf("R['kv-cache']");
   const end = rt.indexOf("R['embeddings-3d']", start);
@@ -106,11 +74,6 @@ test("the KV-cache calculator exposes localized labels and an accessible summary
   expect(component).toContain("cv.c.setAttribute('role', 'img')");
   expect(component).toContain("cv.c.setAttribute('aria-label', L.desc + ': ' + summary)");
   expect(component).toContain("var read = el('span', 'viz-pa-read')");
-});
-
-test("ch17 memory-scheduling uses paged-attention in both languages", () => {
-  expect(src("en/inference/02-memory-scheduling.qmd")).toContain('data-viz="paged-attention"');
-  expect(src("zh/inference/02-memory-scheduling.qmd")).toContain('data-viz="paged-attention"');
 });
 
 test("the viz runtime registers the moe-routing component", () => {
