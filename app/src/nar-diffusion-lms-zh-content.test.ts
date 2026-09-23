@@ -25,7 +25,7 @@ test("Chapter 13 preserves the complete English section architecture", () => {
     "## 区分具体分数的输出缓存与 KV 缓存",
     "## 分块同时恢复变长生成与前缀缓存",
     "## 限定规模化结果的证据范围",
-    "## 评测部署后的生成器，而不是方法标签",
+    "## 评测部署后的生成器",
     "## 争议所在",
     "## 下层约束",
     "## 延伸阅读",
@@ -64,7 +64,7 @@ test("factorization and refinement expose their execution contracts", () => {
 
 test("translation ambiguity and distillation claims remain bounded", () => {
   expect(zh).toContain("每个位置的边缘分布都可能合理，联合起来的句子却不合理");
-  expect(zh).toContain("根本问题是条件独立假设，并不是所有非自回归模型必然失败");
+  expect(zh).toContain("其根源在于条件独立假设，因此恢复部分位置间依赖的模型可以减轻这些问题");
   expect(zh).toContain("序列级知识蒸馏会把一组人工参考译文替换成分布更窄的教师输出");
   expect(zh).toContain("这是一项经验代理指标和容量趋势，并不是关于真实序列熵的一般定理");
   expect(zh).toContain("蒸馏曾是经典非自回归翻译的核心做法，却并不是所有并行生成方法在数学上的必要条件");
@@ -186,9 +186,9 @@ test("evaluation fixes one complete decoding contract", () => {
 test("contested claims and lower-layer constraints remain measurable", () => {
   expect(zh).toContain("在控制质量、硬件、输出长度和服务软件之后，扩散语言模型能否胜过自回归仍无定论");
   expect(zh).toContain("参数量与作者自行报告的吞吐量都不能证明前沿质量或成本匹配下的持平");
-  expect(zh).toContain("现有证据只说明可选设计更多，并不能确定谁会成为继任者");
+  expect(zh).toContain("至于其中是否有哪一种会取代自回归，目前还不能确定");
   expect(zh).toContain("决定性指标是网络评估次数、重新计算的位置数量、缓存字节数、内存带宽、批大小和内核");
-  expect(zh).toContain("「八轮」只是算法描述，并不是服务结果");
+  expect(zh).toContain("「八轮」这样的轮数描述的是算法，延迟必须在服务栈上实测");
 });
 
 test("Chinese Chapter 13 preserves the English artifact and reference contract", () => {
