@@ -35,7 +35,6 @@ import { svg, el, text, g, linePath } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
 import { linear } from "./lib/scale.ts";
 import { axis, axisHeight } from "./lib/axis.ts";
-import { legend } from "./lib/legend.ts";
 import { textWidth, wrap } from "./lib/labels.ts";
 import { fixed, pct, sig, tpl } from "./lib/format.ts";
 
@@ -181,7 +180,7 @@ const labels = {
     ruleNone: "Dr. GRPO advantages",
     kfStart: "the first groups come from the starting policy, and {m} of 6 are mixed",
     kfFirst: "P{j} gets its first mixed group, {k} of {G} passing, and each passing rollout gets A = {a}",
-    kfNinety: "P{j} passes 90% of rollouts, where P(no signal) = {z}",
+    kfNinety: "P{j}'s pass rate reaches 90%, where P(no signal) = {z}",
     kfDry: "no group carries a signal",
   },
   zh: {
@@ -236,6 +235,9 @@ type L = typeof labels.en;
 
 const signed = (v: number) => (v > 0 ? `+${fixed(v, 2)}` : fixed(v, 2));
 const p2 = (v: number) => fixed(v, 2);
+// A pass rate: two decimals, or one significant figure below 0.01 so a rare
+// success does not print as 0.00.
+const rate = (v: number) => (v >= 0.01 || v === 0 ? fixed(v, 2) : sig(v, 1));
 
 function events(p: P, lang: Lang) {
   const Lx = labels[lang];
@@ -335,7 +337,7 @@ function renderRows(p: P, row: Group[], focus: Group, x0: number, y0: number, w:
       // No bars: say why on the empty lane.
       parts.push(text(x0 + LABEL_W, sy + BAR + 4, gr.k === G ? Lx.allPass : Lx.allFail, { "font-size": TYPE.body, class: "fig-t-muted" }));
     }
-    const step = tpl(Lx.step, { a: p2(gr.p), b: p2(gr.next) });
+    const step = tpl(Lx.step, { a: rate(gr.p), b: rate(gr.next) });
     if (narrow) {
       parts.push(text(x0 + LABEL_W, y + 12, `${tpl(Lx.mean, { v: p2(gr.mean) })} · ${tpl(Lx.sd, { v: p2(gr.sd) })}`, { "font-size": TYPE.body, class: cls }));
       parts.push(text(x0 + w, y + 12, step, { "font-size": TYPE.body, "text-anchor": "end", class: cls }));
@@ -429,7 +431,7 @@ function renderReadout(p: P, t: number, row: Group[], focus: Group, x0: number, 
   for (let s = 0; s <= t; s++) for (const gr of groups[s]) { cumAll += G; if (!gr.mixed) cumWaste += G; }
   const lines: Array<[string, string]> = [];
   const f = focus;
-  lines.push([tpl(Lx.eqHead, { j: f.j + 1, t, k: f.k, G, p: p2(f.p) }), "fig-t-strong"]);
+  lines.push([tpl(Lx.eqHead, { j: f.j + 1, t, k: f.k, G, p: rate(f.p) }), "fig-t-strong"]);
   if (f.mixed) {
     const std = p.norm === "std";
     lines.push([tpl(Lx.eqStats, { k: f.k, G, m: fixed(f.mean, 3), s: fixed(f.sd, 3) }), "fig-t-num"]);
@@ -438,9 +440,9 @@ function renderReadout(p: P, t: number, row: Group[], focus: Group, x0: number, 
   } else {
     lines.push([tpl(p.norm === "std" ? Lx.eqZeroStd : Lx.eqZeroNone, { r: f.k === G ? 1 : 0, G }), "fig-t-num"]);
   }
-  lines.push([tpl(Lx.eqUpdate, { a: fixed(f.p, 3), b: fixed(f.next, 3) }), "fig-t-num"]);
+  lines.push([tpl(Lx.eqUpdate, { a: f.p >= 0.01 ? fixed(f.p, 3) : sig(f.p, 2), b: f.next >= 0.01 ? fixed(f.next, 3) : sig(f.next, 2) }), "fig-t-num"]);
   const a = f.p ** G, b = (1 - f.p) ** G;
-  lines.push([tpl(Lx.eqNone, { p: p2(f.p), q: p2(1 - f.p), G, x: tiny(a), y: tiny(b), z: tiny(a + b) }), "fig-t-num"]);
+  lines.push([tpl(Lx.eqNone, { p: rate(f.p), q: p2(1 - f.p), G, x: tiny(a), y: tiny(b), z: tiny(a + b) }), "fig-t-num"]);
   lines.push(["", ""]);
   lines.push([tpl(Lx.mixed, { m, e: fixed(expected, 1) }), "fig-t-num"]);
   lines.push([tpl(Lx.wasted, { now: (row.length - m) * G, all: row.length * G, cum: pct(cumWaste / cumAll) }), "fig-t-num"]);
@@ -465,8 +467,8 @@ function describe(st: State<P>, lang: Lang): string {
   const m = row.filter((gr) => gr.mixed).length;
   const z = tiny(noSignal(f.p, p.G));
   const focus = f.mixed
-    ? tpl(Lx.descMixed, { j: f.j + 1, k: f.k, G: p.G, m: p2(f.mean), s: p2(f.sd), a: signed(f.aPass), b: signed(f.aFail), p: p2(f.p), q: p2(f.next), z })
-    : tpl(Lx.descNone, { j: f.j + 1, what: f.k === p.G ? Lx.passed : Lx.failed, p: p2(f.p), z });
+    ? tpl(Lx.descMixed, { j: f.j + 1, k: f.k, G: p.G, m: p2(f.mean), s: p2(f.sd), a: signed(f.aPass), b: signed(f.aFail), p: rate(f.p), q: rate(f.next), z })
+    : tpl(Lx.descNone, { j: f.j + 1, what: f.k === p.G ? Lx.passed : Lx.failed, p: rate(f.p), z });
   return tpl(Lx.describe, { t, d: ITER - 1, rule: p.norm === "std" ? Lx.ruleStd : Lx.ruleNone, G: p.G, m, focus });
 }
 
@@ -482,14 +484,22 @@ function render(st: State<P>, lang: Lang): string {
   const m = row.filter((gr) => gr.mixed).length;
   const parts: string[] = [];
   parts.push(text(0, 14, tpl(Lx.head, { t, m }), { "font-size": TYPE.label, class: "fig-t-strong" }));
-  const lg = legend([
-    { label: Lx.pass, swatch: { kind: "rect", fill: C.c1 } },
-    { label: Lx.fail, swatch: { kind: "rect", fill: "none", stroke: C.c2 } },
-    { label: Lx.up, swatch: { kind: "rect", fill: C.c1 } },
-    { label: Lx.down, swatch: { kind: "rect", fill: C.c2 } },
-  ], 0, 24, w, TYPE.body);
-  parts.push(lg.svg);
-  let y = 34 + lg.height;
+  // Legend with the marks as drawn: reward cells, and advantage bars on a
+  // zero rule.
+  const marks: Array<[string, string, number]> = [
+    [el("rect", { x: 0, y: -10, width: 16, height: 11, rx: 2, fill: C.c1 }), Lx.pass, 16],
+    [el("rect", { x: 0.6, y: -9.4, width: 14.8, height: 9.8, rx: 2, fill: C.paper, stroke: C.c2, "stroke-width": 1.2 }), Lx.fail, 16],
+    [el("line", { x1: 0, x2: 14, y1: -1, y2: -1, stroke: C.rule, "stroke-width": 1 }) + el("rect", { x: 4, y: -13, width: 6, height: 12, fill: C.c1 }), Lx.up, 14],
+    [el("line", { x1: 0, x2: 14, y1: -12, y2: -12, stroke: C.rule, "stroke-width": 1 }) + el("rect", { x: 4, y: -12, width: 6, height: 12, fill: C.c2 }), Lx.down, 14],
+  ];
+  let lx = 0, ly = 40;
+  for (const [mark, label, mw] of marks) {
+    const iw = mw + 6 + textWidth(label, TYPE.body);
+    if (lx > 0 && lx + iw > w) { lx = 0; ly += 20; }
+    parts.push(g({ transform: `translate(${lx} ${ly})` }, mark), text(lx + mw + 6, ly, label, { "font-size": TYPE.body }));
+    lx += iw + 16;
+  }
+  let y = ly + 16;
   if (narrow) {
     const rows = renderRows(p, row, focus, 4, y, w - 8, true, Lx);
     parts.push(rows.svg); y += rows.h + 22;

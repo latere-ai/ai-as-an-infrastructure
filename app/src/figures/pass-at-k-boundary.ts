@@ -316,9 +316,13 @@ function renderReadout(p: P, r: ReturnType<typeof rates>, x0: number, y0: number
   return { svg: g({ class: "fig-readout" }, ...parts), h: y - y0 + 4 };
 }
 
+// k as the integer the readout prints; the log slider snaps to three
+// significant figures, which can leave a fraction.
+const withK = (p: P): P => ({ ...p, k: Math.max(1, Math.round(p.k)) });
+
 function describe(st: State<P>, lang: Lang): string {
   const Lx = labels[lang];
-  const p = st.p;
+  const p = withK(st.p);
   const r = rates(p);
   const s = stats(p, r);
   return tpl(Lx.describe, {
@@ -330,7 +334,7 @@ function describe(st: State<P>, lang: Lang): string {
 
 function render(st: State<P>, lang: Lang): string {
   const Lx = labels[lang];
-  const p = st.p;
+  const p = withK(st.p);
   const w = st.w;
   const narrow = w < 480;
   const r = rates(p);
