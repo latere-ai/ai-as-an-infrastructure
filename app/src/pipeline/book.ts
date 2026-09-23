@@ -50,10 +50,12 @@ function readHeading(qmdPath: string): { title: string; unnumbered: boolean } {
 // "NN-" on the filename is an authoring-order aid only and is stripped here, so
 // the URL never encodes a chapter position (which goes stale on every reorder).
 // Chapter numbers shown to the reader come from manifest position, not the URL.
+// Only a two-digit ordinal is stripped: a dated page such as "field/2026-09"
+// keeps its year in the URL, so monthly editions never share one address.
 // The .html extension is added only when writing to disk (build.ts) and resolved
 // by nginx try_files; every internal link uses the clean form.
-function qmdToHref(qmdRel: string): string {
-  const href = qmdRel.replace(/\.qmd$/, "").replace(/\/\d+-/, "/");
+export function qmdToHref(qmdRel: string): string {
+  const href = qmdRel.replace(/\.qmd$/, "").replace(/\/\d{2}-/, "/");
   return href !== "index" && href.endsWith("/index") ? href.slice(0, -"/index".length) : href;
 }
 

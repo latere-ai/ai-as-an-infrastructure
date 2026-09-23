@@ -109,10 +109,10 @@ function vizSignature(source: string): string[] {
   });
 }
 
-test("the English and Chinese manifests contain the same 125 pages", () => {
+test("the English and Chinese manifests contain the same 126 pages", () => {
   const english = manifestPages("en");
   const chinese = manifestPages("zh");
-  expect(english).toHaveLength(125);
+  expect(english).toHaveLength(126);
   expect(chinese).toEqual(english);
   expect(qmdFiles("en")).toEqual([...english].sort());
   expect(qmdFiles("zh")).toEqual([...chinese].sort());

@@ -33,6 +33,9 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
       // constraint arrow.
       if (path.endsWith("references.qmd") || path.endsWith("glossary.qmd")) continue;
       if (path.endsWith("changelog.qmd") || path.endsWith("contribute.qmd")) continue;
+      // A monthly state-of-the-field page records dated facts and points to
+      // the chapters that argue them, so it carries no argument of its own.
+      if (path.includes("/field/")) continue;
 
       const text = src(path);
       if (!contestedExceptions.has(path)) {
