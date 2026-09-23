@@ -275,8 +275,8 @@ test("the operating review closes the release loop", () => {
 test("contested automation and lower-layer enforcement remain explicit", () => {
   for (const phrase of [
     "多少决策权限可以交给自动化",
-    "人工复核不等于可以临场发挥",
-    "自动化也不是中立的",
+    "人工复核也受政策约束",
+    "自动化同样内含判断",
     "稳定的系统哈希和轨迹标识符",
     "隔离的影子执行、流量分配、分阶段路由",
     "已知可用的回滚目标",
