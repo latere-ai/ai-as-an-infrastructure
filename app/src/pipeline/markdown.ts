@@ -15,6 +15,7 @@ import type { Bibliography } from "./citations.ts";
 import type { CrossrefMap } from "./crossref.ts";
 import { resolveXrefsInText } from "./crossref.ts";
 import { renderDot, renderMermaid, type GraphvizInstance } from "./diagrams.ts";
+import { cjkEmphasis } from "./cjk.ts";
 import { expandDivs } from "./divs.ts";
 import { highlightCode } from "./highlight.ts";
 import type { Glossary, GlossFirstUseMap } from "./glossary.ts";
@@ -114,6 +115,7 @@ function createMd(ctx: RenderContext): MarkdownIt {
   // fence renderer (defFence below) invokes it and adds the <pre><code> wrapper.
   const md = new MarkdownIt({ html: true, linkify: false, typographer: false, breaks: false, highlight: highlightCode });
   md.use(attrs, { allowedAttributes: ["id", "class", /^data-/] });
+  md.use(cjkEmphasis);
   md.use(katex);
   md.use(inlineRefs, {
     bib: ctx.bib,

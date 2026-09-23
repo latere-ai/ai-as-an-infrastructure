@@ -258,23 +258,11 @@ const knownSplitCompounds = [
 ];
 
 // Pages where a `**` run does not close and reaches the reader as literal
-// asterisks. Each is a bold label ending in full-width punctuation directly
-// followed by CJK text (`**标签：**正文`): CommonMark does not treat a closing
-// run between punctuation and a letter as right-flanking. Exact list, as above.
-const knownBoldLeaks = [
-  "zh/ecosystem/05-market-structure.qmd",
-  "zh/ecosystem/07-data-rights-economics.qmd",
-  "zh/evaluation/06-evaluating-agents.qmd",
-  "zh/evaluation/07-operational-evaluation.qmd",
-  "zh/foundations/01-scaling-laws.qmd",
-  "zh/infrastructure/04-orchestration-data-infra.qmd",
-  "zh/infrastructure/05-the-compute-frontier.qmd",
-  "zh/orientation/04-infrastructure-before.qmd",
-  "zh/practice/01-choosing-a-model.qmd",
-  "zh/practice/02-serving-and-compute.qmd",
-  "zh/safety/01-mechanistic-interpretability.qmd",
-  "zh/safety/02-scalable-oversight-control.qmd",
-];
+// asterisks. Bold next to CJK text, such as a label ending in full-width
+// punctuation directly followed by CJK text (`**标签：**正文`), is handled by
+// cjkEmphasis in pipeline/cjk.ts, so a page listed here leaks for another
+// reason. Exact list, as above.
+const knownBoldLeaks: string[] = [];
 
 test("every Graphviz figure parses and fits the mobile reading column", () => {
   const failures: string[] = [];
