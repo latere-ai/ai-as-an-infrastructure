@@ -81,8 +81,8 @@ test("the history distinguishes scripted automation from learned control", () =>
     "选择器、无障碍属性或录制坐标",
     "截图进入模型",
     "开发者提供的工具执行",
-    "界面变化不会因为学习式定位而消失",
-    "哪一种观察和动作通道",
+    "学习式定位同样会受界面变化影响",
+    "能为它提供足够稳定身份的观察和动作通道",
     "稳定身份",
   ]) expect(flat).toContain(phrase);
 });
@@ -202,7 +202,7 @@ test("evaluation covers the deployed system faults and uncertainty", () => {
   for (const phrase of [
     "定位基准",
     "端到端任务基准",
-    "不是同一条不随时间变化的曲线",
+    "每个数字都只衡量某一时刻的某一种配置",
     "基准版本和运行框架都是每个分数的一部分",
     "基于状态的验证器",
     "自助法置信区间",
