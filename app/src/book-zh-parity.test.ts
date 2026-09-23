@@ -90,7 +90,6 @@ const knownMathDivergence = [
   "frontiers/03-verification-frontier.qmd",
   "ecosystem/05-market-structure.qmd",
   "practice/07-evaluation-and-observability.qmd",
-  "practice/10-reliability-nondeterministic.qmd",
 ];
 
 // An interactive figure is identified by its data-viz name. Its numeric and
