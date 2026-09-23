@@ -28,20 +28,20 @@ function citationsAndCrossrefs(source: string): string[] {
 test("Chapter 39 preserves the complete English memory-systems contract", () => {
   expect(headings(chapter, 2)).toEqual([
     "“记忆”一词，四个所有者",
-    "持久执行保存进度，却无法保证外部副作用只发生一次",
+    "持久执行与外部副作用",
     "检查点必须绑定相互关联的状态",
     "工作区持久性来自一组叠加的保证",
     "下层约束",
     "长期记忆是一条受治理的写入、管理与读取闭环",
-    "分阶段评估，不能只看最终答案",
+    "分阶段评估",
     "争议所在",
     "运行契约",
     "延伸阅读",
   ]);
   expect(headings(chapter, 3)).toEqual([
     "确定性重放需要记录什么",
-    "幂等键是一项协议，不是随机字符串",
-    "快照频率只能给出 RPO 上界，不能代替备份",
+    "幂等键协议",
+    "快照频率与恢复点上界",
     "记忆记录需要来源与时间",
     "检索也必须受授权约束",
   ]);
@@ -108,7 +108,7 @@ test("the effect protocol binds a stable key to tenant and input", () => {
 
 test("checkpoints bind state and distinguish replay rewind and fork", () => {
   for (const phrase of [
-    "不是简单的“第 27 轮”",
+    "“第 27 轮”这样的轮次编号只标出了历史中的位置",
     "执行历史头、工作区版本、记忆版本、工作流版本",
     "重放、回退和分叉是三种不同操作",
     "共享祖先",
@@ -193,7 +193,7 @@ test("authorization constrains candidates before relevance ranking", () => {
     "词元或字节预算",
     "用户自行提供的租户标签不等于经过身份验证的主体",
     "零条未授权候选",
-    "而不是很高的相关性分数",
+    "相关性分数衡量不了",
     "让投毒内容存活得更久",
     "绝不能把检索到的记录当作高权限指令",
     "删除必须沿着数据血缘传播",

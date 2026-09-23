@@ -3,15 +3,16 @@
 The agent loop in @sec-agent-architectures is transient unless its state survives
 the process that runs it. A model response may schedule work, a tool may change a
 workspace, and a later turn may need evidence from an earlier one. Calling all of
-that state *memory* hides the most important engineering fact: different state has
-different owners, recovery rules, and authority.
+that state *memory* obscures the fact that different state has different owners,
+recovery rules, and authority.
 
 This chapter separates four things that are often collapsed into one store:
 execution history, the mutable workspace, long-term memory, and external systems.
-A checkpoint can reconnect them, but it cannot make an external side effect happen
-exactly once. A retrieval index can help find an old record, but it does not decide
-whether that record was safe to write, authorized to read, still valid, or complete
-enough to act on. Reliable memory begins by naming those boundaries.
+A checkpoint can reconnect them after a crash, but it cannot make an external side
+effect happen exactly once. A retrieval index can help find an old record. The
+write and read policies around the index determine whether that record was safe to
+write, is authorized for the reader, is still valid, and is complete enough to act
+on. Reliable memory begins by naming those boundaries.
 
 ## One word, four owners
 
@@ -37,9 +38,12 @@ its own state.
 
 An audit transcript is not automatically a replay log. Replay also needs stable step
 identities, recorded non-deterministic results, compatible workflow code, and durable
-references to any workspace or artifact the workflow expects. Likewise, a workspace
-snapshot is not a record of which API calls succeeded. Each store should make its
-guarantees explicit instead of borrowing guarantees from its neighbors.
+references to any workspace or artifact the workflow expects. A workspace snapshot,
+in turn, records files and artifacts; which API calls succeeded is established by the
+execution history and, where an outcome is unknown, by the external systems
+themselves. Each store should state
+its own guarantees explicitly, and no store should be assumed to provide a guarantee
+that belongs to another.
 
 ```{dot}
 //| label: fig-memory-state-boundaries
@@ -65,23 +69,26 @@ digraph {
 }
 ```
 
-## Durable execution preserves progress, not exactly-once effects
+## Durable execution and external side effects
 
-Consider a step that creates a support ticket. The journal durably records the
-scheduled call, the provider creates ticket 8421, and the worker crashes before the
-provider's response reaches the journal. Recovery sees a scheduled step with no
+Durable execution records each step of a workflow in a persistent journal, the
+execution history $J_t$, so that a run interrupted by a crash can resume from the
+record. Consider a step that creates a support ticket. The journal durably records
+the scheduled call, the provider creates ticket 8421, and the worker crashes before
+the provider's response reaches the journal. Recovery sees a scheduled step with no
 completed result. Two histories now look identical from inside the journal:
 
 1. the request never reached the provider; or
 2. the request committed, but its reply was lost.
 
 The outcome is unknown. Recording intent before the call narrows the uncertainty to
-one named step, but it does not close the gap. AWS Lambda durable steps therefore
-have at-least-once execution semantics by default, and its documentation still
-requires idempotent business logic for interrupted attempts [@aws2026idempotency].
-Temporal states the same boundary: completed activities are not rerun during replay,
-but an activity that did not report completion may be retried and execute more than
-once [@temporal2026activity].
+one named step without resolving it. AWS Lambda durable steps therefore have
+at-least-once execution semantics by default, and its documentation still requires
+idempotent business logic for interrupted attempts [@aws2026idempotency].
+Temporal states the same boundary for activities, the functions that perform a
+workflow's external work: completed activities are not rerun during replay, but an
+activity that did not report completion may be retried and execute more than once
+[@temporal2026activity].
 
 ```{dot}
 //| label: fig-memory-unknown-effect
@@ -153,7 +160,7 @@ Unqualified “exactly once” is misleading when the journal and effect owner a
 independent systems. The practical choices are idempotency, reconciliation,
 compensation, or an explicit operator decision.
 
-### A key is a protocol, not a random string
+### The idempotency-key protocol
 
 The following sketch is safe only because the provider accepts the key, binds it to
 the input fingerprint, and returns the prior result on a retry:
@@ -193,18 +200,20 @@ an account ledger, or ask an operator. Compensation can undo some committed effe
 but compensation is a new effect with its own failure modes. A transactional outbox
 can atomically bind a database mutation to an event destined for another service,
 although downstream delivery still needs deduplication. Step boundaries make these
-protocols observable; they do not replace them.
+protocols observable, and each protocol still has to be implemented against the
+receiving system.
 
-Step granularity also matters. A coarse step that reads a database, calls a service,
-and writes a file may repeat a partially completed sequence. Finer steps isolate
-retries and store more intermediate results, but increase history size and
-coordination. Choose a boundary at the smallest unit whose retry semantics can be
+Step granularity sets how much work a retry repeats. A coarse step that reads a
+database, calls a service, and writes a file may repeat a partially completed
+sequence. Finer steps isolate retries and store more intermediate results, but
+increase history size and coordination. Choose a boundary at the smallest unit whose retry semantics can be
 stated and tested.
 
 ## A checkpoint must bind related state
 
-A useful checkpoint is not merely “turn 27.” It is a bundle of compatible
-identities:
+A useful checkpoint names a compatible version of each piece of state that recovery
+must restore together. A turn number such as “turn 27” identifies only a position in
+the history; the full checkpoint is a bundle of identities:
 
 $$
 C_k = (j_k, w_k, m_k, v_k, p_k).
@@ -230,12 +239,12 @@ branches need isolated namespaces if their writes must not leak. A full copy,
 copy-on-write clone, Git worktree, database branch, or remote sandbox can provide
 that isolation. Non-versioned external state is not automatically forked.
 
-Two branches do have a merge base: their shared checkpoint. Files can use a
+Two branches share a merge base, their common checkpoint. Files can use a
 three-way merge when the storage model preserves that ancestry. The harder problem
 is semantic merge: deciding which divergent plans, approvals, tool results, and
-external effects should survive. That is a product policy and sometimes a human
-decision, not an absence of shared history. LangGraph's documented time-travel
-surface illustrates the distinction: replay re-executes work after a checkpoint,
+external effects should survive. The shared history is available, and the choice
+among divergent outcomes is a product policy and sometimes a human decision.
+LangGraph's documented time-travel feature illustrates the distinction: replay re-executes work after a checkpoint,
 whereas a fork creates a new checkpoint branch without modifying the original
 history [@langchain2025timetravel].
 
@@ -294,7 +303,7 @@ differently. A design review should name the actual CSI driver, StorageClass,
 topology constraints, retention policy, and restore path rather than reasoning from
 the PVC label alone.
 
-### Snapshot cadence gives an RPO bound, not a backup
+### Snapshot cadence and the recovery point bound
 
 Suppose instantaneous snapshots occur every $\Delta$ minutes and a crash is equally
 likely at any phase between them. If $L$ is the amount of work since the latest
@@ -332,9 +341,9 @@ block-level copy-on-write filesystems, content-addressed manifests, and full cop
 have different copy-up and retention costs; “copy-on-write” alone is not a complete
 performance model.
 
-MicroVM snapshots illustrate why inclusion lists matter. Firecracker serializes
-guest memory and emulated hardware state, while disk files remain separately managed;
-network continuity is not guaranteed and restore compatibility depends on the host
+MicroVM snapshots show why the state a snapshot covers must be listed explicitly.
+Firecracker serializes guest memory and emulated hardware state, while disk files
+remain separately managed; network continuity is not guaranteed and restore compatibility depends on the host
 and snapshot version [@aws2025firecracker]. Cloned VM state can also duplicate random
 generator state and identifiers, so a restore path may need to rekey secrets,
 regenerate identities, and reconnect services [@brooker2021uniqueness]. A snapshot
@@ -344,18 +353,17 @@ is only as complete as the state it explicitly includes.
 ## Lower-layer constraint
 
 The storage backend determines whether checkpointing and branching are metadata
-operations or full copies. The harness can request a fork, but the CSI driver,
-filesystem, database, object store, or microVM layer determines its isolation,
-latency, changed-byte cost, and restore limits. Expose those lower-layer facts in the
+operations or full copies. The harness, the runtime that drives the agent loop, can
+request a fork, but the CSI driver, filesystem, database, object store, or microVM
+layer determines its isolation, latency, changed-byte cost, and restore limits. Expose those lower-layer facts in the
 checkpoint contract instead of presenting every branch as equally cheap.
 :::
 
 ## Long-term memory is a governed write–manage–read loop
 
 Execution history answers what the runtime accepted. Long-term memory answers what
-selected information should influence later decisions. The selection is the point:
-raw history may be an input to memory, but retaining every event is logging, not a
-memory policy.
+selected information should influence later decisions. Raw history may be an input
+to that selection, but retaining every event is logging, not a memory policy.
 
 Two influential systems illustrate different mechanisms. Generative Agents stored a
 natural-language stream of experiences, synthesized higher-level reflections, and
@@ -379,11 +387,12 @@ orthogonal choices separate:
 | Provenance | Quoted observation, tool result, user-confirmed statement, derived summary |
 | Retrieval control | Harness preload, rule-triggered lookup, model-invoked tool, or hybrid |
 
-Retrieval-augmented generation (RAG) is a retrieval pattern, not an ownership class.
-A RAG corpus can be private and mutable; a memory store can be shared and read-only.
-The useful distinction is lifecycle: memory is normally updated as the agent
-interacts, while an external corpus may have a separate ingestion owner. Chapter 44
-(@sec-rag-retrieval) treats retrieval itself in depth.
+Retrieval-augmented generation (RAG), which places retrieved documents in the
+model's context before it answers, is a retrieval pattern and implies nothing about
+who owns the corpus. A RAG corpus can be private and mutable; a memory store can be
+shared and read-only. The two differ in lifecycle: memory is normally updated as the
+agent interacts, while an external corpus may have a separate ingestion owner.
+Chapter 44 (@sec-rag-retrieval) treats retrieval itself in depth.
 
 ### Records need provenance and time
 
@@ -399,7 +408,7 @@ MemoryRecord {
 ```
 
 `scope` names the authorized audience, while `subject` names the person or entity
-the record concerns; those are not the same. `source` links to the observation or
+the record concerns; the two can differ. `source` links to the observation or
 tool result, and `derivation` explains how a summary or inference was produced.
 `recorded_at` is system time; `valid_from` and `valid_until` describe when the claim
 is true. `status` distinguishes active, superseded, quarantined, and tombstoned
@@ -477,8 +486,8 @@ partitioning, database policies, or defense in depth across them. A user-supplie
 tenant label is not an authenticated principal. PostgreSQL row-level security, for
 example, can restrict normal reads and writes, but table owners, superusers, and
 roles with `BYPASSRLS` require deliberate treatment and tests [@postgresql2026rls].
-The security property is zero unauthorized candidates, not merely a high relevance
-score.
+The security property is zero unauthorized candidates, a requirement that a relevance
+score does not measure.
 
 Persistent memory also extends the lifetime of poisoned content. A malicious or
 mistaken statement can be extracted, summarized, and retrieved in later sessions;
@@ -492,11 +501,11 @@ Deletion must follow lineage. Removing a source row while leaving its embedding,
 summary, graph edge, cache entry, or export does not remove the information from the
 online system. A deletion manifest should enumerate derivatives, record completion,
 prevent a backup restore from resurrecting tombstoned records, and document when
-backups age out. The precise legal obligation depends on jurisdiction and purpose;
-the engineering contract is discoverability, attributable lineage, and verifiable
-deletion within the stated policy.
+backups age out. The specific legal obligation depends on jurisdiction and purpose;
+the engineering requirements are discoverability, attributable lineage, and
+verifiable deletion within the stated policy.
 
-## Evaluate the stages, not only the final answer
+## Stage-level evaluation
 
 Memory benchmarks stress different abilities. LoCoMo uses long, multi-session
 conversations for question answering, event summarization, and multimodal dialogue
@@ -517,12 +526,12 @@ An evaluation should localize failure:
 | Governance | Cross-tenant negative tests, export and correction, deletion latency and completeness, backup-restore resurrection tests |
 | Operations | Index and storage growth, write amplification, model calls, token cost, cache behavior, and recovery time |
 
-Compare systems with the same model checkpoint, prompt and policy versions, task
-split, write budget, retrieval budget, tool access, judge and rubric, hardware and
-cache state, and repeated-run policy. Include no-memory, full-history, lexical,
-vector, and hybrid baselines when they fit the task. Otherwise a better model,
-larger context budget, or looser authorization boundary can masquerade as a better
-memory system.
+Compare systems with the same model checkpoint (the same trained weights, distinct
+from the state checkpoints above), prompt and policy versions, task split, write
+budget, retrieval budget, tool access, judge and rubric, hardware and cache state,
+and repeated-run policy. Include no-memory, full-history, lexical, vector, and hybrid
+baselines when they fit the task. Otherwise a better model, larger context budget,
+or looser authorization boundary can be mistaken for a better memory system.
 
 ::: {.callout-important}
 ## What's contested
@@ -533,7 +542,7 @@ be accurate yet expensive; summaries can be cheap yet erase provenance; vector
 retrieval can find paraphrases yet miss exact identifiers; graphs can preserve
 relationships yet depend on fallible extraction. Vendor-reported scores are not
 comparable unless model, data split, budgets, judge, and operating envelope match.
-Treat memory quality as a measured system property, not a ranking of storage brands.
+Treat memory quality as a system property measured under matched conditions.
 :::
 
 ## The operational contract
