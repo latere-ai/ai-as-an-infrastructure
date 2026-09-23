@@ -9,15 +9,15 @@ const chapter = readFileSync(
 test("multimodal chapter separates interfaces, representations, and objectives", () => {
   const flat = chapter.replace(/\s+/g, " ");
   const required = [
-    "Multimodality creates interfaces, not one architecture",
-    "CLIP aligns paired examples; it does not force the two modalities to occupy identical distributions",
-    "Visual token count is a serving decision, not merely an encoder detail",
+    "Multimodality is a problem of interfaces between modalities",
+    "Neither objective requires image and text embeddings to share one distribution",
+    "Visual token count is a serving decision, since it sets both prefill work and cache size",
     "Guidance scale is not a confidence score",
     "A latent is not automatically a token",
-    "Compression changes representation cost, not semantic understanding",
+    "Compression determines representation cost",
     "Modularity and representation are separate decisions",
     "A unified model can still use different losses",
-    "Benchmark the boundary you intend to ship",
+    "Benchmark the boundary that ships",
     "rankdir=TB;",
     "Lower-layer constraint",
   ];

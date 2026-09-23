@@ -578,11 +578,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/generative/04-multimodal-models.qmd",
-      ["Multimodality creates interfaces, not one architecture", "Visual token count is a serving decision", "Modularity and representation are separate decisions"],
+      ["Multimodality is a problem of interfaces between modalities", "Visual token count is a serving decision", "Modularity and representation are separate decisions"],
     ],
     [
       "zh/generative/04-multimodal-models.qmd",
-      ["多模态带来的是接口，不是某一种架构", "视觉词元数是一项服务决策", "模块化程度与表示方式是两项不同的选择"],
+      ["多模态要解决的是不同模态之间的接口问题", "视觉词元数是一项服务决策", "模块化程度与表示方式是两项不同的选择"],
     ],
     [
       "en/generative/05-beyond-text.qmd",

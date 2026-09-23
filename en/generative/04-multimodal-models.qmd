@@ -1,12 +1,13 @@
 # Multimodal Models: Fusion and Generation {#sec-multimodal}
 
-Multimodality creates interfaces, not one architecture. Images arrive as grids,
-text as sequences, audio as timed frames, and video as all three dimensions at
-once. A system must decide how to encode each input, where representations can
+Multimodality is a problem of interfaces between modalities. Images arrive as grids,
+text as sequences, audio as timed frames, and video as a timed sequence of image
+grids. A system must decide how to encode each input, where representations can
 interact, how each output is generated, and what the serving path can afford.
-Those decisions are related, but they are not interchangeable. A model can be
-unified while using different losses for text and images, and a modular system
-can still train its components in a shared representation space.
+These decisions constrain one another, and each still has to be made on its
+own. A model can be unified while using different losses for text and images,
+and a modular system can still train its components in a shared representation
+space.
 
 This chapter follows the interfaces. It starts with paired image-text training,
 then compares connectors that let a language model consume visual features. It
@@ -25,10 +26,12 @@ Four questions keep the architecture legible:
 | Output model | What objective produces the modality? | Next-token prediction, diffusion, flow matching |
 | System composition | Which components share weights and deployment? | Specialized tools, connected towers, one backbone |
 
-A continuous image latent is not the same thing as a discrete image token. Early
-fusion is not the same thing as end-to-end product integration. Keeping these
-axes separate prevents an improvement on one boundary from being credited to the
-whole system.
+Each row is a separate axis. A continuous image latent and a discrete image token
+are two different answers to the input-representation question. Early fusion,
+which trains one model from the start on sequences that interleave all
+modalities, answers the fusion question; end-to-end product integration belongs
+to the system-composition row. Keeping these axes separate prevents an
+improvement on one boundary from being credited to the whole system.
 
 ## Learn paired image-text geometry
 
@@ -41,8 +44,9 @@ $$
 s_{ij}=\frac{v_i^\top t_j}{\tau},
 $$
 
-where \(\tau>0\) is a learned temperature. CLIP applies cross-entropy in both
-directions:
+where \(\tau>0\) is a learned temperature, a divisor that sets how sharply the
+loss below separates high similarities from low ones. CLIP applies cross-entropy
+in both directions:
 
 $$
 \mathcal{L}_{\mathrm{CLIP}}
@@ -63,21 +67,21 @@ inference, class names written as prompts become text embeddings, and an image i
 classified by similarity to those prompts. Prompt wording and the pretraining
 distribution therefore remain part of the classifier.
 
-SigLIP changes the batch objective, not the meaning of the embeddings. It treats
-each image-text pairing as an independent positive or negative logistic example,
-so it does not require a batch-wide softmax normalization [@zhai2023siglip].
-That changes distributed training and small-batch behavior. It does not establish
-that image and text embeddings have identical distributions. Studies of
-CLIP-style spaces find a modality gap, with the two modalities occupying
-separated regions even when matched pairs have useful cosine similarity
-[@liang2022modalitygap]. CLIP aligns paired examples; it does not force the two
-modalities to occupy identical distributions.
+SigLIP keeps CLIP's paired embeddings and changes only the batch objective. It
+treats each image-text pairing as an independent positive or negative logistic
+example, so it does not require a batch-wide softmax normalization
+[@zhai2023siglip]. That changes distributed training and small-batch behavior.
+Neither objective requires image and text embeddings to share one distribution:
+both reward matched pairs for high similarity and mismatched pairs for low
+similarity. Studies of CLIP-style spaces find a modality gap, with the two
+modalities occupying separated regions even when matched pairs have useful
+cosine similarity [@liang2022modalitygap].
 
 That geometric gap is different from the connector's interface mismatch. CLIP's
 retrieval head produces one global embedding, while a visual language model often
 consumes a grid of spatial features from an earlier encoder layer. The connector
-must match that grid's width, length, and semantics to the language model. It need
-not make the two global embedding distributions identical.
+must match that grid's width, length, and semantics to the language model, and
+the two global embedding distributions can remain different.
 
 ## Connect vision to a language model
 
@@ -114,15 +118,16 @@ gates begin at zero, so the added path initially leaves the language model
 unchanged. Because the language stream can repeatedly attend to visual features,
 Flamingo can process interleaved images, video, and text.
 
-BLIP-2 also starts from frozen towers, but its Querying Transformer, or Q-Former,
-uses 32 learned queries to extract a fixed-length summary from the vision encoder
-[@li2023blip2]. It is pretrained first for vision-language representation
-learning, then for vision-to-language generation. The fixed query count makes the
-interface cost predictable, while also creating an explicit information
-bottleneck.
+BLIP-2 also keeps both towers, the pretrained vision encoder and language model,
+frozen. Its Querying Transformer, or Q-Former, uses 32 learned queries to extract
+a fixed-length summary from the vision encoder [@li2023blip2]. It is pretrained
+first for vision-language representation learning, then for vision-to-language
+generation. The fixed query count makes the interface cost predictable, while
+also creating an explicit information bottleneck.
 
 LLaVA takes a shallower route. Its original connector was one learned linear
-projection from CLIP patch features to the language model's embedding width
+projection from CLIP patch features, the encoder's output vectors for each small
+square region of the image, to the language model's embedding width
 [@liu2023llava]. LLaVA-1.5 replaced that layer with a two-layer MLP and used a
 336-pixel CLIP encoder [@liu2023llava15]. In the alignment stage, the projection
 learns while the pretrained towers stay frozen. During instruction tuning, the
@@ -157,25 +162,27 @@ LLaVA-1.5 case [@liu2023llava15].
 Tiling changes the formula from one grid to a sum of grids. LLaVA-NeXT combines
 several 336-pixel tiles with a global view [@liu2024llavanext]. Qwen2-VL instead
 maps native-resolution images and video to variable-length visual sequences,
-merges each two-by-two group of spatial features, and extends rotary positions
-across temporal, height, and width axes
+merges each two-by-two group of spatial features, and extends rotary position
+encoding, which marks a position by rotating query and key vectors, across
+temporal, height, and width axes
 [@wang2024qwen2vl]. These designs help with documents, charts, and small objects,
 but they also enlarge prefill work and the key-value cache. In standard dense
 attention, prefill attention over the combined text and visual prefix has a
 quadratic term in sequence length; each generated text token then reads a cache
 whose size grows linearly with that prefix. Visual token count is a serving
-decision, not merely an encoder detail.
+decision, since it sets both prefill work and cache size.
 
-Visual instruction tuning supplies the behavioral layer. LLaVA first trained its
-projector on about 595,000 image-caption pairs from CC3M, with both pretrained
-towers frozen. It then used a language-only GPT-4 to generate about 158,000
-instruction examples from textual descriptions of images, including captions and
-bounding boxes [@liu2023llava]. GPT-4 did not inspect the pixels, although the
-student later trained against the corresponding images. The resulting data taught
-conversation formats and task behavior after the projection had been aligned.
-This distinction matters: paired pretraining learns correspondence, connector
-training learns an interface, and instruction tuning teaches how to answer.
-Changing one stage does not replace the others.
+Visual instruction tuning is the third training stage, after paired pretraining
+and connector alignment. LLaVA first trained its projector on about 595,000 image-caption pairs
+from CC3M, with both pretrained towers frozen. It then used a language-only GPT-4
+to generate about 158,000 instruction examples from textual descriptions of
+images, including captions and bounding boxes [@liu2023llava]. GPT-4 did not
+inspect the pixels, although LLaVA later trained on those examples together with
+the corresponding images. The resulting data taught conversation formats and task
+behavior after the projection had been aligned. Across the three stages, paired
+pretraining learns correspondence, connector training learns an interface, and
+instruction tuning teaches how to answer. Changing one stage does not replace the
+others.
 
 ## Guide an image generator
 
@@ -205,7 +212,7 @@ with its equation.
 
 Larger \(s\) often improves prompt adherence or the apparent quality of selected
 samples while reducing diversity and sometimes exaggerating artifacts. Guidance
-scale is not a confidence score. It also commonly requires conditional and
+scale is not a confidence score. Guidance also commonly requires conditional and
 unconditional model evaluations, even if an implementation batches them
 together.
 
@@ -228,8 +235,9 @@ range. Latent Diffusion instead trains an autoencoder and runs the denoising
 process in its continuous latent grid [@rombach2022ldm]. SDXL enlarged that route
 with a 2.6-billion-parameter UNet, two text encoders, size and crop conditioning,
 and an optional refinement stage [@podell2023sdxl]. DALL-E 2 uses another
-factorization: a prior maps text to a CLIP image embedding, and a diffusion
-decoder renders an image conditioned on that embedding [@ramesh2022dalle2].
+factorization, which its paper calls unCLIP: a prior maps text to a CLIP image
+embedding, and a diffusion decoder renders an image conditioned on that
+embedding [@ramesh2022dalle2].
 
 Data quality can dominate these architectural differences. DALL-E 3 trained a
 captioner to replace terse web text with detailed synthetic descriptions, then
@@ -265,17 +273,20 @@ blocks trained with flow matching, according to its vendor announcement
 [@bfl2024flux]. Flow matching changes the objective, but the sampler, number of
 function evaluations, autoencoder, and hardware still determine speed.
 
-The discrete route converts an image grid to codebook indices. VQGAN couples a
-learned quantizer to an autoregressive transformer [@esser2021vqgan], while
-ViT-VQGAN improves the quantizer and Parti scales text-conditioned prediction of
-those indices to 20 billion parameters [@yu2022vitvqgan; @yu2022parti]. VAR
-predicts progressively finer token maps rather than scanning one flattened image
-left to right [@tian2024var]. Its reported speed and quality comparisons are
-class-conditional ImageNet results, so they establish an alternative schedule,
-not a general text-to-image winner. OpenAI later classified GPT-4o's native image
-generation as autoregressive, but did not publish its tokenizer, factorization, or
-decoder design [@openai2025nativeimagesystemcard]. A latent is not automatically a token: continuous grids
-support diffusion or flow, while discrete indices support categorical prediction.
+The discrete route converts an image grid to codebook indices: each cell's
+feature vector is replaced by the index of the nearest entry in a learned table
+of vectors, the codebook. VQGAN couples a learned quantizer to an autoregressive
+transformer [@esser2021vqgan], while ViT-VQGAN improves the quantizer and Parti
+scales text-conditioned prediction of those indices to 20 billion parameters
+[@yu2022vitvqgan; @yu2022parti]. VAR predicts progressively finer token maps
+rather than scanning one flattened image left to right [@tian2024var]. Its
+reported speed and quality comparisons are class-conditional ImageNet results, so
+they establish an alternative schedule for that task rather than a general result
+for text-to-image generation. OpenAI later classified GPT-4o's native image
+generation as autoregressive, but did not publish its tokenizer, factorization,
+or decoder design [@openai2025nativeimagesystemcard]. A latent is not
+automatically a token: continuous grids support diffusion or flow, while discrete
+indices support categorical prediction.
 
 ## Compress space and time for video
 
@@ -294,8 +305,9 @@ $$
 
 Here \(N_{\mathrm{video}}\) counts transformer positions; \(d_t,d_h,d_w\) are
 autoencoder compression factors; and \(p_t,p_h,p_w\) are transformer patch sizes
-measured in latent cells. Channels affect the width of each position, not this
-sequence count. The formula is accounting, not a quality estimate.
+measured in latent cells. Channels affect the width of each position and leave
+this sequence count unchanged. The formula counts cost in positions; quality has
+to be measured separately.
 
 The runnable reconstructs Movie Gen's published maximum video context: 16 seconds
 at 16 frames per second and 768-pixel square frames. Its temporal autoencoder
@@ -336,15 +348,16 @@ quality improvements as model compute increased in its ImageNet experiments
 over spacetime latent patches and variable video shapes, but disclosed too little
 to reproduce the system [@brooks2024sora].
 
-Open papers make the compression boundary more concrete. CogVideoX reports a
+Open papers give concrete compression factors. CogVideoX reports a
 causal 3D autoencoder with fourfold temporal and eightfold compression on each
 spatial axis, followed by a text-video diffusion transformer
 [@yang2024cogvideox]. Movie Gen reports a 30-billion-parameter flow-matching video
 transformer over a temporal autoencoder and uses a separate audio model to produce
 sound conditioned on video [@polyak2024moviegen]. Synchronized output does not
 therefore imply that frames and audio came from one joint sampler. Compression
-changes representation cost, not semantic understanding; physical consistency is
-a separate evaluation problem taken up in @sec-beyond-text.
+determines representation cost. Semantic understanding and physical consistency
+are separate evaluation problems, and the second is taken up in
+@sec-beyond-text.
 
 ## Keep integration and representation separate
 
@@ -356,9 +369,11 @@ latents, or both.
 Chameleon is an early-fusion discrete model. It interleaves text tokens and image
 codebook indices and trains one transformer with next-token prediction
 [@chameleon2024]. Its 7B and 34B training recipes used stability controls that
-included query-key normalization and an output z-loss; the paper's ablations
-found query-key normalization essential in that setup. Those results do not
-prove that every unified model requires the same recipe.
+included query-key normalization, which normalizes queries and keys before their
+dot product, and an output z-loss, a penalty that keeps the output logits from
+drifting to large values; the paper's ablations found query-key normalization
+essential in that setup. Those results do not prove that every unified model
+requires the same recipe.
 
 Transfusion keeps image patches continuous. One transformer applies next-token
 loss to text positions and a diffusion loss to image positions
@@ -380,9 +395,10 @@ trained across text, vision, and audio [@openai2024gpt4o]. Public information
 does not reveal its internal representations, so that announcement cannot settle
 the discrete-versus-continuous question.
 
-## Benchmark the boundary you intend to ship
+## Benchmark the boundary that ships
 
-“Multimodal quality” is too broad to be a useful metric. Test each interface:
+“Multimodal quality” is too broad to be a useful metric. Each interface needs its
+own measures:
 
 | Boundary | Questions and measures |
 |---|---|
@@ -402,9 +418,10 @@ tools.
 For generation, GenEval uses detectors and classifiers to score object presence,
 count, color, position, and attribute binding [@ghosh2023geneval]. DPG-Bench uses
 dense prompts decomposed into many semantic propositions [@hu2024ella]. These
-automated judges are useful diagnostics, not complete measures of aesthetics,
-diversity, typography, memorization, or harmful output. Benchmark the boundary
-you intend to ship, then add end-to-end task and human evaluation.
+automated judges are useful diagnostics; aesthetics, diversity, typography,
+memorization, and harmful output each need further evaluation. Measurement
+starts at the boundary the system will ship and then extends to end-to-end tasks
+and human evaluation.
 
 ::: {.callout-important}
 ## What's contested
@@ -412,9 +429,9 @@ The unresolved issue has two independent layers. System designers must choose
 between replaceable specialists and deeper end-to-end integration. Model
 designers must choose among discrete, continuous, and mixed representations and
 among next-token, masked, diffusion, and flow objectives. Evidence for one choice
-does not decide the other. The right comparison holds data, compute, tokenizer
-quality, and evaluation protocol fixed, which most headline product comparisons
-cannot do.
+does not decide the other. A controlled comparison holds data, compute,
+tokenizer quality, and evaluation protocol fixed, which most comparisons in
+product announcements cannot do.
 :::
 
 ::: {.callout-tip}
@@ -422,9 +439,9 @@ cannot do.
 Representation length reaches the serving layer directly. Patch size, resolution,
 tiling, video duration, temporal compression, and latent patching determine how
 many positions the transformer processes. Those choices also remove information,
-so reducing cost can weaken OCR, grounding, motion, or reconstruction. State the
-input and output contract first, calculate its sequence lengths, and measure
-quality at the resulting compression.
+so reducing cost can weaken OCR, grounding, motion, or reconstruction. Specify
+the supported input and output formats first, calculate their sequence lengths,
+and measure quality at the resulting compression.
 :::
 
 ## Further reading

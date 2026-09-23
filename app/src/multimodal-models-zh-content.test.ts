@@ -36,9 +36,9 @@ test("Chapter 15 preserves the complete English section architecture", () => {
 
 test("the opening separates multimodal interfaces from architecture labels", () => {
   for (const phrase of [
-    "多模态带来的是接口，不是某一种架构",
+    "多模态要解决的是不同模态之间的接口问题",
     "图像以网格形式进入系统，文本是序列，音频是带时间的帧",
-    "这些决定彼此相关，却不能相互替代",
+    "这些决定相互影响，但每一项都要单独做出",
     "所谓「统一多模态模型」其实隐藏着几项彼此独立的选择",
   ]) expect(zh).toContain(phrase);
 });
@@ -50,8 +50,8 @@ test("the design table keeps representation fusion objective and composition dis
     "| <span style=\"white-space: nowrap\">输出模型</span> | 用什么目标生成该模态？ | 下一词元预测、扩散、流匹配 |",
     "| <span style=\"white-space: nowrap\">系统组合</span> | 哪些组件共享权重和部署？ | 专用工具、相连的双塔模型、单一主干 |",
   ]) expect(zh).toContain(row);
-  expect(zh).toContain("连续图像潜变量不等于离散图像词元");
-  expect(zh).toContain("早期融合也不等于端到端产品集成");
+  expect(zh).toContain("连续图像潜变量与离散图像词元是「输入表示」这一问题的两种答案");
+  expect(zh).toContain("端到端产品集成则属于「系统组合」那一行");
 });
 
 test("the mobile design table keeps short Chinese row labels intact", () => {
@@ -69,8 +69,8 @@ test("paired geometry preserves CLIP SigLIP and modality-gap boundaries", () => 
   expect(zh).toContain("@gls-clip，也就是让图像与文本成对学习的训练方法");
   expect(zh).toContain("批内其他样本都作为负例，但非对角图文对仍可能在语义上匹配");
   expect(zh).toContain("提示词的措辞和预训练分布仍然是分类器的一部分");
-  expect(zh).toContain("SigLIP 改变的是批次目标，并不是嵌入的含义");
-  expect(zh).toContain("CLIP 对齐的是配对样本，并不强制两种模态具有相同分布");
+  expect(zh).toContain("SigLIP 保留 CLIP 的成对嵌入，只改变批次目标");
+  expect(zh).toContain("两种目标都不要求图像嵌入和文本嵌入服从同一分布");
   expect(zh).toContain("这种几何间隙不同于连接器的接口不匹配");
 });
 
@@ -94,7 +94,7 @@ test("visual sequence accounting reaches prefill cache and instruction tuning", 
       String.raw`24\times24=576` +
       "$ 个图块位置",
   );
-  expect(zh).toContain("视觉词元数是一项服务决策，不只是编码器细节");
+  expect(zh).toContain("视觉词元数是一项服务决策，因为它同时决定预填充工作量和缓存大小");
   expect(zh).toContain("配对预训练学习对应关系，连接器训练学习接口，指令微调则教模型如何回答");
 });
 
@@ -124,7 +124,7 @@ test("image routes separate representation objective data and sampling claims", 
 test("video accounting and runnable reproduce the English Movie Gen example", () => {
   expect(zh).toContain(String.raw`N_{\mathrm{video}}`);
   expect(zh).toContain(String.raw`\left\lceil\frac{T}{d_t p_t}\right\rceil`);
-  expect(zh).toContain("这个公式只用于核算，不是质量估计");
+  expect(zh).toContain("这个公式按位置数核算成本，质量需要另外测量");
   const cell = zh.match(/:::: \{\.runnable\}\s*```python\n([\s\S]*?)\n```\s*::::/);
   expect(cell).not.toBeNull();
   const python = Bun.which("python3");
@@ -149,7 +149,7 @@ test("video evidence separates compression synchronization and understanding", (
   expect(zh).toContain("早期视频扩散设计用时空分解的 3D UNet 扩展图像模型");
   expect(zh).toContain("Sora 的 2024 年技术报告介绍了作用于时空潜块且支持可变视频形状的扩散 Transformer，但公开信息不足以复现该系统");
   expect(zh).toContain("同步输出并不意味着画面和音频来自同一个联合采样器");
-  expect(zh).toContain("压缩改变的是表示成本，不是语义理解能力");
+  expect(zh).toContain("压缩决定表示成本");
 });
 
 test("integration remains independent from representation and loss", () => {
@@ -171,14 +171,14 @@ test("boundary benchmarks cover representation understanding generation video an
     "| 服务 | 视觉序列长度、预填充时间、缓存内存、首个输出延迟、加速器成本 |",
   ]) expect(zh).toContain(row);
   expect(zh).toContain("任何基准分数都必须注明模型版本、提示协议和工具使用情况");
-  expect(zh).toContain("这些自动评判器是有用的诊断工具，但不是对审美、多样性、排版、记忆或有害输出的完整衡量");
+  expect(zh).toContain("这些自动评判器是有用的诊断工具；审美、多样性、排版、记忆和有害输出还需要另外评测");
 });
 
 test("contested choices and lower-layer constraints remain independently measurable", () => {
   expect(zh).toContain("未解决的问题有两个彼此独立的层次");
   expect(zh).toContain("一项选择的证据不能决定另一项");
   expect(zh).toContain("表示长度会直接传导到服务层");
-  expect(zh).toContain("先写清输入与输出契约，再计算序列长度");
+  expect(zh).toContain("先明确支持的输入与输出规格，再计算序列长度");
 });
 
 test("Chinese Chapter 15 preserves the English artifact and reference contract", () => {
