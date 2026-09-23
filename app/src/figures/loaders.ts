@@ -12,4 +12,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "paged-kv-batching": () => import("./paged-kv-batching.ts"),
   roofline: () => import("./roofline.ts"),
   "causal-attention": () => import("./causal-attention.ts"),
+  "speculative-sampling": () => import("./speculative-sampling.ts"),
 };
