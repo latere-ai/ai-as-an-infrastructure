@@ -1,7 +1,7 @@
 // Guard the bespoke 2D-canvas viz components and their homes.
 
 import { test, expect } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 
 const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
 function src(p: string) { return readFileSync(new URL("../../" + p, import.meta.url), "utf8"); }
@@ -430,6 +430,12 @@ test("lora-lowrank clamps reconstruction rank to available components", () => {
   expect(rt).toContain("k < eff");
 });
 
+test("task arithmetic scales its vectors from the canvas, independent of label length", () => {
+  const component = rt.slice(rt.indexOf("R['task-arithmetic']"), rt.indexOf("R['grpo-advantage']"));
+  expect(component).toContain("vectorLength = Math.min(W, H) * 0.3");
+  expect(component).toContain("/ vectorLength");
+});
+
 test("ch09 sft-peft uses lora-lowrank and task-arithmetic in both languages", () => {
   for (const lang of ["en", "zh"]) {
     const t = src(`${lang}/adaptation/01-sft-peft.qmd`);
@@ -584,6 +590,19 @@ test("adoption-productivity uses ROI balance in both languages", () => {
   expect(src("en/ecosystem/06-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
   expect(src("zh/ecosystem/06-adoption-productivity.qmd")).toContain('data-viz="roi-balance"');
   expect(src("zh/ecosystem/06-adoption-productivity.qmd")).toContain('data-lang="zh"');
+});
+
+test("the ROI explorer does not add raw time and quality percentages", () => {
+  const component = rt.slice(rt.indexOf("R['roi-balance']"), rt.indexOf("R['superposition']"));
+  expect(component).not.toContain("base * (time / 100 + quality / 100)");
+  expect(component).not.toContain("time: 'time saved (%)'");
+});
+
+test("the ROI explorer keeps row labels outside its diverging bars", () => {
+  const component = rt.slice(rt.indexOf("R['roi-balance']"), rt.indexOf("R['superposition']"));
+  expect(component).not.toContain("fillText(r.label, zero");
+  for (const marker of ["var rowH = 42", "var barY = y + 18", "ctx.textAlign = 'left'", "ctx.textAlign = 'right'"])
+    expect(component).toContain(marker);
 });
 
 test("the viz runtime registers evaluation power and frontier components", () => {
@@ -755,4 +774,31 @@ test("infonce-field draws negatives with a tau-dependent emphasis", () => {
   const body = rt.slice(rt.indexOf("R['infonce-field']"), rt.indexOf("R['comparison-explorer']"));
   // Emphasis is exp((s - maxs) / tau): a softmax sharpening that tau controls.
   expect(body).toMatch(/Math\.exp\(\(o\.s - maxs\) \/ tau\)/);
+});
+
+// Every page of both trees, for checks that hold wherever a component is placed.
+function qmdSources(dir: string): string[] {
+  const base = new URL("../../" + dir + "/", import.meta.url);
+  return readdirSync(base, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? qmdSources(`${dir}/${entry.name}`) : entry.name.endsWith(".qmd") ? [src(`${dir}/${entry.name}`)] : [],
+  );
+}
+
+test("every decision-tree placement requests a tree the runtime defines", () => {
+  const component = rt.slice(rt.indexOf("R['decision-tree']"), rt.indexOf("R['float-bits']"));
+  const trees = component.match(/var TREES = \{([^}]*)\}/)?.[1] ?? "";
+  const modes = ["en", "zh"].flatMap((lang) =>
+    qmdSources(lang).flatMap((source) =>
+      [...source.matchAll(/<[a-z]+\b[^>]*\bdata-viz="decision-tree"[^>]*>/g)].map(
+        ([tag]) => tag.match(/\bdata-mode="([^"]*)"/)?.[1] ?? "",
+      ),
+    ),
+  );
+  expect(modes.length).toBeGreaterThan(0);
+  expect(modes.filter((mode) => !trees.includes(`'${mode}':`))).toEqual([]);
+});
+
+test("the precision inspector includes the FP4 E2M1 format", () => {
+  const component = rt.slice(rt.indexOf("R['float-bits']"));
+  expect(component).toContain("{ n: 'fp4 E2M1', e: 2, m: 1 }");
 });

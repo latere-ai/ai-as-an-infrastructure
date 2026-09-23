@@ -269,14 +269,19 @@ match". Test effort goes to content quality, not to per-figure assertions.
   `knownMathDivergence` in `app/src/book-zh-parity.test.ts`. Most are
   punctuation or layout. `practice/05` and `practice/08` were fixed on
   2026-09-23.
-- [ ] **Two hard-wrapped hyphenated compounds** in `adaptation/04`
-  ("instruction-tuned", "log-probabilities").
-- [ ] **Long display equations are clipped, not scrolled.** In
+- [x] **Two hard-wrapped hyphenated compounds** in `adaptation/04`
+  ("instruction-tuned", "log-probabilities"). Fixed 2026-09-23; the
+  allow-list is empty.
+- [x] **Long display equations are clipped, not scrolled.** In
   `foundations/04` the equation ending in a softmax is cut off mid-word at
   desktop width. Display math wider than the column needs horizontal scroll or
-  a line break, and the render test should catch it.
-- [ ] **`app/src/reader-mermaid.test.ts` always skips**: it points at a stale page
-  path and the figure it checked is now Graphviz.
+  a line break, and the render test should catch it. Fixed 2026-09-23: the
+  display did scroll, but behind an overlay scrollbar. Display math now wraps
+  at the break points KaTeX emits (after a top-level relation or operator),
+  and a run that cannot break still scrolls.
+- [x] **`app/src/reader-mermaid.test.ts` always skips**: it points at a stale page
+  path and the figure it checked is now Graphviz. Removed 2026-09-23: a
+  browser test that depends on a CDN in CI costs more than it catches.
 
 ## Open goals: coverage (2026-09-23 audit)
 

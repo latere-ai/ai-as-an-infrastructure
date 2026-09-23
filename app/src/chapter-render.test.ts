@@ -3,7 +3,8 @@
 // (bibliography, cross-reference map, glossary). The checks are mechanical:
 // diagrams parse and fit the reading column, no markdown syntax leaks into the
 // page, no reference goes unresolved, content after a block is not swallowed,
-// and hard wraps do not split hyphenated compounds. None depends on wording.
+// display math can wrap to the column, and hard wraps do not split hyphenated
+// compounds. None depends on wording.
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -252,10 +253,7 @@ const knownWideFigures = [
 
 // Hard-wrapped hyphenated compounds already in the sources, as
 // "<path>: <compound>". Exact for the same reason as the figure list.
-const knownSplitCompounds = [
-  "en/adaptation/04-dpo-variants.qmd: instruction-tuned",
-  "en/adaptation/04-dpo-variants.qmd: log-probabilities",
-];
+const knownSplitCompounds: string[] = [];
 
 // Pages where a `**` run does not close and reaches the reader as literal
 // asterisks. Bold next to CJK text, such as a label ending in full-width
@@ -395,4 +393,28 @@ test("hard wraps in prose do not split hyphenated compounds", () => {
     }
   }
   expect(splits.sort(), "hyphenated compounds split across a hard wrap").toEqual([...knownSplitCompounds].sort());
+});
+
+// A display formula wider than the column must stay visible. KaTeX emits each
+// display as a .katex-html run of inline-block .base spans, split where TeX
+// allows a break, and its own stylesheet forbids wrapping; theme.css lifts
+// that so the runs wrap, and keeps horizontal scroll for a run that cannot
+// break. Both halves are checked: the rule exists, and every rendered display
+// has the structure the rule selects.
+test("display math wraps at KaTeX break points and scrolls when it cannot", () => {
+  const css = readFileSync(join(import.meta.dir, "theme.css"), "utf8");
+  expect(css).toMatch(/\.rdr-article \.katex-display > \.katex \{[^}]*white-space: normal/);
+  expect(css).toMatch(/\.rdr-article \.katex-display \{[^}]*overflow-x: auto/);
+
+  const unselected: string[] = [];
+  let displays = 0;
+  for (const page of pages) {
+    for (const [, body] of page.html.matchAll(/<span class="katex-display">([\s\S]*?)<\/p>/g)) {
+      displays++;
+      if (!body.startsWith('<span class="katex">') || !body.includes('<span class="katex-html" aria-hidden="true"><span class="base">'))
+        unselected.push(page.path);
+    }
+  }
+  expect(displays).toBeGreaterThan(0);
+  expect([...new Set(unselected)], "display math outside the wrap rule's selector").toEqual([]);
 });
