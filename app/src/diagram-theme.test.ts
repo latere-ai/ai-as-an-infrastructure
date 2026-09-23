@@ -82,3 +82,7 @@ test("graphviz colors come from theme tokens by class, not a list of hex values"
   }
   for (let i = 1; i <= 8; i++) expect(css).toContain(`--dg-c${i}t: color-mix(in srgb, var(--fig-c${i}) 18%, var(--fig-paper));`);
 });
+
+test("graphviz edge labels carry a paper halo so the shaft does not run through them", () => {
+  expect(css).toMatch(/\.rdr-diagram svg g\.edge text \{[^}]*paint-order:\s*stroke;[^}]*stroke:\s*var\(--fig-paper\)/);
+});
