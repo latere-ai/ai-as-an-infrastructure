@@ -36,7 +36,6 @@ test("the first paragraph retains every reasoning control route", () => {
 
 test("the second paragraph turns conditional benefits into operating questions", () => {
   for (const phrase of [
-    "确实有效，但都有适用条件",
     "提高候选覆盖率和最终选择质量",
     "掩盖故障",
     "拉长延迟",
@@ -52,7 +51,6 @@ test("the second paragraph turns conditional benefits into operating questions",
 
 test("the closing defines the system and hands routing to serving", () => {
   for (const phrase of [
-    "神秘的内在能力",
     "预算、搜索空间、验证器、轨迹和停止规则",
     "仍未解决的核心问题是路由",
     "测试时算力何时还能继续带来收益",
@@ -76,6 +74,9 @@ test("the rewrite removes translated and machine-like formulations", () => {
     "难度从未被度量过",
     "服务机器",
     "额外思考到底能不能被交付",
+    "确实有效，但都有适用条件",
+    "神秘的内在能力",
+    "长期结论很简单",
     "—",
   ]) {
     expect(chapter).not.toContain(phrase);

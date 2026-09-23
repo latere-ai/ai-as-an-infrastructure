@@ -27,7 +27,7 @@ test("the Part IV epigraph preserves the source in natural Chinese", () => {
 
 test("the opening defines reasoning by when and how computation is spent", () => {
   for (const phrase of [
-    "把推理看成网络内部新增的某个专门模块",
+    "并不对应网络内部新增的某个专门模块",
     "推理是在答案确定之前投入计算的一种方式",
     "额外计算发生在模型作答期间，而不是训练期间",
     "这就是标题中的「测试时算力」",
@@ -62,7 +62,7 @@ test("the closing preserves the complete engineering test", () => {
   expect(zh).toContain("额外工作的成本由哪一层承担，由谁核查，又由什么数据记录");
   expect(zh).toContain("增加计算究竟扩大了候选覆盖面、改善了选择，还是两者兼有");
   expect(zh).toContain("经过推理训练的模型和测试时扩展系统");
-  expect(zh).toContain("不再显得神秘，而成为可以比较和取舍的工程选择");
+  expect(zh).toContain("成为可以比较和取舍的工程选择");
 });
 
 test("the Chinese opener preserves the complete English structure and links", () => {
@@ -84,6 +84,8 @@ test("the rewrite removes mixed-language and translated phrasing", () => {
     "自生成 rationale",
     "long-to-short 迁移",
     "这样一来",
+    "更便于分析的定义",
+    "不再显得神秘",
     "—",
   ]) expect(zh).not.toContain(rejected);
 });
