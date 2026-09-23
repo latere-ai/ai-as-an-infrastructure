@@ -184,7 +184,7 @@ test("merged and switchable adapters retain different operational costs", () => 
 
 test("model merging remains a separate measured approximation", () => {
   expect(zh).toContain("## 权重合并是另一种近似");
-  expect(zh).toContain("不要把一条 LoRA 分支合入自身基座，与组合多个独立微调模型混为一谈");
+  expect(zh).toContain("模型合并是把多个独立微调得到的模型组合成一个，这与把一条 LoRA 分支合入自身基座是两种操作");
   expect(zh).toContain(String.raw`\tau_i=\theta_i-\theta_0`);
   expect(zh).toContain("共享初始化提供了这种对齐");
   expect(zh).toContain("这些方法只是在处理干扰，并不能保证每个父模型的能力都被保留");
@@ -214,9 +214,9 @@ test("adaptation closes as a controlled experiment", () => {
 });
 
 test("lower-layer and evidence boundaries stay explicit", () => {
-  expect(zh).toContain("训练样本不只是文字");
-  expect(zh).toContain("可训练参数量也不等于峰值内存");
-  expect(zh).toContain("## 证据边界");
+  expect(zh).toContain("一条训练样本由多个下层环节共同确定");
+  expect(zh).toContain("可训练参数只是峰值内存中的一项");
+  expect(zh).toContain("## 现有证据支持什么");
   expect(zh).toContain("SFT 让模型更可能在特定序列化方式下复现示范行为");
   expect(zh).toContain("选择能够通过目标测试与回归测试的最小更新");
   expect(zh).toContain("再验证实际部署的确切产物");

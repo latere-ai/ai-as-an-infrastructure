@@ -10,27 +10,30 @@ truthfulness, safety, or knowledge that the examples never support.
 
 Two decisions are often collapsed into the word *fine-tuning*:
 
-1. **What is the training signal?** SFT defines target tokens and minimizes
-   their next-token loss.
-2. **Which parameters may change?** Full fine-tuning updates the model, while
+1. **The training signal.** SFT defines target tokens and minimizes their
+   next-token loss, a penalty that is large when the model gives a target token
+   low probability.
+2. **The trainable parameters.** Full fine-tuning updates the model, while
    parameter-efficient fine-tuning (PEFT) updates a smaller set of parameters
    or adds a small trainable module.
 
 SFT and PEFT therefore answer different questions. SFT is an objective and data
-pipeline. LoRA is one way to parameterize the update. A model can undergo SFT
-with every weight trainable, with LoRA, or with another PEFT method.
+pipeline. LoRA (low-rank adaptation) is one way to parameterize the update: it
+freezes selected weight matrices and trains a small correction to each, stored
+as the product of two thin matrices. A model can undergo SFT with every weight
+trainable, with LoRA, or with another PEFT method.
 
 ## Turn conversations into supervised tokens
 
 An SFT record may contain a system message, several user and assistant turns,
-tool calls, and tool results. The model does not receive those fields directly.
-A chat template serializes them into one token sequence, including the exact
-role and boundary tokens expected by the tokenizer. Training and serving must
-use the same template. A mismatch changes the prefix distribution even when the
-visible conversation looks identical.
+tool calls, and tool results. Before training, a chat template serializes those
+fields into one token sequence, including the exact role and boundary tokens
+expected by the tokenizer, and the model sees only that sequence. Training and
+serving must use the same template. A mismatch changes the prefix distribution
+even when the visible conversation looks identical.
 
-Let the serialized sequence be (u_{1:T}=(u_1,ldots,u_T)), and let a binary
-mask (m_t) select the tokens that should contribute to training. A common
+Let the serialized sequence be $u_{1:T}=(u_1,\ldots,u_T)$, and let a binary
+mask $m_t$ mark each token that should contribute to training. A common
 assistant-only objective is
 
 $$
@@ -43,10 +46,10 @@ m_t\log p_\theta(u_t\mid u_{<t}),
 M=\sum_{t=1}^{T}m_t.
 $$
 
-Here (T) is the sequence length; (u_t) is the token at position (t);
-(u_{<t}) is its prefix; (p_\theta) is the model distribution with parameters
-(\theta); (m_t=1) for a scored target token and (m_t=0) for an ignored
-token; and (M) is the number of scored tokens. The normalization by (M)
+Here $T$ is the sequence length; $u_t$ is the token at position $t$;
+$u_{<t}$ is its prefix; $p_\theta$ is the model distribution with parameters
+$\theta$; $m_t=1$ for a scored target token and $m_t=0$ for an ignored
+token; and $M$ is the number of scored tokens. The normalization by $M$
 makes the loss an average over targets rather than a sum that grows with
 sequence length.
 
@@ -83,9 +86,9 @@ digraph {
 }
 ```
 
-Several implementation details sit inside this apparently simple pipeline:
+Four implementation details in this pipeline change what the model learns:
 
-- **End-of-turn tokens matter.** Without a learned stopping boundary, a model
+- **End-of-turn tokens teach stopping.** Without a learned stopping boundary, a model
   may continue into a simulated user turn or produce several answers.
 - **Truncation changes supervision.** Left truncation can remove the instruction;
   right truncation can remove the answer or its stop token. Log the fraction of
@@ -99,17 +102,19 @@ Several implementation details sit inside this apparently simple pipeline:
 
 Multi-turn supervision adds another choice. A recipe can score every assistant
 span in one serialized conversation, or create one example per assistant turn
-and score only that response. In both cases, later responses are conditioned on
-the recorded earlier replies during teacher forcing, not on errors the model
-might make in a live conversation. Full conversational rollouts are therefore a
-separate evaluation.
+and score only that response. Both use teacher forcing: each later response is
+conditioned on the recorded earlier replies, not on the replies, errors
+included, that the model would produce in a live conversation. Full
+conversational rollouts, in which the model's own replies become the context for
+later turns, therefore need a separate evaluation.
 
 InstructGPT used labeler demonstrations for an SFT stage before preference
 modeling and reinforcement learning [@ouyang2022instructgpt]. Its final behavior
 cannot be attributed to SFT alone. Earlier instruction-tuning work also showed
 that training across many tasks can improve generalization to held-out task
-types [@wei2022flan]. These results establish SFT as more than format selection,
-while leaving its effect dependent on the base model and training set.
+types, task types excluded from training [@wei2022flan]. These results show that
+SFT can change more than output format, and that its effect depends on the base
+model and training set.
 
 ## Data determines the behavior being copied
 
@@ -118,11 +123,12 @@ this context.” It does not directly say which alternative was almost acceptabl
 which defect made another answer worse, or how strongly two requirements should
 trade off. Preference data in @sec-behavior-specs adds that kind of comparison.
 
-The LIMA experiment is a useful boundary case. A 65-billion-parameter LLaMA
-model fine-tuned on 1,000 curated examples learned strong response formats and
-broad conversational behavior in the reported human evaluation
-[@zhou2023lima]. That result supports the claim that a strong base model can need
-little data to adopt a style. It is not a general sample-complexity law. Teaching
+The LIMA experiment tested how far a small curated dataset can go. A
+65-billion-parameter LLaMA model fine-tuned on 1,000 curated examples learned
+strong response formats and broad conversational behavior in the reported human
+evaluation [@zhou2023lima]. That result supports the claim that a strong base
+model can need little data to adopt a style. It is not a general
+sample-complexity law, a rule for how many examples any adaptation needs. Teaching
 specialized facts, a new tool protocol, a language underrepresented in
 pre-training, or a difficult reasoning procedure can require much broader
 coverage.
@@ -140,9 +146,10 @@ A useful dataset audit separates five concerns:
 Duplicate prompts can make a random split look better than true generalization.
 One dominant source can overwhelm a smaller capability even when the record
 counts appear balanced, because long answers contribute more target tokens.
-Incorrect demonstrations are especially costly: maximum-likelihood training
-rewards the model for reproducing them without expressing that the label was
-uncertain.
+Incorrect demonstrations enter the objective directly. The SFT loss raises the
+probability of every target token, so this maximum-likelihood training rewards
+the model for reproducing an incorrect demonstration without expressing that the
+label was uncertain.
 
 Safety examples need the same distributional care. Too many broad refusals can
 produce @gls-over-refusal, meaning that the tuned model rejects benign requests
@@ -150,11 +157,12 @@ because it learned a boundary wider than the intended policy.
 
 Evaluation should compare the base model, a prompting baseline, and the tuned
 model on the same held-out tasks. Report task metrics, instruction and format
-compliance, calibration where relevant, and regression suites for capabilities
-that should remain unchanged. Tulu 3 illustrates the value of separate
-development and unseen evaluations plus decontamination rather than choosing a
-checkpoint on the public test set [@lambert2024tulu3]. Training loss alone only
-shows that the model fits the supervised tokens.
+compliance, calibration (whether the model's confidence matches its accuracy)
+where relevant, and regression suites for capabilities that should remain
+unchanged. Tulu 3 separates development and unseen evaluations and applies
+decontamination, the removal of training examples that overlap evaluation sets,
+rather than choosing a checkpoint on the public test set [@lambert2024tulu3].
+Training loss alone only shows that the model fits the supervised tokens.
 
 ::: {.callout-important}
 ## What's contested
@@ -163,9 +171,9 @@ The “superficial alignment” hypothesis proposes that most knowledge is learn
 during pre-training and that limited SFT mainly selects a conversational style.
 LIMA provides evidence for that view in one broad-assistant setting. FLAN-style
 instruction tuning, domain adaptation, and tool-use training show that SFT can
-also change task competence. The useful question is not whether SFT *elicits* or
-*teaches* in the abstract. It is which held-out behaviors changed, and whether
-those behaviors were already reachable from the base model by prompting.
+also change task competence. A measurable form of the *elicits* versus *teaches*
+question asks which held-out behaviors changed, and whether those behaviors were
+already reachable from the base model by prompting.
 :::
 
 ## Choose which parameters may move
@@ -184,11 +192,12 @@ serving behavior.
 
 Freezing a parameter means the optimizer does not change it and does not need
 gradient or optimizer state for it. The frozen parameter is still used in the
-forward and backward computations. PEFT therefore reduces some important memory
-terms, but it does not make the base model, activations, temporary buffers, or
-communication disappear.
+forward computation and in the backward pass that carries gradients through it
+to the trainable parameters. PEFT therefore removes the gradient and optimizer
+state of the frozen parameters, while the base weights, activations, temporary
+buffers, and communication remain.
 
-A useful memory ledger is
+Peak memory can be approximated as a sum of six terms:
 
 $$
 M_{\mathrm{peak}}
@@ -201,19 +210,19 @@ M_{\mathrm{base}}
 +M_{\mathrm{work}}.
 $$
 
-Here (M_{\mathrm{peak}}) is peak accelerator memory;
-(M_{\mathrm{base}}) stores frozen base weights;
-(M_{\mathrm{adapter}}) stores trainable PEFT parameters;
-(M_{\mathrm{grad}}) stores their gradients;
-(M_{\mathrm{optim}}) stores optimizer state;
-(M_{\mathrm{act}}) stores activations needed for backpropagation; and
-(M_{\mathrm{work}}) covers temporary kernel, communication, and dequantization
+Here $M_{\mathrm{peak}}$ is peak accelerator memory;
+$M_{\mathrm{base}}$ stores frozen base weights;
+$M_{\mathrm{adapter}}$ stores trainable PEFT parameters;
+$M_{\mathrm{grad}}$ stores their gradients;
+$M_{\mathrm{optim}}$ stores optimizer state;
+$M_{\mathrm{act}}$ stores activations needed for backpropagation; and
+$M_{\mathrm{work}}$ covers temporary kernel, communication, and dequantization
 buffers. The approximation omits allocator details, so measure the actual peak.
 
 ## LoRA constrains each update to a low-rank factorization
 
-For a frozen linear map (W_0\in\mathbb{R}^{d_{\mathrm{out}}\times
-d_{\mathrm{in}}}), @gls-lora replaces the effective weight with
+For a frozen linear map $W_0\in\mathbb{R}^{d_{\mathrm{out}}\times d_{\mathrm{in}}}$,
+@gls-lora replaces the effective weight with
 
 $$
 W
@@ -225,17 +234,17 @@ A\in\mathbb{R}^{r\times d_{\mathrm{in}}},
 B\in\mathbb{R}^{d_{\mathrm{out}}\times r}.
 $$
 
-Here (d_{\mathrm{in}}) and (d_{\mathrm{out}}) are the input and output
-dimensions; (r\le\min(d_{\mathrm{in}},d_{\mathrm{out}})) is the adapter rank;
-(A) and (B) are trainable; and (s) is a fixed scale, commonly (\alpha/r)
-in the original parameterization for a chosen multiplier (\alpha). The update
-obeys (\operatorname{rank}(sBA)\le r). For an input
-(x\in\mathbb{R}^{d_{\mathrm{in}}}), the output is
-(Wx=W_0x+sB(Ax)). Implementations commonly initialize one factor so that
-(BA=0), making the adapted model equal to the base model before the first
+Here $d_{\mathrm{in}}$ and $d_{\mathrm{out}}$ are the input and output
+dimensions; $r\le\min(d_{\mathrm{in}},d_{\mathrm{out}})$ is the adapter rank;
+$A$ and $B$ are trainable; and $s$ is a fixed scale, commonly $\alpha/r$
+in the original parameterization for a chosen multiplier $\alpha$. The update
+obeys $\operatorname{rank}(sBA)\le r$. For an input
+$x\in\mathbb{R}^{d_{\mathrm{in}}}$, the output is
+$Wx=W_0x+sB(Ax)$. Implementations commonly initialize one factor so that
+$BA=0$, making the adapted model equal to the base model before the first
 update.
 
-The base matrix contains (d_{\mathrm{out}}d_{\mathrm{in}}) parameters. The
+The base matrix contains $d_{\mathrm{out}}d_{\mathrm{in}}$ parameters. The
 LoRA branch contains
 
 $$
@@ -247,15 +256,14 @@ N_{\mathrm{LoRA}}
 {d_{\mathrm{out}}d_{\mathrm{in}}}.
 $$
 
-Here (N_{\mathrm{LoRA}}) is the number of trainable adapter parameters for
-this matrix and (\rho) is their fraction of the base-matrix parameter count.
+Here $N_{\mathrm{LoRA}}$ is the number of trainable adapter parameters for
+this matrix and $\rho$ is their fraction of the base-matrix parameter count.
 The total for a model is the sum over every targeted matrix, plus any biases,
 embeddings, or output heads deliberately left trainable.
 
-![For one 4,096 by 4,096 matrix, the exact LoRA parameter fraction is (2r/4{,}096). The chart counts the two factors only; it does not predict task quality, memory use, or the fraction for a whole model.](/figures/sft-peft-1.svg){#fig-sft-peft-1}
+![For one 4,096 by 4,096 matrix, the exact LoRA parameter fraction is 2r/4,096. The chart counts the two factors only; it does not predict task quality, memory use, or the fraction for a whole model.](/figures/sft-peft-1.svg){#fig-sft-peft-1}
 
-The runnable performs the same exact accounting. It describes one matrix, not a
-complete transformer.
+The runnable performs the same exact accounting for one matrix.
 
 :::: {.runnable}
 ```python
@@ -316,21 +324,24 @@ applicable, MoE projections as well. A 2025 report found high-rank LoRA could
 match full fine-tuning in its Llama and Qwen sweeps when adapters covered all
 linear layers and were not capacity-constrained; it also found a different
 best learning rate and worse behavior at large batch sizes
-[@schulman2025lora]. Those are empirical results, not universal defaults. Sweep
-the update strategy on the actual dataset.
+[@schulman2025lora]. These findings come from specific model families and
+sweeps, so the update strategy still needs its own sweep on the actual dataset.
 
 ## QLoRA changes the storage of the frozen base
 
 @gls-qlora keeps the frozen base weights in a 4-bit NormalFloat representation
-and trains LoRA factors in a higher compute precision. During computation,
-weight blocks are dequantized as needed; gradients flow through the computation
-to the adapter parameters, while the quantized base remains unchanged.
+and trains LoRA factors in a higher compute precision. Quantization of this kind
+stores each weight as a 4-bit code plus shared scaling constants for each block
+of weights. During computation, weight blocks are dequantized, expanded back to
+the compute precision, as needed; gradients flow through the computation to the
+adapter parameters, while the quantized base remains unchanged.
 Double quantization compresses quantization constants, and paged optimizers
 manage temporary memory spikes [@dettmers2023qlora].
 
 The QLoRA paper demonstrated fine-tuning a 65-billion-parameter model on one
 48 GB GPU in its reported configuration. That is an existence result, not a
-hardware rule. Sequence length, batch size, activation checkpointing, attention
+hardware rule. Sequence length, batch size, activation checkpointing (recomputing
+activations during the backward pass instead of storing them), attention
 kernels, adapter coverage, optimizer, and temporary buffers can move the peak
 substantially. Four bits per base parameter is also only the ideal payload for
 the quantized values; scales and other metadata add storage.
@@ -352,7 +363,7 @@ $$
 Here the merged matrix uses the original linear operation, so the LoRA branch adds no
 separate matrix multiplications at inference. The cost is operational: the
 result is another full-size weight set, and that model instance no longer has a
-small independent adapter to switch off. Keeping (A) and (B) separate
+small independent adapter to switch off. Keeping $A$ and $B$ separate
 preserves modularity but adds adapter computation, memory reads, and routing.
 The real latency depends on batch shape, kernel fusion, rank, target modules,
 and whether requests in a batch use the same adapter.
@@ -361,18 +372,20 @@ Adapter hot-swapping also has compatibility constraints. A server must pair an
 adapter with the exact base architecture and parameter names it was trained
 against, plus the compatible tokenizer and chat template. Current PEFT tooling
 can replace LoRA weights in place, but target modules and compiled shapes constrain
-which adapters can share a slot [@huggingface2026peft]. “One base, many
-adapters” is a deployment design, not an automatic property of an adapter file.
+which adapters can share a slot [@huggingface2026peft]. Serving one base with
+many adapters is therefore a deployment design, in which the server enforces
+these pairings for every adapter it loads.
 
 ## Weight merging is a separate approximation
 
-Do not confuse merging one LoRA branch into its own base with combining several
-independently fine-tuned models. The latter is *model merging*. It operates on
-compatible parameter coordinates and tries to preserve several behaviors
+*Model merging* combines several independently fine-tuned models into one, a
+different operation from folding one LoRA branch into its own base. It operates
+on compatible parameter coordinates and tries to preserve several behaviors
 without another training run.
 
-For fine-tuned parameter vector (\theta_i) derived from the same base
-(\theta_0), define the task delta and a weighted merge as
+For a fine-tuned parameter vector $\theta_i$ derived from the same base
+$\theta_0$, define the task delta, which measures how far each fine-tune moved
+from the base, and a weighted merge as
 
 $$
 \tau_i=\theta_i-\theta_0,
@@ -381,9 +394,9 @@ $$
 =\theta_0+\sum_{i=1}^{n}\lambda_i\tau_i.
 $$
 
-Here (i\in\{1,\ldots,n\}) indexes the source fine-tunes; (\tau_i) is the
-parameter displacement for source (i); (\lambda_i) is its chosen merge
-coefficient; and (\theta_{\mathrm{merge}}) is the candidate merged model.
+Here $i\in\{1,\ldots,n\}$ indexes the source fine-tunes; $\tau_i$ is the
+parameter displacement for source $i$; $\lambda_i$ is its chosen merge
+coefficient; and $\theta_{\mathrm{merge}}$ is the candidate merged model.
 The operation assumes matching architecture, tensor shapes, tokenizer-related
 parameters, and parameter alignment. A shared initialization supplies that
 alignment. Arithmetic on unrelated checkpoints is not justified by the
@@ -440,22 +453,23 @@ artifact distinguishable:
 ::: {.callout-tip}
 ## Lower-layer constraint
 
-The training example is not just prose. It is bytes, normalized text, template
-tokens, truncation, an attention mask, a target mask, and a packed sequence.
-Likewise, “trainable parameters” is not peak memory: base weights, activations,
-gradients, optimizer state, communication buffers, and temporary kernels occupy
-different terms. Record those lower-layer contracts before comparing recipes.
+A training example is fixed at several lower layers: bytes, normalized text,
+template tokens, truncation, an attention mask, a target mask, and a packed
+sequence. Likewise, the trainable parameters are one term of peak memory; base
+weights, activations, gradients, optimizer state, communication buffers, and
+temporary kernels occupy the others. Record these lower-layer settings before
+comparing recipes.
 :::
 
-## The evidence boundary
+## What the evidence supports
 
 SFT makes a model more likely to reproduce demonstrated behavior under a
 particular serialization. PEFT changes the set or form of parameters allowed to
 carry that update. Neither choice determines the other, and neither removes the
 need for held-out evaluation.
 
-Small curated datasets can be enough for style and familiar tasks. LoRA and
-QLoRA can make those experiments much cheaper. The claims stop there. New
+Small curated datasets can be enough for style and familiar tasks, and LoRA and
+QLoRA can make those experiments much cheaper. Beyond those cases, new
 knowledge, distant domains, long training runs, precision-sensitive tasks, and
 combined skills may expose capacity, forgetting, quantization, or interference
 limits. Choose the smallest update that passes the target and regression suites,
