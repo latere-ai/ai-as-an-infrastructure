@@ -52,11 +52,11 @@ test("Chapter 58 preserves the complete English adversarial-evaluation contract"
     "对抗鲁棒性与红队 {#sec-adversarial-robustness}",
   ]);
   expect(headings(chapter, 2)).toEqual([
-    "从失效出发，而不是从提示词出发",
+    "从失效出发",
     "先写威胁模型，再运行攻击",
     "不同攻击方法暴露不同攻击面",
-    "度量攻击尝试，而不是轶事",
-    "构建红队计划，而不是只跑一次基准",
+    "度量攻击尝试",
+    "构建红队计划",
     "按失效阶段匹配防御",
     "把结果写成发布规则",
     "保留可复现的评估记录",
@@ -390,12 +390,12 @@ test("the lower-layer constraint and conclusion define a versioned claim", () =>
   for (const phrase of [
     "基础设施限制一次成功攻击能够做什么",
     "不能取代权限范围、秘密隔离、有类型的工具闸门、接收方检查、沙箱或出网策略",
-    "模型可以提出动作，可信代码必须决定并强制执行",
-    "对抗鲁棒性不是附着在单个模型上的一个分数",
+    "由可信代码决定模型提出的动作能否执行",
+    "对抗鲁棒性要靠一套可重复的流程来确立",
     "定义失效、说明攻击者能力、运行代表性与自适应攻击",
     "验证裁判、量化不确定性和效用、执行发布规则",
     "把每个已确认失效保存为回归证据",
-    "不是证书",
+    "这套流程产出一项带版本、可审计的主张",
     "带版本、可审计的主张",
   ]) expect(flat).toContain(phrase);
 });
