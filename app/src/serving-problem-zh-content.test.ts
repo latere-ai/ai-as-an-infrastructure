@@ -51,7 +51,7 @@ test("Chapter 31 preserves the complete English serving contract", () => {
 
 test("the opening defines serving as online resource allocation", () => {
   for (const phrase of [
-    "模型检查点不会决定请求何时运行",
+    "模型检查点与用户之间隔着一个服务系统",
     "提示词长度、输出长度和截止时间各不相同",
     "创建模型状态，并在生成词元的间隙保留这些状态",
     "何时继续接纳任务会让已有请求逾期",
@@ -83,9 +83,9 @@ test("phase regimes and batching remain conditional", () => {
   for (const phrase of [
     "通常具有更高的算术强度",
     "常常受到内存带宽限制",
-    "roofline 模型描述的是判断条件，而不是一句口号",
+    "roofline 模型用算术吞吐量和内存带宽这两个硬件峰值",
     "模型形状、序列长度、批的组成、量化、内核、并行方式和硬件",
-    "常见运行区间，而不是自然定律",
+    "都可能让一项操作落到不等式的另一侧",
     "仍能维持目标延迟分布的最大可行批",
   ]) expect(flat).toContain(phrase);
 });
@@ -151,11 +151,11 @@ test("load evaluation reports the complete operating curve", () => {
 
 test("the conclusion distinguishes a kernel result from a useful service", () => {
   for (const phrase of [
-    "服务性能不能靠“计算量”到“速度”的简单换算来解释",
+    "服务系统要协调完整的请求生命周期",
     "每种机制消除的浪费来源不同",
     "都不能取代接纳控制和针对具体负载的测量",
     "同时报告尾延迟、有效吞吐量、拒绝情况和成本",
-    "快速内核演示与并发用户到来时仍然有用的服务之间的分界线",
+    "并发用户到来时服务是否仍然有用",
   ]) expect(flat).toContain(phrase);
 });
 

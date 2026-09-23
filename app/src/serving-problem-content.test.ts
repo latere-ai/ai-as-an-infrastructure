@@ -48,7 +48,7 @@ test("phase bottlenecks are conditional rather than universal", () => {
   }
   for (const phrase of [
     "neither has a universal bottleneck",
-    "common regimes, not laws of nature",
+    "move an operation to the other side of the inequality",
     "model shape, sequence length, batch composition",
     "largest feasible batch that still preserves",
   ]) expect(flat).toContain(phrase);

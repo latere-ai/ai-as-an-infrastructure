@@ -1,19 +1,23 @@
 # The Serving Problem {#sec-serving-problem}
 
-A model checkpoint does not decide when a request runs, how much memory it may
-occupy, or which request should go next. A serving system makes those decisions
-while requests arrive with different prompt lengths, output lengths, and
-deadlines. It must create the model's state, retain that state between tokens,
-share finite accelerators across users, and decide when admitting more work
-would make existing work late.
+A serving system sits between a model checkpoint and its users. It decides when
+each request runs, how much memory the request may occupy, and which request
+goes next, while requests arrive with different prompt lengths, output lengths,
+and deadlines. It must create the model's state, retain that state between
+tokens, share finite accelerators across users, and decide when admitting more
+work would make existing work late.
 
-This chapter focuses on decoder-only autoregressive Transformers. Serving them
-is an online resource-allocation problem. The @gls-prefill phase processes a
-prompt and creates attention state. The
-@gls-decode phase repeatedly consumes that state to produce one new token.
-Those phases usually stress hardware differently, but neither has a universal
-bottleneck. The useful objective is @gls-goodput: completed requests that meet
-an explicit latency contract, measured together with acceptance rate and cost.
+This chapter focuses on decoder-only autoregressive Transformers, which generate
+output one token at a time, each token conditioned on the prompt and on every
+token produced before it. Serving them is an online resource-allocation problem.
+The @gls-prefill phase processes a prompt and creates attention state, the
+per-token keys and values that later tokens read, called the key-value (KV)
+state. The @gls-decode phase repeatedly consumes that state to produce one new
+token. Those phases usually stress hardware differently, but neither has a
+universal bottleneck. The useful objective is @gls-goodput: completed requests
+that meet an explicit latency contract, meaning latency targets stated in
+advance for each class of request. Goodput is measured together with acceptance
+rate and cost.
 
 ## Measure the request lifecycle
 
@@ -101,23 +105,25 @@ the maximum arrival rate at which a chosen share of requests, such as 90%,
 meets both phase SLOs, another useful goodput convention
 [@zhong2024distserve]. A one-token response can use a TTFT or E2E contract
 without a TPOT condition. In every convention, goodput must be paired with
-offered load, admission rate, and rejection rate. A system can manufacture
-excellent latency by refusing difficult requests.
+offered load, admission rate, and rejection rate. A system can report excellent
+latency simply by rejecting difficult requests.
 
 ## Prefill and decode occupy different regimes
 
 Prefill evaluates all prompt positions and creates the keys and values needed
 by later attention. Its matrix operations expose parallel work across the
-prompt and usually have higher arithmetic intensity. Decode evaluates one new
-position per active sequence. At small batch sizes, each step performs little
-work relative to the model weights and cache bytes it must access, so it is
-often limited by memory bandwidth. Batching several decode requests reuses the
+prompt and usually have higher arithmetic intensity, meaning more arithmetic
+per byte moved from memory. Decode evaluates one new position per active
+sequence. At small batch sizes, each step performs little work relative to the
+model weights and cache bytes it must access, so it is often limited by memory
+bandwidth. Batching several decode requests reuses the
 loaded weights across more work and can move the step toward compute saturation
 [@pope2022scaling; @yuan2024roofline].
 
-The roofline model states this condition rather than turning it into a slogan.
-For an operation requiring $F$ floating-point operations and $D$ bytes of data
-movement, its execution time is bounded below by
+The roofline model states this condition quantitatively in terms of two
+hardware peaks, arithmetic throughput and memory bandwidth. For an operation
+requiring $F$ floating-point operations and $D$ bytes of data movement, its
+execution time is bounded below by
 
 $$
 \begin{gathered}
@@ -138,14 +144,16 @@ operation is bandwidth-limited in this simplified model when
 $I<P_{\max}/B_{\max}$ and compute-limited when the inequality reverses. Model
 shape, sequence length, batch composition, quantization, kernels, parallelism,
 and hardware all change $F$, $D$, or the attainable fractions of the two peaks.
-Long-prefill and small-batch-decode are common regimes, not laws of nature.
+Long prefill and small-batch decode are therefore common regimes, and a change
+in any of these factors can move an operation to the other side of the
+inequality.
 
 This distinction explains the basic batching trade-off. More decode sequences
 can amortize weight reads and raise token throughput. The larger batch also
 takes longer to execute, consumes more state memory, and may make each sequence
-wait longer for its next turn. The best batch is therefore not the one with the
-highest raw throughput. It is the largest feasible batch that still preserves
-the relevant latency distribution under the measured workload.
+wait longer for its next turn. The best batch is therefore the largest feasible
+batch that still preserves the relevant latency distribution under the measured
+workload, which can be smaller than the batch with the highest raw throughput.
 
 ## KV state turns memory into an admission constraint
 
@@ -164,7 +172,8 @@ M_{\mathrm{KV}}=\sum_{i\in\mathcal R}m_i.
 $$
 
 Here $L$ is the transformer-layer count; $n_{\mathrm{kv}}$ is the number of
-key-value heads per layer; $d_{\mathrm{head}}$ is the dimension of each head;
+key-value heads per layer, which sets how many key and value vectors each layer
+stores per token; $d_{\mathrm{head}}$ is the dimension of each head;
 $b_{\mathrm{kv}}$ is the number of bytes per cached element; $T_i$ is the
 number of retained prompt and generated tokens for request $i$; $\mathcal R$ is
 the set of resident requests; and the factor two accounts for keys and values.
@@ -184,7 +193,8 @@ kernel and communication workspace, and a safety reserve. Their sum is
 $M_{\mathrm{used}}$, which must not exceed usable accelerator memory
 $M_{\mathrm{device}}$. The formula describes logical bytes before prefix
 sharing. If requests share physical prefix blocks, count each unique block
-once. Tensor parallelism may shard KV heads or replicate them, so per-device
+once. Tensor parallelism, which splits each layer's weight matrices across
+several accelerators, may shard KV heads or replicate them, so per-device
 memory depends on the parallel layout as well as the architecture.
 
 <figure id="fig-serving-problem-kv-cache">
@@ -199,12 +209,14 @@ Here the architecture fixes $L$, $n_{\mathrm{kv}}$, and
 $d_{\mathrm{head}}$, but the
 serving layer still controls cache precision, admitted sequences, block
 allocation, prefix sharing, eviction, and parallel placement. The KV cache is
-therefore often an admission constraint, not always *the* constraint. Weights
-can dominate memory for short sequences. Arithmetic, memory bandwidth, network
-transfer, or queueing can bind before KV capacity does.
+therefore often an admission constraint, not always the first limit reached.
+Weights can dominate memory for short sequences. Arithmetic, memory bandwidth,
+network transfer, or queueing can bind before KV capacity does.
 
-Multi-query and grouped-query attention reduce $n_{\mathrm{kv}}$ relative to
-ordinary multi-head attention. Cache quantization reduces $b_{\mathrm{kv}}$.
+Multi-query and grouped-query attention, which let several attention heads
+share one set of keys and values, reduce $n_{\mathrm{kv}}$ relative to ordinary
+multi-head attention. Cache quantization, which stores each cached element at
+lower numeric precision, reduces $b_{\mathrm{kv}}$.
 Both change the capacity equation, but they may also change accuracy or kernel
 behavior. @sec-transformer-architecture defines the state the model creates;
 @sec-memory-scheduling develops the allocation and eviction mechanisms in
@@ -257,8 +269,9 @@ print("continuous slot utilization:", f"{active_slot_steps / (continuous_steps *
 Continuous batching does not reduce the model work needed for those tokens. It
 changes when a free slot can be reused. Real schedulers must also decide which
 waiting request to admit, how much future KV memory to reserve, whether to
-prioritize prefills or decodes, and when to preempt work. A scheduling policy is
-part of the service contract, not an implementation detail behind it.
+prioritize prefills or decodes, and when to preempt work. The scheduling policy
+is part of the service contract, because it determines which latency targets
+the service can meet.
 
 ## What a scheduler must guarantee
 
@@ -313,9 +326,10 @@ ways. Sarathi-Serve divides a long prefill into chunks and combines them with
 ongoing decodes, limiting how long decode work waits behind one prompt
 [@agrawal2024sarathi]. DistServe assigns prefill and decode to different GPU
 pools and chooses resources and parallelism for each phase separately
-[@zhong2024distserve]. Disaggregation removes colocated kernel interference,
-but it does not make the phases independent: the decode pool cannot start until
-the KV state arrives, and both pools can still queue.
+[@zhong2024distserve]. Disaggregation removes the kernel interference of
+colocation, where both phases share the same GPUs, but it does not make the
+phases independent: the decode pool cannot start until the KV state arrives,
+and both pools can still queue.
 
 ::: {.callout-important}
 ## What's contested
@@ -355,13 +369,15 @@ saturation:
    gaps, cache misses, preemption, transfer, and client backpressure. An average
    cannot identify which resource failed.
 
-Admission policy deserves special scrutiny. Reserving every request's declared
-maximum length protects memory but can waste most of the pool. Reserving only
-its current length admits more work but needs a credible plan for growth,
-preemption, eviction, or rejection. Priority scheduling can protect interactive
-traffic while starving batch jobs. Prefix caches can improve TTFT while
-creating cross-tenant data or timing risks if isolation is underspecified.
-Every optimization moves a boundary that operations must expose.
+Admission and scheduling policies each trade one cost for another. Reserving
+every request's declared maximum length protects memory but can waste most of
+the pool. Reserving only its current length admits more work but needs a
+credible plan for growth, preemption, eviction, or rejection. Priority
+scheduling can protect interactive traffic while starving batch jobs. Prefix
+caches can improve TTFT while creating cross-tenant data or timing risks if
+isolation is underspecified. Each of these choices shifts cost or risk to
+another resource, request class, or tenant, and the service's metrics must show
+where it went.
 
 ::: {.callout-tip}
 ## Constraint arrow
@@ -370,14 +386,14 @@ This chapter defines the service objective and the resources a scheduler must
 allocate. @sec-memory-scheduling explains block allocation, preemption, and
 prefix caching. @sec-faster-decoding reduces or overlaps the work of producing
 tokens, while @sec-quantization-kernels changes weight, cache, and arithmetic
-costs. Improvements in those layers matter only after the end-to-end scheduler
-turns them into in-contract completions under load.
+costs. An improvement in those layers raises goodput only when the end-to-end
+scheduler turns it into more requests completed within their latency contract
+under load.
 :::
 
 ## Payoff and boundary
 
-Serving does not turn one scalar called “compute” into one scalar called
-“speed.” It coordinates a request lifecycle with two recurring execution
+A serving system coordinates a request lifecycle across two recurring execution
 regimes, growing state, uncertain output length, finite memory, and deadlines.
 Continuous batching, paged KV allocation, prefix reuse, chunked prefill, and
 phase disaggregation each remove a different source of waste. None replaces
@@ -386,8 +402,9 @@ admission control or workload-specific measurement.
 A defensible serving result states the model and hardware, offered and admitted
 load, request-length distributions, scheduling policy, cache policy, and
 latency contract. It then reports tail latency, goodput, rejection, and cost
-together. That is the boundary between a fast kernel demonstration and a
-service that remains useful when users arrive concurrently.
+together. A result reported this way shows whether the service remains useful
+when users arrive concurrently, which a fast kernel demonstration alone cannot
+show.
 
 ## Further reading
 
