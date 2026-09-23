@@ -4,7 +4,8 @@
 
 import type { AnyFigure } from "./types.ts";
 import pagedKvBatching from "./paged-kv-batching.ts";
+import roofline from "./roofline.ts";
 
-const ALL: AnyFigure[] = [pagedKvBatching];
+const ALL: AnyFigure[] = [pagedKvBatching, roofline];
 
 export const FIGURES: ReadonlyMap<string, AnyFigure> = new Map(ALL.map((f) => [f.name, f]));
