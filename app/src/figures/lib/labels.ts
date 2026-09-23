@@ -19,7 +19,7 @@ function advance(ch: string): number {
   if (/[iljtf.,:;'!|]/.test(ch)) return 0.28;
   if (/[mwMW]/.test(ch)) return 0.88;
   if (/[A-Z]/.test(ch)) return 0.66;
-  if (/[−–—=+<>≤≥×÷]/.test(ch)) return 0.62;
+  if (/[−–\u2014=+<>≤≥×÷]/.test(ch)) return 0.62;
   return 0.57;
 }
 
