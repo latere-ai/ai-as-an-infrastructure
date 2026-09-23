@@ -41,9 +41,9 @@ test("Chapter 61 preserves the complete English law and policy contract", () => 
   expect(headings(chapter, 2)).toEqual([
     "先确认来源与效力状态",
     "先分类，再映射控制措施",
-    "欧盟《人工智能法案》：多套分类并行，不是一座金字塔",
+    "欧盟《人工智能法案》：多套分类并行",
     "角色会沿价值链转移",
-    "美国：多重权限交叠，并非监管真空",
+    "美国：多重权限交叠",
     "国际文书与标准",
     "既有法律仍然适用于系统",
     "前沿模型自愿政策：有用、可修订，也有边界",
@@ -73,7 +73,7 @@ test("Chapter 61 preserves the complete English law and policy contract", () => 
 
 test("the opening treats compliance as a dated claim about a specific system", () => {
   for (const phrase of [
-    "法律合规不是模型本身的一项属性",
+    "法律合规是一个带有时间条件的判断",
     "特定系统",
     "预期用途",
     "实施该用途的主体",

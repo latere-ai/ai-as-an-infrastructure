@@ -15,7 +15,7 @@ const flat = chapter.replace(/\s+/g, " ").toLowerCase();
 
 test("the opening defines compliance as a dated system claim", () => {
   for (const phrase of [
-    "legal compliance is not a property of a model",
+    "legal compliance is a dated claim",
     "specific system",
     "intended use",
     "actor",

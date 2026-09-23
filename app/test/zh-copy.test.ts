@@ -935,11 +935,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/safety/08-law-regulation-policy.qmd",
-      ["Legal compliance is not a property of a model", "specific system", "intended use", "jurisdiction", "source version"],
+      ["Legal compliance is a dated claim", "specific system", "intended use", "jurisdiction", "source version"],
     ],
     [
       "zh/safety/08-law-regulation-policy.qmd",
-      ["法律合规不是模型本身的一项属性", "特定系统", "预期用途", "司法辖区", "分析所依据的来源版本"],
+      ["法律合规是一个带有时间条件的判断", "特定系统", "预期用途", "司法辖区", "分析所依据的来源版本"],
     ],
     [
       "en/safety/index.qmd",
