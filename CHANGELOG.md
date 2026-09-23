@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.6.0 - 2026-09-23
+
 ### Changed
 
 - Every chapter was reread for wording in English and Chinese: definitions are
