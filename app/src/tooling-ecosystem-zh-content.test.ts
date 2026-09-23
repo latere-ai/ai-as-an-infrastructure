@@ -24,11 +24,11 @@ function refs(source: string) {
 test("Chinese Chapter 75 preserves the complete English structure", () => {
   expect(chinese).toMatch(/^# 工具生态 \{#sec-tooling-ecosystem\}/);
   expect(headings(chinese)).toEqual([
-    ["##", "先分平面，再看产品"],
+    ["##", "执行、控制与证据平面"],
     ["##", "让兼容性成为可审查的主张"],
     ["##", "生态围绕不同边界逐步形成"],
     ["##", "训练与服务暴露出可移植性的边界"],
-    ["##", "智能体主机不是协议"],
+    ["##", "智能体主机及其各条边上的协议"],
     ["###", "MCP：从应用主机到能力服务器"],
     ["###", "A2A：从客户端到独立智能体"],
     ["##", "安全属于完整的组合路径"],
@@ -123,7 +123,7 @@ test("training and serving history stays scoped to the evaluated boundaries", ()
     "模型、动作与观察",
     "MCP",
     "A2A",
-    "并不构成一条成熟度阶梯",
+    "并不是同一问题依次演进的几个阶段",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -291,7 +291,7 @@ test("the contested boundary and economics handoff preserve the systems argument
     "加速器",
     "存储",
     "网络路径",
-    "只有测试与策略才能让组合系统获得准入",
+    "组合系统要获得准入，需要在它的所有边上完成测试与策略检查",
   ]) expect(flat).toContain(phrase);
   for (const ref of [
     "@sec-model-artifacts",
@@ -362,7 +362,7 @@ test("the complete Chinese chapter renders through the economics handoff", async
   const { html, headings: renderedHeadings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("只有测试与策略才能让组合系统获得准入");
+  expect(html).toContain("组合系统要获得准入，需要在它的所有边上完成测试与策略检查");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(3);
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();
 });

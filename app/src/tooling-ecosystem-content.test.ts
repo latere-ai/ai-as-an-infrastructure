@@ -110,7 +110,7 @@ test("A2A v1.0 is an asynchronous task protocol rather than a trust layer", () =
     "artifact",
     "a2a-version",
     "terminal state",
-    "does not prove",
+    "do not prove that the remote agent is correct",
     "correct",
   ]) expect(flat).toContain(phrase);
 });
@@ -277,7 +277,7 @@ test("the complete chapter renders without swallowing figures or late prose", as
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("A protocol makes an edge legible; only tests and policy make the composed system acceptable");
+  expect(html).toContain("Accepting the composed system requires tests and policy checks across all of its edges");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(3);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });
