@@ -50,6 +50,11 @@ export function compact(v: number): string {
 }
 
 // Fill {name} placeholders in a label template: tpl("R{i} frees {k}", { i: 3, k: 2 }).
+// {name:one/many} picks the English singular or plural form by the value:
+// tpl("{k:block is/blocks are} free", { k: 1 }) gives "1 block is free".
 export function tpl(s: string, vars: Record<string, string | number>): string {
-  return s.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
+  return s
+    .replace(/\{(\w+):([^/{}]*)\/([^{}]*)\}/g, (m, k: string, one: string, many: string) =>
+      (k in vars ? `${vars[k]} ${Number(vars[k]) === 1 ? one : many}` : m))
+    .replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m));
 }
