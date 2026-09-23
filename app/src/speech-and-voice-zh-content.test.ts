@@ -34,12 +34,12 @@ test("Chapter 14 preserves the complete English section architecture", () => {
 
 test("the opening treats speech as timed interaction rather than text input", () => {
   for (const phrase of [
-    "语音不是接上麦克风的文本",
+    "语音是随时间展开的信号",
     "听者会在一句话尚未结束时作出反应",
     "两个人也可能同时说话",
     "流式处理改变了什么才算正确",
     "从音频帧与文本之间未被标注的对齐开始",
-    "可用语音对话背后的工程契约",
+    "可用的语音对话对每一层提出的要求",
   ]) expect(zh).toContain(phrase);
 });
 
@@ -51,7 +51,7 @@ test("timed workloads define distinct first outputs and failures", () => {
     "| 全双工对话 | 没有固定轮次边界 | 对说话、停顿或打断作出反应 | 重叠与状态错误 |",
   ]) expect(zh).toContain(row);
   expect(zh).toContain("最终转写很好，局部文本却可能变化得太频繁");
-  expect(zh).toContain("「实时」必须对应明确指标，不能只作为一个形容词");
+  expect(zh).toContain("说一个系统「实时」时，必须说明指的是哪项指标");
 });
 
 test("recognition objectives keep alignment and streaming claims distinct", () => {
@@ -81,7 +81,8 @@ test("representation pretraining separates self-supervision from weak supervisio
   expect(zh).toContain("论文的代表性解码器还使用了 Transformer 语言模型");
   expect(zh).toContain("目标在每个训练阶段内保持固定");
   expect(zh).toContain("在干扰下识别内容，而不是重建干净波形");
-  expect(zh).toContain("主要结果是跨留出数据集的广泛零样本迁移，而不是普遍优于针对单一领域调优的系统");
+  expect(zh).toContain("主要结果是跨留出数据集的广泛零样本迁移");
+  expect(zh).toContain("这并不说明它普遍优于针对单一领域调优的系统");
 });
 
 test("codec accounting defines RVQ index traffic and nominal bitrate", () => {
@@ -148,7 +149,7 @@ test("conversation latency is decomposed without inventing one universal thresho
 });
 
 test("system evidence keeps Moshi human timing and GPT-4o claims bounded", () => {
-  expect(zh).toContain("这些数字只描述该系统，并不是通用的对话阈值");
+  expect(zh).toContain("这些数字只描述该系统。");
   expect(zh).toContain("人类对话不是一项 200 毫秒服务等级目标");
   expect(zh).toContain("不同语言和回应类型之间仍有很大差异");
   expect(zh).toContain("语音产品应当按自己的任务测量");

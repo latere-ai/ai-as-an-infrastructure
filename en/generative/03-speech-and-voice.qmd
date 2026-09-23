@@ -1,16 +1,18 @@
 # Speech and Realtime Voice {#sec-speech}
 
-Speech is not text with a microphone attached. It is a timed signal: words arrive
-inside a voice, listeners respond before every sentence is complete, and two
-people may speak at once. A batch transcription system can wait for the recording
-to end. A live captioner must revise partial hypotheses without distracting the
-reader. A voice assistant must also decide when to answer, begin producing audio,
-and keep listening while it speaks. Streaming changes what counts as correct.
+Speech is a timed signal: words arrive inside a voice, listeners respond before
+every sentence is complete, and two people may speak at once. A batch
+transcription system can wait for the recording to end. A live captioner must
+revise its partial hypotheses, the provisional transcript of speech still in
+progress, without distracting the reader. A voice assistant must also detect when
+the user has finished speaking (endpointing), begin producing audio, and keep
+listening while it speaks. Streaming changes what counts as correct.
 
 This chapter develops the stack in that order. It begins with the latent alignment
 between audio frames and text, then explains how learned representations and
 neural codecs reduce the amount of audio a model must process. It closes with
-speech generation and the engineering contract behind a usable conversation.
+speech generation and with the requirements that a usable conversation places on
+every layer.
 
 ## Treat speech as a timed stream
 
@@ -24,19 +26,22 @@ frames. What happens next depends on the application:
 | Turn-based voice assistant | Until end of turn | First reply audio | Late or false endpoint |
 | Full-duplex conversation | No fixed turn boundary | Speech, pause, or interruption response | Overlap and state errors |
 
-The distinctions matter. A model can have an excellent final transcript while its
-partial text changes too often for captions. A synthesizer can render natural
-speech faster than real time yet take too long to produce its first audio frame.
-“Realtime” therefore needs a named measurement, not a single adjective.
+Each workload needs its own measurement. A model can have an excellent final
+transcript while its partial text changes too often for captions. A synthesizer
+can render natural speech faster than real time yet take too long to produce its
+first audio frame. A claim that a system is “realtime” therefore has to name the
+measurement it refers to.
 
 ## Learn an alignment for recognition
 
 @gls-asr observes acoustic frames
 \(\mathbf{x}=(x_1,\ldots,x_T)\) and a shorter transcript
 \(\mathbf{y}=(y_1,\ldots,y_U)\), but no label says which frames produced each
-symbol. CTC and RNN-T sum over latent monotonic alignments. An attention-based
-encoder-decoder instead learns a soft correspondence between encoder frames and
-output steps.
+symbol. @gls-ctc and the recurrent neural network transducer (RNN-T) treat that
+alignment as a latent, unobserved variable and sum over every monotonic
+alignment, meaning every assignment of frames to symbols that preserves
+transcript order. An attention-based encoder-decoder instead learns a soft
+correspondence between encoder frames and output steps.
 
 @gls-ctc adds a blank symbol and assigns probability to every length-\(T\) path
 that collapses to the transcript [@graves2006ctc]:
@@ -59,8 +64,9 @@ RNN-T adds output history [@graves2012rnnt]. Its prediction network summarizes
 preceding nonblank labels, and its joint network combines that state with an
 acoustic encoder state. In the alignment lattice, blank advances acoustic time;
 a label advances output position. The model may therefore emit several labels at
-one encoder step. A causal or bounded-context encoder makes this factorization
-suitable for online decoding, but RNN-T by itself does not guarantee streaming.
+one encoder step. A causal encoder, which reads only past and current frames, or a
+bounded-context encoder makes this factorization suitable for online decoding,
+but RNN-T by itself does not guarantee streaming.
 The original model used a bidirectional transcription network, while later work
 demonstrated a causal on-device system [@he2019streaming].
 
@@ -87,7 +93,9 @@ offline; streaming implementations constrain that context.
 ## Pretrain representations before transcribing
 
 Transcripts are expensive, while raw audio is plentiful. Self-supervision and weak
-supervision solve different data problems:
+supervision solve different data problems: self-supervision derives its training
+targets from untranscribed audio, and weak supervision trains on abundant but
+noisy transcripts.
 
 | Method | Training signal | What the model predicts |
 |---|---|---|
@@ -108,17 +116,19 @@ $$
 \exp(\operatorname{sim}(c_t,\widetilde q)/\kappa)}.
 $$
 
-Here, the similarity is cosine similarity and \(\kappa\) is a temperature. These targets
-are matching masked steps, not future continuations. In one reported low-resource
-setting, a large model pretrained on 53,000 hours of Libri-Light and fine-tuned on
-ten labeled minutes reached 4.8 and 8.2 word error rate on LibriSpeech test-clean
-and test-other; the headline decoder also used a Transformer language model.
+Here, the similarity is cosine similarity and \(\kappa\) is a temperature. The
+targets are the masked steps themselves, not future continuations. In one reported
+low-resource setting, a large model pretrained on 53,000 hours of Libri-Light and
+fine-tuned on ten labeled minutes reached 4.8 and 8.2 word error rate on
+LibriSpeech test-clean and test-other; that result also used a Transformer
+language model during decoding.
 
 HuBERT replaces contrastive selection with masked prediction of offline cluster
-assignments [@hsu2021hubert]. It begins with clusters of handcrafted features,
-then can recluster representations produced by an earlier training stage. The
-targets stay fixed within a stage. The paper's important finding was that
-consistent targets can be useful even when they are imperfect phonetic labels.
+assignments, labels produced by clustering audio features before training
+[@hsu2021hubert]. It begins with clusters of handcrafted features, then can
+recluster representations produced by an earlier training stage. The targets stay
+fixed within a stage. The paper found that consistent targets can be useful even
+when they are imperfect phonetic labels.
 WavLM keeps this masked pseudo-label objective but sometimes adds noise or another
 speaker to the input. Its target remains the cluster label from the original
 primary utterance, so it learns to identify content through interference rather
@@ -129,18 +139,20 @@ multilingual audio-text pairs train one encoder-decoder Transformer
 [@radford2022whisper]. Its decoder sequence carries a language token, a
 transcription-or-translation task token, controls for timestamps, and the text;
 when enabled, timestamp tokens are interleaved around transcript spans. The main
-result is broad zero-shot transfer across held-out datasets, not universal
-superiority to a system tuned for one domain.
+result is broad zero-shot transfer: accuracy across held-out datasets that the
+model was never fine-tuned on. It does not establish universal superiority to a
+system tuned for one domain.
 
 ## Turn waveforms into codec indices
 
 A neural codec compresses a waveform into discrete indices. An encoder maps audio
 to one latent vector \(z_t\) per frame, a quantizer replaces each vector with
-codebook entries, and a decoder reconstructs audio. SoundStream established an
-end-to-end residual-vector-quantized design with quantizer dropout for multiple
-bitrates [@zeghidour2021soundstream]. EnCodec combined a streaming
-encoder-decoder, residual vector quantization, adversarial training, and optional
-entropy coding [@defossez2022encodec]. Their quality claims are tied to the
+entries from a codebook, a learned table of vectors, and a decoder reconstructs
+audio. SoundStream established an end-to-end residual-vector-quantized design with
+quantizer dropout, which trains with a randomly chosen number of quantizers so
+that one model serves multiple bitrates [@zeghidour2021soundstream]. EnCodec
+combined a streaming encoder-decoder, residual vector quantization, adversarial
+training, and optional entropy coding [@defossez2022encodec]. Their quality claims are tied to the
 bitrates, datasets, and listening tests reported in those papers.
 
 Residual vector quantization (RVQ) applies codebooks in sequence. For frame \(t\),
@@ -211,12 +223,14 @@ for depth, codebook in enumerate(codebooks, start=1):
 self-supervised speech model tend to preserve linguistic content while discarding
 some speaker and recording detail. Codec tokens must preserve enough information
 to reconstruct the signal, so they also carry content. Systems can encourage a
-division: SpeechTokenizer distills its first RVQ layer toward HuBERT units
-[@zhang2024speechtokenizer], while later layers refine the audio. AudioLM uses
+division: SpeechTokenizer distills its first RVQ layer toward HuBERT units, the
+cluster labels described above [@zhang2024speechtokenizer], while later layers
+refine the audio. AudioLM uses
 w2v-BERT units for long-range structure and SoundStream codes for fidelity
 [@chung2021w2vbert; @borsos2022audiolm]. The Descript Audio Codec targets
 high-fidelity 44.1 kHz audio with improved quantizer use [@kumar2023dac]. Mimi,
-used by Moshi, operates at 12.5 frames per second and combines a semantic
+the codec of the Moshi conversation model discussed later in this chapter,
+operates at 12.5 frames per second and combines a semantic
 quantizer with acoustic RVQ levels [@defossez2024moshi]. A low frame rate shortens
 the time axis, but quality, codebook depth, and the generator's schedule still
 determine the actual cost.
@@ -230,21 +244,24 @@ synthesizing speech from text, adds a transcript and often a short acoustic prom
 that identifies the target voice.
 
 VALL-E predicts EnCodec tokens conditioned on text and a three-second enrollment
-recording. Its autoregressive stage produces the first codebook, and its
-non-autoregressive stage fills residual codebooks one level at a time, with frame
-positions parallel within a level [@wang2023valle]. SoundStorm uses confidence-
-based masked decoding across positions; in the authors' TPU-v4 setup, it generated
-thirty seconds of audio in half a second [@borsos2023soundstorm]. VALL-E 2 changed
+recording of the target speaker. Its autoregressive stage produces the first
+codebook, and its non-autoregressive stage fills residual codebooks one level at
+a time, with frame positions parallel within a level [@wang2023valle]. SoundStorm
+uses confidence-based masked decoding across positions; in the authors' TPU-v4
+setup, it generated thirty seconds of audio in half a second
+[@borsos2023soundstorm]. VALL-E 2 changed
 codec grouping and sampling to reduce repetition. Its “human parity” claim refers
 to the paper's preference tests on LibriSpeech and VCTK, not to every speaker,
 language, or recording condition [@chen2024valle2].
 
-Continuous generators offer another path. Voicebox uses conditional flow matching
-to infill masked mel-spectrogram spans, enabling synthesis, editing, denoising,
-and style transfer in one model [@le2023voicebox]. NaturalSpeech 3 instead
-factorizes speech into content, prosody, speaker identity, and acoustic detail,
-then uses discrete masked diffusion for the generated factors
-[@ju2024naturalspeech3]. F5-TTS removes an explicit alignment search and duration
+Continuous generators offer another path. Voicebox works on the mel-spectrogram,
+a time-frequency picture of audio with frequencies on a perceptual scale. It uses
+conditional flow matching, a training method that learns to transform noise into
+data given a conditioning input, to infill masked spectrogram spans, enabling
+synthesis, editing, denoising, and style transfer in one model [@le2023voicebox].
+NaturalSpeech 3 instead factorizes speech into content, prosody (rhythm, stress,
+and intonation), speaker identity, and acoustic detail, then uses discrete masked
+diffusion for the generated factors [@ju2024naturalspeech3]. F5-TTS removes an explicit alignment search and duration
 predictor from training, but inference still needs a target duration to define the
 generated span [@chen2024f5tts].
 
@@ -255,13 +272,15 @@ generated span [@chen2024f5tts].
 | Flow or diffusion over spectrograms | Global conditioning and editing | Sampling schedule and output length must be chosen |
 
 None of these rows guarantees or forbids streaming. Chunking, causal context,
-look-ahead, and the vocoder determine when audio can leave the system.
+look-ahead, and the vocoder, the component that turns generated spectrograms or
+tokens into a waveform, determine when audio can leave the system.
 
 Voice cloning also makes consent and provenance part of the technical design.
 AudioSeal jointly trains a watermark generator and a detector that can localize
 its embedded signal [@sanroman2024audioseal]. It is proactive rather than a
-universal detector: it can recognize content carrying that watermark, not prove
-that any unmarked recording is human-made.
+universal detector: the watermark must be embedded when the audio is generated,
+and the detector recognizes content that carries it. It cannot prove that an
+unmarked recording is human-made.
 
 ## Build conversation on incremental state
 
@@ -323,8 +342,7 @@ not accidentally claim a turn or trigger an action.
 Moshi demonstrates one model-level implementation. It represents user and system
 audio as parallel streams and predicts a text “inner monologue” before the system
 audio at each step. The paper reports 160 ms theoretical latency and about 200 ms
-in its practical setup [@defossez2024moshi]. These figures describe that system,
-not a universal conversational threshold.
+in its practical setup [@defossez2024moshi]. These figures describe that system.
 
 Human conversation is not a 200 ms service-level objective. Across ten languages,
 Stivers and colleagues observed response-time distributions with modes from 0 to
