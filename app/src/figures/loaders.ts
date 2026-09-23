@@ -32,4 +32,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "continuous-batching": () => import("./continuous-batching.ts"),
   "serving-lifecycle": () => import("./serving-lifecycle.ts"),
   "kv-admission": () => import("./kv-admission.ts"),
+  "iteration-roofline": () => import("./iteration-roofline.ts"),
 };

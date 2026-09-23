@@ -13,16 +13,19 @@
 //
 // Each iteration lasts the roofline lower bound from the next section of the
 // chapter, tau = max(F / P_max, D / B_max), for an 8B-parameter model with the
-// shape of Llama 3.1 8B (32 layers, 8 KV heads of dimension 128, 8.03e9
-// parameters; meta-llama/Llama-3.1-8B config.json and model card) in BF16 on
-// the H100 SXM datasheet peaks used by roofline.ts (989 TFLOP/s dense BF16,
-// 3.35 TB/s):
-//   F = 2 N (prompt tokens prefilled + sequences decoded)
+// shape of Llama 3.1 8B (32 layers, 32 query heads and 8 KV heads of dimension
+// 128, 8.03e9 parameters; meta-llama/Llama-3.1-8B config.json and model card)
+// in BF16 on the H100 SXM datasheet peaks used by roofline.ts (989 TFLOP/s
+// dense BF16, 3.35 TB/s). iterationCost below counts
+//   F = 2 N (prompt tokens + decoded sequences) + attention score and value
+//       products (4 L d_model per query-key pair, p^2 / 2 pairs for a causal
+//       prompt of p tokens, T pairs for a decode step over T cached tokens)
 //   D = weight bytes + KV bytes read by the decodes + KV bytes written
-// Attention arithmetic, kernel launch, sampling, and scheduler time are left
-// out, so real iterations are slower; the shape of the result is the point:
-// an iteration that carries a long prefill is compute-bound and takes several
-// times longer than a decode-only one, and every running request waits for it.
+// Kernel launch, sampling, and scheduler time are left out and each operand
+// is counted crossing HBM once, so real iterations are slower; the shape of
+// the result is the point: an iteration that carries a long prefill is
+// compute-bound and takes several times longer than a decode-only one, and
+// every running request waits for it.
 
 import { defineFigure, type Lang, type State } from "./types.ts";
 import { rng, exponential, intBetween } from "./lib/random.ts";
@@ -48,14 +51,26 @@ export const MODEL = {
 export const WEIGHT_BYTES = MODEL.params * MODEL.bytes;
 // Logical KV bytes per cached token: 2 L n_kv d_head b_kv.
 export const KV_PER_TOKEN = 2 * MODEL.layers * MODEL.kvHeads * MODEL.dHead * MODEL.bytes;
-// H100 SXM datasheet peaks and memory.
-export const H100 = { peak: 989e12, bw: 3.35e12, memory: 80e9 };
+// Accelerator datasheet figures (dense BF16 peak FLOP/s, HBM bandwidth in
+// byte/s, and memory capacity), the same values roofline.ts uses.
+export interface Hardware { name: string; peak: number; bw: number; memory: number }
+export const HW = {
+  a100: { name: "A100 SXM", peak: 312e12, bw: 2.039e12, memory: 80e9 },
+  h100: { name: "H100 SXM", peak: 989e12, bw: 3.35e12, memory: 80e9 },
+  mi300x: { name: "MI300X", peak: 1307e12, bw: 5.3e12, memory: 192e9 },
+} satisfies Record<string, Hardware>;
+export const H100 = HW.h100;
+const D_MODEL = MODEL.qHeads * MODEL.dHead;
 
-// Iteration time lower bound in ms and its two terms.
-export function iterationTime(tokens: number, kvRead: number) {
-  const F = 2 * MODEL.params * tokens;
+// Roofline lower bound of one iteration, in ms, with its two terms: the
+// prompts it prefills and the cached lengths of the sequences it decodes.
+export function iterationCost(prompts: number[], contexts: number[], hw: Hardware = H100) {
+  let tokens = 0, pairs = 0, kvRead = 0;
+  for (const p of prompts) { tokens += p; pairs += (p * p) / 2; }
+  for (const c of contexts) { tokens += 1; pairs += c; kvRead += c; }
+  const F = 2 * MODEL.params * tokens + 4 * MODEL.layers * D_MODEL * pairs;
   const D = WEIGHT_BYTES + KV_PER_TOKEN * (kvRead + tokens);
-  const tF = (F / H100.peak) * 1000, tD = (D / H100.bw) * 1000;
+  const tF = (F / hw.peak) * 1000, tD = (D / hw.bw) * 1000;
   return { F, D, tF, tD, tau: Math.max(tF, tD) };
 }
 
@@ -99,11 +114,11 @@ function simulate(reqs: Req[]): Sim {
     }
     const prefill: number[] = [];
     while (queue.length && running.length + prefill.length < SLOTS) prefill.push(queue.shift()!);
-    let tokens = 0, kvRead = 0, prefillTokens = 0;
-    for (const i of prefill) { tokens += reqs[i].prompt; prefillTokens += reqs[i].prompt; }
-    for (const i of running) { tokens += 1; kvRead += reqs[i].prompt + lives[i].tokens.length; }
+    const prompts = prefill.map((i) => reqs[i].prompt);
+    const contexts = running.map((i) => reqs[i].prompt + lives[i].tokens.length);
+    const prefillTokens = prompts.reduce((a, b) => a + b, 0);
     const t0 = now;
-    now += iterationTime(tokens, kvRead).tau;
+    now += iterationCost(prompts, contexts).tau;
     iters.push({ t0, t1: now, prefill, decode: [...running], prefillTokens });
     for (const i of prefill) { lives[i].start = t0; lives[i].iterStart = iters.length - 1; }
     for (const i of running) lives[i].stretched.push(prefill.length > 0);
