@@ -586,11 +586,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/generative/05-beyond-text.qmd",
-      ["Predicting plausible observations is not the same as predicting what changes under an action", "A shared backbone is not yet a world model"],
+      ["Predicting plausible observations is not the same as predicting what changes under an action", "Test what a shared backbone adds to control"],
     ],
     [
       "zh/generative/05-beyond-text.qmd",
-      ["预测合理的观测，不等于预测采取某个动作后会发生什么", "共享主干还不等于世界模型", "离线动作预测是开发指标，不是部署结果"],
+      ["预测合理的观测，不等于预测采取某个动作后会发生什么", "检验共享主干为控制带来什么", "离线动作预测是开发指标，不是部署结果"],
     ],
     [
       "en/generative/index.qmd",

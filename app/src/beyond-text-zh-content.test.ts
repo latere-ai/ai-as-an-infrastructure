@@ -19,17 +19,17 @@ test("Chapter 16 preserves the complete English section architecture", () => {
   for (const heading of [
     "## 分开讨论生成、动力学、规划与控制",
     "## 为世界模型定义动作接口",
-    "## 视觉真实感不是干预测试",
+    "## 在干预下检验预测",
     "## 选择模型必须保留的信息",
     "### 规划把预测误差带入决策",
-    "## 共享主干还不等于世界模型",
+    "## 检验共享主干为控制带来什么",
     "## 机器人策略有明确的物理输出契约",
     "### 分清控制步数与模型调用",
     "## 先看数据差异，再谈数据稀缺",
     "## 评测闭环",
     "## 争议所在",
     "## 下层约束",
-    "## 证据边界",
+    "## 现有证据支持什么",
     "## 延伸阅读",
   ]) expect(zh).toContain(heading);
   expect((zh.match(/^\$\$$/gm) ?? []).length).toBe((en.match(/^\$\$$/gm) ?? []).length);
@@ -42,7 +42,7 @@ test("the opening distinguishes observation prediction from embodied control", (
     "视频生成器预测的是看起来合理的观测",
     "策略负责选择动作，还必须承受动作带来的真实后果",
     "预测合理的观测，不等于预测采取某个动作后会发生什么",
-    "模型接受像素，并不是核心问题",
+    "全章衡量模型的标准",
   ]) expect(zh).toContain(phrase);
 });
 
@@ -68,7 +68,7 @@ test("the world-model interface defines state action transition reward and termi
   ]) expect(zh).toContain(formula);
   expect(zh).toContain("规划本身并不要求解码器存在");
   expect(zh).toContain("随机世界模型会用下一状态的分布取代点预测");
-  expect(zh).toContain("关键不变量是模型面对的条件问题，尤其是状态转移是否依赖 $a_t$");
+  expect(zh).toContain("这些写法共有的不变量，是模型面对的条件问题，尤其是状态转移是否依赖 $a_t$");
   for (const label of [
     'label="观测历史"',
     'label="编码器\\n状态估计 z_t"',
@@ -99,7 +99,7 @@ test("representation choices preserve downstream decision requirements", () => {
     "| 结构化状态 | 物体、位姿、几何、接触或地图 | 持久约束和可解释规划 | 状态提取与结构定义成为瓶颈 |",
   ]) expect(zh).toContain(row);
   expect(zh).toContain("最合适的表示，是能够保留下游决策所需差异的最小表示");
-  expect(zh).toContain("被动视频提供的是表示先验，不是完整控制器");
+  expect(zh).toContain("被动视频提供的是表示先验");
 });
 
 test("planning exposes model error through optimization", () => {
@@ -114,8 +114,8 @@ test("planning exposes model error through optimization", () => {
 test("multimodal fusion remains distinct from an action-conditioned world model", () => {
   expect(zh).toContain("任何一种选择都不会单独创造出世界模型");
   expect(zh).toContain("一个主干可以同时处理文本、图像、音频和视频，却没有动作条件下的状态转移");
-  expect(zh).toContain("需要检验的科学主张是迁移效果");
-  expect(zh).toContain("仅仅把多种模态放进同一个序列，不能回答这个问题");
+  expect(zh).toContain("可检验的主张是迁移效果");
+  expect(zh).toContain("仅仅把多种模态放进同一个序列，并不能检验这一主张");
 });
 
 test("robot policies retain embodiment-specific action and feedback contracts", () => {
@@ -157,7 +157,7 @@ test("robot data keeps trajectory units and source-specific gaps explicit", () =
   expect(zh).toContain("Open X-Embodiment 统一了来自 22 种机器人、21 家机构和 527 项技能的数据");
   expect(zh).toContain("DROID 在 564 个场景中采集了 76,000 条演示，合计约 350 小时");
   for (const row of [
-    "| 真实遥操作 | 同步的观测与动作轨迹 | 人力昂贵、需要复位、覆盖有限 |",
+    "| 真实遥操作（由人远程操控机器人） | 同步的观测与动作轨迹 | 人力昂贵、需要复位、覆盖有限 |",
     "| 跨本体汇集 | 更多任务和硬件多样性 | 动作空间和传感器标定不兼容 |",
     "| 仿真 | 低成本干预和精确状态 | 外观、接触、磨损和执行器存在偏差 |",
     "| 被动人类视频 | 广泛的物体、环境和行为 | 缺少机器人动作、力、本体感知和本体映射 |",
@@ -166,9 +166,9 @@ test("robot data keeps trajectory units and source-specific gaps explicit", () =
 });
 
 test("the embodied data loop remains anchored to real closed-loop trials", () => {
-  expect(zh).toContain("真正有用的飞轮不是「无限生成机器人数据」");
+  expect(zh).toContain("每一轮都经过测量，这个循环才能改进策略");
   expect(zh).toContain("收集一次失败，复现或近似这个失败，更新模型，再回到真实硬件上复测");
-  expect(zh).toContain("近乎重复的场景或操作员习惯可能泄漏到数据划分两侧");
+  expect(zh).toContain("近乎重复的场景或操作员习惯可能泄漏到训练与测试划分的两侧");
   for (const label of [
     'label="遥操作\\n真实动作"',
     'label="仿真\\n低成本干预"',
@@ -201,11 +201,11 @@ test("contested questions lower-layer constraints and evidence boundary remain b
     "世界模型应当保留什么？",
     "网络先验能否迁移到控制？",
     "可以接受多长的开环执行？",
-    "哪些合成数据真正有用？",
+    "哪些合成数据有用？",
     "具身系统把模型选择变成截止时间和物理单位",
     "更大的多模态主干无法挽回错过的控制截止时间",
-    "超越文本并没有揭示一种名为「接地」的单一缺失成分",
-    "它揭示的是一组层层相扣的契约",
+    "超越文本有时被描述为补上一种名为「接地」的缺失成分",
+    "构成一组层层相扣的契约",
     "开放问题是如何在不同环境、任务、机器人本体和干预之间可靠迁移",
   ]) expect(zh).toContain(phrase);
 });

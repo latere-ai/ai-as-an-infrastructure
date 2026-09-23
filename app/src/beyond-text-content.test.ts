@@ -11,11 +11,11 @@ test("beyond-text chapter separates observation prediction from embodied control
   const required = [
     "Predicting plausible observations is not the same as predicting what changes under an action",
     "Give a world model an action interface",
-    "Visual realism is not an intervention test",
-    "A shared backbone is not yet a world model",
+    "Test predictions under intervention",
+    "Test what a shared backbone adds to control",
     "There is no sound conversion from language tokens to robot trajectories",
     "Offline action prediction is a development metric, not a deployment result",
-    "The useful flywheel is therefore not “generate unlimited robot data.”",
+    "The data loop above improves a policy when each pass is measured",
     "rankdir=TB;",
     "Lower-layer constraint",
   ];
