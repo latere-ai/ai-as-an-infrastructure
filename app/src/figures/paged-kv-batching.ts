@@ -638,10 +638,15 @@ export default defineFigure({
       const r = runs(p)[p.mode];
       return r.events.map((e) => ({ t: e.t, label: eventLabel(e, p.mode, L) }));
     },
+    // Under pressure, open where a preempted request is recomputed (the
+    // orange cells); otherwise where paging runs most ahead of reservation.
     poster: (p) => {
       const all = runs(p);
       const pre = all.paged.events.find((e) => e.kind === "preempt");
-      if (pre) return pre.t;
+      if (pre) {
+        const rec = all.paged.phases.findIndex((row) => row.some((ph) => ph === Ph.Recompute));
+        return rec >= 0 ? rec : pre.t;
+      }
       let best = 0, score = -Infinity;
       for (let t = 10; t <= Math.floor(all.duration * 0.6); t++) {
         const a = snapAt(all.paged, t, 1), b = snapAt(all.contiguous, t, 1);
