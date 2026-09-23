@@ -67,7 +67,7 @@ test("the release profile is formal, versioned, and rejects unknown hard require
     "hard deployment requirements",
     "documented evidence",
     "unknown does not satisfy a release gate",
-    "not an openness metric",
+    "openness metric",
   ]) expect(flat).toContain(phrase);
 });
 

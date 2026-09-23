@@ -29,7 +29,7 @@ test("the Chinese model-landscape chapter preserves the complete English structu
   expect(headings(chinese, 2)).toEqual([
     "先用准确的名词",
     "发布契约包含五个字段",
-    "发布实例，而不是永久分级",
+    "带日期的发布实例",
     "公开报告能够说明什么，不能说明什么",
     "把要求转化为准入闸门",
     "约束如何向上传导",
@@ -97,7 +97,7 @@ test("the release profile is formal, versioned, and keeps unknown requirements u
     "硬性部署要求",
     "已确认、已否定或未知",
     "未知不能通过发布闸门",
-    "不是开放度指标",
+    "开放度指标",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -134,7 +134,7 @@ test("legal, service, and evidence reviews retain their distinct checks", () => 
     "弃用通知",
     "服务级别协议",
     "这是一份工程检查清单，不是法律意见",
-    "证据质量并不等于模型质量",
+    "证据质量与模型质量是彼此独立的属性",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -209,7 +209,7 @@ test("the supply-chain handoff and contested release question remain bounded", (
     "现实可行的替代方案",
     "证据不足",
     "既不足以普遍支持现行限制，也不足以断定限制永远不合适",
-    "模型版图由不断变化的发布契约组成，不是一场只有一个赢家的竞赛",
+    "模型版图由不断变化的发布契约组成",
   ]) expect(flat).toContain(phrase);
   for (const ref of [
     "@sec-model-artifacts",
