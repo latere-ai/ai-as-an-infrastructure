@@ -36,6 +36,15 @@ test("attribute rewrites leave label text alone", () => {
   expect(out).toContain(`fontname="${LAYOUT_FONT}"];`);
 });
 
+test("size and ratio are dropped, so text is never scaled below the reader's minimum", () => {
+  // size="3.2,8.0" shrank some diagrams to 0.39x, about 4.7 px text.
+  const src = 'digraph { size="1,1"; ratio=compress; a [label="a long label that is wide"]; a -> b; }';
+  const out = prepareDot(src);
+  expect(out).not.toMatch(/(?<![\w])size\s*=/);
+  expect(out).not.toMatch(/\bratio\s*=/);
+  expect(gv.dot(out, "svg")).toMatch(/transform="scale\(1 1\)/);
+});
+
 test("Graphviz SVGs expose the figure caption as an accessible name", () => {
   const code = [
     "//| label: fig-path",

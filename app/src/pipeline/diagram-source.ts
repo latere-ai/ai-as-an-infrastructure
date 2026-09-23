@@ -113,10 +113,16 @@ function openBrace(toks: Tok[]): number {
 }
 
 // Every layout gets the same base: one layout font for every label (the
-// source's fontname is replaced), a transparent background, and a roomier
-// default node margin, injected right after the root graph's opening brace.
+// source's fontname is replaced), a transparent background, a roomier default
+// node margin, and no `size` or `ratio`. The reader scales a diagram itself,
+// down to a minimum text size; `size` shrank some diagrams to fit a phone
+// column with no limit, to about 4.7 px text.
 export function prepareDot(body: string): string {
-  const toks = rewriteAttrs(lexDot(body), (name) => (name === "fontname" ? `"${LAYOUT_FONT}"` : undefined));
+  const toks = rewriteAttrs(lexDot(body), (name) => {
+    if (name === "fontname") return `"${LAYOUT_FONT}"`;
+    if (name === "size" || name === "ratio") return null;
+    return undefined;
+  });
   const at = openBrace(toks);
   if (at < 0) return body;
   const font = `fontname="${LAYOUT_FONT}"`;
