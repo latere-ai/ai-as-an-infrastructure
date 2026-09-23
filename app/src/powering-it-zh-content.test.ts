@@ -61,7 +61,7 @@ test("Chapter 68 preserves the complete English time-to-power contract", () => {
   expect(headings(chapter, 2)).toEqual([
     "电力是一份有日期的交付契约",
     "从电源到可用的 IT 电力",
-    "并网队列不是交付预测",
+    "并网队列衡量的是什么",
     "表后供电改变了边界",
     "冷却方式取决于产品与设施契约",
     "约束如何向上传导",
@@ -99,7 +99,7 @@ test("the opening scopes time-to-power to one site product and date", () => {
     "厂址、产品与日期",
     "现场供电项目跨过商业、监管与调试验收关口",
     "把液冷作为默认方案",
-    "明确的模型、遥测、保护方案与运行协议",
+    "明确的负载模型、遥测、保护方案与运行协议",
     "把每句口号还原成可核验的量",
   ]) expect(flat).toContain(phrase);
 });
@@ -120,7 +120,7 @@ test("the delivery contract distinguishes power boundaries and dependencies", ()
 test("readiness percentiles preserve the dependency model", () => {
   for (const phrase of [
     "方程本身是确定性的",
-    "P50 与 P90 通电日期",
+    "P50 与 P90 就绪日期",
     "不能机械地相加",
     "各项活动的 P90 通常不等于整个项目的 P90",
     "工期彼此相关",
@@ -188,7 +188,7 @@ test("behind-the-meter supply changes rather than erases the boundary", () => {
   for (const phrase of [
     "燃料供应、排放许可、用水、噪声、设备交付周期、保护研究",
     "现场机组跳闸时由谁供电",
-    "电气单线图与电价条款才定义边界",
+    "边界由电气单线图与电价条款定义",
     "公告、合同、许可或执照、融资、施工、调试验收与运行",
     "购电协议已经签署不等于产能已经投运",
     "贷款已经交割不等于监管已经批准",
@@ -199,11 +199,11 @@ test("the Crane example and self-generation claim retain evidence status", () =>
   for (const phrase of [
     "10 亿美元贷款",
     "835 MW",
-    "取决于 NRC 的许可批准",
+    "取决于美国核管理委员会（NRC）的许可批准",
     "截至 2026 年 8 月 7 日",
     "SAFSTOR",
     "项目真实且进展显著，但还不是一项正在运行的电源",
-    "@gls-smr 协议与现场燃气方案",
+    "@gls-smr 这类工厂化建造、出力适中的核反应堆",
     "已经跨过的关口，而不是最大的公告吉瓦数",
     "“自发电”也不等于脱离电力系统",
   ]) expect(flat).toContain(phrase);
@@ -217,7 +217,8 @@ test("cooling remains a product and facility acceptance contract", () => {
     "不是实测平均功率、年用电量或设施总负载",
     "部件热流密度、机架功率密度、冷却液与空气供回温度、液冷捕获热量的比例、当地气候、可维护性与既有建筑",
     "液冷带走高热流部件的热量，空气处理剩余热量",
-    "冷板、后门换热器与浸没式冷却",
+    "冷板把冷却液引到芯片上",
+    "浸没式冷却则把电路板浸入不导电的液体",
     "并非一条普遍适用的成熟度阶梯",
   ]) expect(flat).toContain(phrase);
 });
@@ -228,7 +229,7 @@ test("cooling acceptance and the first constraint arrow reach the building", () 
     "泵或电源故障后的行为",
     "实测热量",
     "设备限制与冗余目标",
-    "母线、开关设备、冷却液回路、排热系统、楼板承重与调试验收",
+    "母线与开关设备（配电用的导体与断路器）、冷却液回路、排热系统、楼板承重与调试验收",
     "无论已经交付多少硬件",
   ]) expect(flat).toContain(phrase);
 });
@@ -250,7 +251,7 @@ test("compute flexibility is a contracted and tested service", () => {
     "转移工作、降低功率，或调用储能与现场电源",
     "限电量、通知时间、持续时长、恢复方式与可用性",
     "工作负载截止时间、检查点成本、安全爬坡限制与反弹峰值",
-    "既发现了真实机会，也指出高成本、监管碎片化",
+    "发现了其中的机会，也指出高成本、监管碎片化",
     "稳定合同需求",
     "非稳定合同需求",
     "不是全国统一并网方案已经生效的证据",
@@ -274,7 +275,7 @@ test("energy totals and energy per result use declared units", () => {
 
 test("per-result reporting makes allocation and exclusions reproducible", () => {
   for (const phrase of [
-    "“每次查询”不是充分的方法说明",
+    "“每次查询”的能耗数字",
     "模型与运行时、硬件、请求组合、输入输出大小、缓存状态、批处理、重试、吞吐量、延迟分布与质量门槛",
     "加速器、服务器、集群 IT 或整座设施",
     "闲置容量与共享服务",
@@ -306,14 +307,14 @@ test("the contested section keeps five boundary-dependent questions", () => {
     "算力究竟有多灵活",
     "哪种能耗边界才公平",
     "带日期的物料清单与依赖图",
-    "灵活性是一种经过测量的运营产品",
+    "灵活性是一种经过合同约定和测量的服务",
     "相同的边界、工作负载、质量与服务等级目标",
   ]) expect(flat).toContain(phrase);
 });
 
 test("the final constraint arrow intersects schedules and capacities", () => {
   for (const phrase of [
-    "电力不会取代它上方的约束，而是加入这些约束",
+    "电力在前几章的约束之外又增加了一项约束",
     "机架可能先于变电站交付",
     "发电机可能先签合同、后拿许可",
     "园区可能已经通电，但负载行为尚未获准",
