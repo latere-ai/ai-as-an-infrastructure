@@ -80,3 +80,11 @@ test("the layout control is reachable and named in both languages", () => {
     expect(reader).toContain(`v: "${key}", l: t.${key}`);
   }
 });
+
+// The server render carries the desktop shell's mini-TOC gutter as inline
+// padding on <main>. Below 992 px the TOC is hidden, so the stylesheet must
+// drop that gutter or a reader without script gets a sliver of an article.
+test("narrow viewports drop the mini-TOC gutter before hydration", () => {
+  expect(reader).toMatch(/<main[^>]*paddingRight: showMiniToc/);
+  expect(css).toMatch(/@media \(max-width: 991px\) \{ \.reader main \{ padding-right: 0 !important; \} \}/);
+});
