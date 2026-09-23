@@ -32,7 +32,7 @@ test("Chinese Chapter 76 preserves the complete English structure", () => {
     ["##", "争议所在"],
     ["##", "约束如何传导"],
     ["##", "按场景比较购买与自托管"],
-    ["##", "用分布而非平均值描述需求"],
+    ["##", "用分布描述需求"],
     ["##", "区分现金流、会计费用与经济成本"],
     ["##", "持续校准经济模型"],
     ["##", "延伸阅读"],
@@ -42,7 +42,7 @@ test("Chinese Chapter 76 preserves the complete English structure", () => {
 
 test("the thesis compares cost per accepted result under one operating contract", () => {
   for (const phrase of [
-    "发票还不是经济模型",
+    "经济模型则把这些花费与它换来的结果",
     "算力从哪里购买",
     "训练和推理为何是两类不同的成本",
     "何时应该自建模型",
@@ -170,11 +170,11 @@ test("the contested section and constraint arrow keep the claim conditional", ()
     "几个推荐系统",
     "开发和服务必须采用相同的时间范围",
     "场景分析的结果",
-    "不是人工智能的固有属性",
+    "只在该场景的工作负载和时间范围内成立",
     "成本预测会反过来影响模型设计",
     "训练算力最优点",
     "预期部署需求",
-    "共享同一份工作负载和验收契约",
+    "采用同一份工作负载和验收规则",
   ]) expect(flat).toContain(phrase);
 });
 
@@ -236,7 +236,7 @@ test("the runnable is identical to English and exposes four reversals", () => {
 
 test("demand is modeled as a distribution with stepwise capacity", () => {
   for (const phrase of [
-    "平均需求不能充当容量规划",
+    "容量规划要从需求分布出发",
     "到达分布",
     "请求与响应大小",
     "并发量",
@@ -288,7 +288,7 @@ test("the eight-step operating loop reconciles forecasts with evidence", () => {
     "已计费容量与有效容量",
     "人员成本分摊",
     "无法区分价格漂移、需求预测错误、质量不合格或运行退化",
-    "便宜的词元不一定带来便宜的结果",
+    "下一章解释这些价格和选择为何存在",
   ]) expect(flat).toContain(phrase);
   const section = chinese.match(/## 持续校准经济模型\n([\s\S]*?)\n```\{dot\}/);
   expect(section).not.toBeNull();
@@ -352,7 +352,7 @@ test("the complete Chinese chapter renders through the market-structure handoff"
   const { html, headings: renderedHeadings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("便宜的词元不一定带来便宜的结果");
+  expect(html).toContain("下一章解释这些价格和选择为何存在");
   expect(html.match(/<figure/g)?.length).toBe(3);
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();
 });

@@ -297,7 +297,7 @@ test("the complete chapter renders without swallowing figures or late prose", as
   const { html, headings } = renderMarkdown(chapter, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("A cheap token is not necessarily a cheap result");
+  expect(html).toContain("those prices and choices exist");
   expect(html.match(/<figure/g)?.length).toBe(3);
   expect(headings.some(({ text }) => text === "Further reading")).toBeTrue();
 });
