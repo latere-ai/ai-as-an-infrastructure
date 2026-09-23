@@ -55,13 +55,13 @@ test("Chapter 64 preserves the complete English compiler-kernel contract", () =>
   ]);
   expect(headings(chapter, 2)).toEqual([
     "内核实现一份有边界的契约",
-    "屋顶线是上界，不是秒表",
+    "屋顶线给出乐观上界",
     "融合是合法性与资源决策",
     "分块把工作映射到有限资源",
     "FlashAttention 围绕 IO 改写算法",
     "降级在增加决策的同时保留语义",
     "布局与自动调优都是编译的一部分",
-    "可移植性不止一种",
+    "可移植性分为五种主张",
     "生态系统也是目标的一部分",
     "生成内核需要一名挑剔的评估者",
     "运行编译器与内核的边界",
@@ -92,7 +92,7 @@ test("the opening defines compiler and kernel correctness contracts", () => {
     "对守卫覆盖的每一种输入保留程序语义",
     "布局、融合边界、分块形状、库调用和目标指令",
     "形状、步幅、dtype、布局、别名、修改、数值和目标设备语义",
-    "不是优化，而是另一个程序",
+    "它实现的就是另一个程序",
     "从中间表示一路追踪到目标代码",
   ]) expect(flat).toContain(phrase);
 });
@@ -107,7 +107,7 @@ test("a kernel owns a declared launch and operator domain", () => {
     "共享内存与同步",
     "寄存器属于单个线程",
     "全局设备内存对整个网格可见",
-    "启动域和内核本体同样重要",
+    "既取决于内核本体，也取决于启动域",
     "相同的逻辑形状却有不同的步幅",
     "运行时守卫这些事实，或保留正确的通用路径",
   ]) expect(flat).toContain(phrase);
