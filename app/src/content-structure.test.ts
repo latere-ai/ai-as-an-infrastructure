@@ -889,8 +889,8 @@ test("part I is framed as base model formation, not only pretraining", () => {
   expect(src("zh/orientation/index.qmd")).toContain("基座模型形成（训练原始模型）、适配（调整训练后模型的行为）");
   expect(src("en/orientation/01-whole-stack.qmd")).toContain("Part I calls this full sequence *base-model formation*");
   expect(src("zh/orientation/01-whole-stack.qmd")).toContain("第一部分把这套完整流程称为「基座模型形成」");
-  expect(src("en/foundations/summary.qmd")).toContain("Base-model formation is infrastructure, not background");
-  expect(src("zh/foundations/summary.qmd")).toContain("基座模型的形成本身就是基础设施，而非背景知识");
+  expect(src("en/foundations/summary.qmd")).toContain("Base-model formation is part of the infrastructure the rest of the stack runs on");
+  expect(src("zh/foundations/summary.qmd")).toContain("基座模型的形成是后续整个技术栈依赖的基础设施");
   expect(flat("en/summary.qmd")).toContain("The training loop changes a model artifact");
   expect(src("zh/summary.qmd")).toContain("训练循环把受治理的数据");
 });

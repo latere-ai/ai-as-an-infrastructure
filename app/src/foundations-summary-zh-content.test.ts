@@ -23,7 +23,7 @@ test("the Part I summary preserves the English three-part argument", () => {
   expect(paragraphs(zh)).toHaveLength(3);
   expect(zh).toContain("第一部分讨论的是基座模型在成为产品之前如何形成");
   expect(zh).toContain("贯穿这一部分的主线，是这些选择往往难以逆转");
-  expect(zh).toContain("基座模型的形成本身就是基础设施，而非背景知识");
+  expect(zh).toContain("基座模型的形成是后续整个技术栈依赖的基础设施");
 });
 
 test("the formation recap names every inherited design choice", () => {
@@ -54,7 +54,7 @@ test("the scaling question remains open and testable", () => {
 test("the handoff to Part II explains constructed order", () => {
   expect(zh).toContain("本书没有紧接着讨论后训练，而是先在第二部分转向另一类生成问题");
   expect(zh).toContain("系统必须为这些对象构造一种顺序，训练、采样、缓存和评测才有可操作的基础");
-  expect(zh).toContain("不是在文本之后罗列更多媒体格式");
+  expect(zh).toContain("两部分共享同一个基础设施问题");
   expect(zh).toContain("不天然以字符串形式出现的对象");
 });
 
