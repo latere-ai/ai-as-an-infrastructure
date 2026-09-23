@@ -236,6 +236,21 @@ coverage check of the English tree. None has been decided or started.
   The reader renders `---` in prose as an em dash. `tools/lint.sh` now fails on
   `---` inside a prose line.
 
+## Open goal: visuals that explain
+
+Recorded 2026-09-23 at the author's request. The book has 39 interactive
+components (58 placements, mostly canvas sketches with a slider or a stepper),
+151 Graphviz diagrams, and static SVG charts. The author judges them well short
+of what current interactive and animated explanation can do, and allows
+removing any existing figure. The work starts from what each chapter needs a
+reader to understand, not from the existing component list: a screenshot audit
+graded against a fixed rubric (does the figure answer the question its
+paragraph asks, does interaction change understanding, is it legible on a
+phone, does it look current), then a first tranche of about ten figures across
+the parts for the author to judge, then the rest. Constraints: a zh twin with
+matching inputs for every figure, theme tokens, the mobile column width,
+reduced motion, and a static fallback when scripts do not run.
+
 ## Open goals: rendering and parity defects found by the new tests
 
 - [ ] **Bold renders as literal `**` on 12 zh pages.** `**标签：**正文` does not
