@@ -76,21 +76,10 @@ function canonicalMath(block: string): string {
     .replace(/\s+/g, "");
 }
 
-// Pages whose Chinese display math currently differs from the English after
-// canonicalization: trailing punctuation, an added \times, sized delimiters,
-// a two-line \substack label, or equations restated with intermediate
-// variables. The list is exact, so a new divergence and a reconciled page
-// both fail until it is updated.
-const knownMathDivergence = [
-  "foundations/03-tokenization.qmd",
-  "foundations/04-transformer-architecture.qmd",
-  "foundations/05-moe-ssm-hybrids.qmd",
-  "generative/01-diffusion-flow-matching.qmd",
-  "generative/03-speech-and-voice.qmd",
-  "frontiers/03-verification-frontier.qmd",
-  "ecosystem/05-market-structure.qmd",
-  "practice/07-evaluation-and-observability.qmd",
-];
+// Pages whose Chinese display math differs from the English after
+// canonicalization. The list is exact, so a new divergence and a reconciled
+// page both fail until it is updated.
+const knownMathDivergence: string[] = [];
 
 // An interactive figure is identified by its data-viz name. Its numeric and
 // boolean data-* attributes are the model inputs, and data-family, data-mode,
