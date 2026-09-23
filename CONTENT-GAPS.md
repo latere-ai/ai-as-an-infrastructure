@@ -313,25 +313,25 @@ Left unchanged during the wording pass because resolving them needs a source.
   unclear; (en 353, zh 197) the definition of S conflicts with e_s.
 - [x] `orchestration/06` (en/zh 145): OSWorld-Human "2.7-4.3 times as many
   steps" may be 1.4-2.7 in the current version of the paper.
-- [ ] `orchestration/07` (en 330-336, zh 189): the 90.2 percent figure is
+- [x] `orchestration/07` (en 330-336, zh 189): the 90.2 percent figure is
   relative to single-agent Claude Opus 4; name that baseline.
-- [ ] `orchestration/08` (en 537, zh 283): "oracle-context gap" does not name
+- [x] `orchestration/08` (en 537, zh 283): "oracle-context gap" does not name
   the two conditions it compares.
 - [ ] `safety/01` (en 179-180, zh 96): "held-out feature labels" reads as
   circular; probably held-out activating examples.
 - [x] `refs/scalable-oversight-control.bib`: the zh note for
   `greenblatt2024faking` mixes the compliance rate with the reasoning rate;
   the zh note for `hubinger2024sleeper` claims more than the chapter does.
-- [ ] `safety/05` (zh 135): names the NIST risk management framework where en
+- [x] `safety/05` (zh 135): names the NIST risk management framework where en
   names the Generative AI Profile (AI 600-1).
-- [ ] `safety/07` (en 224, zh 105): "trusted assignment" versus zh "trusted
+- [x] `safety/07` (en 224, zh 105): "trusted assignment" versus zh "trusted
   physical boundary"; (zh 145) "oblivious HTTP relay" loses its meaning in
   translation.
 - [x] `safety/08`: dates after mid-2026 are unchecked (Regulation (EU)
   2026/1744, the Council of Europe convention ratification, the 2027 and 2028
   calendar, Colorado SB 26-189, the amended New York RAISE Act). Checked
   against the primary texts on 2026-09-23.
-- [ ] `infrastructure/02` (en 444): `zhao2023pytorch` is also cited for
+- [x] `infrastructure/02` (en 444): `zhao2023pytorch` is also cited for
   distributed tensors, which the paper does not cover.
 - [x] `infrastructure/06` (en 282, zh 156): "TSMC's own 2025 capacity page"
   cites `tsmc2026fabcapacity`.
@@ -339,10 +339,10 @@ Left unchanged during the wording pass because resolving them needs a source.
   reasoning" (en 194) are unexplained; "the reported human average" for
   ARC-AGI-2 (en 279) refers to a figure the book never gives; date formats are
   mixed.
-- [ ] `ecosystem/01` (en 336, zh 192): the Chinchilla and GQA comparison is
+- [x] `ecosystem/01` (en 336, zh 192): the Chinchilla and GQA comparison is
   uneven because DeepMind is part of Google; the Sardana paper has two
-  bibliography keys.
-- [ ] `ecosystem/07` (en 166-167, zh 85): names Google although the cited
+  bibliography keys. Merged to `sardana2024beyond` on 2026-09-23.
+- [x] `ecosystem/07` (en 166-167, zh 85): names Google although the cited
   filing does not name the partner.
-- [ ] zh terminology: inference is 推断 in `zh/ecosystem/01` and 推理 in the
+- [x] zh terminology: inference is 推断 in `zh/ecosystem/01` and 推理 in the
   other ecosystem chapters.
