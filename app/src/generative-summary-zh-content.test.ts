@@ -23,7 +23,7 @@ test("the Part II summary preserves the English three-part argument", () => {
   expect(paragraphs(zh)).toHaveLength(3);
   expect(zh).toContain("并非天然按词元排列的生成对象");
   expect(zh).toContain("构造顺序必然有代价");
-  expect(zh).toContain("多模态架构的核心，是为原本没有明确顺序的对象构造顺序");
+  expect(zh).toContain("这一部分尚未回答的是");
 });
 
 test("the recap retains every generation regime named in English", () => {
@@ -44,7 +44,7 @@ test("the constructed-order trade-offs remain explicit", () => {
   expect(zh).toContain("有些表示方式便于训练，却会增加服务难度");
   expect(zh).toContain("提高采样保真度，往往意味着延迟成倍增加");
   expect(zh).toContain("多模态融合还可能让证据来源变得模糊");
-  expect(zh).toContain("关键不在于覆盖了多少种模态");
+  expect(zh).toContain("这一部分反复讨论的");
   expect(zh).toContain("现实世界的物体或感知信号转换成模型可以处理的表示时，需要付出什么代价");
 });
 
@@ -66,6 +66,8 @@ test("the Chinese summary avoids literal and vague framing", () => {
     "表面上讲模态",
     "具身经验、机器人数据和世界模型训练",
     "数据的收集、继承和验证",
+    "关键不在于",
+    "多模态架构的核心",
     "—",
   ]) expect(zh).not.toContain(rejected);
 });

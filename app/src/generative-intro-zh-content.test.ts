@@ -44,7 +44,7 @@ test("the chapter route preserves each English mechanism and tradeoff", () => {
 });
 
 test("the closing identifies invented order with architecture", () => {
-  expect(zh).toContain("本部分不是媒体格式的导览，而是研究顺序如何被构造");
+  expect(zh).toContain("本部分各章都围绕同一个问题展开");
   expect(zh).toContain("系统为模型构造了怎样的序列，训练、缓存、采样和评测才得以进行");
   expect(zh).toContain("架构正是这套人为构造的顺序");
 });
@@ -67,6 +67,8 @@ test("the rewrite removes unsupported and literal framing", () => {
     "被压缩成模型可以共同处理的表示",
     "这一部分表面上在讲多种模态",
     "又为这套顺序付出了什么",
+    "不是媒体格式的导览",
+    "真正的问题是",
     "—",
   ]) expect(zh).not.toContain(rejected);
 });
