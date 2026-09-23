@@ -139,6 +139,26 @@ throughput at a similar latency level [@kwon2023pagedattention]. That result
 includes the block manager, scheduler, kernels, and sharing behavior. It is not
 a hardware-independent multiplier for block allocation alone.
 
+In the 2023 system, PagedAttention named both the block manager and its
+attention kernel. The two have since separated. Attention kernels written later
+accept a block table as an input, so an engine can replace the kernel while
+keeping the block manager, the table layout, and the accounting rules in this
+chapter.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+vLLM v0.25.0 (11 July 2026) deleted its original PagedAttention CUDA kernels.
+The release notes state that "the legacy attention implementation is deleted
+now that V1/MRv2 backends are the standard path", meaning vLLM's V1 engine and
+its second-generation model runner [@vllm2026v025]. Block tables remain the
+interface between allocator and kernel. In vLLM v0.30.0 (22 September 2026)
+the per-request tables are held in
+`BlockTable, vllm/v1/worker/block_table.py`, and backends such as
+`FlashAttentionImpl.forward, vllm/v1/attention/backends/flash_attn.py` pass
+the table to the kernel.
+:::
+
 ## Allocation is part of the token plan
 
 @gls-continuous-batching lets the active set change between iterations, but an
@@ -252,6 +272,61 @@ A request-level hit rate can hide most of the value. Report matched prefix
 tokens or bytes as well, because a hit on eight tokens and a hit on eight
 thousand tokens do not save the same work.
 
+### Hybrid models keep per-request state beside per-token KV
+
+The accounting so far assumes that every layer stores keys and values for every
+retained token. A hybrid model replaces some attention layers with recurrent
+layers, which fold the prefix into a fixed-size state that each new token
+updates in place (@sec-moe-ssm-hybrids). Let $\kappa_{\mathrm{attn}}$ be the
+per-token payload counted over the attention layers only, and let $\sigma$ be
+the recurrent state summed over the recurrent layers. Request $i$ then holds
+$T_i\kappa_{\mathrm{attn}}+\sigma$ bytes. The first term grows with every
+retained token; the second is the same for a ten-token request and a
+million-token one.
+
+One block pool must now serve both terms. An allocator that gives every layer
+type the same physical block size must make a block large enough for one
+recurrent state, and an attention block of that size then covers many token
+positions. The tail-waste bound $w_i<B$ grows with it, so a hybrid model can
+waste more memory per request in its attention layers than a pure attention
+model with small blocks.
+
+Prefix sharing changes as well. The components of a hybrid model share one
+token prefix but not one reusable boundary [@huang2026unifiedradix].
+Full-attention KV for a matched prefix is valid at every length. A
+sliding-window layer, which attends only to a fixed number of recent tokens,
+needs only the trailing window of the match. A recurrent state is valid only at
+the exact position where it was saved, because later tokens overwrite it in
+place, so the engine keeps copies of the state, called checkpoints, at chosen
+positions such as block boundaries. A cache hit extends to the deepest
+position that every component accepts, which is usually the last checkpoint
+inside the matched prefix. A request that resumes from a shared checkpoint
+copies it into a private slot before its first update, which is the
+copy-on-write rule above applied to recurrent state. Eviction also works per
+component: removing one component's data at a prefix can leave another
+component's data there valid, so the index records which components each
+prefix still holds.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- vLLM's worked example for Qwen3.8-2.4T, a model with 69 Gated DeltaNet
+  (recurrent) layers and 23 full-attention layers, gives 2 KiB of FP8 keys and
+  values per token in each attention layer and 4,216 KiB of recurrent state per
+  request in each recurrent layer. vLLM sizes a block to hold one recurrent
+  state, which makes an attention block 2,112 tokens (4.125 MiB); a request
+  with 8,192 prompt tokens and 1,024 output tokens occupies about 759 MiB.
+  Prefill and decode instances compute their block sizes independently, and KV
+  transfer between them requires the sizes to match [@vllm2026qwen38pd]. In
+  vLLM v0.30.0, recurrent state is cached for prefix reuse at block-aligned
+  checkpoints by
+  `MambaManager, vllm/v1/core/single_type_kv_cache_manager.py`.
+- SGLang's Unified Radix Cache keeps one radix tree with separate
+  full-attention, sliding-window, and recurrent components. DeepSeek-V4 uses
+  the first two, and Kimi-K3 uses the first and the third
+  [@huang2026unifiedradix].
+:::
+
 ## Memory pressure needs an explicit policy
 
 Dynamic allocation admits more work than maximum-length reservation, but it
@@ -267,10 +342,10 @@ $\sum_i\Delta q_i$; the system must choose among distinct actions:
 | Offload and reload | Live or cached blocks | Transfer, storage queueing, and synchronization |
 | Reject or fail explicitly | Waiting or active request, according to contract | Lost request; must be visible in service metrics |
 
-These actions are not interchangeable. Evicting an unpinned cache entry leaves
-live requests untouched, whereas preempting live work discards state that a
-running request still needs. Offloading preserves state
-but adds a data path that can become slower than recomputation. Priority can
+The actions differ in which state they discard. Evicting an unpinned cache
+entry leaves live requests untouched, whereas preempting live work discards
+state that a running request still needs. Offloading preserves state but adds
+a data path that can become slower than recomputation. Priority can
 protect interactive traffic while starving an older batch request, so victim
 selection needs age or fairness constraints as well as a memory score.
 
@@ -278,6 +353,37 @@ The pressure policy must also bound how many times a plan is retried after one
 of these actions. If capacity cannot be recovered, the scheduler must defer,
 reject, or surface a failure. An invisible retry loop converts a known allocation
 failure into unbounded queueing.
+
+Offload becomes a hierarchy when the engine keeps evicted blocks in slower tiers
+instead of discarding them. One design sends all offloaded state through host
+DRAM. A block is copied from the accelerator to host memory, the accelerator
+block returns to the free pool as soon as that copy completes, and storage or
+peer tiers receive the data from the host copy. The host tier is a cache with
+its own eviction policy rather than a staging buffer. Reload runs in the
+opposite direction, and the engine reserves accelerator blocks only after the
+data is back in host memory. A reload in flight therefore holds no accelerator
+capacity, and a plan that needs it waits for a later iteration under the retry
+bound above [@ozeri2026tieredkv]. A reload pays off when moving the blocks up
+from their tier takes less time than recomputing the same prefix, which
+depends on the tier's latency and bandwidth and on how much of the reused
+working set fits in the faster tiers.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+vLLM has shipped a multi-tier offloading framework since v0.22 (May 2026),
+with filesystem, object-storage, and peer-to-peer tiers behind host memory. In
+the framework authors' benchmark (Qwen3.6-35B-A3B on two H100 GPUs, multi-turn
+conversations with 12K-token first prompts and 4K tokens per round, the
+prefill instances of a disaggregated deployment, a local NVMe storage tier),
+accelerator memory held the working set for a pool of up to about 64
+conversations and host memory kept throughput up to about 128. Beyond that,
+the storage tier more than doubled throughput compared with the alternatives
+[@ozeri2026tieredkv]. NVIDIA Dynamo v1.5.0 deprecated its own KV Block Manager
+(KVBM), which v1.0.0 had enabled by default, and directs users to "the
+engine's native KV offloading for host and disk tiering"; removal is targeted
+for v1.6.0 [@nvidia2026dynamo150; @nvidia2026dynamo100].
+:::
 
 ## Chunked prefill shares an iteration budget
 
@@ -335,6 +441,37 @@ movement problem across GPU memory, CPU @gls-dram, SSD, and network links
 workloads. They do not establish disaggregation or tiering as the universal
 choice.
 
+Phase is one axis for placing work on separate devices; two other layouts
+divide the work of a single step. Tensor parallelism divides the KV cache by
+attention head, so a group with more devices than the model has KV heads holds
+duplicate copies, and a model whose attention stores one shared latent vector
+per token has a single head to split and replicates its whole cache across the
+group [@lee2026vllmdcp]. Decode context parallelism divides each sequence's
+cache by token position instead: every device scores the current query against
+its own slice, and a collective step in every attention layer merges the
+partial results into the exact attention output [@bhatia2025helix].
+Attention-FFN disaggregation divides each layer of a mixture-of-experts model,
+whose feed-forward blocks route each token to a few of many expert
+subnetworks, between an attention pool that holds the KV cache and an expert
+pool that holds the expert weights. Hidden states cross between the pools
+twice per layer, and the system pipelines micro-batches so that each pool
+computes while the other's results are in transit [@zhu2025megascaleinfer].
+Both layouts add a data path to every step, so the rule of this section
+applies to them: the memory saved or the better-matched parallelism must
+outweigh the added communication.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+A post on the vLLM blog in August 2026 said that vLLM had supported decode
+context parallelism for almost a year, with backends for latent attention and
+for grouped-query attention [@lee2026vllmdcp]. vLLM's attention-FFN
+disaggregation plugin, announced in July 2026, is labeled experimental, and its
+reported decode throughput was measured with the model's expert routing
+replaced by a forced balanced cycle, which changes model outputs
+[@vllm2026afdplugin].
+:::
+
 Cache-aware routing also needs both locality and load. Here $Q_j$ denotes the
 predicted queue delay on worker $j$, $P_i$ the prompt length, $H_{ij}$ the
 compatible cached-prefix length, $C_{\mathrm{prefill}}(u;j)$ the predicted time
@@ -351,6 +488,12 @@ $$
 
 Choosing the lowest estimate is only a starting point. Capacity, fairness,
 fault domains, prediction error, and tenant isolation can override it.
+
+The same estimate can decide whether a request needs the prefill pool at all.
+When a decode worker already holds most of the prompt, $P_i-H_{ij}$ is small,
+and prefilling that suffix there can cost less than a remote prefill followed
+by a transfer; @sec-serving-problem describes routers that make this choice per
+request.
 
 ::: {.callout-important}
 ## What's contested

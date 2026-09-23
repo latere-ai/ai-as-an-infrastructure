@@ -195,7 +195,12 @@ $M_{\mathrm{device}}$. The formula describes logical bytes before prefix
 sharing. If requests share physical prefix blocks, count each unique block
 once. Tensor parallelism, which splits each layer's weight matrices across
 several accelerators, may shard KV heads or replicate them, so per-device
-memory depends on the parallel layout as well as the architecture.
+memory depends on the parallel layout as well as the architecture. The formula
+also assumes that every layer is an attention layer. A hybrid model replaces
+some attention layers with recurrent layers, which fold the whole prefix into
+a fixed-size state; those layers add a per-request term that does not grow
+with $T_i$. @sec-memory-scheduling shows how that term changes block
+allocation and prefix sharing.
 
 <figure id="fig-serving-problem-kv-cache">
 <div class="viz" data-viz="kv-cache" data-lang="en"></div>
@@ -305,13 +310,18 @@ They act on different resources and introduce different costs.
 | Chunked prefill | A long prefill monopolizing an iteration | More scheduling decisions and possibly smaller kernels | Bounds decode stalls while admitting prompts |
 | Prefill-decode disaggregation | Phase interference and coupled resource sizing | KV transfer, extra queues, and network capacity | Lets each phase use separate resources |
 
-PagedAttention applies virtual-memory-style blocks to KV storage. A request's
-logical sequence can map to non-contiguous physical blocks allocated as it
-grows. This sharply reduces reservation and fragmentation waste, and it enables
-block sharing, but it does not reduce the logical bytes required by a unique
-token. In the vLLM paper's evaluated workloads, this memory management produced
-two to four times the throughput of the compared systems at similar latency
-[@kwon2023pagedattention]. That number belongs to those models, workloads, and
+PagedAttention, introduced with vLLM in 2023, applies virtual-memory-style
+blocks to KV storage. A request's logical sequence can map to non-contiguous
+physical blocks allocated as it grows. This sharply reduces reservation and
+fragmentation waste, and it enables block sharing, but it does not reduce the
+logical bytes required by a unique token. The name covered two components: a
+block manager that records each request's physical blocks in a block table,
+and an attention kernel that reads keys and values through that table. Later
+attention kernels accept the block table as an input, so an engine can retire
+the original kernel and keep paged allocation; @sec-memory-scheduling gives
+the release detail. In the vLLM paper's evaluated workloads, this memory
+management produced two to four times the throughput of the compared systems
+at similar latency [@kwon2023pagedattention]. That number belongs to those models, workloads, and
 baselines, not to paging in isolation.
 
 Prefix reuse skips work only when the server can reuse KV state for exactly the
@@ -327,9 +337,9 @@ ongoing decodes, limiting how long decode work waits behind one prompt
 [@agrawal2024sarathi]. DistServe assigns prefill and decode to different GPU
 pools and chooses resources and parallelism for each phase separately
 [@zhong2024distserve]. Disaggregation removes the kernel interference of
-colocation, where both phases share the same GPUs, but it does not make the
-phases independent: the decode pool cannot start until the KV state arrives,
-and both pools can still queue.
+colocation, where both phases share the same GPUs. The phases remain coupled:
+the decode pool cannot start until the KV state arrives, and both pools can
+still queue.
 
 ::: {.callout-important}
 ## What's contested
@@ -343,6 +353,39 @@ more flexibly when load is low or prompts are short. A production framework
 shipping both options does not prove that one option is optimal for a given
 workload. Measure the crossover on the topology and traffic that will carry the
 service.
+:::
+
+The crossover also varies from one request to the next, so a router can choose
+the regime per request instead of fixing it for a whole deployment. In a
+multi-turn conversation, a follow-up turn often shares most of its prompt with
+KV state that a decode worker still holds from the previous turn. Prefilling
+only the new tokens on that worker, an append-prefill, slows the worker's
+ongoing decodes roughly an order of magnitude less than a full prefill, and it
+avoids another KV transfer between the pools. PPD decides for each later turn
+whether to run it on the decode worker, with configurable weights for
+different SLOs. Its authors found that no single fixed routing rule met every
+SLO at once, and their router reduced time to first token for later turns by
+about 68 percent while keeping TPOT competitive [@li2026ppd]. A per-request
+router turns the crossover into policy parameters, such as a limit on the
+uncached prompt length or on pool load, and those parameters need the same
+measurement on the target traffic as a deployment-wide choice.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+NVIDIA Dynamo v1.0.0 (13 March 2026) made enforced disaggregation its router
+default: a request in a disaggregated deployment goes through a prefill worker
+unless the operator enables fallback to decode-only execution
+[@nvidia2026dynamo100]. Dynamo v1.5.0 (21 September 2026) added conditional
+disaggregation, which sends selected requests straight to a decode worker for
+local prefill and decode [@nvidia2026dynamo150]. Its documentation labels the
+feature experimental and off by default. The default policy bypasses the
+prefill pool when the uncached prompt, the prompt minus the chosen decode
+worker's cached prefix, is under 2,048 tokens and under 70 percent of the full
+prompt; other policies add a prefill-load condition. The router needs KV-cache
+events from the decode workers, which the vLLM and TensorRT-LLM backends
+publish and the SGLang backend does not yet support
+[@nvidia2026conditionaldisagg].
 :::
 
 ## Evaluate a serving policy under load
