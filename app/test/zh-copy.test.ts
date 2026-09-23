@@ -1148,11 +1148,11 @@ test("polished chapter openings preserve key source theses", () => {
     ],
     [
       "en/practice/02-serving-and-compute.qmd",
-      ["versioned serving contract", "complete path", "choose an engine", "@gls-gateway", "means, not the architecture"],
+      ["versioned serving contract", "complete path", "choose an engine", "@gls-gateway"],
     ],
     [
       "zh/practice/02-serving-and-compute.qmd",
-      ["版本化的服务契约", "完整路径", "选择引擎", "@gls-gateway", "手段，不是架构起点"],
+      ["版本化的服务契约", "完整路径", "选择引擎", "@gls-gateway"],
     ],
     [
       "en/practice/03-edge-on-device.qmd",

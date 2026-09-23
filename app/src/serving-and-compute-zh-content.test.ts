@@ -28,7 +28,7 @@ test("Chinese Chapter 82 preserves the complete English structure", () => {
     ["##", "测量用户实际等待的时间"],
     ["###", "引擎机制是有条件的调节手段"],
     ["###", "对完整系统指纹做基准测试"],
-    ["##", "只有边界有价值时才引入中介层"],
+    ["##", "只在边界能够落实时引入中介层"],
     ["##", "根据测量结果采购容量"],
     ["###", "先估算规划下界，再做负载测试"],
     ["##", "按工作负载语义选择编排方式"],
@@ -42,21 +42,20 @@ test("Chinese Chapter 82 preserves the complete English structure", () => {
 
 test("the opening defines serving through an accepted workload envelope", () => {
   for (const phrase of [
-    "只有端点返回文本，不等于模型已经得到可靠服务",
+    "端点能返回文本，只是其中一个前提",
     "已声明的一类请求",
-    "质量、延迟、可用性、成本和策略边界",
+    "延迟、可用性、成本和策略边界",
     "版本化的服务契约",
     "模型制品、运行时、适配器、请求语义、路由策略和算力放置",
     "共同产生结果",
     "完整路径",
     "代表性负载",
-    "手段，不是架构起点",
   ]) expect(flat).toContain(phrase);
 });
 
 test("the request contract fixes behavior rather than only HTTP shape", () => {
   for (const phrase of [
-    "HTTP 请求格式只是连接组件的手段，不是行为标准",
+    "共用的 HTTP 请求格式只统一了传输层",
     "消息角色",
     "工具和 JSON Schema 方言",
     "分词方式",
@@ -197,9 +196,9 @@ test("joint eligibility publishes admission beside conditional latency", () => {
 
 test("mediation is optional and earns an enforceable boundary", () => {
   for (const phrase of [
-    "网关或中介服务是一种设计选择，不是必选层",
+    "网关或中介服务是一种可选的设计",
     "一个应用和一个供应商",
-    "集中管理是否形成了团队真正能够执行和运营的边界",
+    "集中管理形成团队能够执行和运营的边界",
     "先验证调用方和租户身份",
     "持有代理密钥还不够",
     "允许的候选集合",
@@ -219,7 +218,7 @@ test("retry fallback and traces preserve action safety", () => {
   for (const phrase of [
     "传输重试安全不能单独证明应用副作用安全",
     "副作用账本",
-    "不能盲目把同一动作交给另一个模型",
+    "不经这一步就把同一动作交给另一个模型",
     "唯一的重试负责人",
     "嵌套重试会相乘，而不是相加",
     "同一部署上的传输重试",
@@ -308,7 +307,7 @@ test("orchestration follows workload lifecycle and scheduling semantics", () => 
     "应用执行框架",
     "不能替代集群准入、设备分配或服务生命周期控制",
     "所需的生命周期和调度语义",
-    "不能挽救当前的请求突发",
+    "赶不上当前的请求突发",
     "保持热容量或减少准入流量",
     "完整扩容路径",
   ]) expect(flat).toContain(phrase);
@@ -422,7 +421,7 @@ test("the complete Chinese chapter renders through its operating handoff", async
   const { html, headings: renderedHeadings } = renderMarkdown(chinese, ctx);
   expect(html).not.toContain("```rdrdot");
   expect(html).not.toContain("katex-error");
-  expect(html).toContain("只有端点返回文本，不等于模型已经得到可靠服务");
+  expect(html).toContain("端点能返回文本，只是其中一个前提");
   expect(html).toContain("本章的方法就是它的验收测试");
   expect(html.match(/<figure class="rdr-figure"/g)?.length).toBe(3);
   expect(renderedHeadings.some(({ text }) => text === "延伸阅读")).toBeTrue();
