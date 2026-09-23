@@ -58,6 +58,9 @@ test("en and zh embed the same figures with the same parameters on each page", (
 });
 
 test("every module is registered under its file name and labels both languages", async () => {
+  const infra = new Set(["index.ts", "loaders.ts", "static.ts", "types.ts"]);
+  const modules = readdirSync(import.meta.dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !infra.has(f));
+  for (const f of modules) expect(Object.keys(LOADERS), `${f} is not in loaders.ts`).toContain(f.slice(0, -3));
   for (const [key, load] of Object.entries(LOADERS)) expect((await load()).default.name, `loaders.ts key ${key}`).toBe(key);
   for (const [name, fig] of FIGURES) {
     expect(fig.name).toBe(name);
