@@ -1085,50 +1085,6 @@
     watchTheme(host, draw);
   };
 
-  // Attention vs recurrent decode state: attention retains one record per past
-  // position, while a recurrent layer keeps a fixed number of state slots.
-  // This visualizes storage shape only; it does not invent a recall curve.
-  R['ssm-vs-attention'] = function (host) {
-    var len = 12, stateSlots = 6;
-    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
-    var zh = lang === 'zh';
-    var L = zh ? {
-      attention: '注意力：逐位置记录', recurrent: '递归层：固定状态', length: '长度',
-      attentionGrowth: '注意力记录随长度增长', recurrentFixed: '递归状态槽位保持固定',
-      sequenceLength: '序列长度'
-    } : {
-      attention: 'attention: per-position records', recurrent: 'recurrent layer: fixed state', length: 'length',
-      attentionGrowth: 'attention records grow with length', recurrentFixed: 'recurrent state slots stay fixed',
-      sequenceLength: 'sequence length'
-    };
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 230);
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var half = W / 2, y = H / 2;
-      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(L.attention, half / 2, pd);
-      ctx.fillText(L.recurrent, half + half / 2, pd);
-      var cw = Math.min(16 * cv.dpr, (half - 2 * pd) / len);
-      for (var i = 0; i < len; i++) {
-        var x = pd + i * cw;
-        ctx.fillStyle = t.accent;
-        ctx.fillRect(x, y - cw / 2, Math.max(1 * cv.dpr, cw - 2 * cv.dpr), cw - 2 * cv.dpr);
-      }
-      var sw = Math.min(22 * cv.dpr, (half - 2 * pd) / stateSlots);
-      for (var j = 0; j < stateSlots; j++) {
-        var sx = half + pd + j * sw;
-        ctx.fillStyle = t.accent2;
-        ctx.fillRect(sx, y - sw / 2, sw - 3 * cv.dpr, sw - 3 * cv.dpr);
-      }
-      read.textContent = L.length + ' ' + len + ' · ' + L.attentionGrowth + ' (' + len + ') · ' + L.recurrentFixed + ' (' + stateSlots + ')';
-    }
-    host.appendChild(slider(L.sequenceLength, 4, 40, 1, len, function (v) { len = Math.round(v); draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Agent-RL systems have two independent design axes: resource placement
   // (shared or separate pools) and update synchronization (barriered or async).
   // This view switches axes instead of incorrectly equating disaggregation with
