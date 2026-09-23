@@ -321,7 +321,7 @@ test("the lifecycle verifies recovery before granting the full allocation", () =
 
 test("the conclusion preserves lower-layer limits and contested choices", () => {
   for (const phrase of [
-    "运维平面无法凭空创造训练程序没有暴露的状态",
+    "编排系统无法凭空创造训练程序没有暴露的状态",
     "并行方案不能重新切分",
     "异步工作仍会降低训练有效吞吐量",
     "固定成员关系让恢复语义更简单",

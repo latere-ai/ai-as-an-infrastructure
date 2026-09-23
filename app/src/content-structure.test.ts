@@ -850,7 +850,7 @@ test("audited leftover first uses define the role of the term in place", () => {
     ["zh/infrastructure/01-accelerators-networking.qmd", "TPU v4 用 @gls-ici 连接各块芯片"],
     ["zh/infrastructure/01-accelerators-networking.qmd", "同样，@gls-gpu 集群可以在"],
     ["en/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc lets the run continue while producing subtly wrong numbers without an explicit crash"],
-    ["zh/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc，也就是不崩溃却悄悄写出错误数字的静默数据损坏"],
+    ["zh/infrastructure/04-orchestration-data-infra.qmd", "@gls-sdc，也就是不崩溃却悄悄写出错误数字的故障"],
     ["en/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key issued by a @gls-gateway for model access, a short-lived scoped substitute for a provider key"],
     ["zh/practice/05-agents-and-sandboxes.qmd", "@gls-virtual-key，也就是有明确范围和短有效期的提供商密钥替代物"],
     ["en/practice/10-reliability-nondeterministic.qmd", "@gls-sli, a quantitative indicator of one service property"],
