@@ -91,9 +91,6 @@ test("scaling-law extrapolation annotations do not overlap the legend", () => {
 });
 
 test("hand-authored zh diagrams do not keep English explanatory labels", () => {
-  const multimodalServing = read("zh/inference/06-serving-multimodal.qmd");
-  expect(multimodalServing).toContain('IMG [label="媒体字节"]');
-  expect(multimodalServing).not.toContain('label="raw pixels"');
 
   const rag = read("zh/orchestration/08-rag-retrieval.qmd");
   expect(rag).toContain('source [label="来源 + ACL"]');

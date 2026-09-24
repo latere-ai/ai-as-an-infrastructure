@@ -112,4 +112,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "process-supervision": () => import("./process-supervision.ts"),
   "sink-window-eviction": () => import("./sink-window-eviction.ts"),
   "constrained-decoding": () => import("./constrained-decoding.ts"),
+  "fusion-kv-cost": () => import("./fusion-kv-cost.ts"),
 };
