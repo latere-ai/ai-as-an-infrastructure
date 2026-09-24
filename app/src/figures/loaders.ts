@@ -68,4 +68,7 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "mutable-state": () => import("./mutable-state.ts"),
   "supply-ledger": () => import("./supply-ledger.ts"),
   "yield-cascade": () => import("./yield-cascade.ts"),
+  "power-ledger": () => import("./power-ledger.ts"),
+  "delivery-critical-path": () => import("./delivery-critical-path.ts"),
+  "curtailment-response": () => import("./curtailment-response.ts"),
 };
