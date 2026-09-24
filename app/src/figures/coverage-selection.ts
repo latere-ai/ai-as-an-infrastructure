@@ -209,7 +209,9 @@ const labels = {
     noteVoteNone: "With d = 0 no wrong answer repeats, so voting converges to 1 on every problem, slowly where p is small.",
     noteVer: "Best at k = {k} ({a}). A wrong sample outscores a correct one with probability {e}; with β = {b} the overrated samples multiply with k and Aₖ falls toward 0.",
     noteVerZero: "Best on this axis at k = {k} ({a}). A wrong sample outscores a correct one with probability {e}; with β = 0 the correct samples win eventually, so Aₖ keeps rising.",
-    describe: "At k = {k} samples per problem, coverage is {c}. Majority vote answers {v} of problems correctly and the learned verifier {r}; the verifier is best at k = {bk} ({ba}).",
+    describe: "At k = {k} samples per problem, coverage is {c}.",
+    describeVote: " Majority vote answers {v} of problems correctly.",
+    describeVer: " The learned verifier answers {r}, and is best at k = {bk} ({ba}).",
   },
   zh: {
     title: "覆盖率与三种选择器的准确率",
@@ -245,7 +247,9 @@ const labels = {
     noteVoteNone: "d = 0 时错误答案互不重复，投票在每道题上最终都会收敛到 1，只是 p 小的题收敛得慢。",
     noteVer: "k = {k} 时最好（{a}）。错误样本得分高于正确样本的概率为 {e}；β = {b} 时，被高估的错误样本随 k 增多，Aₖ 趋向 0。",
     noteVerZero: "在本坐标范围内 k = {k} 时最好（{a}）。错误样本得分高于正确样本的概率为 {e}；β = 0 时正确样本终会胜出，Aₖ 持续上升。",
-    describe: "每道题采样 k = {k} 次时，覆盖率为 {c}。多数投票答对 {v} 的题目，学习得到的验证器答对 {r}；验证器在 k = {bk} 时最好（{ba}）。",
+    describe: "每道题采样 k = {k} 次时，覆盖率为 {c}。",
+    describeVote: "多数投票答对 {v} 的题目。",
+    describeVer: "学习得到的验证器答对 {r}，在 k = {bk} 时最好（{ba}）。",
   },
 };
 
@@ -259,7 +263,8 @@ function describe(st: State<P>, lang: Lang): string {
   const c = curves(p);
   const k = Math.min(p.kmax, Math.max(1, Math.round(p.k)));
   const v = atK(p, c, k);
-  return tpl(L.describe, { k: int(k), c: f3(v.cov), v: f3(v.vote), r: f3(v.ver), bk: int(c.best.k), ba: f3(c.best.a) });
+  const vars = { k: int(k), c: f3(v.cov), v: f3(v.vote), r: f3(v.ver), bk: int(c.best.k), ba: f3(c.best.a) };
+  return tpl(L.describe, vars) + (p.showVote ? tpl(L.describeVote, vars) : "") + (p.showVerifier ? tpl(L.describeVer, vars) : "");
 }
 
 // ---------------------------------------------------------------- render
