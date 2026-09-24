@@ -246,6 +246,7 @@ const labels = {
     describeNone: "Hour {h}: {state}. {gate} So far the candidate served {s} tasks and none failed because of it.",
     dGate: "The gate's interval for Δ is [{l}, {u}] percentage points against −δ = {m}.",
     dNoGate: "The gate has no outcomes for this stage.",
+    dRolled: "The gate rolled back from {stage} at hour {h}, when U = {u} fell below −δ = {m} percentage points.",
     evAt: "Hour {h}, {what}",
     evEnter: "{stage}: {share} of traffic",
     evHold: "{stage}: minimum dwell reached, L below −δ, holding",
@@ -296,6 +297,7 @@ const labels = {
     describeNone: "第 {h} 小时：{state}。{gate}到目前为止，候选版本处理了 {s} 个任务，没有任务因它失败。",
     dGate: "闸门给出的 Δ 区间为 [{l}, {u}] 个百分点，对照 −δ = {m}。",
     dNoGate: "本阶段闸门还没有结果。",
+    dRolled: "闸门在第 {h} 小时从{stage}回滚，此时 U = {u}，低于 −δ = {m} 个百分点。",
     evAt: "第 {h} 小时，{what}",
     evEnter: "{stage}：承接 {share} 的流量",
     evHold: "{stage}：已达最低驻留时间，L 仍低于 −δ，暂停",
@@ -341,8 +343,13 @@ function describe(st: State<P>, lang: Lang): string {
   const r = run(p);
   const t = Math.min(Math.round(st.t), r.end);
   const s = r.steps[t];
-  const gate = Number.isFinite(s.est) ? tpl(L.dGate, { l: pp(s.lo), u: pp(s.hi), m: fixed(-p.margin, 2) }) : L.dNoGate;
-  return zhFix(tpl(s.harm > 0.5 ? L.describe : L.describeNone, { h: fmtH(hours(t + 1)), state: stateLine(s, L), gate, s: int(s.served), f: int(s.harm) }), lang);
+  const rb = r.events.find((e) => e.kind === "rollback");
+  const q = rb && s.stage < 0 ? r.steps[rb.t - 1] : null;
+  const gate = q
+    ? tpl(L.dRolled, { stage: stageName(q.stage, L), u: pp(q.hi), m: fixed(-p.margin, 2), h: fmtH(hours(rb!.t)) })
+    : s.stage >= 0 && STAGES[s.stage].key === "full" ? ""
+    : Number.isFinite(s.est) ? tpl(L.dGate, { l: pp(s.lo), u: pp(s.hi), m: fixed(-p.margin, 2) }) : L.dNoGate;
+  return zhFix(tpl(s.harm > 0.5 ? L.describe : L.describeNone, { h: fmtH(hours(t + 1)), state: stateLine(s, L), gate, s: int(s.served), f: int(s.harm) }).replace(/ {2,}/g, " "), lang);
 }
 
 // Step path through (hour, value) cells: each step holds its value for STEP_H.
