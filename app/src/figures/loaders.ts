@@ -117,4 +117,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "adoption-ledger": () => import("./adoption-ledger.ts"),
   "agent-transaction": () => import("./agent-transaction.ts"),
   "task-substitution": () => import("./task-substitution.ts"),
+  "rubric-weights": () => import("./rubric-weights.ts"),
 };
