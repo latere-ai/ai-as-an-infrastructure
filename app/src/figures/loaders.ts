@@ -120,4 +120,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "rubric-weights": () => import("./rubric-weights.ts"),
   "preference-lineage": () => import("./preference-lineage.ts"),
   "reward-source-use": () => import("./reward-source-use.ts"),
+  "calibration-reward": () => import("./calibration-reward.ts"),
 };

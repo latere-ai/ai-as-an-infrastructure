@@ -146,7 +146,7 @@ const labels = {
   },
   zh: {
     title: "同一组回答上的奖励来源与奖励用途",
-    colSelect: "挑选一个回答",
+    colSelect: "挑选回答",
     colFilter: "筛选 SFT 数据",
     colUpdate: "更新策略",
     rowLearned: "学习型评分器",
@@ -287,8 +287,7 @@ function renderMatrix(p: P, lang: Lang, y0: number, w: number): { svg: string; h
     const rowHead = head(rk).flatMap(([s, cls]) => lines(s, fs, rhW - 6, lang).map((ln) => [ln, cls] as [string, string]));
     const cells = colKeys.map((ck) => {
       const src = (isSource(rk) ? rk : ck) as Source, use = (isSource(rk) ? ck : rk) as Use;
-      // The selected cell's name is bold, which runs about 8 percent wider.
-      const name = lines(cellName(L, src, use), fs, (cw - 14) / 1.08, lang);
+      const name = lines(cellName(L, src, use), fs, cw - 14, lang);
       const strict = src === "checker" && use === "update" ? lines(L.strict, fs, cw - 14, lang) : [];
       return { src, use, name, strict };
     });
@@ -299,7 +298,9 @@ function renderMatrix(p: P, lang: Lang, y0: number, w: number): { svg: string; h
       const on = c.src === p.source && c.use === p.use;
       parts.push(el("rect", { x, y, width: cw, height: rh, rx: 6, fill: on ? C.c1 : C.panel, "fill-opacity": on ? 0.16 : 1, stroke: on ? C.ink : "none", "stroke-width": on ? 2 : 0 }));
       let yy = y + 18;
-      for (const ln of c.name) { parts.push(text(x + 7, yy, ln, { "font-size": fs, class: on ? "fig-t-strong" : undefined })); yy += 15; }
+      // Selection shows as fill and outline; the name keeps its regular weight
+      // so a long system name fits the phone column.
+      for (const ln of c.name) { parts.push(text(x + 7, yy, ln, { "font-size": fs, class: on ? undefined : "fig-t-muted" })); yy += 15; }
       for (const ln of c.strict) { parts.push(text(x + 7, yy, ln, { "font-size": fs, class: "fig-t-muted" })); yy += 15; }
       parts.push(el("rect", { x, y, width: cw, height: rh, rx: 6, fill: "transparent", "data-fig-set": `cell=${c.src}-${c.use}`, class: "fig-hit" }));
     });
