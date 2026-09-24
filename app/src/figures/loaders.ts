@@ -42,4 +42,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "load-latency-knee": () => import("./load-latency-knee.ts"),
   "superposition-toy": () => import("./superposition-toy.ts"),
   "sae-readback": () => import("./sae-readback.ts"),
+  "divergence-direction": () => import("./divergence-direction.ts"),
 };
