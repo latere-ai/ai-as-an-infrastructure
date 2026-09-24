@@ -167,6 +167,7 @@ function render(st: State<P>, lang: Lang): string {
   const labelW = narrow ? 0 : 132;
   const cx = narrow ? 0 : labelW + 14;
   const cw = w - cx;
+  const sep = lang === "zh" ? "；" : "; ";
   const parts: string[] = [];
   const used = new Set<string>();
   let y = 0;
@@ -222,12 +223,12 @@ function render(st: State<P>, lang: Lang): string {
 
   // ---- normalization
   const nChanged = changedCount(r.nf);
-  const normSub = !p.normalize ? L.normOff : `${info.norm[lang]}; ${nChanged ? tpl(L.changed, { n: nChanged }) : L.same}`;
+  const normSub = !p.normalize ? L.normOff : `${info.norm[lang]}${sep}${nChanged ? tpl(L.changed, { n: nChanged }) : L.same}`;
   stage(L.sNorm, normSub, cells(r.n, p.normalize ? r.nf : "", STYLE.changed));
 
   // ---- boundary rules: the pretokens, control spans marked
   const controlWords = new Set(r.t.filter((t) => t[5] === K.control).map((t) => t[4]));
-  stage(L.sBound, `${info.bound[lang]}; ${tpl(L.pretokens, { n: r.p.length })}`, (y0) => {
+  stage(L.sBound, `${info.bound[lang]}${sep}${tpl(L.pretokens, { n: r.p.length })}`, (y0) => {
     // A pretoken wider than the column (a whole SentencePiece input) wraps
     // inside one tall tile.
     const chunks = r.p.map((pt) => {
@@ -257,7 +258,7 @@ function render(st: State<P>, lang: Lang): string {
 
   // ---- segmentation and ids: piece, id, offsets per tile, grouped by pretoken
   const inserted = countOf(r, K.inserted);
-  stage(L.sSeg, `${info.seg[lang]}; ${tpl(L.idsSub, { n: r.t.length, i: inserted })}`, (y0) => {
+  stage(L.sSeg, `${info.seg[lang]}${sep}${tpl(L.idsSub, { n: r.t.length, i: inserted })}`, (y0) => {
     const th = 50;
     const lines = r.t.map((t) => ({ piece: showText(t[0]), id: String(t[1]), off: `${t[2]}–${t[3]}` }));
     const ws = lines.map((l) => Math.max(tileWidth(l.piece, fs), tileWidth(l.id, fs), tileWidth(l.off, fs), 26));

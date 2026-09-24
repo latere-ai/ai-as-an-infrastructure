@@ -298,8 +298,8 @@ export default defineFigure({
       options: MODELS.map((mm) => ({
         value: mm.key,
         label: {
-          en: `${mm.name}: d = ${int(mm.d)}, ${mm.tied ? "tied" : "untied"}, V = ${int(mm.rows)}`,
-          zh: `${mm.name}：d = ${int(mm.d)}，${mm.tied ? "绑定" : "不绑定"}，V = ${int(mm.rows)}`,
+          en: `${mm.name}, d = ${int(mm.d)}, ${mm.tied ? "tied" : "untied"}`,
+          zh: `${mm.name}，d = ${int(mm.d)}，${mm.tied ? "绑定" : "不绑定"}`,
         },
       })),
     },
