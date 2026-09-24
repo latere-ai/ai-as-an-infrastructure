@@ -159,7 +159,7 @@ function render(st: State<P>, lang: Lang): string {
   // Band.
   const lo = GRID.map((lc, i) => [x(10 ** lc), y(f.lossLo[i])] as [number, number]).filter(([px]) => px <= xA1 + 1);
   const hi = GRID.map((lc, i) => [x(10 ** lc), y(f.lossHi[i])] as [number, number]).filter(([px]) => px <= xA1 + 1);
-  clipped.push(el("path", { d: linePath([...lo, ...hi.reverse()]) + "Z", fill: FIT, "fill-opacity": 0.2 }));
+  clipped.push(el("path", { d: linePath([...lo, ...hi.reverse()]) + "Z", fill: FIT, "fill-opacity": 0.3 }));
   // The point-estimate optimum: solid over the fitted range, dashed beyond it.
   const curve = (c0: number, c1: number) => {
     const out: Array<[number, number]> = [];
@@ -204,13 +204,13 @@ function render(st: State<P>, lang: Lang): string {
   const lgA = legend([
     { label: L.lgFit, swatch: { kind: "dot", fill: FIT } },
     { label: L.lgHeld, swatch: { kind: "rect", fill: C.paper, stroke: HELD } },
-    { label: L.lgCurve, swatch: { kind: "rect", fill: FIT, opacity: 0.35 } },
+    { label: L.lgCurve, swatch: { kind: "rect", fill: FIT, opacity: 0.45 } },
   ], 0, botA + axisHeight(true, fs) + 6, wA, fs);
   parts.push(lgA.svg);
   const botLgA = botA + axisHeight(true, fs) + 6 + lgA.height;
 
   // ---- panel B: the forecast N* at the target from each fitted range
-  const topB = narrow ? botLgA + 44 : topA;
+  const topB = narrow ? botLgA + 56 : topA;
   const hB = narrow ? 170 : hA;
   const botB = topB + hB;
   const all = FITS.map((ff) => forecast(ff, c));
@@ -233,9 +233,10 @@ function render(st: State<P>, lang: Lang): string {
       const yy = yb(MODELS[key].N);
       parts.push(el("line", { x1: xB0, x2: xB1, y1: yy, y2: yy, stroke: C.ink2, "stroke-width": 1, "stroke-dasharray": "5 3" }));
       bObs.push(...lineObstacles([[xB0, yy], [xB1, yy]]));
-      // Gopher's line runs above the points, Chinchilla's below them.
+      // Gopher's line runs above the points and is named under its right end;
+      // Chinchilla's runs below them and is named under its left end.
       const right = key === "gopher";
-      bReqs.push({ x: right ? xB1 - 2 : xB0 + 2, y: yy, text: L[key], size: fs, sides: right ? ["above-left", "below-left"] : ["below-right", "above-right"], gap: 4, priority: 1, attrs: { class: "fig-t-halo fig-t-soft" } });
+      bReqs.push({ x: right ? xB1 - 2 : xB0 + 2, y: yy, text: L[key], size: fs, sides: right ? ["below-left", "above-left"] : ["below-right", "above-right"], gap: 8, priority: 4, attrs: { class: "fig-t-halo fig-t-soft" } });
     }
   }
   // Point estimates joined in order, so the drift reads as one path.
@@ -251,10 +252,14 @@ function render(st: State<P>, lang: Lang): string {
     parts.push(el("rect", { x: px - 12, y: topB, width: 24, height: hB, fill: "transparent", "data-fig-set": `fitTo=${CUTS[i]}`, class: "fig-hit" }));
     bObs.push({ x0: px - 6, y0: yb(all[i].nhi) - 2, x1: px + 6, y1: yb(all[i].nlo) + 2 });
   });
+  // The reference lines are named first; the chosen forecast's value then keeps
+  // a few pixels clear of those names.
+  const bBounds = { x0: xB0 + 2, y0: topB + 2, x1: xB1 - 2, y1: botB - 2 };
+  const refs = placeLabels(bReqs, bBounds, bObs);
+  for (const r of refs.placed) bObs.push({ x0: r.box.x0 - 10, y0: r.box.y0 - 3, x1: r.box.x1 + 10, y1: r.box.y1 + 3 });
   const si = FITS.findIndex((ff) => ff.budget === f.budget);
-  bReqs.push({ x: pts[si][0], y: pts[si][1], text: count(fc.N), size: fs, sides: ["right", "left", "above-right", "below-right"], gap: 9, priority: 3, attrs: { class: "fig-t-halo fig-t-num" } });
-  const bPlaced = placeLabels(bReqs, { x0: xB0 + 2, y0: topB + 2, x1: xB1 - 2, y1: botB - 2 }, bObs);
-  parts.push(drawLabels(bPlaced.placed));
+  const val = placeLabels([{ x: pts[si][0], y: pts[si][1], text: count(fc.N), size: fs, sides: ["right", "below-right", "above-right", "left", "below", "above"], gap: 9, priority: 3, attrs: { class: "fig-t-halo fig-t-num" } }], bBounds, bObs);
+  parts.push(drawLabels([...refs.placed, ...val.placed]));
 
   // ---- readout
   const leftBottom = narrow ? 0 : botLgA;

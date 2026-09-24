@@ -104,17 +104,20 @@ export function pow10(v: number): string {
 }
 
 // wrap() from lib/labels.ts, plus the CJK line-start rule: a line never starts
-// with closing punctuation, so the last glyph of the previous line moves down
-// with it.
+// with closing punctuation, so the end of the previous line moves down with it
+// (one CJK glyph, or a whole number or Latin word, never part of one).
 const NO_LINE_START = new Set([..."，。、；：）」』！？,.;:)"]);
+const isCJK = (ch: string) => ch.codePointAt(0)! >= 0x2e80;
 export function wrapCJK(s: string, size: number, maxWidth: number): string[] {
   const lines = wrap(s, size, maxWidth);
   for (let i = 1; i < lines.length; i++) {
     const prev = [...lines[i - 1]];
-    if (NO_LINE_START.has([...lines[i]][0]) && prev.length > 1) {
-      lines[i] = prev.pop()! + lines[i];
-      lines[i - 1] = prev.join("");
-    }
+    if (!NO_LINE_START.has([...lines[i]][0]) || prev.length < 2) continue;
+    let j = prev.length - 1;
+    if (!isCJK(prev[j])) while (j > 0 && !isCJK(prev[j - 1]) && prev[j - 1] !== " ") j--;
+    if (j === 0) continue;
+    lines[i] = prev.slice(j).join("") + lines[i];
+    lines[i - 1] = prev.slice(0, j).join("").trimEnd();
   }
   return lines;
 }

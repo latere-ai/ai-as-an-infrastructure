@@ -195,7 +195,7 @@ function render(st: State<P>, lang: Lang): string {
     ...(at ? [{ label: L.lgRuns, swatch: { kind: "rect" as const, fill: C.paper, stroke: C.ink } }] : []),
   ], 0, botA + axisHeight(true, fs) + 6, wA, fs);
   const botLgA = botA + axisHeight(true, fs) + 6 + lgA.height;
-  const topB = narrow ? botLgA + 40 : topA;
+  const topB = narrow ? botLgA + 56 : topA;
   const hB = narrow ? 160 : hA;
   const botB = topB + hB;
 
