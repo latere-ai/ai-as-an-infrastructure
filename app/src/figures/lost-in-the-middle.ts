@@ -110,14 +110,14 @@ const labels = {
     x: "包含答案的文档所在位置",
     y: "准确率",
     closed: "闭卷 {v}",
-    oracle: "仅给答案文档 {v}",
+    oracle: "只给答案文档 {v}",
     readout: "{m}，{k} 篇文档",
     first: "答案文档在最前",
     worst: "最差位置",
     last: "答案文档在最后",
     drop: "比最佳位置下降",
     vsClosed: "最差位置与闭卷相比",
-    oracleRow: "只提供答案文档（oracle）",
+    oracleRow: "只给答案文档（oracle）",
     at: "位置 {i}：{v}",
     points: "{v} 个百分点",
     below: "低 {v} 个百分点",
@@ -125,7 +125,7 @@ const labels = {
     notRun: "{m} 的窗口只有 4K，没有在 {k} 篇文档的设置下测试。",
     others: "其他模型",
     keyClosed: "闭卷，不提供文档",
-    keyOracle: "只提供答案文档",
+    keyOracle: "只给答案文档",
     source: "Liu 等人（2024），多文档问答",
     describe: "{m}，{k} 篇文档：答案文档在最前时准确率 {f}，在位置 {i} 时最低，为 {w}，在最后时 {l}。闭卷准确率 {c}，只给答案文档时 {o}，因此最差位置{d}。",
     describeNone: "{m} 没有在 {k} 篇文档的设置下测试，图中只显示其他模型。",
@@ -174,8 +174,8 @@ function render(st: State<P>, lang: Lang): string {
   const bottom = top + plotH;
   const x = linear([1, p.docs], [left + 8, w - right - 8]);
   const y = linear([30, 90], [bottom, top]);
-  parts.push(axis({ scale: x, orient: "bottom", at: bottom, ticks: pos, grid: [top, bottom], title: L.x, format: (v) => String(v) }));
-  parts.push(axis({ scale: y, orient: "left", at: left, ticks: [30, 40, 50, 60, 70, 80, 90], grid: [left, w - right], title: L.y, format: (v) => `${v}%` }));
+  parts.push(axis({ scale: x, orient: "bottom", at: bottom, ticks: pos, grid: [top, bottom], title: L.x, format: (v) => String(v), size: TYPE.body }));
+  parts.push(axis({ scale: y, orient: "left", at: left, ticks: [30, 40, 50, 60, 70, 80, 90], grid: [left, w - right], title: L.y, format: (v) => `${v}%`, size: TYPE.body }));
 
   const obstacles: Box[] = [];
   const pts = (acc: number[]): Array<[number, number]> => acc.map((v, i) => [x(pos[i]), y(v)]);
@@ -250,14 +250,14 @@ function render(st: State<P>, lang: Lang): string {
   }
 
   // Key under the plot: which line is which.
-  let yy = bottom + axisHeight(true) + 16;
+  let yy = bottom + axisHeight(true, TYPE.body) + 16;
   const key: string[] = [];
   let kx = 0;
   const keyItem = (stroke: string, width: number, dash: string | undefined, label: string) => {
-    const lw = textWidth(label, TYPE.small);
+    const lw = textWidth(label, TYPE.body);
     if (kx > 0 && kx + 30 + lw > w) { kx = 0; yy += 18; }
     key.push(el("line", { x1: kx, x2: kx + 22, y1: yy - 4, y2: yy - 4, stroke, "stroke-width": width, "stroke-dasharray": dash }));
-    key.push(text(kx + 28, yy, label, { "font-size": TYPE.small, class: "fig-t-muted" }));
+    key.push(text(kx + 28, yy, label, { "font-size": TYPE.body, class: "fig-t-muted" }));
     kx += 28 + lw + 16;
   };
   if (s) keyItem(C.c1, 2.6, undefined, NAMES[p.model]);
@@ -297,7 +297,7 @@ function render(st: State<P>, lang: Lang): string {
     rp.push(el("line", { x1: 0, x2: w, y1: yy, y2: yy, stroke: C.grid, "stroke-width": 1 }));
   }
   yy += 16;
-  rp.push(text(0, yy, L.source, { "font-size": TYPE.small, class: "fig-t-muted" }));
+  rp.push(text(0, yy, L.source, { "font-size": TYPE.body, class: "fig-t-muted" }));
   parts.push(g({ class: "fig-readout" }, ...rp));
   return svg(w, yy + 6, describe(st, lang), ...parts);
 }
