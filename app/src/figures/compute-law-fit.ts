@@ -40,6 +40,7 @@ const labels = {
     lgFit: "frontier point in the fit",
     lgHeld: "held-out point",
     lgBand: "80% bootstrap band",
+    lgRange: "fitted range",
     floorLine: "L∞ = {v}",
     summary: "Fit on the {k} budgets up to {c} FLOP; {h:larger budget/larger budgets} held out",
     summaryAll: "Fit on all {k} budgets up to {c} FLOP; nothing held out",
@@ -67,6 +68,7 @@ const labels = {
     lgFit: "参与拟合的前沿点",
     lgHeld: "留出的前沿点",
     lgBand: "80% 自助法区间",
+    lgRange: "拟合范围",
     floorLine: "L∞ = {v}",
     summary: "用不超过 {c} FLOP 的 {k} 个预算拟合；留出 {h} 个更大的预算",
     summaryAll: "用不超过 {c} FLOP 的全部 {k} 个预算拟合；没有留出预算",
@@ -241,6 +243,7 @@ function render(st: State<P>, lang: Lang): string {
     { label: L.lgFit, swatch: { kind: "dot", fill: C.ink } },
     { label: L.lgHeld, swatch: { kind: "rect", fill: C.paper, stroke: C.ink } },
     { label: L.lgBand, swatch: { kind: "rect", fill: C.ink3, opacity: 0.35 } },
+    { label: L.lgRange, swatch: { kind: "rect", fill: C.panel, stroke: C.rule } },
   ], 0, bot + axisHeight(true, fs) + 6, w, fs);
   parts.push(lg.svg);
 
