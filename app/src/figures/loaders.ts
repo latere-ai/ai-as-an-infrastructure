@@ -125,4 +125,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "selection-frontier": () => import("./selection-frontier.ts"),
   "device-memory-budget": () => import("./device-memory-budget.ts"),
   "hybrid-route": () => import("./hybrid-route.ts"),
+  "bundle-slots": () => import("./bundle-slots.ts"),
 };
