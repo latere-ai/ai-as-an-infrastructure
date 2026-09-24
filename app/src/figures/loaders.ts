@@ -30,6 +30,7 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "compute-optimal-allocation": () => import("./compute-optimal-allocation.ts"),
   "scaling-fit-extrapolation": () => import("./scaling-fit-extrapolation.ts"),
   "compute-law-fit": () => import("./compute-law-fit.ts"),
+  "part-dependencies": () => import("./part-dependencies.ts"),
   "continuous-batching": () => import("./continuous-batching.ts"),
   "serving-lifecycle": () => import("./serving-lifecycle.ts"),
   "kv-admission": () => import("./kv-admission.ts"),

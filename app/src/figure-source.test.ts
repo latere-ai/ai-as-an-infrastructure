@@ -40,44 +40,13 @@ test("scatter labels sit top-right by default and only flip left on overflow", (
   expect(fieldMap).toMatch(/text-anchor: start;[^>]*>政策/);
 });
 
-test("figure 2.1 (field-map-stack) is an inline SVG with all 12 substantive parts", () => {
-  for (const lang of ["en", "zh"]) {
-    const qmd = readFileSync(join(repoRoot, lang, "orientation", "02-field-map.qmd"), "utf8");
-    // A fixed inline SVG keeps labels selectable while avoiding Graphviz's
-    // overlapping edge labels in this dense cross-layer map.
-    expect(qmd).toMatch(/```\{=html\}\n<figure id="fig-field-map-stack">/);
-    expect(qmd).toContain('<svg class="field-map-stack-svg"');
-    const figure = qmd.match(/<figure id="fig-field-map-stack">[\s\S]*?<\/figure>/)?.[0] ?? "";
-    // Blank lines terminate Markdown HTML blocks, which made markdown-it wrap
-    // later SVG children in <p> tags and broke the inline figure.
-    expect(figure).not.toMatch(/\n\s*\n/);
-    expect(qmd).not.toContain("/figures/field-map-stack.svg");
-    expect(qmd).not.toMatch(/```\{dot\}\n\/\/\| label: fig-field-map-stack/);
-    // Part XII must be present (Part XI was missing from an earlier version
-    // of this diagram, and Part X was added when Part IX was split),
-    // and every substantive part should have an addressable SVG group.
-    for (const id of ["PIX", "PI", "PII", "PIII", "PIV", "PV", "PVI", "PVII", "PVIII", "PX", "PXI", "PXII"]) {
-      expect(qmd).toContain(`id="fm-${id}"`);
-    }
-    expect(qmd).toContain("fm-dashed");
-    expect(qmd).not.toMatch(/style=dashed,\s*label=/);
-  }
-  // The matplotlib renderer/spec for this figure was fully removed.
+test("the retired field-map-stack renderer stays removed and the heading counts twelve parts", () => {
   const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
   expect(catalog).not.toContain("field-map-stack");
   expect(catalog).not.toContain("_layered");
   // Heading reflects the real part count (was "eleven parts" before the Part IX split).
   expect(readFileSync(join(repoRoot, "en", "orientation", "02-field-map.qmd"), "utf8")).toContain("twelve parts");
   expect(readFileSync(join(repoRoot, "zh", "orientation", "02-field-map.qmd"), "utf8")).toContain("十二个部分");
-});
-
-test("English figure 2.1 distinguishes dependencies from reading order", () => {
-  const qmd = readFileSync(join(repoRoot, "en", "orientation", "02-field-map.qmd"), "utf8");
-  const figure = qmd.match(/<figure id="fig-field-map-stack">[\s\S]*?<\/figure>/)?.[0] ?? "";
-  expect(figure).toContain("Selected dependencies among the twelve substantive parts");
-  expect(figure).toContain("Solid arrows show technical dependencies");
-  expect(figure).toContain("The layout is not a reading sequence");
-  expect(figure).not.toContain("The substantive parts read as a stack");
 });
 
 test("English figure 1.2 separates model development from request execution", () => {
