@@ -138,6 +138,7 @@ const labels = {
     weightTitle: "gradient weight −dℓ/du",
     x: "margin inside the loss, u",
     wrong: "u < 0: mispredicted",
+    wrongKto: "u < 0: r_θ < z_0",
     target: "target u = ½",
     gamma: "u = γ",
     base: "r_θ = z_0",
@@ -162,8 +163,9 @@ const labels = {
     rawA: "A",
     rawH: "h",
     rawKto: "r_θ − z_0",
-    describe: "{name} at β = {b}: the three example {what} sit at u = {u1}, {u2} and {u3} with gradient weights {w1}, {w2} and {w3}; the first carries {s} of the total. {extra}",
+    describe: "{name}{at}: the three example {what} sit at u = {u1}, {u2} and {u3} with gradient weights {w1}, {w2} and {w3}; the first carries {s} of the total. {extra}",
     whatPairs: "pairs",
+    atBeta: " at β = {b}",
     whatKto: "responses",
     exDpo: "Past a margin of a few units the weight is near zero.",
     exIpo: "Past the target u = ½ (h = {t} nats) the weight turns negative and pulls the margin back.",
@@ -183,6 +185,7 @@ const labels = {
     weightTitle: "梯度权重 −dℓ/du",
     x: "损失内部的间隔 u",
     wrong: "u < 0：排序判反",
+    wrongKto: "u < 0：r_θ 低于 z_0",
     target: "目标 u = ½",
     gamma: "u = γ",
     base: "r_θ = z_0",
@@ -207,8 +210,9 @@ const labels = {
     rawA: "A",
     rawH: "h",
     rawKto: "r_θ − z_0",
-    describe: "{name}，β = {b}：三个示例{what}位于 u = {u1}、{u2}、{u3}，梯度权重分别为 {w1}、{w2}、{w3}；第一个占总权重的 {s}。{extra}",
+    describe: "{name}{at}：三个示例{what}位于 u = {u1}、{u2}、{u3}，梯度权重分别为 {w1}、{w2}、{w3}；第一个占总权重的 {s}。{extra}",
     whatPairs: "样本对",
+    atBeta: "，β = {b}",
     whatKto: "回答",
     exDpo: "间隔超过几个单位后，权重接近零。",
     exIpo: "越过目标 u = ½（h = {t} nats）后，权重变为负值，把间隔拉回。",
@@ -234,7 +238,7 @@ function describe(st: State<P>, lang: Lang): string {
   const ps = pairs(v, beta);
   const t = sig(1 / (2 * beta), 3);
   return tpl(L.describe, {
-    name: NAME[v], b: sig(beta, 3),
+    name: NAME[v], at: usesBeta(v) ? tpl(L.atBeta, { b: sig(beta, 3) }) : "",
     u1: num(ps[0].u), u2: num(ps[1].u), u3: num(ps[2].u),
     w1: num(ps[0].w), w2: num(ps[1].w), w3: num(ps[2].w),
     s: pct(ps[0].share), extra: tpl(L[EXTRA[v]], { t }), what: v === "kto" ? L.whatKto : L.whatPairs,
@@ -339,7 +343,9 @@ function render(st: State<P>, lang: Lang): string {
     const marker = (u: number, label: string) => {
       const px = x(u);
       out.push(el("line", { x1: px, x2: px, y1: top, y2: top + plotH, stroke: C.ink2, "stroke-width": 1, "stroke-dasharray": "3 3" }));
-      if (isLoss) {
+      // The top strip of the weight panel right of the marker is empty for
+      // every objective: weights above 0.85 occur only at u < 0.
+      if (!isLoss) {
         const tw = mathWidth(label, size);
         const tx = px + 5 + tw > w - right - 2 ? px - 5 - tw : px + 5;
         out.push(mtext(tx, top + size + 2, label, size, { class: "fig-t-halo fig-t-soft" }));
@@ -349,7 +355,7 @@ function render(st: State<P>, lang: Lang): string {
     if (v === "simpo") marker(GAMMA, L.gamma);
     if (v === "kto") marker(0, L.base);
     // No objective has a negative weight at u < 0, so this corner stays clear.
-    if (!isLoss) out.push(text(left + 5, top + plotH - 6, L.wrong, { "font-size": size, class: "fig-t-halo fig-t-soft" }));
+    if (!isLoss) out.push(mtext(left + 5, top + plotH - 6, v === "kto" ? L.wrongKto : L.wrong, size, { class: "fig-t-halo fig-t-soft" }));
     // Curves: DPO faint underneath, then the chosen objective.
     const curve = (vv: Variant, stroke: string, width: number, opacity: number) =>
       el("path", { d: linePath(us.map((u) => [x(u), ys(Math.max(Math.min(f(vv, u), yDom[1] + 1), yDom[0] - 1))])), fill: "none", stroke, "stroke-width": width, "stroke-opacity": opacity, "stroke-linejoin": "round" });
@@ -429,7 +435,7 @@ export default defineFigure({
       options: VARIANTS.map((v) => ({ value: v, label: { en: NAME[v], zh: NAME[v] } })),
     },
     beta: {
-      kind: "range", scale: "log", label: { en: "β", zh: "β" }, min: 0.02, max: 2, default: BETA_REF,
+      kind: "range", scale: "log", label: { en: "β", zh: "β" }, min: 0.05, max: 2, default: BETA_REF,
       marks: [{ value: BETA_REF, label: { en: "runnable example", zh: "可运行示例" } }],
     },
   },
