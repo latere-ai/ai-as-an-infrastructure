@@ -64,7 +64,8 @@ const labels = {
     tilesNote: "{t} × {t} tiles of 336 pixels plus one global view, each a {s} × {s} grid",
     nativeNote: "{g} × {g} patches, merged 2 × 2 into {s} × {s} positions",
     ratio: "{r} times LLaVA-1.5's 576 positions",
-    describe: "A {e}-pixel square image with {p}-pixel patches, {mode}, becomes {n} visual positions, {r} times the 576 of LLaVA-1.5.",
+    same: "the LLaVA-1.5 case",
+    describe: "A {e}-pixel square image with {p}-pixel patches, {mode}, becomes {n} visual positions; LLaVA-1.5 uses 576.",
     mSingle: "as one crop",
     mTiles: "tiled into 336-pixel tiles with a global view",
     mNative: "at native resolution with 2 × 2 merging",
@@ -83,7 +84,8 @@ const labels = {
     tilesNote: "{t} × {t} 个 336 像素分块加一个全局视图，每个都是 {s} × {s} 的网格",
     nativeNote: "{g} × {g} 个图块，按 2 × 2 合并为 {s} × {s} 个位置",
     ratio: "是 LLaVA-1.5 的 576 个位置的 {r} 倍",
-    describe: "边长 {e} 像素的正方形图像，图块边长 {p} 像素，{mode}，得到 {n} 个视觉位置，是 LLaVA-1.5 的 576 个的 {r} 倍。",
+    same: "即 LLaVA-1.5 的设置",
+    describe: "边长 {e} 像素的正方形图像，图块边长 {p} 像素，{mode}，得到 {n} 个视觉位置；LLaVA-1.5 为 576 个。",
     mSingle: "单次裁剪",
     mTiles: "切成 336 像素分块并加全局视图",
     mNative: "按原生分辨率并做 2 × 2 合并",
@@ -98,7 +100,7 @@ function describe(st: State<P>, lang: Lang): string {
   const c = count(p);
   return tpl(Lx.describe, {
     e: p.edge, p: p.patch, mode: { single: Lx.mSingle, tiles: Lx.mTiles, native: Lx.mNative }[p.mode],
-    n: int(c.n), r: sig(c.n / LLAVA15.n, 3),
+    n: int(c.n),
   });
 }
 
@@ -230,7 +232,7 @@ function render(st: State<P>, lang: Lang): string {
     lines.push([tpl(Lx.eqNative, { e: p.edge, p: p.patch, s: c.side, n: int(c.n) }), "fig-t-num"]);
     lines.push([tpl(Lx.nativeNote, { g: c.side * 2, s: c.side }), "fig-t-muted fig-t-num"]);
   }
-  lines.push([tpl(Lx.ratio, { r: sig(c.n / LLAVA15.n, 3) }), "fig-t-muted fig-t-num"]);
+  lines.push([c.n === LLAVA15.n ? Lx.same : tpl(Lx.ratio, { r: sig(c.n / LLAVA15.n, 3) }), "fig-t-muted fig-t-num"]);
   for (const [line, cls] of lines) {
     for (const part of wrapCJK(line, size, w * 0.92)) {
       y += 17;

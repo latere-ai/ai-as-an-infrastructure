@@ -182,7 +182,7 @@ function renderStage(z: V, j: number, x0: number, y0: number, size: number, uid:
   });
   parts.push(el("path", { d: cross(rx, ry), stroke: C.ink, "stroke-width": 2 }));
   const reqs: LabelRequest[] = cb.map((e, k) => ({
-    x: sx(e[0]), y: sy(e[1]), text: String(k), size: TYPE.small, gap: 7, priority: k === st.k ? 2 : 1,
+    x: sx(e[0]), y: sy(e[1]), text: String(k), size: TYPE.body, gap: 7, priority: k === st.k ? 2 : 1,
     sides: ["above-right", "below-right", "above-left", "below-left", "right", "left", "above", "below"],
     attrs: { class: k === st.k ? "fig-t-halo fig-t-num" : "fig-t-halo fig-t-soft fig-t-num" },
   }));
