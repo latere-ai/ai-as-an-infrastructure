@@ -19,9 +19,9 @@
 // Metrics follow the chapter's definitions in steps: TTFT_i = t_{i,1} - a_i
 // counted inclusively (a request admitted on arrival has TTFT 1), E2E_i ends
 // at the last token, and slot utilization is emitted tokens over slots times
-// elapsed steps, as the chapter's runnable computes it. The "example"
-// workload is the runnable's four requests, so the figure reproduces its
-// printed numbers. Percentiles are nearest-rank.
+// elapsed steps. The "example" workload is the four requests the chapter's
+// runnable checks, so the figure reproduces the step counts it asserts (15
+// static, 12 iteration-level). Percentiles are nearest-rank.
 //
 // State is a pure function of the parameters and the step t: both runs are
 // simulated once per parameter set (memoized) and render reads step t.
