@@ -109,34 +109,6 @@ $$
 
 ![一个无偏置 SwiGLU MoE 层的参数计数，纵轴为对数刻度。模型宽度为 4096，专家宽度为 14336，并采用 top-2 路由。存储参数包括所有专家和路由器；每词元实际计算的参数包括两个专家以及所有路由得分。最下面一条线单独画出路由项 $Ed$：它随 $E$ 增长，但到 64 个专家时仍不到执行参数的 0.1%，所以执行参数那条线看起来是平的。图中不含注意力和其他始终执行的权重。](/figures/moe-ssm-hybrids-2.svg){#fig-moe-ssm-hybrids-2}
 
-下面的可运行单元使用同一套公式，不依赖绘图库。可以修改 $E$、$k$ 或两个宽度，检查其他层配置。
-
-:::: {.runnable}
-```python
-model_width = 4096
-expert_width = 14_336
-selected_experts = 2
-
-def moe_parameter_counts(experts):
-    if not 1 <= selected_experts <= experts:
-        raise ValueError("selected_experts 必须介于 1 和 experts 之间")
-    per_expert = 3 * model_width * expert_width  # 无偏置 SwiGLU
-    router = experts * model_width
-    stored = experts * per_expert + router
-    evaluated = selected_experts * per_expert + router
-    return stored, evaluated
-
-for experts in (8, 16, 32, 64):
-    stored, evaluated = moe_parameter_counts(experts)
-    print(
-        f"E={experts:2d}, k={selected_experts}: "
-        f"存储={stored / 1e9:.3f}B, "
-        f"每词元执行={evaluated / 1e9:.3f}B, "
-        f"比值={stored / evaluated:.2f}x"
-    )
-```
-::::
-
 ### 路由会产生分发问题
 
 专家权重通常分布在一个专家并行组的不同设备上，每台设备持有一部分专家。一次前向传播因此包含四个阶段：计算路由分数；按目标专家整理词元副本；把副本发送给持有相应专家的设备；再把专家输出恢复到原来的词元顺序。常见实现会使用两次 all-to-all，一次用于分发，另一次用于返回。不过，当所有专家都在本地，或者采用其他放置方式时，并不一定需要 all-to-all。因此，all-to-all 并不是 MoE 的固有要求。
@@ -174,6 +146,66 @@ $$
 其中，$p_t=\operatorname{softmax}(z_t)$ 是词元 $t$ 的完整路由分布，$f_e$ 是实际送到专家 $e$ 的词元比例，$q_e$ 是该专家的平均路由概率，$T$ 是路由组中的词元数，$E$ 是专家数，$\alpha\ge0$ 是损失系数，$\mathbf{1}[\cdot]$ 是指示函数。乘积会惩罚同时拥有高流量和高概率质量的专家。Top-$k$ 系统会采用相关但并不完全相同的定义。
 
 系数决定两种失效之间的平衡。均衡压力太弱会造成专家利用率低下，太强又可能压过由任务驱动的路由。DeepSeek-V3 主要通过依据近期负载调整的逐专家偏置来引导 top-$k$ 选择，同时保留一个较小的逐序列辅助损失，以防出现极端不均衡 [@deepseek2024deepseekv3; @wang2024auxiliaryfree]。偏置影响专家选择，不影响组合专家输出时使用的门控权重。因此，不能据此说模型完全移除了所有均衡损失。
+
+下面的单元格在一个固定路由器上运行这种偏置控制器，路由器的 sigmoid 得分偏好编号小的专家。每处理一批 2,048 个词元，它就把 top-2 分配低于平均份额的专家的偏置调高 `gamma`，把其余专家调低同样的步长；动画展示 40 次更新中各专家负载逐步趋稳的过程。单元格在留出词元上断言：最忙专家的负载至少下降 40%，这里是从平均份额的 2.9 倍降到约 1.15 倍；专家集合没有变化的词元，门控权重完全不变，因为门控是用不含偏置的得分归一化得到的。打印的结果给出了代价：大多数词元至少换掉了两个专家中的一个，而所选专家的得分之和只下降约 5%。把 `gamma` 设为 0.002，40 次更新之后，最忙的专家仍承担约 1.6 倍的平均份额，但换专家的词元更少：控制器越慢，均衡程度越低，重新路由也越少。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+rng = np.random.default_rng(0)
+E, k, T, d = 16, 2, 2048, 16      # 专家数、top-k、每批词元数、特征宽度
+gamma = 0.01                      # 偏置更新步长；试试 0.002
+centroid = rng.normal(size=(E, d))
+skew = np.linspace(1.0, -1.0, E)  # 固定的路由器，偏好编号小的专家
+
+def affinity(n):                  # 为新一批词元计算 sigmoid 得分 s_{t,e}
+    return 1 / (1 + np.exp(-(rng.normal(size=(n, d)) @ centroid.T / 4 + skew)))
+
+def route(s, b):
+    top = np.argsort(-(s + b), axis=1)[:, :k]           # 偏置只影响选择
+    g = np.zeros_like(s)
+    np.put_along_axis(g, top, np.take_along_axis(s, top, 1), 1)
+    g /= g.sum(1, keepdims=True)                        # 门控来自 s，而不是 s + b
+    load = np.bincount(top.ravel(), minlength=E) * E / top.size  # 1 表示平均份额
+    return top, g, load
+
+b, loads = np.zeros(E), []
+for _ in range(40):               # 每个训练批次更新一次偏置
+    load = route(affinity(T), b)[2]
+    loads.append(load)
+    b += gamma * np.sign(1 - load)  # 负载不足的专家调高，过载的调低
+
+s = affinity(8 * T)               # 留出词元：分别不用和使用偏置进行路由
+(top0, g0, load0), (top1, g1, load1) = route(s, 0 * b), route(s, b)
+same = ((g0 > 0) == (g1 > 0)).all(1)                  # 专家集合未变的词元
+assert np.allclose(g0[same], g1[same])             # 偏置从不进入门控
+assert load1.max() < 0.6 * load0.max()
+moved = 1 - same.mean()
+lost = 1 - np.take_along_axis(s, top1, 1).sum() / np.take_along_axis(s, top0, 1).sum()
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 5.4), height_ratios=(3, 2))
+ax1.bar(range(E), loads[0], color="none", edgecolor="grey", lw=0.8)  # 第 0 次更新
+bars = ax1.bar(range(E), loads[0])
+ax1.axhline(1, ls="--", c="grey")
+ax1.set(xlabel="专家", ylabel="负载 / 平均份额", ylim=(0, 3.2))
+trace, = ax2.plot([], [])
+ax2.set(xlim=(0, 39), ylim=(0.9, 3.2), xlabel="偏置更新次数", ylabel="最大负载 / 平均份额")
+fig.tight_layout()
+
+def update(t):
+    for bar, h in zip(bars, loads[t]):
+        bar.set_height(h)
+    trace.set_data(range(t + 1), [l.max() for l in loads[: t + 1]])
+    ax1.set_title(f"第 {t} 次更新：最忙的专家为其份额的 {loads[t].max():.2f} 倍")
+
+anim = FuncAnimation(fig, update, frames=len(loads), interval=120)
+print(f"留出词元：最大负载 {load0.max():.2f} -> {load1.max():.2f}；"
+      f"{moved:.0%} 的词元换了专家；所选专家的得分之和下降 {lost:.1%}")
+```
+::::
 
 ST-MoE 还提出了路由器 z-loss。这个惩罚项约束 log-sum-exp，防止路由 logit 变得过大 [@zoph2022stmoe]：
 

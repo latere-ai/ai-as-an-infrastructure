@@ -347,6 +347,69 @@ tokens after a prompt of length $P$ therefore performs attention work
 proportional to $TP+T^2$ across decode. Cache reuse prevents repeated prefix
 projection; it does not make long decode constant-time.
 
+The cell below checks both statements on a two-layer model with random
+weights. It decodes greedily along two paths: one recomputes every position of
+every layer under the causal mask, and the other appends each new position's
+keys and values to a per-layer cache and attends from the new query alone. It
+asserts that the two paths reach the same hidden state at every step and that
+the cached path performs exactly $TP+T(T+1)/2$ query-key products per layer.
+The cache is valid because of the causal mask: set `mask = 0` and the
+assertion fails, since later tokens now change the first layer's outputs at
+earlier positions, and with them the second layer's keys and values.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+d, V, L, P, T = 32, 64, 2, 32, 128  # width, vocabulary, layers, prompt, new tokens
+emb = rng.normal(size=(V, d))
+W = rng.normal(size=(L, 4, d, d)) / np.sqrt(d)  # W_Q, W_K, W_V, W_O per layer
+
+def full(seq):  # recompute every position of every layer under the causal mask
+    x = emb[seq]
+    mask = np.triu(np.full((len(seq), len(seq)), -np.inf), 1)  # try: mask = 0
+    for Wq, Wk, Wv, Wo in W:
+        s = (x @ Wq) @ (x @ Wk).T / np.sqrt(d) + mask
+        a = np.exp(s - s.max(1, keepdims=True))
+        x = x + (a / a.sum(1, keepdims=True)) @ (x @ Wv) @ Wo
+    return x[-1]
+
+def step(tok, cache):  # one new position against the cached keys and values
+    x = emb[tok]
+    for (Wq, Wk, Wv, Wo), c in zip(W, cache):
+        c["K"].append(x @ Wk); c["V"].append(x @ Wv)
+        s = np.array(c["K"]) @ (x @ Wq) / np.sqrt(d)
+        a = np.exp(s - s.max())
+        x = x + (a / a.sum()) @ np.array(c["V"]) @ Wo
+    return x
+
+seq = list(rng.integers(V, size=P))
+cache = [{"K": [], "V": []} for _ in range(L)]
+for tok in seq:  # prefill, position by position for brevity
+    h = step(tok, cache)
+work_cache, work_full, gap = [], [], 0.0
+for _ in range(T):
+    gap = max(gap, np.abs(h - full(seq)).max())  # same state from both paths
+    seq.append(int(np.argmax(h @ emb.T)))        # greedy decode, tied embeddings
+    h = step(seq[-1], cache)
+    n = len(seq)
+    work_cache.append(n)                 # query-key dot products per layer
+    work_full.append(n * (n + 1) // 2)
+assert gap < 1e-9 and sum(work_cache) == T * P + T * (T + 1) // 2
+
+t = np.arange(1, T + 1)
+plt.plot(t, work_full, label=f"recompute prefix: {sum(work_full):,} in total")
+plt.plot(t, work_cache, label=f"KV cache: {sum(work_cache):,} = TP + T(T+1)/2")
+plt.yscale("log")
+plt.xlabel("generated token")
+plt.ylabel("query-key dot products per layer")
+plt.title(f"Identical states (max diff {gap:.0e}), {sum(work_full) / sum(work_cache):.0f}x less work")
+plt.legend()
+```
+::::
+
 The cache scales linearly with resident tokens. Whether it exceeds model
 weights depends on all the quantities above, plus weight and cache precision.
 Therefore no single crossover length is a property of Transformers in general.
@@ -355,43 +418,6 @@ Therefore no single crossover length is a property of Transformers in general.
 128-wide heads, two bytes per KV element, batch size one, and 7 billion
 two-byte weight parameters. Its MHA, GQA, and MQA cases differ only in
 $H_{kv}$, so every value follows directly from the cache equation.
-
-The runnable cell prints the cache payload per token and the context length at
-which that payload equals the stated weight bytes. Change batch size, precision,
-or KV-head count to test a different deployment.
-
-:::: {.runnable}
-```python
-layers = 32
-head_width = 128
-bytes_per_kv_element = 2
-batch_size = 1
-parameter_count = 7_000_000_000
-bytes_per_weight = 2
-weight_bytes = parameter_count * bytes_per_weight
-
-def kv_payload_bytes(sequence_length, kv_heads):
-    return (
-        2
-        * layers
-        * batch_size
-        * sequence_length
-        * kv_heads
-        * head_width
-        * bytes_per_kv_element
-    )
-
-for name, kv_heads in [("MHA", 32), ("GQA", 8), ("MQA", 1)]:
-    bytes_per_token = kv_payload_bytes(1, kv_heads)
-    crossover_tokens = weight_bytes / bytes_per_token
-    cache_at_128k_gib = kv_payload_bytes(128_000, kv_heads) / 2**30
-    print(
-        f"{name}: {bytes_per_token / 1024:.0f} KiB/token; "
-        f"128k cache={cache_at_128k_gib:.2f} GiB; "
-        f"equals weight bytes at {crossover_tokens:,.0f} tokens"
-    )
-```
-::::
 
 ## MHA, GQA, and MQA change KV-head sharing
 

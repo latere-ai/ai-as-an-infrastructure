@@ -321,45 +321,77 @@ run.
 
 ## Test the allocation
 
-The cell below evaluates the fixed-compute tradeoff with the rounded coefficients
-from the Besiroglu et al. refit. They are useful for reproducing this example,
-not as defaults for another training program. Change the exponents or compute
-budget and rerun the cell to see how the optimum moves.
+The cell below runs the ladder, the fit, and the forecast of that procedure on
+runs whose truth is known. It treats the rounded coefficients of the Besiroglu
+et al. refit as the true loss surface; they are useful for reproducing this
+example, not as defaults for another training program. At each of six budgets
+from $10^{18}$ to $10^{21}$ FLOP it places nine model sizes around 20 tokens
+per parameter, takes each run's final loss from the surface with Gaussian
+noise of standard deviation `sigma`, and applies the IsoFLOP method of Hoffmann
+et al.: a parabola in $\log N$ at each budget, whose vertex estimates
+$N_\star$, then a power law through the vertices. Without noise the fitted
+exponent equals the closed form $\beta/(\alpha+\beta)$, which the cell
+asserts. With `sigma = 0.01`, 200 noisy ladders forecast $N_\star$ at
+$10^{24}$ FLOP within about $0.91\times$ to $1.07\times$ of the truth, even
+though the vertices of one ladder already scatter by several percent inside the
+fitted range. Raise `sigma` to 0.03 and the band widens to about $0.72\times$
+to $1.27\times$: loss noise too small to see on the upper plot moves the
+allocation at the target budget.
 
 ::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 
-# Rounded coefficients from Besiroglu et al. (2024).
-E, A, B = 1.8172, 482.01, 2085.43
-alpha, beta = 0.3478, 0.3658
-C = 1e19
-kappa = 6.0
-
-def predicted_loss(N, D):
+# Loss surface: rounded Besiroglu et al. (2024) refit, used here as the truth.
+E, A, B, alpha, beta, kappa = 1.8172, 482.01, 2085.43, 0.3478, 0.3658, 6.0
+def loss(N, D):
     return E + A / N**alpha + B / D**beta
+def n_star(C):  # closed-form compute-optimal N
+    return (alpha * A / (beta * B)) ** (1 / (alpha + beta)) * (C / kappa) ** (beta / (alpha + beta))
 
-N = np.logspace(7.5, 11, 400)
-D = C / (kappa * N)
-L = predicted_loss(N, D)
-best_index = np.argmin(L)
-best_N = N[best_index]
-best_D = D[best_index]
+# Scale ladder: at each of six budgets, nine sizes around 20 tokens per parameter.
+C = np.logspace(18, 21, 6)
+N = np.sqrt(C / (kappa * 20))[:, None] * np.logspace(-0.75, 0.75, 9)  # budgets x sizes
+sigma, seeds = 0.01, 200  # loss noise per run; try 0.03
+rng = np.random.default_rng(0)
+L = loss(N, C[:, None] / (kappa * N))
+runs = L[..., None] + sigma * rng.standard_normal(L.shape + (seeds,))
+runs[..., 0] = L                                                  # seed 0: no noise
 
-plt.figure(figsize=(5, 3))
-plt.plot(N, L, label="predicted held-out loss")
-plt.axvline(best_N, color="tab:orange", linestyle="--", label="predicted optimum")
-plt.xscale("log")
-plt.xlabel("parameters N")
-plt.ylabel("loss")
-plt.legend()
-plt.tight_layout()
-plt.show()
+# IsoFLOP method: a parabola in log N per budget; its vertex estimates N*(C).
+x = np.log10(N)
+fits = [np.polyfit(x[i], runs[i], 2) for i in range(len(C))]      # 3 x seeds each
+log_n_hat = np.array([-b / (2 * a) for a, b, _ in fits])          # budgets x seeds
+slope, icpt = np.polyfit(np.log10(C), log_n_hat, 1)
+target = 1e24
+ratio = 10 ** (slope * 24 + icpt) / n_star(target)
+closed = beta / (alpha + beta)
+assert abs(slope[0] - closed) < 0.005  # noise-free runs recover the exponent
+lo, hi = np.percentile(ratio[1:], [10, 90])
 
-print(f"N* = {best_N:.2e} parameters")
-print(f"D* = {best_D:.2e} training tokens")
-print(f"D*/N* = {best_D / best_N:.1f} tokens per parameter")
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.6))
+for i, c in enumerate(C):
+    ax1.plot(N[i], runs[i, :, 1], "o", ms=4, c=f"C{i}")
+    xs = np.linspace(x[i, 0], x[i, -1], 100)
+    ax1.plot(10**xs, np.polyval(fits[i][:, 1], xs), c=f"C{i}", lw=1.2, label=f"{c:.0e} FLOP")
+ax1.set(xscale="log", xlabel="parameters N", ylabel="final loss", ylim=(2.2, 4.0))
+ax1.legend(fontsize=8, ncol=2)
+cs = np.logspace(18, 24, 61)
+fan = 10 ** (slope[None, 1:] * np.log10(cs)[:, None] + icpt[None, 1:]) / n_star(cs)[:, None]
+ax2.fill_between(cs, *np.percentile(fan, [10, 90], axis=1), color="C0", alpha=0.25,
+                 label="10-90% of noisy ladders")
+ax2.plot(cs, np.median(fan, axis=1), c="C0", lw=1.2)
+ax2.plot(C, 10 ** log_n_hat[:, 1] / n_star(C), "o", c="C0", label="vertices of one ladder")
+ax2.axhline(1, ls="--", c="C1", label="closed-form N*")
+ax2.axvspan(C[-1], cs[-1], color="grey", alpha=0.12)
+ax2.text(2 * C[-1], ax2.get_ylim()[1], "extrapolated", va="top", fontsize=9)
+ax2.set(xscale="log", xlabel="training compute C, FLOP", ylabel="forecast N* / true N*")
+ax2.legend(fontsize=9, loc="upper left")
+fig.suptitle(f"Fit to 1e21 FLOP, forecast at 1e24: {lo:.2f}x to {hi:.2f}x the true N*")
+fig.tight_layout()
+print(f"exponent: closed form {closed:.3f}, noise-free fit {slope[0]:.3f}, "
+      f"noisy fits {np.percentile(slope[1:], 10):.3f} to {np.percentile(slope[1:], 90):.3f}")
 ```
 :::
 

@@ -72,38 +72,8 @@ $$
 ```{figure}
 //| figure: mixture-ramp
 //| label: fig-mid-training-bridge
-//| fig-cap: "专门数据调度的词元核算。$\alpha(u)$ 下方的橙色面积，就是词元速率不变时整段训练的专门数据占比 $\bar\alpha$：本章的线性斜坡为 $a(1-s)/2$；若在引入时点之后固定为权重 $a$，即 Liu 等人所改变的那种形式，则为 $a(1-s)$ [@liu2025midtraining]。虚线是 $s$ 与 $a$ 相同的另一种形状。词元数按下方可运行示例中 100B 词元的阶段计算。图中只核算暴露量，不推断能力或保留效果。"
+//| fig-cap: "专门数据调度的词元核算。$\alpha(u)$ 下方的橙色面积，就是词元速率不变时整段训练的专门数据占比 $\bar\alpha$：本章的线性斜坡为 $a(1-s)/2$；若在引入时点之后固定为权重 $a$，即 Liu 等人所改变的那种形式，则为 $a(1-s)$ [@liu2025midtraining]。虚线是 $s$ 与 $a$ 相同的另一种形状。词元数按 100B 词元的阶段计算。图中只核算暴露量，不推断能力或保留效果。"
 ```
-
-下面的可运行计算说明，报告引入时机和最终占比时，还必须同时报告累计暴露量。
-
-:::: {.runnable}
-```python
-def specialist_share(progress, start, final_share):
-    """计算归一化训练进度上的线性混合占比。"""
-    if not 0 <= progress <= 1:
-        raise ValueError("progress 必须位于 0 到 1 之间")
-    if not 0 <= start < 1 or not 0 <= final_share <= 1:
-        raise ValueError("调度参数无效")
-    if progress < start:
-        return 0.0
-    return final_share * (progress - start) / (1 - start)
-
-
-start = 0.60
-final_share = 0.30
-total_tokens = 100_000_000_000
-whole_run_share = 0.5 * final_share * (1 - start)
-
-for progress in (0.0, 0.4, 0.6, 0.8, 1.0):
-    value = specialist_share(progress, start, final_share)
-    print(f"进度={progress:.1f}：专门数据占比={value:.1%}")
-
-print(f"全程专门数据占比：{whole_run_share:.1%}")
-print(f"专门数据词元：{total_tokens * whole_run_share / 1e9:.1f}B")
-print(f"宽泛数据词元：{total_tokens * (1 - whole_run_share) / 1e9:.1f}B")
-```
-::::
 
 ## 把数据调度与学习率调度分开
 
@@ -121,6 +91,59 @@ $$
 其中，$\eta(t)$ 是步骤 $t$ 的学习率，$\eta_{\max}$ 是稳定阶段的学习率，$T_w$ 是预热结束的步骤，$T_s$ 是开始衰减的步骤，$T_e$ 是这条分支结束的步骤；$w$ 从 0 升到 1，$d$ 从 1 降到设定的终止比例。线性、余弦等不同函数会得到不同调度。
 
 MiniCPM 使用这种调度，让稳定平台上的检查点可以继续训练，也可以分出多条衰减分支 [@hu2024minicpm]。这让衰减分支便于开展实验。数据在训练末段发生变化，与学习率在训练末段衰减，是两项不同的干预。每条分支仍应记录来源检查点、优化器与调度器状态、新的数据清单、学习率路径、词元数和随机种子。重置优化器状态或重新提高学习率，同样是新的干预，需要单独设置对照。
+
+下面的单元格在一个玩具模型中把这两种干预分开。两个最优点不同的二次损失分别代表通用分布 $P$ 和专门分布 $Q$，带噪声的梯度步代表训练。从稳定平台上的同一个检查点出发，它运行同一阶段的四个分支：学习率恒定或线性衰减，数据只用通用数据或采用上文 $s=0.6$、$a=0.3$ 的斜坡。单元格检验两件事：恒定学习率分支的通用损失停在闭式解给出的噪声平台 $\sum_i\eta\sigma^2/(2(2-\eta h_i))$ 上；斜坡抽取专门样本的比例为 $a(1-s)/2$。在这个模型中，两者兼有的分支里，专门损失的下降大部分来自学习率衰减，它同时也降低了通用损失；如果没有只做衰减的分支作为对照，这部分收益就会被记到数据头上。把 `s` 设为 0.0：专门数据的剂量从阶段的 6% 升到 15%，最终的专门损失却几乎不变，因为这个二次模型在几百步内就会忘掉较早的暴露，阶段结束时的状态只反映最终的数据配比和学习率。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+d, R, T = 20, 128, 2000            # 参数维数、重复运行次数、阶段内步数
+h = np.logspace(-1, 0, d)          # 两个二次损失共用的曲率
+p, q = np.zeros(d), np.full(d, 0.6)  # 通用分布与专门分布的最优点
+L = lambda th, c: 0.5 * (h * (th - c) ** 2).sum(-1)
+eta_max, sigma = 0.5, 1.0
+s, a = 0.6, 0.3                    # 斜坡起点与最终专门数据占比；试试 s = 0.0
+u = np.arange(T) / T
+ramp = np.where(u < s, 0.0, a * (u - s) / (1 - s))
+# 从同一个稳定检查点出发的四个分支：{恒定, 衰减} 学习率 x {通用, 斜坡} 数据。
+lr = np.array([np.full(T, eta_max), eta_max * (1 - 0.9 * u)] * 2)
+mix = np.array([np.zeros(T)] * 2 + [ramp] * 2)
+th = np.broadcast_to(p + rng.normal(size=(R, d)) * np.sqrt(eta_max * sigma**2 / (h * (2 - eta_max * h))), (4, R, d)).copy()
+LQ, LP, drawn = [], [], np.zeros(4)
+for t in range(T):
+    spec = rng.random((4, R, 1)) < mix[:, t, None, None]   # 这一步的样本来自 Q
+    target = np.where(spec, q, p)
+    th -= lr[:, t, None, None] * (h * (th - target) + sigma * rng.standard_normal(th.shape))
+    LQ.append(L(th, q).mean(1)); LP.append(L(th, p).mean(1)); drawn += spec.mean((1, 2))
+LQ, LP = np.array(LQ), np.array(LP)
+smooth = lambda y: np.convolve(y, np.ones(25) / 25, mode="valid")  # 仅用于绘图
+plateau = (eta_max * sigma**2 / (2 * (2 - eta_max * h))).sum()   # 平稳状态下的 E[L_P]
+assert abs(LP[T // 2:, 0].mean() / plateau - 1) < 0.05
+assert abs(drawn[2] / T - a * (1 - s) / 2) < 3 * np.sqrt(a * (1 - s) / 2 / (T * R))
+
+names = ["恒定学习率，通用数据", "衰减学习率，通用数据", "恒定学习率，斜坡数据", "衰减学习率，斜坡数据"]
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.4), sharex=True)
+for i, name in enumerate(names):
+    style = dict(lw=1.6, ls="-" if i % 2 else ":", c=f"C{i // 2}")
+    ax1.plot(u[24:], smooth(LQ[:, i]), label=name, **style)
+    ax2.plot(u[24:], smooth(LP[:, i]), **style)
+ax2.axhline(plateau, c="grey", lw=0.8)
+ax2.text(0.45, plateau - 0.12, "闭式解平台", va="top", fontsize=9)
+ax1.axvline(s, c="grey", ls="--", lw=0.8)
+ax1.text(s, 1.1, " 斜坡开始", fontsize=9)
+ax1.set(ylabel="专门损失 L_Q")
+ax2.set(ylabel="通用损失 L_P", xlabel="阶段进度 u")
+ax1.legend(fontsize=9)
+drop = LQ[-50:].mean(0)
+ax1.set_title(f"最终 L_Q 的变化：仅衰减 {drop[1] - drop[0]:+.2f}，"
+              f"仅斜坡 {drop[2] - drop[0]:+.2f}，两者兼有 {drop[3] - drop[0]:+.2f}", fontsize=10)
+fig.tight_layout()
+print(f"实际抽到的专门数据占比：{drawn[2] / T:.4f}（a(1-s)/2 = {a * (1 - s) / 2:.4f}）")
+```
+::::
 
 ## 这一阶段的三种用途
 

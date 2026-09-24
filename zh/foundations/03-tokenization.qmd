@@ -40,63 +40,82 @@ Sennrich、Haddow 和 Birch 在 2016 年把原本用于压缩的字节对编码�
 
 训练和编码是两种不同的算法。训练会统计频率，并在选定每次合并后改变语料的表示。编码时不会重新统计输入频率，而是从基础符号出发，在不跨越受保护边界的前提下，反复应用当前排名最高的已学习符号对。教学用的朴素训练器可能为每次合并重新扫描全部位置；生产训练器通常维护符号对出现位置的索引，只更新受影响的相邻位置。因此，复杂度取决于具体实现。
 
-@fig-tokenization-bpe-merges 在下方可运行代码的七个词上运行同一个训练器，每步做一次合并。`(l, o)` 出现五次，`(o, w)` 出现四次，因此前三次合并没有平局；从第四次合并起，多个符号对同为最高计数，由平局处理规则决定合并表。
+@fig-tokenization-bpe-merges 在七个词 `low low low lo lower newest widest` 上运行下方可运行代码中的训练器，每步做一次合并。`(l, o)` 出现五次，`(o, w)` 出现四次，因此前三次合并没有平局；从第四次合并起，多个符号对同为最高计数，由平局处理规则决定合并表。
 
 ```{figure}
 //| figure: bpe-merges
 //| label: fig-tokenization-bpe-merges
-//| fig-cap: "在可运行代码的语料 `low low low lo lower newest widest` 上训练 BPE，每个词末尾带词尾标记 `</w>`，每步做一次合并。符号对计数按预词元频率加权；下一次合并的符号对在每处出现位置加框，上一次合并产生的符号着色。合并表每步增加一名，所选单词按第 1 至 t 名的顺序应用合并来编码。最高计数出现并列时按所选规则取舍：字典序是代码采用的规则，另外两条规则会从同样的计数学出不同的合并表。"
+//| fig-cap: "用可运行代码中的训练器在语料 `low low low lo lower newest widest` 上训练 BPE，每个词末尾带词尾标记 `</w>`，每步做一次合并。符号对计数按预词元频率加权；下一次合并的符号对在每处出现位置加框，上一次合并产生的符号着色。合并表每步增加一名，所选单词按第 1 至 t 名的顺序应用合并来编码。最高计数出现并列时按所选规则取舍：字典序是代码采用的规则，另外两条规则会从同样的计数学出不同的合并表。"
 ```
 
-下面的代码训练一个小型字符 BPE，冻结合并顺序，再编码两个训练词和两个训练时未见过的词。词尾标记阻止合并跨越词边界。最后一个例子刻意包含未见字符，用来说明字符 BPE 并不会自动消除未知词元。
+下面的单元格把训练器和编码器分开实现。它先检验训练器在图中的七个词上学到的前三次合并与图中一致；然后在一段转述本节内容的文字上训练，按名次顺序应用合并表，编码这段文字和一段留出文字，并检验两件事：编码对每个训练词的切分与训练器的结果相同；每个留出词都能解码回原词，除非其中含有训练文本里没有的字符。起初，两段文字的每词词元数都在下降。越过虚线之后，每个被选中的符号对在训练文字中都只出现一次，所以每次合并恰好让训练文字少一个词元，对留出文字的帮助却小得多。留出文字中还有一个 `z`，训练字母表里没有它，所以这个字符 BPE 会为它输出 `<unk>`。把 `min_count` 设为 2，训练就会停在虚线处。
 
 :::: {.runnable}
 ```python
 from collections import Counter
+import matplotlib.pyplot as plt
 
-EOW = "</w>"
-UNK = "<unk>"
+EOW, UNK = "</w>", "<unk>"
 
 def merge_pair(symbols, pair):
-    left, right = pair
     out, i = [], 0
     while i < len(symbols):
-        if i + 1 < len(symbols) and symbols[i] == left and symbols[i + 1] == right:
-            out.append(left + right)
-            i += 2
+        if i + 1 < len(symbols) and (symbols[i], symbols[i + 1]) == pair:
+            out.append(symbols[i] + symbols[i + 1]); i += 2
         else:
-            out.append(symbols[i])
-            i += 1
+            out.append(symbols[i]); i += 1
     return out
 
-training_words = "low low low lo lower newest widest".split()
-base_symbols = set("".join(training_words))
-encoded_training = [list(word) + [EOW] for word in training_words]
-merges = []
+def train(words, steps, min_count=1):  # 试试 min_count=2
+    freq, merges = Counter(words), []
+    corpus = {w: list(w) + [EOW] for w in freq}
+    for _ in range(steps):
+        counts = Counter()
+        for w, symbols in corpus.items():
+            for pair in zip(symbols, symbols[1:]):
+                counts[pair] += freq[w]
+        if not counts or max(counts.values()) < min_count:
+            break
+        pair = min(counts, key=lambda p: (-counts[p], p))  # 平局时按字典序
+        merges.append(pair)
+        corpus = {w: merge_pair(s, pair) for w, s in corpus.items()}
+    return merges, corpus
 
-for _ in range(8):
-    counts = Counter()
-    for symbols in encoded_training:
-        counts.update(zip(symbols, symbols[1:]))
-    if not counts:
-        break
-    # 先按计数降序，再按字典序处理平局，保证结果确定。
-    pair = min(counts, key=lambda candidate: (-counts[candidate], candidate))
-    merges.append(pair)
-    encoded_training = [merge_pair(symbols, pair) for symbols in encoded_training]
+# 图中的语料：这个训练器学到的前三次合并与图中一致。
+assert train("low low low lo lower newest widest".split(), 3)[0] == [("l", "o"), ("lo", "w"), ("low", EOW)]
 
-def encode_word(word):
-    symbols = [char if char in base_symbols else UNK for char in word] + [EOW]
-    for pair in merges:
-        symbols = merge_pair(symbols, pair)
-    return symbols
+text = ("training counts frequencies and changes the corpus representation after each "
+        "selected merge while encoding does not recount the input it starts from base "
+        "symbols and repeatedly applies the available learned pair with the best rank "
+        "without crossing a protected boundary so the merge table learned from one "
+        "corpus decides how every later text is split into tokens").split()
+held = ("a tokenizer trained on one domain splits text from another domain into more "
+        "pieces because the frequent pairs of its training corpus are not the frequent "
+        "pairs of the new text and rare words fall back to short fragments").split()
+alphabet = set("".join(text))
+merges, corpus = train(text, 200)
 
-print("merge ranks:", [left + "+" + right for left, right in merges])
-for word in ["low", "lower", "lowest", "lobster"]:
-    pieces = encode_word(word)
-    print(f"{word:7s} -> {' '.join(pieces)}  ({len(pieces)} pieces)")
+# 编码按名次依次应用学到的符号对，每步一名，不重新计数。
+segs = {name: [[c if c in alphabet else UNK for c in w] + [EOW] for w in words]
+        for name, words in (("训练文本", text), ("留出文本", held))}
+per_word = {name: [] for name in segs}
+for t in range(len(merges) + 1):
+    for name, s in segs.items():
+        per_word[name].append(sum(map(len, s)) / len(s))
+        segs[name] = [merge_pair(x, merges[t]) for x in s] if t < len(merges) else s
+assert all(s == corpus[w] for w, s in zip(text, segs["训练文本"]))  # 编码结果 = 训练结果
+assert all(UNK in s or "".join(s) == w + EOW for w, s in zip(held, segs["留出文本"]))
 
-print("UTF-8 bytes for 🐍:", list("🐍".encode("utf-8")))
+for name, ys in per_word.items():
+    plt.plot(ys, label=f"{name}：{len(merges)} 次合并后为 {ys[-1]:.2f}")
+once = train(text, 200, min_count=2)[0]
+plt.axvline(len(once), ls=":", c="grey")
+plt.text(len(once) + 3, 2.2, "此后的符号对\n都只出现一次")
+plt.xlabel("已学合并次数")
+plt.ylabel("每词词元数（含词尾标记）")
+plt.title("虚线之后，合并只是在记住单个词")
+plt.legend()
+print(f"留出文本中训练时从未见过的字符：{sorted(set(''.join(held)) - alphabet)} -> {UNK}")
 ```
 ::::
 

@@ -107,40 +107,64 @@ $$
 //| fig-cap: "300 对示意性文档上的 LSH 分带。曲线是所选 $b$ 个分带、每带 $r$ 行时的 $P_{\mathrm{candidate}}(s)=1-(1-s^r)^b$。每个点是一对文档，横坐标为真实 Jaccard 相似度 $s$，由固定种子均匀抽取；签名的每一行以概率 $s$ 独立取相同值，这正是公式背后的理想化假设。至少有一个分带匹配时，这一对落在上方条带。$s\geq\tau$ 的文档对算作重复，因此实心橙点是假阳性，空心蓝点是假阴性；阴影表示各相似度下出现这两类错误的概率。预设取自 FineWeb 的配置和 Lee 等人的两种配置，RefinedWeb 沿用了后者 [@penedo2024fineweb; @lee2022deduplicating; @penedo2023refinedweb]。下方网格列出选中那一对文档的各个分带。"
 ```
 
-下面的代码在两个集合的并集上使用同一套随机顺序，这等价于为 MinHash 抽取一次随机排列。两个集合的精确 Jaccard 相似度为 $0.6$；估计值就是最小元素相同的排列比例。
+下面的单元格在两段近似重复的文字上运行 MinHash，第二段是第一段改动几处后的副本。它把每段文字切成以词为单位的 3-gram shingle，用常见实现所采用的哈希 $(c_1x+c_0)\bmod p$ 代替每个排列 $\pi_i$，并在每个签名长度 $m$ 上抽取 200 个签名。单元格检验上面的两个等式：估计值以精确的 $J$ 为中心，其离散程度在每个 $m$ 上都与 $\sqrt{J(1-J)/m}$ 相差不超过 25%，说明哈希替代品在这里的表现与理想排列一致。直方图把 $m=32$ 时的估计值与等式所对应的二项分布相比较。把 `w` 设为 5，同样的三处改动会让 $J$ 从 0.70 降到 0.56，因为每个被改动的词现在会破坏五个 shingle，而不是三个：决定什么算作相似的是 shingle 宽度，而不是估计器。
 
 :::: {.runnable}
 ```python
-from math import sqrt
-from random import Random
+import zlib
+from math import comb
+import numpy as np
+import matplotlib.pyplot as plt
 
-rng = Random(18)
-universe = list(range(5000))
+a = ("web text is crawled from billions of pages and many of them repeat each "
+     "other with small changes such as a new date a different footer or a copied "
+     "paragraph from a news wire so a curation pipeline removes near duplicates "
+     "before training because repeated text is memorized more easily and wastes "
+     "the compute budget on examples the model has already seen many times")
+b = a.replace("new date", "fresh timestamp").replace("news wire", "press release")
+b = b.replace("is memorized", "gets memorized")
 
-# 两个集合各有 800 个元素，其中 600 个相同：J = 600 / 1000 = 0.6。
-A = set(rng.sample(universe, 800))
-outside_A = [x for x in universe if x not in A]
-B = set(rng.sample(sorted(A), 600) + rng.sample(outside_A, 200))
+w = 3  # 以词为单位的 shingle 宽度；试试 5
+def shingles(text):
+    t = text.split()
+    return {zlib.crc32(" ".join(t[i:i + w]).encode()) for i in range(len(t) - w + 1)}
+S_a, S_b = shingles(a), shingles(b)
+J = len(S_a & S_b) / len(S_a | S_b)
+U = np.array(sorted(S_a | S_b))
+in_a, in_b = np.isin(U, list(S_a)), np.isin(U, list(S_b))
 
-true_j = len(A & B) / len(A | B)
-elements = sorted(A | B)
-max_perm = 1024
-matches = []
+# h_i(S) = S 上 (c1 * x + c0) mod p 的最小值：用哈希代替随机排列。
+p, pool = 2**31 - 1, 200 * 128
+rng = np.random.default_rng(1)
+c1, c0 = rng.integers(1, p, pool), rng.integers(0, p, pool)
+h = (c1[:, None] * (U % p)[None, :] + c0[:, None]) % p          # 哈希函数数 x |并集|
+match = h[:, in_a].min(1) == h[:, in_b].min(1)
 
-for _ in range(max_perm):
-    order = elements.copy()
-    rng.shuffle(order)  # 对并集使用同一个随机排列
-    min_a = next(x for x in order if x in A)
-    min_b = next(x for x in order if x in B)
-    matches.append(min_a == min_b)
+ms = [4, 8, 16, 32, 64, 128]
+est = {m: match[:200 * m].reshape(200, m).mean(1) for m in ms}  # 每个长度 200 个签名
+sd = [est[m].std() for m in ms]
+ideal = [np.sqrt(J * (1 - J) / m) for m in ms]
+for m, s, i in zip(ms, sd, ideal):  # 哈希版本同样满足 Var = J(1 - J)/m
+    assert abs(est[m].mean() - J) < 4 * i / np.sqrt(200) and 0.75 < s / i < 1.25
 
-for m in [16, 64, 256, 1024]:
-    estimate = sum(matches[:m]) / m
-    standard_error = sqrt(true_j * (1 - true_j) / m)
-    print(
-        f"m={m:>4}  estimate={estimate:.3f}  "
-        f"true={true_j:.3f}  standard error={standard_error:.3f}"
-    )
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2))
+ax1.plot(ms, ideal, "--", c="C1", label="√(J(1−J)/m)")
+ax1.plot(ms, sd, "o", c="C0", label="200 个签名的离散程度")
+ax1.set(xscale="log", yscale="log", xlabel="签名长度 m", ylabel="Ĵ 的标准差")
+ax1.set_xticks(ms, [str(m) for m in ms])
+ax1.set_yticks([0.04, 0.06, 0.1, 0.2], ["0.04", "0.06", "0.1", "0.2"])
+ax1.legend()
+m = 32
+k = np.arange(m + 1)
+pmf = [comb(m, j) * J**j * (1 - J) ** (m - j) for j in k]
+ax2.hist(est[m], bins=np.arange(m + 2) / m - 0.5 / m, color="C0", label=f"Ĵ，m = {m}")
+ax2.plot(k / m, 200 * np.array(pmf), "o-", c="C1", ms=3, lw=1, label="Binomial(m, J) / m")
+ax2.axvline(J, ls=":", c="grey")
+ax2.set(xlabel="Jaccard 相似度估计值", ylabel="签名数", xlim=(J - 0.4, J + 0.4))
+ax2.legend(fontsize=9)
+fig.suptitle(f"J = {J:.3f}：哈希版 MinHash 无偏，方差为 J(1−J)/m")
+fig.tight_layout()
+print(f"shingle 数分别为 {len(S_a)} 和 {len(S_b)}，真实 J = {J:.3f}")
 ```
 ::::
 

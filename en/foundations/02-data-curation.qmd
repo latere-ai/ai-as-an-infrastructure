@@ -209,43 +209,74 @@ rule before forming duplicate clusters.
 //| fig-cap: "LSH banding on 300 illustrative document pairs. The curve is $P_{\mathrm{candidate}}(s)=1-(1-s^r)^b$ for the chosen $b$ bands of $r$ rows. Each dot is one pair at its true Jaccard similarity $s$, drawn uniformly from a fixed seed; its signature rows agree independently with probability $s$, the idealization behind the equation, and the pair sits in the upper strip when at least one band matched. Pairs with $s\geq\tau$ count as duplicates, so filled orange dots are false positives and hollow blue dots are false negatives; the shading marks the probability of each error at each similarity. The presets are the FineWeb setting and the two settings of Lee et al., which RefinedWeb reuses [@penedo2024fineweb; @lee2022deduplicating; @penedo2023refinedweb]. The grid shows the bands of the selected pair."
 ```
 
-The cell below uses a shared random ordering of the union of two sets. That is
-equivalent to drawing a random permutation for MinHash. The sets have exact
-Jaccard similarity $0.6$; the estimate is the fraction of permutations whose
-minimum element agrees.
+The cell below runs MinHash on two near-duplicate paragraphs, the second an
+edited copy of the first. It shingles each into word 3-grams, replaces each
+permutation $\pi_i$ with the hash $(c_1x+c_0)\bmod p$ that common
+implementations use in its place, and draws 200 signatures at each length $m$.
+It checks the two equations above: the estimates center on the exact $J$, and
+their spread follows $\sqrt{J(1-J)/m}$ within 25% at every $m$, so the hashed
+stand-in behaves like ideal permutations here. The histogram compares the
+estimates at $m=32$ with the binomial distribution that the equations imply.
+Set `w = 5` and $J$ drops from 0.70 to 0.56 for the same three edits, because
+each changed word now breaks five shingles instead of three: the shingle width,
+not the estimator, decides what counts as similar.
 
 :::: {.runnable}
 ```python
-from math import sqrt
-from random import Random
+import zlib
+from math import comb
+import numpy as np
+import matplotlib.pyplot as plt
 
-rng = Random(18)
-universe = list(range(5000))
+a = ("web text is crawled from billions of pages and many of them repeat each "
+     "other with small changes such as a new date a different footer or a copied "
+     "paragraph from a news wire so a curation pipeline removes near duplicates "
+     "before training because repeated text is memorized more easily and wastes "
+     "the compute budget on examples the model has already seen many times")
+b = a.replace("new date", "fresh timestamp").replace("news wire", "press release")
+b = b.replace("is memorized", "gets memorized")
 
-# Two 800-element sets with 600 shared elements: J = 600 / 1000 = 0.6.
-A = set(rng.sample(universe, 800))
-outside_A = [x for x in universe if x not in A]
-B = set(rng.sample(sorted(A), 600) + rng.sample(outside_A, 200))
+w = 3  # shingle width in words; try 5
+def shingles(text):
+    t = text.split()
+    return {zlib.crc32(" ".join(t[i:i + w]).encode()) for i in range(len(t) - w + 1)}
+S_a, S_b = shingles(a), shingles(b)
+J = len(S_a & S_b) / len(S_a | S_b)
+U = np.array(sorted(S_a | S_b))
+in_a, in_b = np.isin(U, list(S_a)), np.isin(U, list(S_b))
 
-true_j = len(A & B) / len(A | B)
-elements = sorted(A | B)
-max_perm = 1024
-matches = []
+# h_i(S) = min over S of (c1 * x + c0) mod p: a hashed stand-in for a permutation.
+p, pool = 2**31 - 1, 200 * 128
+rng = np.random.default_rng(1)
+c1, c0 = rng.integers(1, p, pool), rng.integers(0, p, pool)
+h = (c1[:, None] * (U % p)[None, :] + c0[:, None]) % p          # pool x |union|
+match = h[:, in_a].min(1) == h[:, in_b].min(1)
 
-for _ in range(max_perm):
-    order = elements.copy()
-    rng.shuffle(order)  # one shared random permutation of the union
-    min_a = next(x for x in order if x in A)
-    min_b = next(x for x in order if x in B)
-    matches.append(min_a == min_b)
+ms = [4, 8, 16, 32, 64, 128]
+est = {m: match[:200 * m].reshape(200, m).mean(1) for m in ms}  # 200 signatures each
+sd = [est[m].std() for m in ms]
+ideal = [np.sqrt(J * (1 - J) / m) for m in ms]
+for m, s, i in zip(ms, sd, ideal):  # Var = J(1 - J)/m holds for the hashed version
+    assert abs(est[m].mean() - J) < 4 * i / np.sqrt(200) and 0.75 < s / i < 1.25
 
-for m in [16, 64, 256, 1024]:
-    estimate = sum(matches[:m]) / m
-    standard_error = sqrt(true_j * (1 - true_j) / m)
-    print(
-        f"m={m:>4}  estimate={estimate:.3f}  "
-        f"true={true_j:.3f}  standard error={standard_error:.3f}"
-    )
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2))
+ax1.plot(ms, ideal, "--", c="C1", label="√(J(1−J)/m)")
+ax1.plot(ms, sd, "o", c="C0", label="spread of 200 signatures")
+ax1.set(xscale="log", yscale="log", xlabel="signature length m", ylabel="standard deviation of Ĵ")
+ax1.set_xticks(ms, [str(m) for m in ms])
+ax1.set_yticks([0.04, 0.06, 0.1, 0.2], ["0.04", "0.06", "0.1", "0.2"])
+ax1.legend()
+m = 32
+k = np.arange(m + 1)
+pmf = [comb(m, j) * J**j * (1 - J) ** (m - j) for j in k]
+ax2.hist(est[m], bins=np.arange(m + 2) / m - 0.5 / m, color="C0", label=f"Ĵ, m = {m}")
+ax2.plot(k / m, 200 * np.array(pmf), "o-", c="C1", ms=3, lw=1, label="Binomial(m, J) / m")
+ax2.axvline(J, ls=":", c="grey")
+ax2.set(xlabel="estimated Jaccard similarity", ylabel="signatures", xlim=(J - 0.4, J + 0.4))
+ax2.legend(fontsize=9)
+fig.suptitle(f"J = {J:.3f}: hashed MinHash is unbiased, variance J(1−J)/m")
+fig.tight_layout()
+print(f"{len(S_a)} and {len(S_b)} shingles, true J = {J:.3f}")
 ```
 ::::
 

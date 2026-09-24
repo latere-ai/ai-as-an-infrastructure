@@ -58,6 +58,76 @@ schemes may change where tensors live and the order of floating-point
 reductions while implementing this same synchronous update. Bitwise identity is
 a stronger and usually topology-dependent requirement.
 
+The cell below implements a ring all-reduce, one of the algorithms collective
+libraries use for large messages. In $N-1$ reduce-scatter steps each rank
+passes one chunk to its neighbor, which adds it to its own copy; in $N-1$
+all-gather steps the finished chunks travel once around the ring. The cell
+checks that every rank ends with the same bits, that the result matches the
+mean gradient computed in float64, and that each rank sends $2(N-1)/N$ of the
+gradient, which approaches two gradients however many ranks join, while a
+single root would send $N-1$. It then reduces the same 16 replicas in a
+different ring order: the update agrees to within rounding, yet about 70% of
+the elements differ in their last bits. Set `D = 2` and no element differs,
+because two addends give the same sum in either order; with `D = 3` about a
+fifth already do.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+def ring_allreduce(g):  # g[r] is rank r's gradient; returns every rank's mean, elements sent
+    N = len(g)
+    ch = [np.array_split(row.copy(), N) for row in g]      # ch[r][c]: rank r's chunk c
+    sent = 0
+    for s in range(N - 1):  # reduce-scatter: r sends chunk r - s to r + 1, which adds it
+        msgs = [(r, (r - s) % N, ch[r][(r - s) % N].copy()) for r in range(N)]
+        for r, c, x in msgs:
+            ch[(r + 1) % N][c] += x
+        sent += len(msgs[0][2])
+    for s in range(N - 1):  # all-gather: r passes its finished chunk r + 1 - s onward
+        msgs = [(r, (r + 1 - s) % N, ch[r][(r + 1 - s) % N].copy()) for r in range(N)]
+        for r, c, x in msgs:
+            ch[(r + 1) % N][c] = x
+        sent += len(msgs[0][2])
+    return np.array([np.concatenate(c) for c in ch]) / N, sent
+
+rng = np.random.default_rng(0)
+D, S = 16, 3 << 14                      # replicas, gradient elements
+g = rng.standard_normal((D, S), dtype=np.float32)
+out, sent = ring_allreduce(g)
+exact = g.astype(np.float64).mean(0)
+assert (out == out[0]).all()            # every rank holds the same bits
+assert np.allclose(out[0], exact, rtol=1e-5, atol=1e-6)
+assert sent == 2 * (D - 1) * S // D     # per rank: 2(N-1)/N of the gradient
+
+order = rng.permutation(D)              # the same replicas on a different ring order
+other = ring_allreduce(g[order])[0][0]
+ulps = np.abs(out[0].view(np.int32).astype(np.int64) - other.view(np.int32))
+differ = np.mean(ulps > 0)
+
+Ns = [2, 4, 8, 16, 32, 64]
+measured = [ring_allreduce(np.zeros((n, 4096), np.float32))[1] / 4096 for n in Ns]
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2))
+ax1.plot(Ns, [n - 1 for n in Ns], "--", c="C1", label="reduce at one root: N-1")
+ax1.plot(Ns, [2 * (n - 1) / n for n in Ns], c="C0", label="ring: 2(N-1)/N")
+ax1.plot(Ns, measured, "o", c="C0", label="ring, simulated")
+ax1.set(xscale="log", yscale="log", xlabel="ranks N", ylabel="sent by busiest rank, gradients")
+ax1.minorticks_off()
+ax1.set_xticks(Ns, [str(n) for n in Ns])
+ax1.legend(fontsize=9)
+k = np.minimum(ulps, 5)                # near-zero sums can differ by many ulps
+ax2.bar(range(6), [np.mean(k == i) for i in range(6)])
+ax2.set_xticks(range(6), ["0", "1", "2", "3", "4", "5+"])
+ax2.set(xlabel="difference between two ring orders, units in the last place",
+        ylabel="share of elements")
+ax2.set_title(f"Same update, different bits: {differ:.0%} of elements differ", fontsize=11)
+fig.tight_layout()
+print(f"max |ring - float64 mean| = {np.abs(out[0] - exact).max():.1e}; "
+      f"{differ:.1%} of elements change bits when the ring order changes")
+```
+::::
+
 ## Account for model-state memory
 
 Plain distributed data parallelism (DDP) divides the batch and the compute
@@ -180,29 +250,8 @@ tradeoff from GPipe's synchronous flush [@narayanan2019pipedream].
 //| fig-cap: "One optimizer step of a pipeline schedule on $p$ balanced stages with $m$ micro-batches, communication time ignored. Rows are stages, or devices when interleaving gives each device $v$ chunks; cells are forward and backward passes, with backward drawn at twice the forward time (illustrative), and hatched slots are idle. The strips below count the micro-batches whose activations each stage holds. The readout sets the hatched area against $(p-1)/(m+p-1)$, or $(p-1)/(vm+p-1)$ for the interleaved schedule [@narayanan2021efficient], and the table compares the four schedules at the same stage and micro-batch counts."
 ```
 
-The calculation below makes the scale of the bubble concrete. For 32 stages
-and 32 micro-batches, nearly half of aggregate stage capacity is still idle in
-this idealized schedule.
-
-:::: {.runnable}
-```python
-def bubble_fraction(stages, microbatches):
-    """Balanced GPipe flush schedule; communication is ignored."""
-    if stages < 1 or microbatches < 1:
-        raise ValueError("stages and microbatches must be positive")
-    return (stages - 1) / (microbatches + stages - 1)
-
-
-for stages in (4, 8, 16, 32):
-    values = {
-        microbatches: round(bubble_fraction(stages, microbatches), 3)
-        for microbatches in (1, 4, 8, 16, 32, 64)
-    }
-    print(f"p={stages}: {values}")
-
-print("p=32, m=32:", f"{bubble_fraction(32, 32):.1%}")
-```
-::::
+For 32 stages and 32 micro-batches, $f_{\mathrm{bubble}}=31/63$: nearly half
+of aggregate stage capacity is still idle in this idealized schedule.
 
 ### Sequence parallelism and context parallelism: split tokens
 

@@ -82,69 +82,95 @@ merge; production trainers maintain pair-occurrence indexes and update only
 affected neighbors. Complexity therefore depends on the implementation.
 
 @fig-tokenization-bpe-merges runs the trainer of the runnable cell below on
-its seven words, one merge per step. `(l, o)` occurs five times and `(o, w)`
+seven words, `low low low lo lower newest widest`, one merge per step. `(l, o)` occurs five times and `(o, w)`
 four, so the first three merges have no tie; from the fourth merge on, several
 pairs share the top count and the tie-break rule decides the table.
 
 ```{figure}
 //| figure: bpe-merges
 //| label: fig-tokenization-bpe-merges
-//| fig-cap: "BPE training on the runnable cell's corpus, `low low low lo lower newest widest` with the end-of-word marker `</w>`, one merge per step. Pair counts are weighted by pretoken frequency; the pair the next merge joins is outlined in every occurrence and the symbol the last merge made is tinted. The merge table grows by one rank per step, and the chosen word is encoded by applying ranks 1 to t in order. Ties at the top count go to the chosen rule: lexical order is the cell's, and the other two rules learn different tables from the same counts."
+//| fig-cap: "BPE training with the runnable cell's trainer on the corpus `low low low lo lower newest widest` with the end-of-word marker `</w>`, one merge per step. Pair counts are weighted by pretoken frequency; the pair the next merge joins is outlined in every occurrence and the symbol the last merge made is tinted. The merge table grows by one rank per step, and the chosen word is encoded by applying ranks 1 to t in order. Ties at the top count go to the chosen rule: lexical order is the cell's, and the other two rules learn different tables from the same counts."
 ```
 
-The runnable cell trains a small character BPE, freezes its merge order, and
-then encodes two training words and two words it never saw. Its end-of-word
-marker prevents merges across word boundaries. The final example deliberately
-contains an unseen character to show that character BPE is not automatically
-free of unknown tokens.
+The runnable cell implements the trainer and the encoder separately. It first
+checks that the trainer learns the figure's first three merges from the
+figure's seven words. It then trains on a paragraph paraphrasing this section,
+encodes that paragraph and a held-out paragraph by applying the merge table in
+rank order, and checks two things: encoding reproduces the trainer's
+segmentation of every training word, and every held-out word decodes back to
+itself unless it contains a character the training text lacks. Tokens per word
+fall on both texts at first. Past the dotted line every selected pair occurs
+once in the training paragraph, so each merge removes exactly one token there
+and helps the held-out text far less. The held-out paragraph also contains a
+`z`, which the training alphabet lacks, so this character BPE emits `<unk>`
+for it. Set `min_count=2` to stop training at the dotted line.
 
 :::: {.runnable}
 ```python
 from collections import Counter
+import matplotlib.pyplot as plt
 
-EOW = "</w>"
-UNK = "<unk>"
+EOW, UNK = "</w>", "<unk>"
 
 def merge_pair(symbols, pair):
-    left, right = pair
     out, i = [], 0
     while i < len(symbols):
-        if i + 1 < len(symbols) and symbols[i] == left and symbols[i + 1] == right:
-            out.append(left + right)
-            i += 2
+        if i + 1 < len(symbols) and (symbols[i], symbols[i + 1]) == pair:
+            out.append(symbols[i] + symbols[i + 1]); i += 2
         else:
-            out.append(symbols[i])
-            i += 1
+            out.append(symbols[i]); i += 1
     return out
 
-training_words = "low low low lo lower newest widest".split()
-base_symbols = set("".join(training_words))
-encoded_training = [list(word) + [EOW] for word in training_words]
-merges = []
+def train(words, steps, min_count=1):  # try min_count=2
+    freq, merges = Counter(words), []
+    corpus = {w: list(w) + [EOW] for w in freq}
+    for _ in range(steps):
+        counts = Counter()
+        for w, symbols in corpus.items():
+            for pair in zip(symbols, symbols[1:]):
+                counts[pair] += freq[w]
+        if not counts or max(counts.values()) < min_count:
+            break
+        pair = min(counts, key=lambda p: (-counts[p], p))  # ties: lexical order
+        merges.append(pair)
+        corpus = {w: merge_pair(s, pair) for w, s in corpus.items()}
+    return merges, corpus
 
-for _ in range(8):
-    counts = Counter()
-    for symbols in encoded_training:
-        counts.update(zip(symbols, symbols[1:]))
-    if not counts:
-        break
-    # Highest count first; lexical order makes ties deterministic.
-    pair = min(counts, key=lambda candidate: (-counts[candidate], candidate))
-    merges.append(pair)
-    encoded_training = [merge_pair(symbols, pair) for symbols in encoded_training]
+# The figure's corpus: this trainer learns the figure's first three merges.
+assert train("low low low lo lower newest widest".split(), 3)[0] == [("l", "o"), ("lo", "w"), ("low", EOW)]
 
-def encode_word(word):
-    symbols = [char if char in base_symbols else UNK for char in word] + [EOW]
-    for pair in merges:
-        symbols = merge_pair(symbols, pair)
-    return symbols
+text = ("training counts frequencies and changes the corpus representation after each "
+        "selected merge while encoding does not recount the input it starts from base "
+        "symbols and repeatedly applies the available learned pair with the best rank "
+        "without crossing a protected boundary so the merge table learned from one "
+        "corpus decides how every later text is split into tokens").split()
+held = ("a tokenizer trained on one domain splits text from another domain into more "
+        "pieces because the frequent pairs of its training corpus are not the frequent "
+        "pairs of the new text and rare words fall back to short fragments").split()
+alphabet = set("".join(text))
+merges, corpus = train(text, 200)
 
-print("merge ranks:", [left + "+" + right for left, right in merges])
-for word in ["low", "lower", "lowest", "lobster"]:
-    pieces = encode_word(word)
-    print(f"{word:7s} -> {' '.join(pieces)}  ({len(pieces)} pieces)")
+# Encoding applies the learned pairs in rank order, one rank per step, no recounting.
+segs = {name: [[c if c in alphabet else UNK for c in w] + [EOW] for w in words]
+        for name, words in (("training", text), ("held-out", held))}
+per_word = {name: [] for name in segs}
+for t in range(len(merges) + 1):
+    for name, s in segs.items():
+        per_word[name].append(sum(map(len, s)) / len(s))
+        segs[name] = [merge_pair(x, merges[t]) for x in s] if t < len(merges) else s
+assert all(s == corpus[w] for w, s in zip(text, segs["training"]))  # encode = train
+assert all(UNK in s or "".join(s) == w + EOW for w, s in zip(held, segs["held-out"]))
 
-print("UTF-8 bytes for 🐍:", list("🐍".encode("utf-8")))
+for name, ys in per_word.items():
+    plt.plot(ys, label=f"{name}: {ys[-1]:.2f} after {len(merges)} merges")
+once = train(text, 200, min_count=2)[0]
+plt.axvline(len(once), ls=":", c="grey")
+plt.text(len(once) + 3, 2.2, "every later pair\noccurs once")
+plt.xlabel("merges learned")
+plt.ylabel("tokens per word, incl. end marker")
+plt.title("Past the dotted line, merges memorize single words")
+plt.legend()
+print(f"held-out characters never seen in training: {sorted(set(''.join(held)) - alphabet)} -> {UNK}")
 ```
 ::::
 

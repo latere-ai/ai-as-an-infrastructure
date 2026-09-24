@@ -206,44 +206,64 @@ $$
 
 复用缓存后，每层为一个新词元执行稠密注意力的成本与历史长度 $S$ 线性相关，这里省略头数和维度因子。若提示词长度为 $P$，之后生成 $T$ 个词元，整个解码过程的注意力工作量与 $TP+T^2$ 成正比。缓存复用避免了重复投影前缀，却不会让长解码变成常数时间。
 
-缓存随驻留词元数线性增长。它是否超过模型权重，取决于上述所有变量，以及权重和缓存精度。因此，不能把某一个交叉点说成 Transformer 的普遍属性。
-
-下一节的 @fig-kv-sharing 采用明确假设：32 层、头宽度 128、每个 KV 元素两字节、批大小为一，以及 70 亿个两字节权重参数。图中 MHA、GQA 与 MQA 只改变 $H_{kv}$，每个数值都直接来自缓存公式。
-
-下面的可执行单元会输出每词元缓存有效载荷，以及缓存等于所述权重字节数时的上下文长度。可以修改批大小、精度或 KV 头数，测试不同的部署配置。
+下面的单元格在一个随机权重的两层模型上检验这两个说法。它沿两条路径做贪心解码：一条在因果掩码下重新计算每一层的每个位置；另一条把每个新位置的键和值追加到逐层缓存中，只让新的查询做注意力。单元格断言两条路径在每一步得到相同的隐藏状态，并且缓存路径每层恰好执行 $TP+T(T+1)/2$ 次查询-键点积。缓存之所以有效，靠的是因果掩码：把 `mask` 设为 0，断言就会失败，因为后来的词元会改变第一层在较早位置上的输出，第二层的键和值也随之改变。
 
 :::: {.runnable}
 ```python
-layers = 32
-head_width = 128
-bytes_per_kv_element = 2
-batch_size = 1
-parameter_count = 7_000_000_000
-bytes_per_weight = 2
-weight_bytes = parameter_count * bytes_per_weight
+import numpy as np
+import matplotlib.pyplot as plt
 
-def kv_payload_bytes(sequence_length, kv_heads):
-    return (
-        2
-        * layers
-        * batch_size
-        * sequence_length
-        * kv_heads
-        * head_width
-        * bytes_per_kv_element
-    )
+rng = np.random.default_rng(0)
+d, V, L, P, T = 32, 64, 2, 32, 128  # 宽度、词表、层数、提示词长度、新词元数
+emb = rng.normal(size=(V, d))
+W = rng.normal(size=(L, 4, d, d)) / np.sqrt(d)  # 每层的 W_Q、W_K、W_V、W_O
 
-for name, kv_heads in [("MHA", 32), ("GQA", 8), ("MQA", 1)]:
-    bytes_per_token = kv_payload_bytes(1, kv_heads)
-    crossover_tokens = weight_bytes / bytes_per_token
-    cache_at_128k_gib = kv_payload_bytes(128_000, kv_heads) / 2**30
-    print(
-        f"{name}: {bytes_per_token / 1024:.0f} KiB/词元；"
-        f"128k 缓存={cache_at_128k_gib:.2f} GiB；"
-        f"在 {crossover_tokens:,.0f} 个词元时等于权重字节数"
-    )
+def full(seq):  # 在因果掩码下重新计算每一层的每个位置
+    x = emb[seq]
+    mask = np.triu(np.full((len(seq), len(seq)), -np.inf), 1)  # 试试：mask = 0
+    for Wq, Wk, Wv, Wo in W:
+        s = (x @ Wq) @ (x @ Wk).T / np.sqrt(d) + mask
+        a = np.exp(s - s.max(1, keepdims=True))
+        x = x + (a / a.sum(1, keepdims=True)) @ (x @ Wv) @ Wo
+    return x[-1]
+
+def step(tok, cache):  # 只计算一个新位置，与缓存的键和值做注意力
+    x = emb[tok]
+    for (Wq, Wk, Wv, Wo), c in zip(W, cache):
+        c["K"].append(x @ Wk); c["V"].append(x @ Wv)
+        s = np.array(c["K"]) @ (x @ Wq) / np.sqrt(d)
+        a = np.exp(s - s.max())
+        x = x + (a / a.sum()) @ np.array(c["V"]) @ Wo
+    return x
+
+seq = list(rng.integers(V, size=P))
+cache = [{"K": [], "V": []} for _ in range(L)]
+for tok in seq:  # 预填充；为简洁起见逐个位置进行
+    h = step(tok, cache)
+work_cache, work_full, gap = [], [], 0.0
+for _ in range(T):
+    gap = max(gap, np.abs(h - full(seq)).max())  # 两条路径得到相同的状态
+    seq.append(int(np.argmax(h @ emb.T)))        # 贪心解码，输入输出共享嵌入
+    h = step(seq[-1], cache)
+    n = len(seq)
+    work_cache.append(n)                 # 每层的查询-键点积次数
+    work_full.append(n * (n + 1) // 2)
+assert gap < 1e-9 and sum(work_cache) == T * P + T * (T + 1) // 2
+
+t = np.arange(1, T + 1)
+plt.plot(t, work_full, label=f"重新计算前缀：共 {sum(work_full):,} 次")
+plt.plot(t, work_cache, label=f"KV 缓存：{sum(work_cache):,} = TP + T(T+1)/2")
+plt.yscale("log")
+plt.xlabel("生成的词元序号")
+plt.ylabel("每层查询-键点积次数")
+plt.title(f"状态相同（最大差 {gap:.0e}），工作量少 {sum(work_full) / sum(work_cache):.0f} 倍")
+plt.legend()
 ```
 ::::
+
+缓存随驻留词元数线性增长。它是否超过模型权重，取决于上述所有变量，以及权重和缓存精度。因此，不能把某一个交叉点说成 Transformer 的普遍属性。
+
+下一节的 @fig-kv-sharing 采用明确假设：32 层、头宽度 128、每个 KV 元素两字节、批大小为一，以及 70 亿个两字节权重参数。图中 MHA、GQA 与 MQA 只改变 $H_{kv}$，每个数值都直接来自缓存公式。
 
 ## MHA、GQA 与 MQA 改变 KV 头的共享方式
 

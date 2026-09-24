@@ -131,39 +131,8 @@ better” is not a universal rule [@liu2025midtraining].
 ```{figure}
 //| figure: mixture-ramp
 //| label: fig-mid-training-bridge
-//| fig-cap: "Token accounting for the specialist schedule. The orange area under $\alpha(u)$ is the whole-phase specialist fraction $\bar\alpha$ at a constant token rate: $a(1-s)/2$ for the chapter's linear ramp, and $a(1-s)$ for a fixed weight $a$ after the introduction point, the form Liu et al. varied [@liu2025midtraining]. The dashed outline is the other shape with the same $s$ and $a$. Token counts use the 100B-token phase of the runnable cell below. The figure accounts for exposure only and makes no claim about capability or retention."
+//| fig-cap: "Token accounting for the specialist schedule. The orange area under $\alpha(u)$ is the whole-phase specialist fraction $\bar\alpha$ at a constant token rate: $a(1-s)/2$ for the chapter's linear ramp, and $a(1-s)$ for a fixed weight $a$ after the introduction point, the form Liu et al. varied [@liu2025midtraining]. The dashed outline is the other shape with the same $s$ and $a$. Token counts assume a 100B-token phase. The figure accounts for exposure only and makes no claim about capability or retention."
 ```
-
-The runnable calculation shows why introduction time and final share cannot be
-reported separately from total exposure.
-
-:::: {.runnable}
-```python
-def specialist_share(progress, start, final_share):
-    """Linear mixture ramp over normalized training progress."""
-    if not 0 <= progress <= 1:
-        raise ValueError("progress must be between 0 and 1")
-    if not 0 <= start < 1 or not 0 <= final_share <= 1:
-        raise ValueError("invalid schedule")
-    if progress < start:
-        return 0.0
-    return final_share * (progress - start) / (1 - start)
-
-
-start = 0.60
-final_share = 0.30
-total_tokens = 100_000_000_000
-whole_run_share = 0.5 * final_share * (1 - start)
-
-for progress in (0.0, 0.4, 0.6, 0.8, 1.0):
-    value = specialist_share(progress, start, final_share)
-    print(f"progress={progress:.1f}: specialist={value:.1%}")
-
-print(f"whole-run specialist share: {whole_run_share:.1%}")
-print(f"specialist tokens: {total_tokens * whole_run_share / 1e9:.1f}B")
-print(f"broad tokens: {total_tokens * (1 - whole_run_share) / 1e9:.1f}B")
-```
-::::
 
 ## Keep the data schedule separate from the learning rate
 
@@ -191,6 +160,73 @@ branches convenient to run as experiments, and each branch must still record
 its source checkpoint, optimizer and scheduler state, new data manifest,
 learning-rate path, token count, and random seeds. Resetting optimizer state or
 raising the learning rate is another intervention and needs its own control.
+
+The cell below separates the two interventions in a toy model. Two quadratic
+losses with different optima stand for the broad distribution $P$ and the
+specialist distribution $Q$, and noisy gradient steps stand for training. From
+one checkpoint on the stable plateau it runs four branches of the same phase: a
+constant or a linearly decaying learning rate, crossed with broad data only or
+the ramp above with $s=0.6$ and $a=0.3$. It checks that the constant-rate
+branch holds the broad loss at the closed-form noise plateau
+$\sum_i\eta\sigma^2/(2(2-\eta h_i))$ and that the ramp draws specialist
+samples at the rate $a(1-s)/2$. In this model most of the specialist-loss drop
+in the combined branch comes from the learning-rate decay, which lowers the
+broad loss as well; without the decay-only branch as a control, that gain would
+be credited to the data. Set `s = 0.0`: the specialist dose rises from 6% to
+15% of the phase, yet the final specialist loss barely changes, because the
+quadratic forgets early exposure within a few hundred steps and the end of the
+phase reflects only the final mixture and learning rate.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+d, R, T = 20, 128, 2000            # parameters, repeated runs, steps in the phase
+h = np.logspace(-1, 0, d)          # curvatures of both quadratic losses
+p, q = np.zeros(d), np.full(d, 0.6)  # broad and specialist optima
+L = lambda th, c: 0.5 * (h * (th - c) ** 2).sum(-1)
+eta_max, sigma = 0.5, 1.0
+s, a = 0.6, 0.3                    # ramp start and final specialist share; try s = 0.0
+u = np.arange(T) / T
+ramp = np.where(u < s, 0.0, a * (u - s) / (1 - s))
+# Four branches from one stable checkpoint: {constant, decaying} LR x {broad, ramp} data.
+lr = np.array([np.full(T, eta_max), eta_max * (1 - 0.9 * u)] * 2)
+mix = np.array([np.zeros(T)] * 2 + [ramp] * 2)
+th = np.broadcast_to(p + rng.normal(size=(R, d)) * np.sqrt(eta_max * sigma**2 / (h * (2 - eta_max * h))), (4, R, d)).copy()
+LQ, LP, drawn = [], [], np.zeros(4)
+for t in range(T):
+    spec = rng.random((4, R, 1)) < mix[:, t, None, None]   # this step's sample is from Q
+    target = np.where(spec, q, p)
+    th -= lr[:, t, None, None] * (h * (th - target) + sigma * rng.standard_normal(th.shape))
+    LQ.append(L(th, q).mean(1)); LP.append(L(th, p).mean(1)); drawn += spec.mean((1, 2))
+LQ, LP = np.array(LQ), np.array(LP)
+smooth = lambda y: np.convolve(y, np.ones(25) / 25, mode="valid")  # for plotting only
+plateau = (eta_max * sigma**2 / (2 * (2 - eta_max * h))).sum()   # stationary E[L_P]
+assert abs(LP[T // 2:, 0].mean() / plateau - 1) < 0.05
+assert abs(drawn[2] / T - a * (1 - s) / 2) < 3 * np.sqrt(a * (1 - s) / 2 / (T * R))
+
+names = ["constant LR, broad data", "decay LR, broad data", "constant LR, ramp", "decay LR, ramp"]
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.4), sharex=True)
+for i, name in enumerate(names):
+    style = dict(lw=1.6, ls="-" if i % 2 else ":", c=f"C{i // 2}")
+    ax1.plot(u[24:], smooth(LQ[:, i]), label=name, **style)
+    ax2.plot(u[24:], smooth(LP[:, i]), **style)
+ax2.axhline(plateau, c="grey", lw=0.8)
+ax2.text(0.45, plateau - 0.12, "closed-form plateau", va="top", fontsize=9)
+ax1.axvline(s, c="grey", ls="--", lw=0.8)
+ax1.text(s, 1.1, " ramp starts", fontsize=9)
+ax1.set(ylabel="specialist loss L_Q")
+ax2.set(ylabel="broad loss L_P", xlabel="phase progress u")
+ax1.legend(fontsize=9)
+drop = LQ[-50:].mean(0)
+ax1.set_title(f"Change in final L_Q: decay alone {drop[1] - drop[0]:+.2f}, "
+              f"ramp alone {drop[2] - drop[0]:+.2f}, both {drop[3] - drop[0]:+.2f}", fontsize=10)
+fig.tight_layout()
+print(f"specialist share drawn: {drawn[2] / T:.4f} (a(1-s)/2 = {a * (1 - s) / 2:.4f})")
+```
+::::
 
 ## Three uses of the phase
 
