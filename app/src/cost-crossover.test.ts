@@ -1,12 +1,11 @@
 // Guard the cost-crossover interactive figure: the component stays registered in
-// the viz runtime, and the four economics/practical homes keep using it.
+// the viz runtime, and the three practice-chapter homes keep using it.
 
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
 const homes = [
-  "en/ecosystem/04-economics.qmd",
   "en/practice/01-choosing-a-model.qmd",
   "en/practice/04-training-finetuning-practice.qmd",
   "en/practice/08-wiring-a-2026-stack.qmd",
