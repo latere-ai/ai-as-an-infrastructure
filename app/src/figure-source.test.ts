@@ -138,18 +138,6 @@ test("NAR figure reports dependency depth rather than synthetic latency", () => 
   expect(spec).not.toContain("latency");
 });
 
-test("beyond-text figure shows control arithmetic rather than invented modality positions", () => {
-  const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
-  const spec = catalog.match(/"beyond-text-1": \{[\s\S]*?\n    \},/)?.[0] ?? "";
-  expect(spec).toContain('"x": [1, 5, 10, 30, 60]');
-  expect(spec).toContain('"label": "10 Hz control", "y": [10, 50, 100, 300, 600]');
-  expect(spec).toContain('"label": "50 Hz control", "y": [50, 250, 500, 1500, 3000]');
-  expect(spec).toContain('"ylabel": "control targets"');
-  expect(spec).not.toContain("supervision density");
-  expect(spec).not.toContain('"label": "world model"');
-  expect(spec).not.toContain('"label": "robot"');
-});
-
 test("every committed static SVG figure has source and bilingual outputs", () => {
   const sources = new Set(sourceScripts.map((file) => basename(file, ".py")));
   const refs = new Set<string>();

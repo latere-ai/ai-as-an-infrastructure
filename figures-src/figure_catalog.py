@@ -187,18 +187,6 @@ SPECS = {
         "yticks": [0, 64, 128, 192, 256],
         "legend": "upper left",
     },
-    "beyond-text-1": {
-        "type": "line",
-        "x": [1, 5, 10, 30, 60],
-        "series": [
-            {"label": "10 Hz control", "y": [10, 50, 100, 300, 600], "color": DATA},
-            {"label": "50 Hz control", "y": [50, 250, 500, 1500, 3000], "color": ACCENT},
-        ],
-        "xlabel": "episode duration (seconds)",
-        "ylabel": "control targets",
-        "xint": True,
-        "ylim": (0, 3200),
-    },
     "synthetic-data-self-improvement-1": {
         "type": "line",
         "x": [0, 1, 2, 3, 4, 5, 6],
