@@ -238,23 +238,34 @@ coverage check of the English tree. None has been decided or started.
 
 ## Open goal: visuals that explain
 
-Recorded 2026-09-23 at the author's request. The book has 39 interactive
-components (58 placements, mostly canvas sketches with a slider or a stepper),
-151 Graphviz diagrams, and static SVG charts. The author judges them well short
-of what current interactive and animated explanation can do, and allows
-removing any existing figure. The work starts from what each chapter needs a
-reader to understand, not from the existing component list: a screenshot audit
-graded against a fixed rubric (does the figure answer the question its
-paragraph asks, does interaction change understanding, is it legible on a
-phone, does it look current), then a first tranche of about ten figures across
-the parts for the author to judge, then the rest. Constraints: a zh twin with
-matching inputs for every figure, theme tokens, the mobile column width,
-reduced motion, and a static fallback when scripts do not run.
+- [x] **Visuals that explain** (done 2026-09-24, except the golden-image tests below)
 
-Decision (author, 2026-09-23): image-based golden figure tests come after the
-visuals ship to production and the author confirms them; animations are not
-tested beyond "the figure builds, its fallback renders, and en and zh inputs
-match". Test effort goes to content quality, not to per-figure assertions.
+  Recorded 2026-09-23 at the author's request. The book had 39 interactive
+  components (58 placements, mostly canvas sketches with a slider or a stepper),
+  151 Graphviz diagrams, and static SVG charts. The author judged them well short
+  of what current interactive and animated explanation can do, and allowed
+  removing any existing figure. The work started from what each chapter needs a
+  reader to understand, not from the existing component list: a screenshot audit
+  graded against a fixed rubric (does the figure answer the question its
+  paragraph asks, does interaction change understanding, is it legible on a
+  phone, does it look current), then a first tranche of about ten figures across
+  the parts for the author to judge, then the rest. Constraints: a zh twin with
+  matching inputs for every figure, theme tokens, the mobile column width,
+  reduced motion, and a static fallback when scripts do not run.
+
+  - [x] **Figures rebuilt as modules.** Done 2026-09-24: 148 placements per
+    tree from 142 modules in `app/src/figures`. The canvas runtime keeps
+    `curve` and `outlier-quant`; 13 static SVG charts stay embedded, and the
+    unreferenced ones are deleted with their sources except `field-map-1`.
+  - [x] **Mermaid removed.** Done 2026-09-24: the reader no longer renders or
+    loads it, and lint and the tests reject a mermaid fence.
+  - [x] **Graphviz fits phones.** Done 2026-09-24: all 62 diagrams per tree fit
+    the mobile column; `knownWideFigures` is empty.
+  - [ ] **Golden-image figure tests.** Decision (author, 2026-09-23):
+    image-based golden figure tests come after the visuals ship to production
+    and the author confirms them; animations are not tested beyond "the figure
+    builds, its fallback renders, and en and zh inputs match". Test effort goes
+    to content quality, not to per-figure assertions.
 
 ## Open goals: rendering and parity defects found by the new tests
 
@@ -263,8 +274,9 @@ match". Test effort goes to content quality, not to per-figure assertions.
   (visible in `zh/foundations/scaling-laws`). Fix in the pipeline, not page by
   page; the pages are listed as `knownBoldLeaks` in
   `app/src/chapter-render.test.ts`.
-- [ ] **39 Graphviz figures are wider than the mobile column** (34 en, 5 zh) and
-  scroll sideways; listed as `knownWideFigures`.
+- [x] **39 Graphviz figures are wider than the mobile column** (34 en, 5 zh) and
+  scroll sideways; listed as `knownWideFigures`. Fixed 2026-09-24; the list is
+  empty.
 - [x] **Display math differs between en and zh on 9 pages** (fixed 2026-09-23; the allow-list is empty); listed as
   `knownMathDivergence` in `app/src/book-zh-parity.test.ts`. Most are
   punctuation or layout. `practice/05` and `practice/08` were fixed on
