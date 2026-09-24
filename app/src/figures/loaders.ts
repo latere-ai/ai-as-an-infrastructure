@@ -99,4 +99,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "defense-layers": () => import("./defense-layers.ts"),
   "many-shot-power-law": () => import("./many-shot-power-law.ts"),
   "rl-rollout-schedule": () => import("./rl-rollout-schedule.ts"),
+  "agent-turn-loop": () => import("./agent-turn-loop.ts"),
 };
