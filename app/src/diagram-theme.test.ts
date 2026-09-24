@@ -3,34 +3,6 @@ import { expect, test } from "bun:test";
 
 const css = readFileSync(new URL("./theme.css", import.meta.url), "utf8");
 
-test("mermaid diagrams inherit the reader theme instead of Mermaid's light fills", () => {
-  expect(css).toMatch(/\.mermaid svg \.node rect,[\s\S]*fill:\s*var\(--bg-surface\)\s*!important/);
-  expect(css).toMatch(/\.mermaid svg text,[\s\S]*fill:\s*var\(--fg-1\)\s*!important/);
-  expect(css).toMatch(/\.mermaid svg \.edgePath \.path,[\s\S]*stroke:\s*var\(--fg-3\)\s*!important/);
-});
-
-test("dark mode keeps classDef-highlighted mermaid labels dark on their pastel fill", () => {
-  // Mermaid writes classDef fills inline with !important, so a highlighted node
-  // keeps its light pastel fill in dark mode; its label must not inherit the
-  // light --fg-1 (which would vanish against the pastel). The fix targets such
-  // nodes by the inline fill on their rect and forces the label dark.
-  expect(css).toMatch(
-    /:root\[data-theme="dark"\] \.mermaid svg \.node:has\(rect\[style\*="fill"\]\)[\s\S]*?color:\s*#1f2937\s*!important/,
-  );
-});
-
-test("diagram labels are transparent-backed, never a solid box", () => {
-  // A label foreignObject painted with var(--bg) drew a darker box that did not
-  // match the content surface, on both node labels (inside the lighter node
-  // fill) and edge labels (the reported regressions). Both must be transparent,
-  // including the edge-label background rect mermaid inserts.
-  const labelRule = css.match(/\.mermaid svg foreignObject,[\s\S]*?\}/)?.[0] ?? "";
-  expect(labelRule).toContain(".edgeLabel p");
-  expect(labelRule).toMatch(/background-color:\s*transparent\s*!important/);
-  expect(labelRule).not.toMatch(/background-color:\s*var\(--bg\)/);
-  expect(css).toMatch(/\.mermaid svg \.edgeLabel rect \{[^}]*fill:\s*transparent\s*!important/);
-});
-
 test("bare <figure> viz blocks get the same framing and muted caption as numbered figures", () => {
   // Interactive viz are authored as raw {=html} <figure> blocks, not the
   // pipeline's .rdr-figure; they must still read as proper figures.

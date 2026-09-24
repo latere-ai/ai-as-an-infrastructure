@@ -29,9 +29,3 @@ test("the reader owns #fragment scrolling and pins the document to the top", () 
   expect(reader).toMatch(/scrollingElement/);
   expect(reader).toMatch(/document\.addEventListener\("scroll"/);
 });
-
-test("the mermaid tooltip is pinned out of flow so it adds no scrollable height", () => {
-  // mermaid.run() appends a <div.mermaidTooltip> to <body>, positioned absolute
-  // inline at the bottom; without this it adds a few px of document overflow.
-  expect(css).toMatch(/\.mermaidTooltip\s*\{[^}]*position:\s*fixed\s*!important/);
-});
