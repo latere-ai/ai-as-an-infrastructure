@@ -31,7 +31,8 @@ import { svg, el, text, g, esc, r as rd, linePath, type Attrs } from "./lib/svg.
 import { C, TYPE } from "./lib/theme.ts";
 import { linear, band } from "./lib/scale.ts";
 import { axis } from "./lib/axis.ts";
-import { textWidth, wrap } from "./lib/labels.ts";
+import { textWidth } from "./lib/labels.ts";
+import { wrapCjk as wrap } from "./lib/kinsoku.ts";
 import { fixed, pct, sig, tpl } from "./lib/format.ts";
 
 // ---------------------------------------------------------------- model
@@ -192,8 +193,8 @@ const labels = {
     x: "词元序号 v",
     termsFwd: "D_KL(q_T‖p_S) 的逐词元项",
     termsRev: "D_KL(p_S‖q_T) 的逐词元项",
-    termsFwdSub: "q_T(v) log(q_T(v) / p_S(v))：对数比按教师概率加权",
-    termsRevSub: "p_S(v) log(p_S(v) / q_T(v))：对数比按学生概率加权",
+    termsFwdSub: "q_T(v) log(q_T(v) / p_S(v))：按教师概率加权",
+    termsRevSub: "p_S(v) log(p_S(v) / q_T(v))：按学生概率加权",
     nats: "奈特",
     colF: "D_KL(q_T‖p_S)",
     colR: "D_KL(p_S‖q_T)",
@@ -243,8 +244,8 @@ const mwidth = (s: string, size: number) => textWidth(s.replace(/_([A-Za-z]+)/g,
 // A panel title and a muted line under it; returns the height used.
 function title(s: string, sub: string, x0: number, y0: number, w: number, parts: string[]): number {
   let y = y0;
-  for (const ln of wrap(s, TYPE.label, w)) { y += 18; parts.push(mtext(x0, y - 4, ln, { "font-size": TYPE.label, class: "fig-t-strong" })); }
-  for (const ln of wrap(sub, TYPE.body, w)) { y += 17; parts.push(mtext(x0, y - 3, ln, { "font-size": TYPE.body, class: "fig-t-muted" })); }
+  for (const ln of wrap(s, TYPE.label, w * 0.92 - 13)) { y += 18; parts.push(mtext(x0, y - 4, ln, { "font-size": TYPE.label, class: "fig-t-strong" })); }
+  for (const ln of wrap(sub, TYPE.body, w - 13)) { y += 17; parts.push(mtext(x0, y - 3, ln, { "font-size": TYPE.body, class: "fig-t-muted" })); }
   return y - y0;
 }
 
@@ -401,8 +402,8 @@ function render(st: State<P>, lang: Lang): string {
       y += i ? 26 : 0;
       ro.push(swatch(0, y, color, i ? "5 3" : undefined));
       ro.push(text(24, y, `${name}, ${tpl(Lx.fit, { mu: pos(f.mu), s: pos(f.sigma) })}`, { "font-size": TYPE.body, class: "fig-t-strong" }));
-      for (const ln of wrap(tpl(Lx.rowNarrow, { f: nat(f.fwd), r: nat(f.rev) }), TYPE.body, w)) { y += 17; ro.push(mtext(0, y, ln, { "font-size": TYPE.body, class: "fig-t-num" })); }
-      for (const ln of wrap(tpl(Lx.lowNarrow, { m: pct(f.low, 1) }), TYPE.body, w)) { y += 17; ro.push(mtext(0, y, ln, { "font-size": TYPE.body, class: "fig-t-num" })); }
+      for (const ln of wrap(tpl(Lx.rowNarrow, { f: nat(f.fwd), r: nat(f.rev) }), TYPE.body, w - 13)) { y += 17; ro.push(mtext(0, y, ln, { "font-size": TYPE.body, class: "fig-t-num" })); }
+      for (const ln of wrap(tpl(Lx.lowNarrow, { m: pct(f.low, 1) }), TYPE.body, w - 13)) { y += 17; ro.push(mtext(0, y, ln, { "font-size": TYPE.body, class: "fig-t-num" })); }
     });
   }
   const notes = [narrow ? null : Lx.boldNote];
@@ -412,7 +413,7 @@ function render(st: State<P>, lang: Lang): string {
   y += 8;
   for (const note of notes) {
     if (!note) continue;
-    for (const ln of wrap(note, TYPE.body, w)) { y += 17; ro.push(mtext(0, y, ln, { "font-size": TYPE.body, class: "fig-t-muted" })); }
+    for (const ln of wrap(note, TYPE.body, w - 13)) { y += 17; ro.push(mtext(0, y, ln, { "font-size": TYPE.body, class: "fig-t-muted" })); }
   }
   parts.push(g({ class: "fig-readout" }, ...ro));
   return svg(w, y + 6, describe(st, lang), ...parts);
