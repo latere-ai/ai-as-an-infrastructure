@@ -280,18 +280,6 @@ SPECS = {
         "xlabel": "runtime cost",
         "ylabel": "isolation strength",
     },
-    "embeddings-representation-1": {
-        "type": "scatter",
-        "points": [
-            {"label": "cat", "x": 0.22, "y": 0.72, "color": DATA, "dx": -0.03, "dy": -0.01, "ha": "right"},
-            {"label": "kitten", "x": 0.30, "y": 0.78, "color": DATA, "dx": 0.03, "dy": 0.03},
-            {"label": "invoice", "x": 0.72, "y": 0.28, "color": ACCENT, "dx": -0.03, "dy": -0.04, "ha": "right"},
-            {"label": "receipt", "x": 0.80, "y": 0.34, "color": ACCENT, "dx": 0.03, "dy": 0.03},
-            {"label": "hard negative", "x": 0.52, "y": 0.56, "color": WARN, "dx": 0.03, "dy": 0.02},
-        ],
-        "xlabel": "embedding dimension 1",
-        "ylabel": "embedding dimension 2",
-    },
     "context-engineering-1": {
         "type": "line",
         "x": [1, 2, 4, 8, 16, 32, 64],
