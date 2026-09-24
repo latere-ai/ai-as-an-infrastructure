@@ -343,13 +343,6 @@ SPECS = {
         "logx": True,
         "ylim": (0, 6.0),
     },
-    "rag-retrieval-1": {
-        "type": "funnel",
-        "stages": ["index", "retrieve", "rerank", "compose", "verify"],
-        "values": [1.00, 0.72, 0.46, 0.34, 0.28],
-        "xlabel": "candidate mass retained",
-        "xmax": 1.05,
-    },
     "embeddings-representation-1": {
         "type": "scatter",
         "points": [
