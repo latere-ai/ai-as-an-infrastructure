@@ -15,8 +15,24 @@
 //
 // The components, calls, and credential assignments restate the chapter's
 // prose. The example projects are illustrative, not recommendations, and were
-// checked against each project's own documentation or repository on
-// 24 September 2026; the chapter's dated blocks cite them.
+// checked on 24 September 2026 against each project's own documentation or
+// repository; the chapter's dated blocks cite them:
+// - gateways: github.com/BerriAI/litellm, github.com/agentgateway/agentgateway
+//   (LLM, MCP, and A2A gateway), github.com/theagentrouter/agent-router
+//   (Agent Router, formerly Envoy AI Gateway, with MCP support),
+//   github.com/Portkey-AI/gateway, github.com/maximhq/bifrost,
+//   openrouter.ai/pricing, developers.cloudflare.com/ai-gateway/
+// - sandboxes: github.com/e2b-dev/runtime and vercel.com/docs/sandbox
+//   (Firecracker microVMs), modal.com/docs/guide/security (gVisor)
+// - serving: github.com/vllm-project/vllm, github.com/sgl-project/sglang,
+//   github.com/llm-d/llm-d, github.com/ai-dynamo/dynamo
+// - runtimes and retrieval: openai.github.io/openai-agents-python,
+//   github.com/anthropics/claude-agent-sdk-python, LangGraph checkpointers,
+//   Pydantic AI durable execution, github.com/pgvector/pgvector, Qdrant hybrid
+//   queries, turbopuffer.com/docs
+// - compute: Kueue, Volcano, and KAI Scheduler repositories, KubeRay, Slurm
+// - evaluation: Langfuse, Arize Phoenix, Promptfoo, DeepEval, Braintrust, and
+//   LangSmith documentation
 
 import { defineFigure, type Lang, type State, type Text } from "./types.ts";
 import { svg, el, text, g } from "./lib/svg.ts";
