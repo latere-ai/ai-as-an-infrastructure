@@ -214,7 +214,6 @@ const knownWideFigures = [
   "en:fig-agent-architectures-react-loop",
   "en:fig-harness-state-machine",
   "en:fig-orchestration-control-loop",
-  "en:fig-whole-stack-pipeline",
   "zh:fig-agent-architectures-react-loop",
   "zh:fig-orchestration-control-loop",
 ];

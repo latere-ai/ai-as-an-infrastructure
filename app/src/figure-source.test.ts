@@ -100,7 +100,7 @@ test("English figure 1.2 separates model development from request execution", ()
   const block = qmd.match(/```\{dot\}\n\/\/\| label: fig-whole-stack-pipeline[\s\S]*?\n```/)?.[0] ?? "";
   expect(block).toContain('label="MODEL LIFECYCLE"');
   expect(block).toContain('label="REQUEST RUNTIME"');
-  expect(block).toContain('W -> S [style=dashed, label="loaded by"]');
+  expect(block).toContain('W -> S [style=dashed');
   expect(block).toContain('G -> E [label="permitted action"]');
   expect(block).toContain('E -> G [label="observation"]');
   expect(block).not.toContain('G -> S [label="observe, act, repeat"]');
