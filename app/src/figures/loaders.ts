@@ -142,4 +142,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "plaintext-path": () => import("./plaintext-path.ts"),
   "attestation-chain": () => import("./attestation-chain.ts"),
   "incident-clocks": () => import("./incident-clocks.ts"),
+  "progressive-rollout": () => import("./progressive-rollout.ts"),
 };
