@@ -46,4 +46,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "acceptance-weighting": () => import("./acceptance-weighting.ts"),
   "block-scaling": () => import("./block-scaling.ts"),
   "horizon-threshold": () => import("./horizon-threshold.ts"),
+  "benchmark-headroom": () => import("./benchmark-headroom.ts"),
 };
