@@ -95,4 +95,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "phase-record": () => import("./phase-record.ts"),
   "request-binding": () => import("./request-binding.ts"),
   "credential-reach": () => import("./credential-reach.ts"),
+  "attack-surfaces": () => import("./attack-surfaces.ts"),
 };
