@@ -321,7 +321,7 @@ export default defineFigure({
       ],
     },
     context: {
-      kind: "range", scale: "log", label: { en: "Context length", zh: "上下文长度" }, unit: { en: "tokens", zh: "个词元" }, min: 64, max: 1048576, default: 262144,
+      kind: "range", scale: "log", label: { en: "Context length", zh: "上下文长度" }, unit: { en: "tokens", zh: "个词元" }, min: 64, max: 1048576, default: 262000, // three significant figures, as the slider reports it
       marks: [{ value: 262144, label: { en: "256K, Jamba's context", zh: "256K，Jamba 的上下文" } }],
     },
   },
