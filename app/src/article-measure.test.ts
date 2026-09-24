@@ -51,12 +51,12 @@ test("caps are in em, so the measure holds its character count at any text size"
   }
 });
 
-test("the default measure reads about 66 to 72 Latin characters, zh narrower", () => {
+test("the default measure reads about 80 to 90 Latin characters, zh narrower", () => {
   expect(DEFAULT_SETTINGS.layout).toBe("codex");
   // Inter at 18 px advances about 0.48 em per character of running English.
   const chars = (parseFloat(measure("en", "codex")) / 0.48);
-  expect(chars).toBeGreaterThanOrEqual(66);
-  expect(chars).toBeLessThanOrEqual(76);
+  expect(chars).toBeGreaterThanOrEqual(80);
+  expect(chars).toBeLessThanOrEqual(90);
   // A CJK glyph is ~2x the advance width of a Latin one, so the zh caps must
   // stay the narrower pair.
   for (const layout of ["manuscript", "codex"]) {
@@ -68,6 +68,15 @@ test("the default measure reads about 66 to 72 Latin characters, zh narrower", (
 test("no layout drops the column below the 640 px figure modules need", () => {
   for (const lang of ["en", "zh"] as const) {
     for (const layout of ["manuscript", "codex"]) expect(px(measure(lang, layout))).toBeGreaterThanOrEqual(640);
+  }
+});
+
+// Both caps once resolved below the 640 px floor at 18 px text, so manuscript
+// and codex rendered the same column until the reader enlarged the text.
+test("manuscript and codex are distinct widths at the default text size", () => {
+  for (const lang of ["en", "zh"] as const) {
+    expect(px(measure(lang, "manuscript"))).toBeGreaterThan(640);
+    expect(px(measure(lang, "manuscript"))).toBeLessThan(px(measure(lang, "codex")));
   }
 });
 

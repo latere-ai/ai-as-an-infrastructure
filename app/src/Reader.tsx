@@ -7,7 +7,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterData, Lang, Layout, Palette, ReaderSettings } from "./types.ts";
 import { DEFAULT_SETTINGS } from "./types.ts";
-import { runSearch, type SearchDoc } from "./search-match.ts";
+import { runSearch, type SearchDoc, type Scored } from "./search-match.ts";
+import { SUGGESTED, emptyStateDocs, pushRecent, readRecent } from "./search-suggest.ts";
 import { Comments } from "./comments.tsx";
 import { BookmarkButton, ChapterStats, HeaderAuth } from "./account.tsx";
 import { REPO_URL, editUrl, issueUrl } from "./repo.ts";
@@ -18,7 +19,7 @@ type Strings = {
   palette: string; ink: string; clay: string; rose: string; theme: string; light: string; dark: string;
   body: string; sans: string; kai: string; size: string; layout: string;
   codex: string; manuscript: string; atlas: string; prev: string; next: string; language: string; resize: string;
-  author: string; updated: string; reviewed: string; readtimeLabel: string; noResults: string;
+  author: string; updated: string; reviewed: string; readtimeLabel: string; noResults: string; recent: string; startHere: string; tryTopics: string;
   aboutAuthor: string; aboutLatere: string; sourceRepo: string;
   contributePrompt: string; reportIssue: string; editPage: string;
 };
@@ -29,7 +30,7 @@ const STRINGS: Record<Lang, Strings> = {
     palette: "配色", ink: "墨纸", clay: "靛蓝", rose: "玫瑰", theme: "主题", light: "浅色", dark: "深色",
     body: "正文字体", sans: "黑体", kai: "楷体", size: "字号", layout: "版式",
     codex: "典藏", manuscript: "手稿", atlas: "图册", prev: "上一章", next: "下一章", language: "语言", resize: "拖动调整宽度",
-    author: "作者", updated: "更新于", reviewed: "审阅于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果",
+    author: "作者", updated: "更新于", reviewed: "审阅于", readtimeLabel: "阅读时长", noResults: "没有匹配的结果", recent: "最近阅读", startHere: "从这里开始", tryTopics: "试试搜索",
     aboutAuthor: "关于作者", aboutLatere: "关于 Latere AI", sourceRepo: "GitHub 源码仓库",
     contributePrompt: "本书在 GitHub 上公开写作。发现错误或有不清楚的地方：", reportIssue: "提交问题", editPage: "编辑本页",
   },
@@ -38,7 +39,7 @@ const STRINGS: Record<Lang, Strings> = {
     palette: "Palette", ink: "Ink", clay: "Azure", rose: "Rose", theme: "Theme", light: "Light", dark: "Dark",
     body: "Body font", sans: "Sans", kai: "Kai", size: "Text size", layout: "Layout",
     codex: "Codex", manuscript: "Manuscript", atlas: "Atlas", prev: "Previous", next: "Next", language: "Language", resize: "Drag to resize",
-    author: "Author", updated: "Updated", reviewed: "Reviewed", readtimeLabel: "Reading time", noResults: "No matching results",
+    author: "Author", updated: "Updated", reviewed: "Reviewed", readtimeLabel: "Reading time", noResults: "No matching results", recent: "Recent", startHere: "Start here", tryTopics: "Try",
     aboutAuthor: "About Author", aboutLatere: "About Latere AI", sourceRepo: "Source on GitHub",
     contributePrompt: "This book is written in the open. Found an error, or something unclear?", reportIssue: "Report an issue", editPage: "Edit this page",
   },
@@ -115,6 +116,9 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const [vw, setVw] = useState(1440);
   const [tocFits, setTocFits] = useState(true);
   const settingsRef = useRef<HTMLDivElement>(null);
+
+  // Remember this page for the search dialog's list of recent pages.
+  useEffect(() => { pushRecent(lang, chapter.path || "index"); }, [lang, chapter.path]);
 
   // Spotlight search: Cmd/Ctrl+K opens it from anywhere (preventDefault so the
   // browser does not steal the chord for its address bar / search shortcut).
@@ -423,7 +427,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
         </>
       )}
 
-      {searchOpen && <SearchModal t={t} prefix={chapter.prefix} onClose={() => setSearchOpen(false)} />}
+      {searchOpen && <SearchModal t={t} lang={lang} current={chapter.path || "index"} prefix={chapter.prefix} onClose={() => setSearchOpen(false)} />}
     </div>
   );
 }
@@ -465,7 +469,7 @@ function ChapterOpener({ chapter, t }: { chapter: ChapterData; t: Strings }) {
 
 // Spotlight-style search overlay: a centred command palette with live results,
 // keyboard navigation (↑/↓ to move, Enter to open, Esc to close).
-function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClose: () => void }) {
+function SearchModal({ t, lang, current, prefix, onClose }: { t: Strings; lang: Lang; current: string; prefix: string; onClose: () => void }) {
   const [q, setQ] = useState("");
   const [docs, setDocs] = useState<SearchDoc[] | null>(null);
   const [sel, setSel] = useState(0);
@@ -479,6 +483,10 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
   }, [prefix]);
 
   const results = useMemo(() => (docs ? runSearch(docs, q) : []), [q, docs]);
+  // Before the reader types: recent pages (or starting pages) and topic chips.
+  const empty = useMemo(() => (docs ? emptyStateDocs(docs, readRecent(lang), current) : null), [docs, lang, current]);
+  const typing = q.trim() !== "";
+  const items: { doc: SearchDoc; snip?: Scored["snip"] }[] = typing ? results : (empty?.docs ?? []).map((doc) => ({ doc }));
 
   // Keep the selection in range as results change, and scrolled into view.
   useEffect(() => { setSel(0); }, [q]);
@@ -492,12 +500,29 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
     return d.anchor ? `${base}#${d.anchor}` : base;
   };
 
+  const renderItem = ({ doc: d, snip }: { doc: SearchDoc; snip?: Scored["snip"] }, i: number) => (
+    <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} className="rdr-hit" style={{ background: i === sel ? "var(--accent-subtle)" : "transparent" }}>
+      <div style={{ fontSize: 13.5, fontWeight: 500 }}>
+        <span style={{ display: "inline-block", minWidth: 20, fontSize: 12, fontVariantNumeric: "tabular-nums", color: "var(--fg-3)", marginRight: 4 }}>{d.num || "·"}</span>
+        {d.title}
+        {d.heading && <span style={{ color: "var(--fg-3)", fontWeight: 400 }}> › {d.heading}</span>}
+      </div>
+      {snip?.hit && (
+        <div style={{ fontSize: 12, color: "var(--fg-2)", marginTop: 3, lineHeight: 1.45 }}>
+          {snip.pre}
+          <mark style={{ background: "var(--accent-glow)", color: "inherit", padding: "0 1px", borderRadius: 2 }}>{snip.hit}</mark>
+          {snip.post}
+        </div>
+      )}
+    </a>
+  );
+
   const onKey = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); onClose(); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); setSel((i) => Math.min(results.length - 1, i + 1)); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setSel((i) => Math.min(items.length - 1, i + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setSel((i) => Math.max(0, i - 1)); }
     else if (e.key === "Enter") {
-      const r = results[sel];
+      const r = items[sel];
       if (r) { e.preventDefault(); location.href = hrefFor(r.doc); }
     }
   };
@@ -521,24 +546,19 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
             border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)", padding: "2px 6px",
           }}>ESC</kbd>
         </div>
-        {results.length > 0 && (
-          <div ref={listRef} style={{ overflowY: "auto", padding: 6 }}>
-            {results.map(({ doc: d, snip }, i) => (
-              <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} className="rdr-hit" style={{ background: i === sel ? "var(--accent-subtle)" : "transparent" }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500 }}>
-                  <span style={{ fontSize: 12, fontVariantNumeric: "tabular-nums", color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>
-                  {d.title}
-                  {d.heading && <span style={{ color: "var(--fg-3)", fontWeight: 400 }}> › {d.heading}</span>}
-                </div>
-                {snip.hit && (
-                  <div style={{ fontSize: 12, color: "var(--fg-2)", marginTop: 3, lineHeight: 1.45 }}>
-                    {snip.pre}
-                    <mark style={{ background: "var(--accent-glow)", color: "inherit", padding: "0 1px", borderRadius: 2 }}>{snip.hit}</mark>
-                    {snip.post}
-                  </div>
-                )}
-              </a>
-            ))}
+        {typing && results.length > 0 && (
+          <div ref={listRef} style={{ overflowY: "auto", padding: 6 }}>{items.map(renderItem)}</div>
+        )}
+        {!typing && docs && (
+          <div style={{ overflowY: "auto", padding: "4px 6px 10px" }}>
+            {items.length > 0 && <div className="rdr-search-label">{empty?.kind === "recent" ? t.recent : t.startHere}</div>}
+            <div ref={listRef}>{items.map(renderItem)}</div>
+            <div className="rdr-search-label">{t.tryTopics}</div>
+            <div className="rdr-search-chips">
+              {SUGGESTED[lang].map((term) => (
+                <button key={term} type="button" className="rdr-chip" onClick={() => { setQ(term); inputRef.current?.focus(); }}>{term}</button>
+              ))}
+            </div>
           </div>
         )}
         {q.trim() && results.length === 0 && docs && (
