@@ -90,4 +90,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "vision-connectors": () => import("./vision-connectors.ts"),
   "patch-grid": () => import("./patch-grid.ts"),
   "lsh-banding": () => import("./lsh-banding.ts"),
+  "curation-retention": () => import("./curation-retention.ts"),
 };
