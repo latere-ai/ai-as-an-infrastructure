@@ -90,11 +90,17 @@ an on-ramp added in EN is ported to ZH, not re-invented.
 ## Math and diagrams
 
 - Math is LaTeX: inline `$...$` and display `$$...$$`.
-- Diagrams are figure modules embedded with a `` ```{figure} `` block (see
-  `app/src/figures/README.md`), or Graphviz in a `` ```{dot} `` block. The
-  reader does not render Mermaid, and the lint rejects a mermaid fence. Verify
-  a diagram renders, not just that its source parses. Use a static image only
-  when neither can express the figure.
+- Diagrams and charts are figure modules embedded with a `` ```{figure} ``
+  block (see `app/src/figures/README.md`): the build renders each one to
+  inline SVG, so it reads without script, and the browser adds its controls.
+  A structural diagram with nothing to vary can be Graphviz in a
+  `` ```{dot} `` block, also rendered at build time. The reader does not
+  render Mermaid, and the lint rejects a mermaid fence. Verify a figure at the
+  mobile column width, not just that its source parses.
+- A figure drawn from measured data takes it from a script under
+  `tools/figure-data/` that regenerates it, and says where the data come
+  from.
+- Every figure has a Chinese twin with the same inputs and the same meaning.
 
 ## Tone
 
