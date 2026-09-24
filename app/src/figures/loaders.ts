@@ -81,4 +81,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "unigram-lattice": () => import("./unigram-lattice.ts"),
   "boundary-transfer": () => import("./boundary-transfer.ts"),
   "reverse-accumulation": () => import("./reverse-accumulation.ts"),
+  "finite-difference-step": () => import("./finite-difference-step.ts"),
 };
