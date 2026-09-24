@@ -12,7 +12,8 @@ governed dataset, a training run, an evaluation report, and a versioned model
 artifact. The mechanics of supervised fine-tuning and parameter-efficient
 methods appear in @sec-sft-peft; distributed training appears in
 @sec-training-at-scale. This chapter connects those mechanisms into an operating
-procedure for a product team.
+procedure for a product team, and names the current training engines,
+post-training toolkits, and managed services with what each is built for.
 
 ## Freeze the adaptation contract
 
@@ -333,22 +334,24 @@ costs in dollars, and the $c$ terms are dollars per million accepted tokens.
 There is no meaningful crossover if quality, safety, or reliability differs, or
 if the tuned path is not cheaper per accepted token.
 
-:::: {.runnable}
-```python
-# Illustrative only. All costs are USD; volume is millions of accepted tokens.
-base_fixed = 0.0
-adaptation_program = 50.0
-tuned_fixed = adaptation_program
-base_rate = 5.0
-tuned_rate = 0.5
+For a small adapter, training compute is often the smallest term of
+$C_{\mathrm{adapt}}$. A pilot on 20,000 examples of about 1,000 tokens each,
+trained for three epochs, processes 60 million training tokens, which at a
+current managed price for an 8-billion-parameter model costs about twenty
+dollars. Data review, evaluation, and engineering time are counted in person-days.
+The break-even volume $V^*$ is then set mostly by $C_{\mathrm{data}}$,
+$C_{\mathrm{eval}}$, and $C_{\mathrm{engineering}}$, and by the per-token
+difference $c_{\mathrm{base}}-c_{\mathrm{tuned}}$, which the serving layer
+decides.
 
-if base_rate <= tuned_rate:
-    print("no positive break-even volume")
-else:
-    break_even = (tuned_fixed - base_fixed) / (base_rate - tuned_rate)
-    print(f"break-even volume: {break_even:.1f}M accepted tokens")
-```
-::::
+::: {.callout-note .dated}
+## As of September 2026
+
+Together AI lists fine-tuning per million training tokens by model: $0.34 for
+SFT and $0.84 for DPO on Llama 3.1 8B or Qwen3.5 9B, and $2.03 and $5.08 on
+Llama 3.3 70B, with a minimum charge per job of $4 to $60. The same list does
+not separate LoRA from full fine-tuning [@together2026pricing].
+:::
 
 ## Select tools by capability
 
@@ -381,6 +384,77 @@ fastest are not grounds for selection. Benchmark the smallest representative
 run. Pin versions and container images. Force a worker failure, restore from a
 checkpoint, export the artifact, and serve it through the target runtime before
 scaling up.
+
+### Current tools by layer
+
+The tools fall into three layers that are easy to conflate. Distributed engines
+shard a model and its optimizer state across accelerators. Post-training
+toolkits wrap those engines with SFT, preference, and RL trainers and with
+adapter methods; most product teams work at this layer. Managed services run
+the whole stack on the provider's accelerators.
+
+| Engine | What it is | License | Built for |
+|---|---|---|---|
+| **PyTorch FSDP2** | Fully sharded data parallelism in PyTorch, with each parameter a sharded DTensor [@pytorch2026fsdp2] | BSD | Sharded training in plain PyTorch |
+| **TorchTitan** | PyTorch-native platform that composes FSDP2 with tensor, pipeline, and context parallelism and Float8, MXFP8, and NVFP4 training [@liang2024torchtitan; @pytorch2026torchtitanrepo] | BSD | Pretraining, continued pretraining, and SFT on PyTorch |
+| **Megatron Core** | NVIDIA's library of GPU-optimized transformer blocks with tensor, pipeline, data, expert, and context parallelism and FP8 and FP4 training [@nvidia2026megatronlm] | Apache 2.0 | Large dense and mixture-of-experts models on NVIDIA GPUs |
+| **DeepSpeed** | ZeRO sharding of optimizer state, gradients, and parameters, with CPU and NVMe offload [@rajbhandari2020zero; @microsoft2026deepspeed] | Apache 2.0 | Runs limited by accelerator memory |
+| **MaxText** | JAX reference library for language models, with SFT and GRPO through Tunix [@google2026maxtext] | Apache 2.0 | Training on Cloud TPUs, and on GPUs |
+
+| Toolkit | What it is | License | Built for |
+|---|---|---|---|
+| **TRL** | Hugging Face's post-training library: SFT, DPO, reward-model, GRPO, and RLOO trainers [@hf2026trl] | Apache 2.0 | The reference trainers that other toolkits build on |
+| **PEFT** | LoRA, QLoRA, DoRA, and other adapter methods, with adapter merging [@hf2026peft] | Apache 2.0 | The adapter layer under the other toolkits |
+| **Axolotl** | One YAML file per run over TRL and PEFT: LoRA, QLoRA, full fine-tuning, and preference training [@axolotl2026] | Apache 2.0 | Reviewable, repeatable runs on one or a few nodes |
+| **Unsloth** | Custom kernels for lower-memory LoRA, QLoRA, full fine-tuning, GRPO, DPO, and FP8 training [@unsloth2026docs] | Apache 2.0 core; AGPL-3.0 Studio interface | Single-GPU and small multi-GPU runs |
+| **LLaMA-Factory** | More than 100 models with SFT, DPO, KTO, ORPO, and PPO and a web interface, LLaMA Board [@llamafactory2026repo] | Apache 2.0 | Breadth of models and a low-code interface |
+| **verl** | The HybridFlow implementation: PPO, GRPO, GSPO, and DAPO over FSDP or Megatron trainers with vLLM or SGLang rollouts [@verl2026repo; @sheng2024hybridflow] | Apache 2.0 | Multi-node RL post-training |
+| **vime** | Megatron training joined to vLLM rollout workers, colocated or disaggregated [@vllm2026vime] | Apache 2.0 | RL on a Megatron and vLLM stack |
+
+| Managed service | What it offers | Built for |
+|---|---|---|
+| **Tinker** | A training API: the team writes the loop with `forward_backward`, `optim_step`, `sample`, and `save_state`, and the service runs LoRA training of open-weight models and returns downloadable checkpoints [@thinkingmachines2025tinker] | Custom SFT and RL loops without operating accelerators |
+| **Together AI** | LoRA and full fine-tuning with SFT and DPO on open-weight models, billed per training token [@together2026pricing] | Standard SFT and DPO runs |
+| **Amazon Bedrock** | Managed fine-tuning, including reinforcement fine-tuning with rule-based graders, model judges, or Lambda reward functions [@aws2026rftbedrock] | Teams whose data and serving already run on AWS |
+| **OpenAI fine-tuning** | Hosted SFT and reinforcement fine-tuning of OpenAI models, served only by the provider [@openai2026evalsdeprecation] | Existing customers; the service is winding down |
+
+Read against the capability matrix, the tables narrow the choice quickly:
+
+- **Unsloth** when the run fits one GPU or a few and memory is the binding
+  limit.
+- **Axolotl** or **LLaMA-Factory** when a reviewed configuration file, or a
+  web interface for non-specialists, should describe the run.
+- **TRL** directly when the objective or data flow needs custom code.
+- **TorchTitan**, **Megatron Core**, or **MaxText** for multi-node pretraining
+  or continued pretraining, chosen by accelerator family and framework.
+- **verl** or **vime** for multi-node RL, and TRL for RL that fits one node.
+- A **managed service** when the team has no appetite for operating
+  accelerators and the workload is standard, after its export path has passed
+  the same serving and merge-parity checks as a self-managed artifact.
+
+The export path decides whether a managed run remains a reversible choice. A
+provider that holds the weights also holds the rollback target, and the release
+can outlive the product that trained it: OpenAI's self-serve fine-tuning is
+closing to new jobs, while its fine-tuned models keep serving only until their
+base models are deprecated.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+TRL v1.13 generates with vLLM versions 0.19.1 through 0.28.0 [@hf2026trlvllm],
+two minor versions behind the vLLM release in @sec-serving-stack, so the rollout
+engine inside a training job is pinned separately from the serving fleet's
+engine. Unsloth's open-source release now lists multi-GPU training
+[@unsloth2026docs]. torchtune stopped active development on 15 July 2025
+[@torchtune2026issue]. Development of the torchforge RL library has paused as
+PyTorch consolidates language-model training in TorchTitan
+[@pytorch2025forgerepo], which added the TitanRL stack in August 2026
+[@pytorch2026torchtitanrepo]. OpenAI stopped accepting fine-tuning jobs from
+new organizations on 7 May 2026; active customers can create jobs until 6
+January 2027 [@openai2026evalsdeprecation]. Amazon Bedrock added
+reinforcement fine-tuning for Qwen3 32B and gpt-oss-20b on 17 February 2026
+[@aws2026rftbedrock].
+:::
 
 ## Make the run reproducible
 
@@ -432,6 +506,48 @@ and checkpoint events. Resumable state includes the model or adapter, optimizer,
 scheduler, precision scaler, random-number generators, sampler or data-loader
 cursor, global token counter, and sharding metadata. Store the last complete
 checkpoint atomically and test restoration in a clean process.
+
+The trainer's own configuration is one input the manifest records. For an
+Axolotl QLoRA pilot, the file below sets the objective, parameter scope, rank,
+target modules, optimizer, scheduler, seed, and loss mask; the manifest stores
+its digest together with the effective configuration after defaults
+[@axolotl2026].
+
+```yaml
+# qlora.yml: one pilot candidate for run support-sft-0042
+base_model: Qwen/Qwen3-8B
+load_in_4bit: true                # QLoRA: the frozen base is stored in 4 bits
+adapter: qlora
+lora_r: 16                        # the rank r, one candidate to compare
+lora_alpha: 32
+lora_dropout: 0.0
+lora_target_linear: true          # adapters on every linear layer
+datasets:
+  - path: ./data/train.jsonl      # the train split of the dataset manifest
+    type: chat_template
+    field_messages: messages
+    roles_to_train: ["assistant"] # the loss mask: only assistant tokens count
+sequence_len: 4096
+sample_packing: true
+micro_batch_size: 2
+gradient_accumulation_steps: 8
+num_epochs: 3
+learning_rate: 2.0e-4
+optimizer: adamw_torch
+lr_scheduler: cosine
+bf16: true
+gradient_checkpointing: true
+seed: 42
+output_dir: ./outputs/support-sft-0042
+```
+
+The same file drives training and the adapter merge, so the merged checkpoint
+traces back to the configuration that produced it:
+
+```bash
+axolotl train qlora.yml
+axolotl merge-lora qlora.yml --lora-model-dir ./outputs/support-sft-0042
+```
 
 Bit-for-bit replay is not always available across accelerators and kernels. The
 manifest must still reproduce the data and objective exactly, restore a run,
@@ -512,6 +628,51 @@ next token, under the same tokenizer, precision, and serving runtime. An
 algebraically exact merge can still behave differently at runtime after
 serialization or quantization.
 
+Saving the merged matrix $W + BA$ in a low-precision format rounds each entry
+relative to the size of that entry, which is set by the base weight, while the
+separate adapter's factors are rounded relative to their own, much smaller
+size. The runnable below stores a base matrix in bfloat16, merges LoRA updates
+of three sizes relative to the base, saves the result in bfloat16 again, and
+compares what the merged matrix and the separate factors add to a layer's
+output with the exact update. The smaller the update, the more of it the merge
+rounds away, and at a thousandth of the base magnitude most merged weights come
+out unchanged. How large a trained update is relative to its base depends on
+rank, scaling, learning rate, and training length, which is why merge parity is
+measured on the real artifact. Setting `BITS = 11`, the precision of float16,
+shrinks the loss, and `BITS = 24`, float32, removes it.
+
+:::: {.runnable}
+```python
+import numpy as np
+
+BITS = 8        # significant bits of the stored format: 8 for bfloat16
+
+def store(a):
+    """Round to BITS significant bits, as saving in a low-precision float does."""
+    m, e = np.frexp(a)
+    return np.ldexp(np.round(m * 2**BITS) / 2**BITS, e)
+
+rng = np.random.default_rng(0)
+d, r = 1024, 16
+W = store(rng.normal(0, 0.02, (d, d)))           # base weights as served
+A = rng.normal(0, 1, (r, d)) / np.sqrt(d)
+x = rng.normal(0, 1, d)
+
+for size in [1e-1, 1e-2, 1e-3]:                  # typical |BA| entry relative to |W|
+    B = rng.normal(0, 0.02 * size * np.sqrt(d / r), (d, r))
+    exact = B @ (A @ x)                           # what the adapter should add
+    separate = store(B) @ (store(A) @ x)          # adapter kept as its own factors
+    W_merged = store(W + B @ A)                   # merged, then saved
+    merged = (W_merged - W) @ x
+    err_s = np.linalg.norm(separate - exact) / np.linalg.norm(exact)
+    err_m = np.linalg.norm(merged - exact) / np.linalg.norm(exact)
+    print(f"|BA|/|W| = {size:g}: separate error {err_s:5.1%}, merged error {err_m:6.1%}, "
+          f"{np.mean(W_merged == W):4.0%} of weights unchanged by the merge")
+    # each merged entry is off by at most 2**-BITS of its own size, however small BA is
+    assert np.all(np.abs(W_merged - (W + B @ A)) <= 2.0**-BITS * np.abs(W + B @ A))
+```
+::::
+
 ```{dot}
 //| label: fig-training-wiring
 //| fig-cap: "Promotion and deployment are reversible. The candidate is evaluated through the serving runtime, introduced to a canary cohort, and either promoted or returned to the last-known-good artifact."
@@ -558,8 +719,29 @@ sleep or offload transitions, resharding, and phase switches. A
 allowing independent scaling but introducing transfer, scheduling, and
 freshness costs. HybridFlow formalizes one distributed RLHF dataflow and a
 mechanism for reshaping an actor, the policy model being trained, between
-generation and training layouts [@sheng2024hybridflow]. @sec-training-agents
-examines these choices in depth. This chapter's concern is artifact identity.
+generation and training layouts [@sheng2024hybridflow].
+
+Current toolkits implement both topologies with a serving engine as the rollout
+generator. TRL's online trainers run vLLM inside the trainer process on the
+training GPUs by default, the colocated case, or as a separate vLLM server on
+dedicated GPUs, the disaggregated case, to which the trainer streams updated
+weights over NCCL after each optimizer step [@hf2026trlvllm]. verl schedules
+vLLM or SGLang rollout workers and FSDP or Megatron trainers under one
+controller [@verl2026repo], and vime joins Megatron training to vLLM rollout
+workers in either placement [@vllm2026vime]. The rollout engine is the same kind
+of system as the serving engine of @sec-serving-stack, with a version of its
+own that the run manifest records. In TRL the topology is one field of the
+trainer configuration:
+
+```python
+from trl import GRPOConfig
+
+# Disaggregated: rollouts come from a vLLM server on dedicated GPUs.
+# The default, vllm_mode="colocate", shares the training GPUs instead.
+args = GRPOConfig(use_vllm=True, vllm_mode="server")
+```
+
+@sec-training-agents examines these choices in depth. This chapter's concern is artifact identity.
 Rollout data records the policy, reward, tokenizer, environment, and sampling
 versions so that each update can be audited.
 
@@ -619,6 +801,13 @@ activation memory, parameter scope sets optimizer and checkpoint state, and the
 rollout topology sets communication and freshness costs. A method is viable
 only when those lower layers meet the recovery, latency, residency, and cost
 requirements of the release.
+
+The serving layer also reaches up into the decision to train. The most common
+reason to adapt a smaller model is its lower serving cost per accepted token,
+the $c_{\mathrm{base}}-c_{\mathrm{tuned}}$ term of the break-even volume, and the
+same lifetime accounting leads @sec-scaling-laws to train small models past the
+compute-optimal point. A fine-tune justified this way is a serving-cost decision,
+and a change in serving prices is a reason to re-evaluate it.
 
 ::: {.callout-important}
 ## What's contested
