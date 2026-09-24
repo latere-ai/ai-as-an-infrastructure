@@ -201,6 +201,65 @@ its mix of token categories.
   [@deepseek2026pricing].
 :::
 
+The inequality takes the number of reads as given; in service it depends on how
+often a prefix recurs within the lifetime. The cell below treats the requests
+that share one prefix as random arrivals, a Poisson process with rate $\lambda$.
+A request that arrives after the entry has expired pays the write price $w$;
+any other request pays the read price $\rho$, and the model assumes every
+request restarts the lifetime $T$. The expected cost per request, as a multiple
+of the uncached input price, is then $e^{-\lambda T}w+(1-e^{-\lambda T})\rho$,
+and a write is followed on average by $e^{\lambda T}-1$ reads, the $n$ of the
+inequality. The code checks a simulation against that closed form, finds the
+mean gap between requests at which each cache stops paying, and plots cost per
+request against that gap. With $\rho=0.1$ and write prices of 1.25 for a
+five-minute lifetime and 2 for a one-hour lifetime, the five-minute cache pays
+while requests for the prefix recur within about 20 minutes on average and the
+one-hour cache within about 80. The code also asserts that, in this model, the
+one-hour cache costs less per request wherever the five-minute cache pays,
+because its entry expires less often; a short burst of requests that ends
+within five minutes, which the model leaves out, is the case where the cheaper
+write wins. The prices and lifetimes are variables at the top of the cell and
+can be set to another provider's terms.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+rho = 0.1                                   # cache read, multiple of the uncached input price
+caches = {"5-minute": (5, 1.25), "1-hour": (60, 2.0)}   # lifetime T in minutes, write price w
+gap = np.logspace(0, np.log10(300), 40)     # mean minutes between requests sharing a prefix
+
+fig, ax = plt.subplots(figsize=(6.4, 3.6))
+cost = {}
+for name, (T, w) in caches.items():
+    lam_T = T / gap                                           # expected requests per lifetime
+    closed = np.exp(-lam_T) * w + (1 - np.exp(-lam_T)) * rho  # cost per request
+    gaps = rng.exponential(gap[:, None], size=(gap.size, 20000))
+    sim = np.where(gaps > T, w, rho).mean(axis=1)             # expired: write; otherwise: read
+    assert np.allclose(sim, closed, atol=0.02)
+    n = (w - 1) / (1 - rho)                                   # break-even reads per write
+    g_star = T / np.log(1 + n)                                # mean gap where the cache breaks even
+    assert np.isclose(np.exp(-T / g_star) * w + (1 - np.exp(-T / g_star)) * rho, 1.0)
+    cost[name] = closed
+    line, = ax.plot(gap, closed, label=f"{name} cache, w = {w}")
+    ax.plot(gap[::3], sim[::3], ".", color=line.get_color(), ms=4)
+    ax.axvline(g_star, ls=":", color=line.get_color())
+    print(f"{name} cache pays while requests recur within {g_star:.0f} min on average")
+
+pays = cost["5-minute"] < 1
+assert np.all(cost["1-hour"][pays] <= cost["5-minute"][pays])
+ax.axhline(1.0, color="k", lw=0.8, label="no cache")
+ax.set(xscale="log", xlabel="mean gap between requests (minutes)",
+       ylabel="input cost per request (x uncached)",
+       title="Caching stops paying at a 20- or 80-minute mean gap")
+ax.legend(frameon=False, fontsize=8)
+plt.tight_layout()
+plt.show()
+```
+::::
+
 A unit cost is reported with the mix it was measured on: prompt and
 output-length distributions, cache-hit rate and reads per cached prefix, batch
 and concurrency policy, service tier, p50, p95, and p99 latency, errors, and
@@ -473,32 +532,6 @@ then returns to scenario and sensitivity analysis.
 //| fig-cap: "Monthly cost against monthly token demand, with illustrative prices, throughput, and costs. The API bill is drawn at today's price (solid), after each intermediate year (dotted), and at the end of the planning horizon (dashed). Self-hosting is bought in whole replicas sized to the planned utilization and costs the same in every month of the horizon, so its bill rises in steps; the gray dashed line is the linear shortcut $V^* = F/(p-c)$ with capacity treated as divisible, so that $c$ is the accelerator cost per token at that utilization. The strip marks, for each year, the demands at which the self-host bill is lower, and the bars compare discounted totals over the horizon at low, base, and high demand and their mean with weights ¼, ½, ¼. The marks on the price-decline control are the listed-price half-lives by model tier reported in [@du2026tiered]. Quality differences, failures, exit cost, and API volume tiers are outside the model."
 ```
 
-The small program makes four assumptions visible. Demand is measured in
-millions of comparable units; changing only API price, demand, or the fixed
-capacity needed for a peak can reverse the result.
-
-:::: {.runnable}
-```python
-self_rate = 0.25  # dollars per million comparable units
-
-scenarios = [
-    ("base", 1_600_000, 2.00, 2_650_000),
-    ("api-price-down", 1_600_000, 1.30, 2_650_000),
-    ("demand-down", 800_000, 2.00, 2_650_000),
-    ("peak-capacity-up", 1_600_000, 2.00, 3_250_000),
-]
-
-for label, volume, api_rate, self_fixed in scenarios:
-    buy = volume * api_rate
-    self_host = self_fixed + volume * self_rate
-    choice = "self-host" if self_host < buy else "API"
-    print(
-        f"{label}: buy=${buy/1e6:.2f}M "
-        f"self=${self_host/1e6:.2f}M -> {choice}"
-    )
-```
-::::
-
 ## Model demand as a distribution
 
 A capacity plan starts from the demand distribution, because an average hides
@@ -541,11 +574,22 @@ Three views answer different questions:
   service.
 
 Changing a depreciation estimate changes the timing of accounting expense; it
-does not change the cash already paid. Amazon, for example, reported that it
-extended server lives from five to six years in 2024, then shortened a subset
-of servers and networking equipment back to five years in 2025
-[@amazon202510k]. That filing demonstrates estimate revision, not the correct
-life for every accelerator. A team comparing owned with rented capacity should
+does not change the cash already paid. A fleet's annual depreciation is its
+recorded cost divided by the estimated life, so the life estimate decides how
+much of the same cash lands in each year's expense, and large operators have
+revised it in both directions. Alphabet lengthened the estimated life of its
+servers from four to six years in 2023 [@computerweekly2023alphabet]. Amazon
+reported that it extended server lives from five to six years in 2024, then
+shortened a subset of servers and networking equipment back to five years in
+2025 [@amazon202510k]. The estimate is contested because an accelerator's
+physical life and its economic life can differ. One position holds that an
+annual accelerator release cadence gives a GPU an economic life of two to three
+years even if the hardware runs for six, so six-year schedules understate
+expense and overstate earnings [@cnbc2025burry]. The other points to
+prior-generation accelerators that stay fully booked and are re-leased near
+their original rates when contracts expire [@cnbc2025depreciation]. These
+filings and arguments demonstrate estimate revision, not the correct life for
+every accelerator. A team comparing owned with rented capacity should
 show useful-life and salvage-value sensitivity, physical failures, performance
 obsolescence, and the planned secondary use of older hardware.
 
@@ -558,6 +602,92 @@ the 2025 infrastructure buildout [@bis2026financing]. For a product decision,
 financing belongs in the discount rate, fixed commitments, and downside
 scenarios. It should not be mixed into a token-cost numerator without an
 explicit allocation rule.
+
+## The capital layer
+
+The ledger assumes the accelerators exist. How the buildout that supplies them
+is paid for forms a second economy, and its terms reach the prices a buyer
+sees. Debt has entered the buildout at scale, and much of it sits outside
+corporate balance sheets: BIS researchers describe borrowing that is
+economically similar to debt but held in joint ventures and special-purpose
+vehicles funded by consortia of sponsors [@bis2026financing], and a sell-side
+estimate puts the gap between planned data-center spending and hyperscaler cash
+flow in the trillions of dollars, with private credit expected to supply the
+largest external share [@morganstanley2025gap]. The instruments are new. A
+specialist GPU cloud borrows to buy hardware for contracts it has already
+signed with customers, so the loan is repaid from contracted revenue
+[@coreweave2023facility]. In a data-center joint venture, a credit fund owns
+most of a campus and the hyperscaler leases the capacity back under operating
+leases, which keeps the debt off the hyperscaler's balance sheet
+[@meta2025hyperion].
+
+Some of the money moves in loops. A chip vendor invests in a model developer
+that commits to deploy its systems; a second chip vendor grants the same
+developer warrants on its own shares that vest as the developer buys its
+accelerators; a cloud provider holds a large stake in a developer that has
+contracted to buy its cloud services [@nvidia2025openai; @amd2025openai;
+@microsoft2025openai]. Skeptics compare these loops with supplier financing in
+the telecom buildout around 2000, when equipment makers lent to the carriers
+that bought their equipment, so reported demand partly measured the suppliers'
+own lending. The counterargument points to served-token volume, which has grown
+fast at large providers and is harder to create this way [@pichai2025q3]. The
+sharper form of the skeptical case therefore concerns price per token and
+margin rather than volume.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+- Alphabet's 2023 change of server life from four to six years reduced its 2023
+  depreciation expense by USD 3.9 billion and raised net income by USD 3.0
+  billion [@computerweekly2023alphabet].
+- In November 2025, Michael Burry estimated that hyperscalers would understate
+  depreciation by about USD 176 billion from 2026 to 2028. CoreWeave's chief
+  executive answered that its A100s from 2020 were fully booked and that H100s
+  coming off contract had been rebooked at 95 percent of their original price
+  [@cnbc2025burry; @cnbc2025depreciation].
+- Morgan Stanley's July 2025 estimate put global data-center spending through
+  2028 at about USD 2.9 trillion, with about USD 1.4 trillion covered by
+  hyperscaler cash flow and about USD 800 billion of the remaining USD 1.5
+  trillion expected from private credit [@morganstanley2025gap]. BIS
+  researchers reported in March 2026 that big-tech gross bond issuance topped
+  USD 100 billion in 2025 [@bis2026financing].
+- CoreWeave's 2023 facility was USD 2.3 billion [@coreweave2023facility]. In the
+  Hyperion joint venture announced in October 2025, funds managed by Blue Owl
+  Capital own 80 percent and Meta 20 percent of a campus with about USD 27
+  billion of development cost, which Meta leases with a four-year initial term
+  [@meta2025hyperion].
+- In September 2025, NVIDIA announced a letter of intent to invest up to USD 100
+  billion in OpenAI as at least 10 GW of NVIDIA systems are deployed
+  [@nvidia2025openai]. In October 2025, AMD granted OpenAI a warrant for up to
+  160 million AMD shares tied to deploying 6 GW of AMD GPUs [@amd2025openai],
+  and Microsoft reported a stake of about 27 percent in OpenAI Group PBC, valued
+  at about USD 135 billion, alongside an OpenAI commitment to buy an
+  incremental USD 250 billion of Azure services [@microsoft2025openai].
+- On Alphabet's October 2025 earnings call, Google reported processing more
+  than 1.3 quadrillion tokens a month, over 20 times the volume a year earlier
+  [@pichai2025q3].
+:::
+
+The historical comparison worth carrying is Odlyzko's study of the British
+railway mania of the 1840s. A transformative network was built while much of
+the capital invested in it was destroyed, and the projections behind the
+overbuild disregarded quantitative evidence available at the time
+[@odlyzko2010railway]. A useful technology and a loss-making buildout can occur
+together.
+
+::: {.callout-important}
+## What's contested
+
+Whether the buildout is self-funding or a credit-financed overbuild is open, and
+the two readings predict different outcomes. Three observable signals separate
+them: whether more operators shorten depreciation lives rather than lengthen
+them; whether rental rates for accelerators coming off contract hold near their
+original pricing or fall; and whether the debt in special-purpose vehicles and
+at specialist GPU clouds is serviced from end-customer revenue or refinanced on
+the assumption that the assets keep their value. The usefulness of the
+technology does not settle the question, as the railway and telecom episodes
+showed.
+:::
 
 ## Operate the economic model
 
