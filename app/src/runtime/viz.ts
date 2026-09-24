@@ -5,7 +5,7 @@
 // framework-free JS; it can be incrementally typed later.
 // Interactive visualizations, client-side. A chapter embeds one with:
 //   ```{=html}
-//   <div class="viz" data-viz="softmax-temperature"></div>
+//   <div class="viz" data-viz="kv-cache"></div>
 //   ```
 // Components init lazily when scrolled into view. Colors are read from the
 // page so they follow the light/dark theme.
@@ -99,30 +99,6 @@
 
   var R = {};
 
-  // Softmax over fixed logits, temperature slider: shows sharpening/flattening.
-  R['softmax-temperature'] = function (host) {
-    var logits = [3.1, 2.4, 1.9, 1.2, 0.6, 0.1, -0.4, -1.0];
-    var cv = canvas(host, 240), T = 1.0;
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, p = 36 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var m = logits.map(function (x) { return Math.exp(x / T); });
-      var Z = m.reduce(function (a, b) { return a + b; }, 0);
-      var probs = m.map(function (x) { return x / Z; });
-      var bw = (W - 2 * p) / logits.length, mx = Math.max.apply(null, probs);
-      ctx.fillStyle = t.accent;
-      probs.forEach(function (pr, i) {
-        var bh = (H - 2 * p) * (pr / mx);
-        ctx.fillRect(p + i * bw + bw * 0.15, H - p - bh, bw * 0.7, bh);
-      });
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(p, H - p); ctx.lineTo(W - p, H - p); ctx.stroke();
-      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      probs.forEach(function (pr, i) { ctx.fillText(pr.toFixed(2), p + i * bw + bw / 2, H - p + 16 * cv.dpr); });
-    }
-    var s = slider('temperature', 0.1, 3, 0.05, 1, function (v) { T = v; draw(); });
-    host.appendChild(s.wrap); draw();
-  };
-
   // KV cache memory vs context length, with sliders.
   R['kv-cache'] = function (host) {
     var lang = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang === 'zh' ? 'zh' : 'en';
@@ -164,39 +140,6 @@
     });
     draw();
     watchTheme(host, draw);
-  };
-
-  // 3D point cloud (three.js), rotatable: a stand-in for an embedding space.
-  R['embeddings-3d'] = function (host) {
-    var box = el('div', 'viz-3d'); box.style.height = '320px'; host.appendChild(box);
-    var src = 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js';
-    function start() {
-      var t = theme();
-      var w = box.clientWidth || 600, h = 320;
-      var scene = new THREE.Scene();
-      var cam = new THREE.PerspectiveCamera(60, w / h, 0.1, 100); cam.position.set(0, 0, 6);
-      var rnd = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      rnd.setPixelRatio(window.devicePixelRatio || 1); rnd.setSize(w, h); box.appendChild(rnd.domElement);
-      var N = 1200, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
-      for (var i = 0; i < N; i++) {
-        var k = i % 3, a = Math.random() * Math.PI * 2, r = 1.4 + Math.random() * 0.5;
-        pos[3 * i] = Math.cos(a) * r + (k - 1) * 2.2; pos[3 * i + 1] = Math.sin(a) * r + (k - 1) * 0.6; pos[3 * i + 2] = (Math.random() - 0.5) * 1.2;
-        var c = [[0.23, 0.51, 0.96], [0.88, 0.58, 0.42], [0.4, 0.7, 0.5]][k];
-        col[3 * i] = c[0]; col[3 * i + 1] = c[1]; col[3 * i + 2] = c[2];
-      }
-      var g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-      var pts = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.06, vertexColors: true }));
-      scene.add(pts);
-      var rot = 0, drag = false, lx = 0;
-      box.addEventListener('pointerdown', function (e) { drag = true; lx = e.clientX; });
-      window.addEventListener('pointerup', function () { drag = false; });
-      window.addEventListener('pointermove', function (e) { if (drag) { rot += (e.clientX - lx) * 0.01; lx = e.clientX; } });
-      (function loop() { requestAnimationFrame(loop); if (!drag) rot += 0.0025; pts.rotation.y = rot; rnd.render(scene, cam); })();
-    }
-    if (window.THREE) start();
-    else { var s = document.createElement('script'); s.src = src; s.onload = start; document.head.appendChild(s); }
   };
 
   // Generic single-parameter curve with a slider. Pick a family and labels
@@ -867,83 +810,6 @@
     host.appendChild(slider(L.temperature, 0.08, 0.6, 0.01, tau, function (v) { tau = v; draw(); }).wrap);
     draw();
     watchTheme(host, draw);
-  };
-
-  // comparison-explorer: filter a set of options by one facet plus free text, so
-  // a comparison table's grouping becomes tactile (which archetype each player
-  // fits, not a leaderboard). Data lives here keyed by data-set so the chapter
-  // block is a one-liner; it mirrors the chapter's own table (as of June 2026).
-  R['comparison-explorer'] = function (host) {
-    var SETS = {
-      'agent-frameworks': [
-        ['LangGraph', 'Graph / state-machine', 'MIT · LangChain'],
-        ['Pydantic AI', 'Graph / state-machine', 'MIT · Pydantic'],
-        ['Google ADK', 'Graph / state-machine', 'Apache-2.0 · Google'],
-        ['Microsoft Agent Framework', 'Graph / state-machine', 'MIT · Microsoft'],
-        ['OpenAI Agents SDK', 'Linear handoff chain', 'MIT · OpenAI'],
-        ['Claude Agent SDK', 'Harness / CLI engine', 'MIT · Anthropic'],
-        ['CrewAI', 'Role / crew', 'MIT · CrewAI'],
-        ['AG2 (ex-AutoGen)', 'Conversation-driven', 'Apache-2.0 · ag2ai'],
-        ['LlamaIndex', 'Data / RAG + agent', 'MIT · LlamaIndex'],
-        ['Mastra', 'Deterministic TS workflow', 'MIT/Apache · Mastra'],
-        ['AWS Strands', 'Model-first loop', 'Apache-2.0 · AWS']
-      ],
-      // zh twin: framework names and backers stay verbatim; only the normalized
-      // loop-archetype facet localizes to match the chapter's Chinese table.
-      'agent-frameworks-zh': [
-        ['LangGraph', '图 / 状态机', 'MIT · LangChain'],
-        ['Pydantic AI', '图 / 状态机', 'MIT · Pydantic'],
-        ['Google ADK', '图 / 状态机', 'Apache-2.0 · Google'],
-        ['Microsoft Agent Framework', '图 / 状态机', 'MIT · Microsoft'],
-        ['OpenAI Agents SDK', '线性交接链', 'MIT · OpenAI'],
-        ['Claude Agent SDK', '运行框架 / CLI 引擎', 'MIT · Anthropic'],
-        ['CrewAI', '角色 / 团队', 'MIT · CrewAI'],
-        ['AG2（前 AutoGen）', '对话驱动', 'Apache-2.0 · ag2ai'],
-        ['LlamaIndex', '数据 / RAG + 智能体', 'MIT · LlamaIndex'],
-        ['Mastra', '确定性 TS 工作流', 'MIT/Apache · Mastra'],
-        ['AWS Strands', '模型优先循环', 'Apache-2.0 · AWS']
-      ]
-    };
-    var zh = (host.getAttribute('data-set') || '').indexOf('-zh') >= 0;
-    var rows = SETS[host.getAttribute('data-set')] || SETS['agent-frameworks'];
-    var facets = []; rows.forEach(function (r) { if (facets.indexOf(r[1]) < 0) facets.push(r[1]); });
-    var sel = null, query = '';
-    var chips = el('div', 'viz-ce-chips');
-    var allChip = el('button', 'viz-ce-chip on'); allChip.type = 'button'; allChip.textContent = zh ? '全部原型' : 'all archetypes';
-    allChip.addEventListener('click', function () { sel = null; render(); });
-    chips.appendChild(allChip);
-    var chipEls = [];
-    facets.forEach(function (f) {
-      var b = el('button', 'viz-ce-chip'); b.type = 'button'; b.textContent = f;
-      b.addEventListener('click', function () { sel = (sel === f) ? null : f; render(); });
-      chips.appendChild(b); chipEls.push({ f: f, b: b });
-    });
-    var search = document.createElement('input');
-    search.type = 'text'; search.className = 'viz-ce-search'; search.placeholder = zh ? '按名称筛选…' : 'filter by name…';
-    search.addEventListener('input', function () { query = search.value.toLowerCase(); render(); });
-    var list = el('div', 'viz-ce-list');
-    var cards = rows.map(function (r) {
-      var c = el('div', 'viz-ce-card');
-      var n = el('div', 'viz-ce-name'); n.textContent = r[0];
-      var a = el('div', 'viz-ce-arch'); a.textContent = r[1];
-      var m = el('div', 'viz-ce-meta'); m.textContent = r[2];
-      c.appendChild(n); c.appendChild(a); c.appendChild(m); list.appendChild(c);
-      return { r: r, c: c };
-    });
-    var count = el('div', 'viz-ce-count');
-    host.appendChild(chips); host.appendChild(search); host.appendChild(list); host.appendChild(count);
-    function render() {
-      allChip.classList.toggle('on', sel === null);
-      chipEls.forEach(function (o) { o.b.classList.toggle('on', o.f === sel); });
-      var shown = 0;
-      cards.forEach(function (o) {
-        var on = (!sel || o.r[1] === sel) && (!query || o.r[0].toLowerCase().indexOf(query) >= 0);
-        o.c.classList.toggle('dim', !on);
-        if (on) shown++;
-      });
-      count.textContent = zh ? (rows.length + ' 个框架中的 ' + shown + ' 个' + (sel ? ' · ' + sel : '')) : (shown + ' of ' + rows.length + ' frameworks' + (sel ? ' · ' + sel : ''));
-    }
-    render();
   };
 
   // Three process cadences shown as concentric rings. The geometry compares
