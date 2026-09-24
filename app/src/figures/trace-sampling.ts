@@ -28,7 +28,7 @@ import { C, TYPE } from "./lib/theme.ts";
 import { linear, niceStep } from "./lib/scale.ts";
 import { axis, axisHeight } from "./lib/axis.ts";
 import { legend } from "./lib/legend.ts";
-import { placeLabels, drawLabels, lineObstacles, wrap, type Box } from "./lib/labels.ts";
+import { placeLabels, drawLabels, lineObstacles, textBox, textWidth, overlaps, wrap, type Box } from "./lib/labels.ts";
 import { wrapCJK } from "./lib/notation.ts";
 import { rng } from "./lib/random.ts";
 import { fixed, int, pct, tpl } from "./lib/format.ts";
@@ -198,11 +198,30 @@ function renderChart(m: M, x0: number, y0: number, w: number, Lx: L, lang: Lang,
     parts.push(el("circle", { cx, cy, r: 5, fill: color, stroke: C.paper, "stroke-width": 1.5 }));
     obstacles.push({ x0: cx - 6, y0: cy - 6, x1: cx + 6, y1: cy + 6 });
   }
-  const placed = placeLabels(dots.map(([v, , s], i) => ({
+  // Equal estimates (t = 0) share one label.
+  const shown = Math.abs(ys(m.naive) - ys(m.weighted)) < 1 ? dots.slice(0, 1) : dots;
+  const placed = placeLabels(shown.map(([v, , s], i) => ({
     x: cx, y: ys(v), text: s, size: TYPE.body, gap: 8, priority: 2 - i,
     sides: ["left", "right", "above-left", "below-left", "above-right", "below-right", "above", "below"],
     attrs: { class: "fig-t-halo fig-t-strong fig-t-num" },
   })), { x0: left + 2, y0: top - 2, x1: right, y1: bottom - 2 }, obstacles);
+  // A label with no free spot next to its dot (the curve and the population
+  // line crowd the left edge) goes higher up on the free side, with a leader.
+  const taken = [...obstacles, ...placed.placed.map((pl) => pl.box)];
+  for (const req of placed.dropped) {
+    const toRight = cx + 12 + textWidth(req.text, TYPE.body) <= right;
+    const lx = toRight ? cx + 12 : cx - 12;
+    const anchor = toRight ? "start" : "end";
+    for (const dy of [36, 56, 76, -36, -56]) {
+      const ly = req.y - dy;
+      const box = textBox(lx, ly, req.text, TYPE.body, anchor);
+      if (box.y0 < top - 2 || box.y1 > bottom - 2 || taken.some((o) => overlaps(o, box, 2))) continue;
+      parts.push(el("line", { x1: cx, y1: req.y + (dy > 0 ? -5 : 5), x2: lx + (toRight ? -2 : 2), y2: dy > 0 ? ly + 3 : ly - TYPE.body + 2, stroke: C.ink3, "stroke-width": 1 }));
+      parts.push(text(lx, ly, req.text, { "font-size": TYPE.body, "text-anchor": anchor, class: "fig-t-halo fig-t-strong fig-t-num" }));
+      taken.push(box);
+      break;
+    }
+  }
   parts.push(drawLabels(placed.placed));
 
   y = bottom + axisHeight(true, fs) + 6;
