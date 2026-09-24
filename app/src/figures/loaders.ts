@@ -92,4 +92,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "lsh-banding": () => import("./lsh-banding.ts"),
   "curation-retention": () => import("./curation-retention.ts"),
   "mixture-ramp": () => import("./mixture-ramp.ts"),
+  "phase-record": () => import("./phase-record.ts"),
 };
