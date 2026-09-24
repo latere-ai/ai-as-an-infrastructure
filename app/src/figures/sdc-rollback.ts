@@ -262,7 +262,7 @@ function render(st: State<P>, lang: Lang): string {
     parts.push(el("line", { x1: x0, x2: x1, y1: cy, y2: cy, stroke: C.rule, "stroke-width": 1 }));
     for (const c of o.checks) {
       const cx = x(c.step);
-      const cr = narrow ? 3.5 : 4.5;
+      const cr = !narrow ? 4.5 : p.cadence === "20" ? 2.5 : 3.5; // markers 6 px apart at every 20 steps on a phone
       parts.push(c.fired ? mark.fire(cx, cy, cr) : c.step >= p.s ? mark.miss(cx, cy, cr) : mark.pass(cx, cy, cr));
     }
     if (o.detected) {
@@ -313,7 +313,7 @@ function render(st: State<P>, lang: Lang): string {
   const kept = new Set(o.retained);
   for (const c of o.written) {
     const cx = x(c);
-    const h = narrow ? 3.5 : 5;
+    const h = !narrow ? 5 : p.every === 20 ? 2.75 : 3.5;
     parts.push(!kept.has(c) ? mark.gone(cx, ky, h - 0.5) : c >= p.s ? mark.keptBad(cx, ky, pat, h) : mark.kept(cx, ky, h));
   }
   let extra = 0;
