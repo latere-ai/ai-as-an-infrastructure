@@ -211,9 +211,7 @@ function sampleOf(masked: string | null, lang: Lang): string | null {
 // than the column. The list is exact: a figure that newly exceeds the column,
 // and a listed figure that now fits, both fail until the list is updated.
 const knownWideFigures = [
-  "en:fig-agent-architectures-react-loop",
   "en:fig-harness-state-machine",
-  "zh:fig-agent-architectures-react-loop",
 ];
 
 // Hard-wrapped hyphenated compounds already in the sources, as
