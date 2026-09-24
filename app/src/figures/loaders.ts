@@ -44,4 +44,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "sae-readback": () => import("./sae-readback.ts"),
   "divergence-direction": () => import("./divergence-direction.ts"),
   "acceptance-weighting": () => import("./acceptance-weighting.ts"),
+  "block-scaling": () => import("./block-scaling.ts"),
 };
