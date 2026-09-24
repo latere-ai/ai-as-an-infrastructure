@@ -69,12 +69,11 @@ const labels = {
     fastLife: "trained on the request's own context, end with it",
     mem: "External memory m_t",
     memLife: "versioned writes by V, persists across requests",
-    serve: "Serving checkpoint θ and its fast-weight procedure",
-    serveLife: "a pair, changes only at promotion",
+    params: "Parameters θ",
+    paramsLife: "candidates trained offline by U(θ, e); the serving checkpoint and its fast-weight procedure change only as a pair, through the gate",
     proc: "procedure {v}",
-    cand: "Candidate checkpoints U(θ, e)",
-    candLife: "trained offline, must pass the gate",
-    gate: "gate",
+    written: "m{m}, written by r{i}",
+    gateNote: "gate: {o}",
     pass: "promoted",
     fail: "rejected",
     trainedOn: "on e{e}",
@@ -98,12 +97,11 @@ const labels = {
     fastLife: "用请求自己的上下文训练，随请求结束",
     mem: "外部记忆 m_t",
     memLife: "由 V 按版本写入，跨请求保留",
-    serve: "服务检查点 θ 及其快权重更新过程",
-    serveLife: "两者成对，只在发布时改变",
+    params: "参数 θ",
+    paramsLife: "候选检查点由 U(θ, e) 离线训练；服务检查点与其快权重更新过程成对改变，且必须经过门禁",
     proc: "更新过程 {v}",
-    cand: "候选检查点 U(θ, e)",
-    candLife: "离线训练，必须通过门禁",
-    gate: "门禁",
+    written: "m{m}，由 r{i} 写入",
+    gateNote: "门禁：{o}",
     pass: "发布",
     fail: "否决",
     trainedOn: "基于 e{e}",
@@ -159,28 +157,35 @@ function render(st: State<P>, lang: Lang): string {
   const { r: sr, v: sv, m: sm } = record(sel);
   const x = linear([0, END], [2, w - 2]);
   const bandH = narrow ? 20 : 18;
-  const parts: string[] = [el("defs", {}, hatch(`${st.uid}-cand`, C.c4, 5, 1.4), hatch(`${st.uid}-rej`, C.ink3, 5, 1.2),
+  const parts: string[] = [el("defs", {}, hatch(`${st.uid}-cand`, C.c4, 5, 1.4),
     el("marker", { id: `${st.uid}-arr`, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" }, el("path", { d: "M0,0L10,5L0,10Z", fill: C.ink })))];
   const lanes: Record<string, { y: number }> = {};
   let y = 0;
   const bands: string[] = [];
-  const addLane = (key: string, name: string, life: string) => {
+  const header = (name: string, life: string) => {
     const hd = laneHeader(name, life, 0, y, w, fs);
     bands.push(hd.svg);
     y += hd.h + 4;
+  };
+  const band = (key: string, gapAfter: number) => {
     lanes[key] = { y };
     bands.push(el("rect", { x: x(0), y, width: x(END) - x(0), height: bandH, fill: C.panel, rx: 2 }));
-    y += bandH + 14;
+    y += bandH + gapAfter;
   };
-  addLane("ctx", L.ctx, L.ctxLife);
-  addLane("fast", L.fast, L.fastLife);
-  addLane("mem", L.mem, L.memLife);
-  addLane("serve", L.serve, L.serveLife);
-  addLane("cand", L.cand, L.candLife);
+  header(L.ctx, L.ctxLife); band("ctx", 14);
+  header(L.fast, L.fastLife); band("fast", 14);
+  header(L.mem, L.memLife); band("mem", 14);
+  // The parameter lane has two bands under one header, candidates above the
+  // serving checkpoint, so the gate sits in the gap between them and crosses
+  // no text.
+  header(L.params, L.paramsLife);
+  const gateGap = fs + 12;
+  band("cand", gateGap);
+  band("serve", 10);
   const axisY = y - 6;
 
   // Selected request: a column through every lane.
-  parts.push(el("rect", { x: x(sr.start) - 2, y: lanes.ctx.y - 4, width: x(sr.end) - x(sr.start) + 4, height: lanes.cand.y + bandH + 4 - lanes.ctx.y + 4, fill: C.ink3, "fill-opacity": 0.12, rx: 3 }));
+  parts.push(el("rect", { x: x(sr.start) - 2, y: lanes.ctx.y - 4, width: x(sr.end) - x(sr.start) + 4, height: lanes.serve.y + bandH + 4 - lanes.ctx.y + 4, fill: C.ink3, "fill-opacity": 0.12, rx: 3 }));
   parts.push(...bands);
 
   // Context and fast weights: one bar per request, clickable.
@@ -199,7 +204,8 @@ function render(st: State<P>, lang: Lang): string {
     parts.push(el("rect", { x: x0, y: cy - 2, width: x1 - x0, height: fy + bandH - cy + 4, fill: "transparent", "data-fig-set": `request=${r.id}`, class: "fig-hit" }));
   }
 
-  // External memory: versions, with a write arrow from the request that made it.
+  // External memory: versions; each later version names the request whose
+  // write through V started it, aligned with that request's end above.
   const my = lanes.mem.y;
   const cuts = [0, ...WRITES.map((id) => REQS[id - 1].end), END];
   for (let k = 0; k < cuts.length - 1; k++) {
@@ -207,15 +213,11 @@ function render(st: State<P>, lang: Lang): string {
     const x0 = x(cuts[k]) + (k ? 1.5 : 0), x1 = x(cuts[k + 1]) - 1.5;
     const on = v === sm;
     parts.push(el("rect", { x: x0, y: my, width: x1 - x0, height: bandH, rx: 3, fill: LANE_COLORS.mem, "fill-opacity": on ? 1 : 0.5, stroke: on ? C.ink : undefined, "stroke-width": on ? 1.5 : undefined }));
-    parts.push(text(x0 + 6, my + bandH / 2 + 4, `m${sub(v)}`, { "font-size": fs, class: "fig-t-halo fig-t-num" }));
-  }
-  for (const id of WRITES) {
-    const r = REQS[id - 1];
-    const ax = x(r.end) - 3;
-    parts.push(el("line", { x1: ax, x2: ax, y1: lanes.ctx.y + bandH, y2: my - 1, stroke: C.ink, "stroke-width": 1.2, "stroke-dasharray": "3 2", "marker-end": `url(#${st.uid}-arr)` }));
+    const lab = k === 0 ? `m${sub(v)}` : tpl(L.written, { m: sub(v), i: WRITES[k - 1] });
+    parts.push(text(x0 + 6, my + bandH / 2 + 4, lab, { "font-size": fs, class: "fig-t-halo fig-t-num" }));
   }
 
-  // Serving checkpoint: θ with its procedure, changing only at a passed gate.
+  // Candidates, the gate in the gap below them, and the serving checkpoint.
   const sy = lanes.serve.y, ky = lanes.cand.y;
   const promos = [0, ...CANDIDATES.filter((c) => c.pass).map((c) => c.to + GATE), END];
   for (let k = 0; k < promos.length - 1; k++) {
@@ -225,7 +227,6 @@ function render(st: State<P>, lang: Lang): string {
     parts.push(el("rect", { x: x0, y: sy, width: x1 - x0, height: bandH, rx: 3, fill: LANE_COLORS.serve, "fill-opacity": on ? 1 : 0.5, stroke: on ? C.ink : undefined, "stroke-width": on ? 1.5 : undefined }));
     parts.push(text(x0 + 6, sy + bandH / 2 + 4, `θ${sub(v)} + ${tpl(L.proc, { v })}`, { "font-size": fs, class: "fig-t-halo fig-t-num" }));
   }
-  // Candidates and the gate between the candidate lane and the serving lane.
   for (const c of CANDIDATES) {
     const x0 = x(c.from), x1 = x(c.to);
     parts.push(el("rect", { x: x0, y: ky, width: x1 - x0, height: bandH, rx: 3, fill: `url(#${st.uid}-cand)` }));
@@ -233,17 +234,21 @@ function render(st: State<P>, lang: Lang): string {
     const lab = `θ${sub(c.version)} ${tpl(L.trainedOn, { e: sub(c.e) })}`;
     parts.push(text(x0 + 5, ky + bandH / 2 + 4, lab, { "font-size": fs, class: "fig-t-halo fig-t-num" }));
     const gx = x(c.to) + (x(c.to + GATE) - x(c.to)) / 2;
-    // The gate: a bar spanning the two lanes.
-    parts.push(el("rect", { x: gx - 3, y: sy + bandH + 2, width: 6, height: ky - sy - bandH - 4, rx: 1.5, fill: C.ink }));
-    const outcome = c.pass ? L.pass : L.fail;
+    const g0 = ky + bandH + 2, g1 = sy - 2;
+    parts.push(el("rect", { x: gx - 3, y: g0, width: 6, height: g1 - g0, rx: 1.5, fill: C.ink }));
+    // On a phone the outcome word alone; the black bar is the gate.
+    const note = narrow ? (c.pass ? L.pass : L.fail) : tpl(L.gateNote, { o: c.pass ? L.pass : L.fail });
+    const baseline = (g0 + g1) / 2 + fs * 0.35;
     if (c.pass) {
-      parts.push(el("line", { x1: gx + 4, x2: x(c.to + GATE) + 8, y1: ky + 2, y2: sy + bandH + 1, stroke: C.ink, "stroke-width": 1.4, "marker-end": `url(#${st.uid}-arr)` }));
+      parts.push(el("line", { x1: gx + 4, x2: x(c.to + GATE) + 10, y1: g0 + 1, y2: g1, stroke: C.ink, "stroke-width": 1.4, "marker-end": `url(#${st.uid}-arr)` }));
     } else {
-      const cx = gx + 12, cy = ky + bandH / 2;
+      const cx = gx + 11, cy = (g0 + g1) / 2;
       parts.push(el("path", { d: `M${cx - 4},${cy - 4}L${cx + 4},${cy + 4}M${cx - 4},${cy + 4}L${cx + 4},${cy - 4}`, stroke: C.bad, "stroke-width": 2 }));
     }
-    const ox = c.pass ? gx + 10 : gx + 20;
-    parts.push(text(ox, ky + bandH + fs + 2, `${L.gate}: ${outcome}`, { "font-size": fs, class: c.pass ? "fig-t-muted" : "fig-t-strong" }));
+    // Outcome to the right of the gate, or to its left if it would overflow.
+    const ox = gx + (c.pass ? 24 : 20);
+    const fits = ox + textWidth(note, fs) <= w - 2;
+    parts.push(text(fits ? ox : gx - 8, baseline, note, { "font-size": fs, "text-anchor": fits ? "start" : "end", class: c.pass ? "fig-t-muted" : "fig-t-strong" }));
   }
   // Time arrow.
   parts.push(el("line", { x1: x(0), x2: x(END) - 2, y1: axisY + fs + 10, y2: axisY + fs + 10, stroke: C.rule, "stroke-width": 1, "marker-end": `url(#${st.uid}-arr)` }));
@@ -259,7 +264,7 @@ function render(st: State<P>, lang: Lang): string {
     items.forEach((it, k) => {
       const lines = wrapCJK(it, fs, bw - 14);
       yy += 6;
-      out.push(el("circle", { cx: x0 + 4, cy: yy + fs * 0.6, r: 2.2, fill: k === items.length - 1 && items === rec ? C.ink3 : C.ink }));
+      out.push(el("circle", { cx: x0 + 4, cy: yy + fs + 4 - fs * 0.35, r: 2.2, fill: k === items.length - 1 && items === rec ? C.ink3 : C.ink }));
       lines.forEach((ln) => { yy += fs + 4; out.push(text(x0 + 14, yy, ln, { "font-size": fs, class: k === items.length - 1 && items === rec ? "fig-t-muted" : undefined })); });
     });
     return { svg: out.join(""), h: yy - y0 };
