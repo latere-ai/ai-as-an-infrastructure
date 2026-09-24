@@ -226,52 +226,35 @@ digraph {
 
 传统注意力可以由多个独立内核完成：把分数块写入高带宽内存，读回后计算 softmax（把每行分数归一化为和为一的权重），再写入概率，最后再次读回并与值相乘。FlashAttention 改用分块计算，让查询、键和值的块能够装入快速的片上 @gls-sram，即紧挨计算单元的小容量存储。它随每个块的处理在线更新 softmax 与输出，不在高带宽内存中物化完整分数张量。它在浮点舍入误差范围内计算精确注意力，不是稀疏或近似注意力规则 [@dao2022flashattention]。
 
-对一行查询，把键和值分为 $J$ 个块。对第 $j$ 个块，定义
+对第 $i$ 行查询，把键和值分为 $T$ 个块 $\mathcal B_1,\ldots,\mathcal B_T$，从 $m_0=-\infty$、$\ell_0=0$、$o_0=0$ 开始。对第 $t$ 个块 $\mathcal B_t$，
 
 $$
-\mathbf S_j=\frac{\mathbf q\mathbf K_j^\mathsf T}{\sqrt d},
-\qquad
-m_j=\max\!\left(m_{j-1},\max_r S_{j,r}\right),
-\\[4pt]
-\ell_j=e^{m_{j-1}-m_j}\ell_{j-1}
-+\sum_r e^{S_{j,r}-m_j},
-\\[4pt]
-\mathbf o_j=e^{m_{j-1}-m_j}\mathbf o_{j-1}
-+\sum_r e^{S_{j,r}-m_j}\mathbf V_{j,r},
-\qquad
-\mathbf O=\mathbf o_J/\ell_J.
+\begin{aligned}
+S_{ij} &= \frac{q_i k_j^\mathsf T}{\sqrt d},\\
+b_t &= \max_{j\in\mathcal B_t} S_{ij},\\
+m_t &= \max(m_{t-1},b_t),\\
+\alpha_t &= \exp(m_{t-1}-m_t),\\
+\ell_t &= \alpha_t\ell_{t-1}+\sum_{j\in\mathcal B_t}\exp(S_{ij}-m_t),\\
+o_t &= \alpha_t o_{t-1}+\sum_{j\in\mathcal B_t}\exp(S_{ij}-m_t)\,v_j,
+\end{aligned}
 $$
 
-这里，$\mathbf q\in\mathbb R^d$ 是查询行；$\mathbf K_j$ 与 $\mathbf V_j$ 是第 $j$ 个块中的键行和值行；$S_{j,r}$ 是该块第 $r$ 行的分数；$m_j$ 是运行中的最大值；$\ell_j$ 是运行中的 softmax 分母；$\mathbf o_j$ 是未归一化的输出累加器；$\mathbf O$ 是最终注意力输出。初始状态为 $m_0=-\infty$、$\ell_0=0$、$\mathbf o_0=\mathbf 0$。后续块若提高最大值，指数因子会把先前的分母与累加器重新缩放到新的数值基准。这是朴素分块 softmax 所缺少的步骤。
+处理完最后一个块后，
 
-```{dot}
+$$
+O_i=o_T/\ell_T.
+$$
+
+这里，$q_i\in\mathbb R^d$ 是第 $i$ 行查询；$k_j$ 与 $v_j$ 是第 $j$ 个键对应的键行和值行；$S_{ij}$ 是二者的分数，即前文分数张量 $S$ 中的一个元素；$b_t$ 是第 $t$ 个块中的最大分数；$m_t$ 是运行中的最大值；$\alpha_t$ 是缩放因子；$\ell_t$ 是运行中的 softmax 分母；$o_t$ 是未归一化的输出累加器；$O_i$ 是第 $i$ 行的最终注意力输出。后续块若提高最大值，$\alpha_t<1$ 会把先前的分母与累加器重新缩放到新的数值基准。这是朴素分块 softmax 所缺少的步骤。
+
+```{figure}
+//| figure: flash-attention
 //| label: fig-quantization-kernels-flashattention
-//| fig-cap: "独立注意力内核会在 HBM 中物化中间结果。分块的在线 softmax 内核把每个分数块及其运行状态保留在片上，只写回最终输出。"
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.38; ranksep=0.48;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_separate {
-    label="独立内核"; style=rounded; color="#6b7280"; fontcolor="#6b7280";
-    Q1 [label="QKᵀ"];
-    H1 [label="HBM 中的分数"];
-    S1 [label="softmax"];
-    H2 [label="HBM 中的概率"];
-    V1 [label="与 V 相乘"];
-    Q1 -> H1 -> S1 -> H2 -> V1;
-  }
-  subgraph cluster_tiled {
-    label="分块在线 softmax"; style=rounded; color="#6b7280"; fontcolor="#6b7280";
-    T1 [label="载入 Q、K、V 块"];
-    T2 [label="在片上更新 m、ℓ、o"];
-    T3 [label="最终输出写入 HBM"];
-    T1 -> T2;
-    T2 -> T1 [label="下一个 K、V 块"];
-    T2 -> T3;
-  }
-}
+//| fig-cap: "FlashAttention 在示意数据上的前向计算：$Q$、$K$、$V$ 是 $d=4$ 的带种子随机数，递推用 FP32 计算。查询块留在片上，键值块 $\mathcal B_t$ 依次流过；$S$ 只有当前块带数值，分数和概率都不会写入 HBM。图中各查询块依次执行，在 GPU 上则并行运行。对选定的第 $i$ 行，两条小图分别画出它的分数与运行最大值 $m_t$，以及已见键的权重 $\exp(S_{ij}-m_t)$，虚线框是这些权重被 $\alpha_t$ 缩放之前的高度；读数逐项代入递推式，并在 FP32 舍入容差内把 $o_t/\ell_t$ 与同一组键上的普通 softmax 对照。关闭缩放后，此前的块停留在各自最大值的数值基准上，虚线框改为标出它们应有的高度，输出也就对不上了。流量条按最小 HBM 流量统计，每个元素 2 字节：独立内核把 $S$ 和 $P$ 写入 HBM 再读回，分块内核每处理一个查询块就重读一遍 $K$ 和 $V$。加因果掩码时，每行之后的键画成斜线，完全位于查询块最后一行之后的键值块直接跳过。这部分流量如何随片上内存大小变化，推导见 @sec-compilers-kernels。"
+n: 24
+qtile: 8
+focus: 13
+seed: 67
 ```
 
 后续版本延续同一项 IO 感知原则，但改变了工作划分与硬件映射。FlashAttention-2 减少非矩阵运算，并改进 A100 级硬件上的并行度 [@dao2023flashattention2]。FlashAttention-3 在 Hopper 上重叠数据搬运与矩阵计算，并增加 FP8 路径 [@shah2024flashattention3]。FlashAttention-4 则针对 Blackwell 在张量吞吐、共享内存流量与特殊函数方面的不同平衡重新设计流水线 [@zadouri2026flashattention4]。它们报告的加速只属于所声明的硬件、精度、形状与基线，换一种配置就需要重新测量。

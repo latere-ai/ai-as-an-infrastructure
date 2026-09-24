@@ -444,61 +444,44 @@ materializing the complete score tensor in high-bandwidth memory. This computes
 exact attention up to floating-point rounding; it is not a sparse or
 approximate attention rule [@dao2022flashattention].
 
-For one query row, divide the keys and values into $J$ blocks. For block $j$,
-let
+For one query row $i$, divide the keys and values into $T$ blocks
+$\mathcal B_1,\ldots,\mathcal B_T$, and start from $m_0=-\infty$, $\ell_0=0$,
+and $o_0=0$. For block $\mathcal B_t$,
 
 $$
-\mathbf S_j=\frac{\mathbf q\mathbf K_j^\mathsf T}{\sqrt d},
-\qquad
-m_j=\max\!\left(m_{j-1},\max_r S_{j,r}\right),
-\\[4pt]
-\ell_j=e^{m_{j-1}-m_j}\ell_{j-1}
-+\sum_r e^{S_{j,r}-m_j},
-\\[4pt]
-\mathbf o_j=e^{m_{j-1}-m_j}\mathbf o_{j-1}
-+\sum_r e^{S_{j,r}-m_j}\mathbf V_{j,r},
-\qquad
-\mathbf O=\mathbf o_J/\ell_J.
+\begin{aligned}
+S_{ij} &= \frac{q_i k_j^\mathsf T}{\sqrt d},\\
+b_t &= \max_{j\in\mathcal B_t} S_{ij},\\
+m_t &= \max(m_{t-1},b_t),\\
+\alpha_t &= \exp(m_{t-1}-m_t),\\
+\ell_t &= \alpha_t\ell_{t-1}+\sum_{j\in\mathcal B_t}\exp(S_{ij}-m_t),\\
+o_t &= \alpha_t o_{t-1}+\sum_{j\in\mathcal B_t}\exp(S_{ij}-m_t)\,v_j,
+\end{aligned}
 $$
 
-Here $\mathbf q\in\mathbb R^d$ is the query row;
-$\mathbf K_j$ and $\mathbf V_j$ are the key and value rows in block $j$;
-$S_{j,r}$ is the score for row $r$ of that block; $m_j$ is the running maximum;
-$\ell_j$ is the running softmax denominator; $\mathbf o_j$ is the unnormalized
-output accumulator; and $\mathbf O$ is the final attention output. The initial
-state is $m_0=-\infty$, $\ell_0=0$, and $\mathbf o_0=\mathbf 0$. When a later
-block raises the maximum, the exponential factors rescale the earlier
-denominator and accumulator into the new numerical frame. This is the step
-missing from a naive block-by-block softmax.
+and after the last block
 
-```{dot}
+$$
+O_i=o_T/\ell_T.
+$$
+
+Here $q_i\in\mathbb R^d$ is query row $i$; $k_j$ and $v_j$ are the key and
+value rows of key $j$; $S_{ij}$ is their score, one entry of the score tensor
+$S$ above; $b_t$ is the largest score in block $t$; $m_t$ is the running
+maximum; $\alpha_t$ is the rescaling factor; $\ell_t$ is the running softmax
+denominator; $o_t$ is the unnormalized output accumulator; and $O_i$ is the
+final attention output for row $i$. When a later block raises the maximum,
+$\alpha_t<1$ rescales the earlier denominator and accumulator into the new
+numerical frame. This is the step missing from a naive block-by-block softmax.
+
+```{figure}
+//| figure: flash-attention
 //| label: fig-quantization-kernels-flashattention
-//| fig-cap: "Separate attention kernels materialize intermediates in HBM. A tiled online-softmax kernel keeps each score block and its running state on chip, then writes only the final output."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.38; ranksep=0.48;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-  subgraph cluster_separate {
-    label="separate kernels"; style=rounded; color="#6b7280"; fontcolor="#6b7280";
-    Q1 [label="QKᵀ"];
-    H1 [label="scores in HBM"];
-    S1 [label="softmax"];
-    H2 [label="probabilities in HBM"];
-    V1 [label="multiply by V"];
-    Q1 -> H1 -> S1 -> H2 -> V1;
-  }
-  subgraph cluster_tiled {
-    label="tiled online softmax"; style=rounded; color="#6b7280"; fontcolor="#6b7280";
-    T1 [label="load Q, K, V tile"];
-    T2 [label="update m, ℓ, o on chip"];
-    T3 [label="final output to HBM"];
-    T1 -> T2;
-    T2 -> T1 [label="next K, V block"];
-    T2 -> T3;
-  }
-}
+//| fig-cap: "FlashAttention's forward pass on illustrative data: $Q$, $K$, and $V$ are seeded random draws with $d=4$, and the recurrence runs in FP32. A query tile stays on chip while the key-value blocks $\mathcal B_t$ stream through; only the current tile of $S$ holds values, and no score or probability reaches HBM. The query tiles run one after another here and in parallel on a GPU. For the chosen row $i$, the strips show its scores against the running maximum $m_t$ and the weights $\exp(S_{ij}-m_t)$ of the keys seen so far, with dashed outlines at the heights they had before $\alpha_t$ rescaled them; the readout evaluates each term of the recurrence and checks $o_t/\ell_t$ against ordinary softmax over the same keys, within an FP32 rounding tolerance. With rescaling turned off, earlier blocks stay in the frame of their own maximum, the dashed outlines mark the heights they should have, and the output no longer matches. The traffic bars count minimum HBM traffic with 2-byte elements: separate kernels write $S$ and $P$ and read them back, while the tiled kernel rereads $K$ and $V$ once per query tile. The causal mask hatches the keys after each row and skips blocks that lie entirely after a tile's last row. @sec-compilers-kernels derives how this traffic depends on the size of on-chip memory."
+n: 24
+qtile: 8
+focus: 13
+seed: 67
 ```
 
 Later versions keep the same IO-aware principle while changing work partition
