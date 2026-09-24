@@ -185,7 +185,7 @@ const HOPS: readonly Hop[] = [
   { from: "mcpgw", to: "toolsrv", cred: "exchanged", call: { en: "authorized tool call", zh: "已授权的工具调用" }, detail: { en: "carries a least-privilege credential issued for that tool's audience", zh: "携带以该工具为受众签发的最小权限凭据" } },
   { from: "sandbox", to: "egress", cred: "none", call: { en: "outbound request", zh: "出站请求" }, detail: { en: "carries a placeholder, never the real secret", zh: "只携带占位符，不含真正的密钥" } },
   { from: "sandbox", to: "gateway", cred: "vkey", call: { en: "model calls from sandboxed code", zh: "沙箱内代码发起的模型调用" }, detail: { en: "carries a short-lived virtual key scoped to this sandbox", zh: "携带限定于本沙箱的短期虚拟密钥" } },
-  { from: "egress", to: "out", cred: "secret", call: { en: "request to an allowlisted host", zh: "发往白名单主机的请求" }, detail: { en: "carries the static secret the proxy substitutes", zh: "携带代理替换进去的静态密钥" } },
+  { from: "egress", to: "out", cred: "secret", call: { en: "the request, with the secret added", zh: "补上密钥后的请求" }, detail: { en: "carries the static secret the proxy substitutes", zh: "携带代理替换进去的静态密钥" } },
   { from: "gateway", to: "hosted", cred: "secret", call: { en: "the provider's own API dialect", zh: "提供商自己的 API 方言" }, detail: { en: "carries the provider API key, held only by the gateway", zh: "携带只由网关保管的提供商 API 密钥" } },
   { from: "gateway", to: "serving", cred: "workload", call: { en: "OpenAI-compatible call", zh: "OpenAI 兼容调用" }, detail: { en: "carries an in-cluster service identity over mTLS", zh: "携带集群内基于 mTLS 的服务身份" } },
   { from: "serving", to: "compute", cred: "none", call: { en: "runs on scheduled GPUs", zh: "运行在调度分配的 GPU 上" }, detail: { en: "no request credential; the scheduler places the replicas", zh: "不携带请求凭据，由调度器安排副本位置" } },
@@ -235,7 +235,7 @@ const labels = {
     title: "A reference stack by layer, with the credential each call carries",
     all: "Which credential each call carries",
     hint: "Select a component to see what it does, example choices, and the contract in this chapter that governs it.",
-    examples: "Examples: {x}",
+    examplesHead: "Examples",
     governed: "Governed by {c}.",
     callsOut: "Calls out",
     callsIn: "Calls in",
@@ -260,7 +260,7 @@ const labels = {
     title: "按层划分的参考技术栈，以及每次调用携带的凭据",
     all: "每次调用携带什么凭据",
     hint: "选中一个组件，可以查看它的作用、可选的实现，以及本章哪一份契约约束它。",
-    examples: "实现示例：{x}",
+    examplesHead: "实现示例",
     governed: "约束它的是{c}。",
     callsOut: "向外调用",
     callsIn: "接收调用",
@@ -288,6 +288,10 @@ type Sel = "all" | Id;
 type P = { component: Sel };
 
 const nameOf = (id: Id | "out", lang: Lang) => (id === "out" ? labels[lang].out : byId.get(id)!.name[lang]);
+// In Chinese text a Latin word next to a CJK glyph takes a space on that side.
+const latinEdge = /[A-Za-z0-9)]/;
+const lead = (s: string, lang: Lang) => (lang === "zh" && latinEdge.test(s[0]) ? ` ${s}` : s);
+const tail = (s: string, lang: Lang) => (lang === "zh" && latinEdge.test(s[s.length - 1]) ? `${s} ` : s);
 const contractText = (c: Comp, lang: Lang) => c.contracts.map((k) => CONTRACTS[k][lang]).join(lang === "zh" ? "，以及" : " and ");
 const touches = (h: Hop, id: Id) => h.from === id || h.to === id;
 
@@ -447,7 +451,7 @@ function phoneHops(c: Comp, x0: number, width: number, lang: Lang) {
   const L = labels[lang];
   const rows: Array<{ lines: string[]; color: string; dashed: boolean }> = [];
   for (const h of HOPS.filter((h) => h.from === c.id)) {
-    rows.push({ lines: wrapLines(tpl(L.phoneOut, { to: nameOf(h.to, lang), cred: CREDS[h.cred][lang] }), HOP_SIZE, width - 2 * PAD - SW - 6), color: CRED_COLOR[h.cred], dashed: false });
+    rows.push({ lines: wrapLines(tpl(L.phoneOut, { to: lead(nameOf(h.to, lang), lang), cred: CREDS[h.cred][lang] }), HOP_SIZE, width - 2 * PAD - SW - 6), color: CRED_COLOR[h.cred], dashed: false });
   }
   if (c.spans) rows.push({ lines: [L.phoneSpans], color: C.ink2, dashed: true });
   const n = rows.reduce((s, r) => s + r.lines.length, 0);
@@ -532,11 +536,11 @@ function drawReadout(sel: Sel, y0: number, w: number, lang: Lang, narrow: boolea
       y += TYPE.label + 10;
       for (const k of CRED_ORDER) {
         const hs = HOPS.filter((h) => h.cred === k);
-        const list = hs.map((h) => tpl(L.hopShort, { from: nameOf(h.from, lang), to: nameOf(h.to, lang) })).join(L.listSep);
+        const list = hs.map((h) => tpl(L.hopShort, { from: tail(nameOf(h.from, lang), lang), to: lead(nameOf(h.to, lang), lang) })).join(L.listSep);
         swatchPara(tpl(L.credLine, { cred: CREDS[k][lang], list }), CRED_COLOR[k], false);
       }
       const emitters = COMPS.filter((c) => c.spans).map((c) => c.name[lang]).join(lang === "zh" ? "、" : ", ");
-      swatchPara(tpl(L.credLine, { cred: L.telemetry, list: tpl(L.hopShort, { from: emitters, to: nameOf("traces", lang) }) }), C.ink2, true);
+      swatchPara(tpl(L.credLine, { cred: L.telemetry, list: tpl(L.hopShort, { from: tail(emitters, lang), to: lead(nameOf("traces", lang), lang) }) }), C.ink2, true);
       y += 4;
     }
     para(L.hint, "fig-t-muted");
@@ -551,7 +555,9 @@ function drawReadout(sel: Sel, y0: number, w: number, lang: Lang, narrow: boolea
   y += TYPE.label + 10;
   para(c.does[lang]);
   y += 4;
-  para(tpl(L.examples, { x: c.more[lang] }));
+  parts.push(text(0, y + TYPE.small, L.examplesHead, { "font-size": TYPE.small, class: "fig-t-muted" }));
+  y += TYPE.small + 8;
+  para(c.more[lang]);
   y += 4;
   para(tpl(L.governed, { c: contractText(c, lang) }));
   y += 6;
@@ -561,7 +567,7 @@ function drawReadout(sel: Sel, y0: number, w: number, lang: Lang, narrow: boolea
     parts.push(text(0, y + TYPE.small, head, { "font-size": TYPE.small, class: "fig-t-muted" }));
     y += TYPE.small + 8;
     for (const h of hs) {
-      swatchPara(tpl(tmpl, { to: nameOf(h.to, lang), from: nameOf(h.from, lang), call: h.call[lang], cred: CREDS[h.cred][lang], detail: h.detail[lang] }), CRED_COLOR[h.cred], false);
+      swatchPara(tpl(tmpl, { to: lead(nameOf(h.to, lang), lang), from: lead(nameOf(h.from, lang), lang), call: h.call[lang], cred: CREDS[h.cred][lang], detail: h.detail[lang] }), CRED_COLOR[h.cred], false);
     }
     y += 4;
   }
