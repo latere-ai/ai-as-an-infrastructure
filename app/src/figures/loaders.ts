@@ -138,4 +138,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "guard-thresholds": () => import("./guard-thresholds.ts"),
   "egress-reachability": () => import("./egress-reachability.ts"),
   "dp-sgd-step": () => import("./dp-sgd-step.ts"),
+  "sisa-deletion": () => import("./sisa-deletion.ts"),
 };
