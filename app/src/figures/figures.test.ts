@@ -12,6 +12,7 @@ import { LOADERS } from "./loaders.ts";
 import { defaults, resolve } from "./lib/params.ts";
 import { STATIC_WIDTHS, renderStatic, openingTime } from "./static.ts";
 import { parseFigureBlock } from "../pipeline/figures.ts";
+import { rangeText } from "./runtime/controls.ts";
 import type { Lang, ParamSpec } from "./types.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -112,4 +113,17 @@ test("the static host carries both layouts and the parameters to hydrate from", 
     expect(html).toContain('class="fig-v fig-v-narrow"');
     expect(html.match(/<svg class="fig-svg"/g)?.length).toBe(2);
   }
+});
+
+test("range readouts state a large amount in the magnitude it has reached", () => {
+  const usd = { kind: "range", label: { en: "", zh: "" }, min: 1, max: 1e5, default: 30, unit: { en: "million US$", zh: "百万美元" } } as const;
+  expect(rangeText(usd, 15000, "en")).toBe("US$15 billion");
+  expect(rangeText(usd, 30, "en")).toBe("US$30 million");
+  expect(rangeText(usd, 15000, "zh")).toBe("150 亿美元");
+  expect(rangeText(usd, 30, "zh")).toBe("3,000 万美元");
+  // Below the declared magnitude, and for any other unit, the number and unit stay as declared.
+  expect(rangeText({ ...usd, unit: { en: "billion", zh: "× 10⁹" } }, 0.5, "en")).toBe("0.5 billion");
+  expect(rangeText({ ...usd, unit: { en: "trillion tokens", zh: "万亿词元" } }, 3000, "en")).toBe("3,000 trillion tokens");
+  expect(rangeText({ ...usd, unit: { en: "trillion tokens", zh: "万亿词元" } }, 3000, "zh")).toBe("3,000 万亿词元");
+  expect(rangeText({ ...usd, unit: { en: "s", zh: "秒" } }, 14, "zh")).toBe("14 秒");
 });

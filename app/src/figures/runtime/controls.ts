@@ -36,9 +36,37 @@ function fromSlider(spec: RangeParam, x: number): number {
   return Number((10 ** x).toPrecision(3));
 }
 
-function rangeText(spec: RangeParam, v: number, lang: Lang): string {
-  const unit = spec.unit ? ` ${spec.unit[lang]}` : "";
-  return `${sig(v, 3)}${unit}`;
+// A unit that opens with a magnitude word ("million US$", "百万美元") is read
+// in the magnitude the value has reached: 15,000 million US$ reads "US$15
+// billion". English moves up through billion and trillion and writes a dollar
+// amount with the sign first; Chinese counts amounts in 万 and 亿, so 百万 is
+// restated in those. Values below the declared magnitude, and every other
+// unit, keep the plain number and unit.
+const EN_MAG: ReadonlyArray<[string, number]> = [["million", 1e6], ["billion", 1e9], ["trillion", 1e12]];
+const ZH_MAG: ReadonlyArray<[string, number]> = [["万", 1e4], ["亿", 1e8], ["万亿", 1e12]];
+
+function magnitudeText(v: number, unit: string, lang: Lang): string | undefined {
+  if (lang === "en") {
+    const m = /^(million|billion)(?: (.+))?$/.exec(unit);
+    if (!m) return undefined;
+    let [word, mag] = EN_MAG.find(([w]) => w === m[1])!;
+    const abs = v * mag;
+    for (const [w, x] of EN_MAG) if (x > mag && Math.abs(abs) >= x) [word, mag] = [w, x];
+    const n = sig(abs / mag, 3);
+    const rest = m[2] ?? "";
+    return rest === "US$" ? `US$${n} ${word}` : `${n} ${word}${rest ? ` ${rest}` : ""}`;
+  }
+  const m = /^(百万|亿)(.*)$/.exec(unit);
+  if (!m) return undefined;
+  const abs = v * (m[1] === "百万" ? 1e6 : 1e8);
+  let [word, mag] = ZH_MAG[m[1] === "百万" ? 0 : 1];
+  for (const [w, x] of ZH_MAG) if (x > mag && Math.abs(abs) >= x) [word, mag] = [w, x];
+  return `${sig(abs / mag, 3)} ${word}${m[2]}`;
+}
+
+export function rangeText(spec: RangeParam, v: number, lang: Lang): string {
+  if (!spec.unit) return sig(v, 3);
+  return magnitudeText(v, spec.unit[lang], lang) ?? `${sig(v, 3)} ${spec.unit[lang]}`;
 }
 
 export function buildControls(fig: AnyFigure, lang: Lang, p: ParamRecord, set: (key: string, value: number | string | boolean) => void): Controls {
