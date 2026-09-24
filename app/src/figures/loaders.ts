@@ -49,6 +49,7 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "benchmark-headroom": () => import("./benchmark-headroom.ts"),
   "paired-comparison": () => import("./paired-comparison.ts"),
   "benchmark-snr": () => import("./benchmark-snr.ts"),
+  "kappa-prevalence": () => import("./kappa-prevalence.ts"),
   "binomial-interval": () => import("./binomial-interval.ts"),
   "sft-loss-mask": () => import("./sft-loss-mask.ts"),
   "lora-low-rank": () => import("./lora-low-rank.ts"),
