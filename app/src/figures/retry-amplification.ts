@@ -97,9 +97,8 @@ const labels = {
     fRun: "this run: {a:attempt/attempts} reached the model; {out}",
     runOk: "attempt {k} succeeded",
     runFail: "all failed",
-    describe: "{L:layer retries/layers retry} up to {r:time/times} each, {mode}: at most {amax} physical attempts per logical operation. With each attempt failing with probability {p}, a logical operation sends {e} attempts on average ({e2} with the other design) and still fails with probability {f}.",
-    modeNested: "every layer retrying",
-    modeSingle: "with one retry owner",
+    describe: "{L:layer retries/layers retry} up to {r:time/times} each: at most {amax} physical attempts per logical operation. With each attempt failing with probability {p}, a logical operation sends {e} attempts on average ({e2} with one retry owner) and still fails with probability {f}.",
+    describeSingle: "{L:layer sits/layers sit} between caller and provider and only the outermost retries, up to {r:time/times}: at most {amax} physical attempts per logical operation. With each attempt failing with probability {p}, a logical operation sends {e} attempts on average ({e2} if every layer retried) and still fails with probability {f}.",
     legendItem: "{name}, A_max = {v}",
   },
   zh: {
@@ -121,9 +120,8 @@ const labels = {
     fRun: "本次运行：{a} 次尝试到达模型，{out}",
     runOk: "第 {k} 次成功",
     runFail: "全部失败",
-    describe: "{L} 层各自最多重试 {r} 次，{mode}：每项逻辑操作最多产生 {amax} 次实际尝试。单次尝试失败概率为 {p} 时，一项逻辑操作平均发出 {e} 次尝试（另一种设计为 {e2} 次），最终失败的概率为 {f}。",
-    modeNested: "每一层都重试",
-    modeSingle: "只有一个重试负责人",
+    describe: "{L} 层各自最多重试 {r} 次：每项逻辑操作最多产生 {amax} 次实际尝试。单次尝试失败概率为 {p} 时，一项逻辑操作平均发出 {e} 次尝试（只有一个重试负责人时为 {e2} 次），最终失败的概率为 {f}。",
+    describeSingle: "调用方与提供商之间有 {L} 层，只有最外层重试，最多 {r} 次：每项逻辑操作最多产生 {amax} 次实际尝试。单次尝试失败概率为 {p} 时，一项逻辑操作平均发出 {e} 次尝试（每层都重试时为 {e2} 次），最终失败的概率为 {f}。",
     legendItem: "{name}，A_max = {v}",
   },
 };
@@ -227,8 +225,8 @@ function describe(st: State<P>, lang: Lang): string {
   const Lx = labels[lang];
   const p = st.p;
   const A = amax(p.layers, p.retries, p.owner), A2 = amax(p.layers, p.retries, p.owner === "nested" ? "single" : "nested");
-  return tpl(Lx.describe, {
-    L: p.layers, r: p.retries, mode: p.owner === "nested" ? Lx.modeNested : Lx.modeSingle, amax: A, p: f2(p.fail),
+  return tpl(p.owner === "nested" ? Lx.describe : Lx.describeSingle, {
+    L: p.layers, r: p.retries, amax: A, p: f2(p.fail),
     e: sig(expectedAttempts(A, p.fail), 3), e2: sig(expectedAttempts(A2, p.fail), 3), f: small(p.fail ** A),
   });
 }

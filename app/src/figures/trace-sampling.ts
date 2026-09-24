@@ -9,8 +9,8 @@
 //   π_e = 1 − (1 − h)(1 − t)   for an error trace
 //   π_s = h                    for a success
 //
-// A dashboard over the kept traces reports k_e / (k_e + k_s), whose expected
-// value p·π_e / (p·π_e + (1 − p)·h) exceeds p whenever t > 0. The
+// A dashboard over the kept traces reports k_e / (k_e + k_s), whose
+// large-sample value p·π_e / (p·π_e + (1 − p)·h) exceeds p whenever t > 0. The
 // design-weighted estimate weights each kept trace by 1 / π, the chapter's
 // inverse inclusion probability:
 //
@@ -82,7 +82,7 @@ function model(p: P) {
 }
 type M = ReturnType<typeof model>;
 
-// Expected dashboard rate at tail share t.
+// Large-sample dashboard rate at tail share t (a ratio of expected counts).
 function expectedNaive(pe: number, h: number, t: number): number {
   const piE = 1 - (1 - h) * (1 - t);
   return (pe * piE) / (pe * piE + (1 - pe) * h);
