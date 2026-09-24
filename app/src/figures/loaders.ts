@@ -53,4 +53,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "lora-low-rank": () => import("./lora-low-rank.ts"),
   "task-vector-merge": () => import("./task-vector-merge.ts"),
   "build-or-buy": () => import("./build-or-buy.ts"),
+  "reward-overoptimization": () => import("./reward-overoptimization.ts"),
 };
