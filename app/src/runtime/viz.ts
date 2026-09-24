@@ -621,44 +621,6 @@
     watchTheme(host, draw);
   };
 
-  // Safety frontier: threshold selection moves the operating point between
-  // unsafe answers and benign refusals. Better training moves the curve; a
-  // deployment still chooses a point on it.
-  R['safety-frontier'] = function (host) {
-    var zh = host.getAttribute('data-lang') === 'zh';
-    var th = 0.52;
-    var labels = zh
-      ? { th: '风险分数阈值', x: '无害请求被拒绝', y: '有害请求被放行', point: '工作点' }
-      : { th: 'risk-score cutoff', x: 'benign requests refused', y: 'harmful requests allowed', point: 'operating point' };
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 270);
-    function xy(s) {
-      return { x: 0.04 + 0.46 * Math.pow(1 - s, 2.05), y: 0.035 + 0.46 * Math.pow(s, 2.0) };
-    }
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 44 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      function X(v) { return pd + v / 0.55 * (W - 2 * pd); }
-      function Y(v) { return H - pd - v / 0.55 * (H - 2 * pd); }
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
-      ctx.strokeStyle = t.accent; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
-      for (var i = 0; i <= 100; i++) {
-        var p = xy(i / 100), x = X(p.x), y = Y(p.y);
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      }
-      ctx.stroke();
-      var op = xy(th);
-      ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(X(op.x), Y(op.y), 6 * cv.dpr, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(labels.x, W / 2, H - 12 * cv.dpr);
-      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(labels.y, 0, 0); ctx.restore();
-      ctx.textAlign = 'left'; ctx.fillText(labels.point, X(op.x) + 8 * cv.dpr, Y(op.y) - 8 * cv.dpr);
-      read.textContent = labels.th + '=' + th.toFixed(2) + ' · ' + labels.x + ' ' + Math.round(op.x * 100) + '% · ' + labels.y + ' ' + Math.round(op.y * 100) + '%';
-    }
-    host.appendChild(slider(labels.th, 0.05, 0.95, 0.01, th, function (v) { th = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
 
   function init(host) {
     var name = host.getAttribute('data-viz');
