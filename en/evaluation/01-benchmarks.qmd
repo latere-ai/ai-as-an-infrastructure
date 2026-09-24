@@ -45,16 +45,29 @@ choices, not interchangeable measures of one capability:
 
 | Test form | What it can observe | Important limitation |
 |---|---|---|
-| Closed-answer questions, such as MMLU [@hendrycks2020mmlu] | Correctness on a fixed academic sample | The sample may be unrepresentative, exposed, or mislabeled |
-| Executable tasks, such as HumanEval or SWE-bench [@chen2021humaneval; @jimenez2023swebench] | Whether generated code passes a specified test environment | Tests and environment only approximate software quality |
-| Synthetic probes, such as configurable long-context tasks | A controlled mechanism under chosen conditions | Synthetic regularity may not transfer to natural inputs |
-| Human preference comparisons | Which output selected raters prefer | Preference depends on raters, rubric, presentation, and context |
-| Interactive environments | Whether an agent reaches a defined state | Success also depends on tools, environment state, and repeated-run reliability |
+| Closed-answer questions, such as MMLU, GPQA, or Humanity's Last Exam [@hendrycks2020mmlu; @rein2023gpqa; @phan2025hle] | Correctness on a fixed academic sample | The sample may be unrepresentative, exposed, or mislabeled |
+| Executable tasks, such as HumanEval, SWE-bench, or its human-validated subset SWE-bench Verified [@chen2021humaneval; @jimenez2023swebench; @openai2024swebenchverified] | Whether generated code passes a specified test environment | Tests and environment only approximate software quality |
+| Synthetic probes, such as the configurable long-context tasks of RULER [@hsieh2024ruler] | A controlled mechanism under chosen conditions | Synthetic regularity may not transfer to natural inputs |
+| Human preference comparisons, such as Chatbot Arena [@chiang2024chatbot] | Which output selected raters prefer | Preference depends on raters, rubric, presentation, and context |
+| Interactive environments, such as GAIA, WebArena, or $\tau$-bench [@mialon2023gaia; @zhou2023webarena; @yao2024taubench] | Whether an agent reaches a defined state | Success also depends on tools, environment state, and repeated-run reliability |
 
 Breadth helps only when the suite's composition matches the claim. The
 “benchmark lottery” describes how conclusions and rankings can change with the
 chosen tasks, datasets, and metrics [@dehghani2021benchmarklottery]. Adding
 unrelated tests can make a dashboard larger while making its meaning less clear.
+
+Several families also report on a decision made in an earlier layer of the
+stack. Math benchmarks from grade-school GSM8K to competition-level MATH have
+answers a program can check [@cobbe2021verifiers; @hendrycks2021math], the
+property that lets the same problems serve as rewards in the verifiable-reward
+training of @sec-training-to-reason. Running one task in several languages
+exposes tokenizer and data-mixture choices from @sec-data-curation that stay
+invisible while a model is measured only in English. Long-context probes gate
+the context extension described in @sec-structured-long-context. MMMU tests
+college-level subject knowledge over diagrams, charts, tables, and images
+[@yue2023mmmu], a construct that captioning accuracy does not cover. The
+interactive row is the subject of @sec-evaluating-agents, because an agent's
+result is a changed environment state rather than a single answer.
 
 ## The decision also chooses the metric
 
@@ -183,7 +196,8 @@ Several different failures are often compressed into the word contamination:
 1. **Training leakage:** an input, answer, or close duplicate enters pre-training
    or later training data.
 2. **Indirect leakage:** synthetic examples inherit benchmark content from a
-   teacher or retrieval source.
+   teacher or retrieval source (@sec-synthetic-data), so a clean corpus does
+   not protect a student trained on a dirty teacher's output.
 3. **Development leakage:** prompts, parsers, checkpoints, or policies are
    repeatedly chosen against evaluation results.
 4. **Reporting leakage:** items are filtered or reinterpreted after outputs are
@@ -197,6 +211,66 @@ is to survive [@dwork2015reusable]. A private final set, accessible only to a
 release service, can preserve one last independent check. It is not permanently
 trustworthy; access history and prior decisions determine how much independence
 remains.
+
+The selection effect is large even when nothing improves. The cell below gives
+$k$ prompt or checkpoint variants the same true accuracy $p$, scores all of them
+on one reused test set of $n$ cases, keeps the top scorer, and then scores the
+kept variant on fresh cases. On the reused set the kept variant sits
+$\sigma\,\mathbb{E}[\max_k Z]$ above $p$, where $\sigma=\sqrt{p(1-p)/n}$ is the
+sampling error of one score and $\mathbb{E}[\max_k Z]$ is the expected maximum of
+$k$ standard normal draws; the code checks the simulation against that closed
+form. With 400 cases, trying 100 variants reports a gain of about six points
+that fresh cases do not reproduce. Raising `n` to 4000 shrinks the invented
+gain by a factor of about three, the square root of ten, but does not remove it.
+
+:::: {.runnable}
+```python
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+n, p, runs = 400, 0.70, 4000     # test cases, true accuracy of every variant, repeated experiments
+K = np.array([1, 2, 3, 5, 10, 20, 50, 100])   # variants tried against the same test set
+
+kept_test, kept_fresh = [], []
+for k in K:
+    test = rng.binomial(n, p, size=(runs, k)) / n    # every variant scored on one reused set
+    kept_test.append(test.max(axis=1).mean())        # the team keeps the top scorer
+    kept_fresh.append((rng.binomial(n, p, size=runs) / n).mean())  # its score on unseen cases
+kept_test, kept_fresh = np.array(kept_test), np.array(kept_fresh)
+
+# Closed form: the best of k equal variants sits sigma * E[max of k standard normals] above p.
+sigma = math.sqrt(p * (1 - p) / n)
+z = np.linspace(-6, 6, 4001)
+Phi = 0.5 * (1 + np.array([math.erf(v / math.sqrt(2)) for v in z]))
+phi = np.exp(-z**2 / 2) / math.sqrt(2 * math.pi)
+e_max = np.array([(z * k * phi * Phi**(k - 1)).sum() * (z[1] - z[0]) for k in K])
+predicted = p + sigma * e_max
+
+assert np.allclose(kept_test, predicted, atol=0.15 * sigma)   # the inflation is pure selection
+assert np.all(np.abs(kept_fresh - p) < 0.1 * sigma)           # fresh cases see no gain
+print(f"k=100: reused set {kept_test[-1]:.3f}, fresh cases {kept_fresh[-1]:.3f}, true {p:.3f}")
+
+plt.figure(figsize=(6, 3.6))
+plt.semilogx(K, 100 * kept_test, "o-", label="kept variant, reused test set")
+plt.semilogx(K, 100 * predicted, "k--", lw=1, label="closed form")
+plt.semilogx(K, 100 * kept_fresh, "s-", label="kept variant, fresh cases")
+plt.xlabel("variants tried against one test set, k")
+plt.ylabel("accuracy (%)")
+plt.title("Keeping the best of k equal variants invents a gain")
+plt.legend(frameon=False)
+plt.tight_layout()
+plt.show()
+```
+::::
+
+Training leakage can pass for capability. SWE-bench builds its tasks from
+public GitHub issues, and state-of-the-art models named the file to repair from
+the issue text alone, without seeing the repository, up to 76 percent of the
+time; on repositories outside the benchmark the same probe reached at most
+53 percent [@liang2025swebenchillusion]. The gap points to memorized benchmark
+content, and the headline repair score does not show it.
 
 Audits provide evidence about exposure, not proof of absence. Exact hashes and
 n-gram matching find exact or near duplicates when the training corpus is
@@ -233,8 +307,22 @@ Even a test that never entered training can be wrong. Items may have incorrect
 keys, ambiguous wording, stale facts, broken dependencies, or a parser that rejects a
 valid answer. MMLU-Redux manually re-annotated 5,700 MMLU questions and estimated
 that 6.49% contained errors, with large variation among subjects
-[@gema2024mmluredux]. The answer key is therefore an input that can be wrong,
-and it needs the same audit as the rest of the benchmark.
+[@gema2024mmluredux]. Humanity's Last Exam, built from expert-written questions
+at the edge of academic knowledge, shows the same problem on a harder test.
+FutureHouse checked 321 of its text-only chemistry and biology questions against
+the literature and found that 29 ± 3.7 percent (95 percent interval) had
+reference answers directly contradicted by peer-reviewed evidence; the
+maintainers' own three-expert review of a subset put the share near 18 percent
+[@futurehouse2025hle]. HLE-Verified later re-examined all 2,500 items: 668 passed
+as written, 1,143 were revised, and 689 remained uncertain. Eight models scored
+7 to 10 points higher on the revised set, and 30 to 40 points higher on the
+items whose statement or reference answer had been wrong [@zhai2026hleverified].
+
+A wrong key does not flatter a model the way leakage does. If a fraction $e$ of
+the keys is wrong, a model that answers every item correctly scores at most
+$1-e$, and a model that reproduces the key's mistake is rewarded for it. The
+answer key is therefore an input that can be wrong, and it needs the same audit
+as the rest of the benchmark.
 
 Before using a suite as a release gate, audit a sample of cases and every case
 that changes the decision. Check:
@@ -373,6 +461,24 @@ OpenAI scored 69.7 percent. In Epoch AI's independent runs, GPT-6 Astra scored
 with a standard error of 1.3 to 1.7 points [@epoch2026gpqa].
 :::
 
+The succession of knowledge and reasoning tests follows this cycle. MMLU
+separated models when it appeared [@hendrycks2020mmlu]. GPQA was then built to
+be hard to look up: experts holding or pursuing a PhD in a question's field
+reached 65 percent, while
+skilled non-experts with unrestricted web access reached 34 percent, so
+retrieval could not stand in for reasoning [@rein2023gpqa]. Humanity's Last Exam
+moved to closed-ended questions written at the edge of expert knowledge
+[@phan2025hle]. The ARC family took a different route. ARC-AGI-2 kept static
+grid puzzles that humans solve and models find hard [@chollet2025arcagi2], and
+ARC-AGI-3 replaced the answer key with interactive turn-based environments whose
+rules an agent must discover by acting [@arcprize2026arcagi3]. Chatbot Arena
+removed the fixed test set altogether: it ranks models from a stream of fresh
+pairwise human votes, so there is no answer key to leak [@chiang2024chatbot],
+and its rating then depends on which users vote and which prompts they bring,
+as @sec-judging-holistic describes. Each step
+gives up some comparability over time in exchange for resistance to exposure,
+the trade the publication-policy table above describes.
+
 Do not respond by adding harder questions blindly. Difficulty is useful only if
 the new cases still represent the construct and decision. Maintain a benchmark
 like a production dependency: record revisions, monitor item statistics and
@@ -413,12 +519,20 @@ weights, scorer, known leakage and item defects, uncertainty, relevant slices,
 and the decision the evidence supports. A leaderboard row omits most of this
 context, so it should link to a result record rather than stand in for one.
 
+A static benchmark is also one layer of evidence among several. Production
+monitoring, A/B tests, user feedback, and human studies catch failures that a
+fixed test set lets through, such as a shift in the user population, while a
+static benchmark catches regressions before those slower layers see them.
+Following the @gls-swiss-cheese, each layer has gaps, and confidence comes from
+stacking layers whose gaps do not line up; @sec-operational-evaluation
+assembles them into release gates.
+
 ::: {.callout-tip}
 ## Lower-layer constraint
-Held-out integrity is decided below the evaluation layer. The data pipeline must
-exclude protected cases and their near duplicates from training mixtures, while
-the model registry, prompt registry, orchestration layer, and serving traces must
-retain the revisions used in each run. Evaluation can define the contract and
+Held-out integrity is decided below the evaluation layer. The data pipeline
+(@sec-data-curation) must exclude protected cases and their near duplicates from
+training mixtures, while the model registry, prompt registry, orchestration
+layer, and serving traces must retain the revisions used in each run. Evaluation can define the contract and
 audit the evidence, but it cannot reconstruct provenance that lower layers did
 not preserve. If those layers lose lineage, a precise score can still be
 uninterpretable.
