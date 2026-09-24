@@ -40,8 +40,30 @@ const SELF_CLOSING = new Set(["rect", "circle", "line", "path", "polyline", "pol
 
 // Text node. Pass `class` to pick a typographic role from theme.css
 // (fig-t-strong, fig-t-muted, fig-t-num); size and color default from CSS.
+// A one-letter symbol written as base_sub (T_msg, p_G, n_kv, g_i) is set with
+// a lowered, smaller subscript, so readouts show notation instead of raw
+// underscores. The base must stand alone (no letter or digit before it), which
+// leaves identifiers such as edit_file untouched. dy positions the subscript
+// the same way in every browser; the baseline is restored after it.
+const SUBSCRIPT = /(?<![A-Za-z0-9])([A-Za-z])_([A-Za-z0-9\u03b1-\u03c9]+)/g;
+
 export function text(x: number, y: number, s: string | number, a: Attrs = {}): string {
-  return el("text", { x, y, ...a }, esc(s));
+  const str = String(s);
+  if (!str.includes("_")) return el("text", { x, y, ...a }, esc(str));
+  const size = Number(a["font-size"] ?? 12);
+  const d = Math.round(size * 2.8) / 10;
+  const fs = Math.round(size * 0.78);
+  let out = "", i = 0, shifted = 0;
+  for (const m of str.matchAll(SUBSCRIPT)) {
+    const pre = str.slice(i, m.index) + m[1];
+    out += shifted ? `<tspan dy="${-shifted}">${esc(pre)}</tspan>` : esc(pre);
+    out += `<tspan dy="${d}" font-size="${fs}">${esc(m[2])}</tspan>`;
+    shifted = d;
+    i = (m.index ?? 0) + m[0].length;
+  }
+  const rest = str.slice(i);
+  if (rest) out += shifted ? `<tspan dy="${-shifted}">${esc(rest)}</tspan>` : esc(rest);
+  return el("text", { x, y, ...a }, out);
 }
 
 export function g(a: Attrs, ...children: Array<string | false | null | undefined>): string {
