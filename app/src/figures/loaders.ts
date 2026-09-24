@@ -122,4 +122,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "reward-source-use": () => import("./reward-source-use.ts"),
   "calibration-reward": () => import("./calibration-reward.ts"),
   "refusal-threshold": () => import("./refusal-threshold.ts"),
+  "selection-frontier": () => import("./selection-frontier.ts"),
 };
