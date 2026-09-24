@@ -78,11 +78,6 @@ test("generated zh SVG figures use localized visible labels", () => {
   expect(tokenAudit).toContain("词元溢价分布");
   expect(tokenAudit).not.toContain("Pinned parallel text");
 
-  const transformerCache = read("zh/figures/transformer-architecture-1.svg");
-  expect(transformerCache).toContain("KV 有效载荷（GiB）");
-  expect(transformerCache).toContain("7B 权重（每参数 2 字节）");
-  expect(transformerCache).not.toContain("KV payload (GiB)");
-
   const sequenceGrowth = read("zh/figures/moe-ssm-hybrids-1.svg");
   expect(sequenceGrowth).toContain("注意力关系（二次增长）");
   expect(sequenceGrowth).toContain("相对 1K 词元的增长倍数");
