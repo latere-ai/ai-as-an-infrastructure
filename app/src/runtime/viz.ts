@@ -818,63 +818,6 @@
     watchTheme(host, draw);
   };
 
-  // Reasoning search budget: exact node counts for a full tree and a
-  // layer-wise beam under fixed branching, no duplicates, and no early exits.
-  R['reasoning-search-budget'] = function (host) {
-    var lang = host.getAttribute('data-lang') === 'zh' ? 'zh' : 'en';
-    var L = lang === 'zh' ? {
-      branching: '分支数', depth: '深度', width: '束宽',
-      full: '完整树', beam: '束搜索', peak: '峰值前沿',
-      nodes: '生成节点', log: '对数刻度'
-    } : {
-      branching: 'branching', depth: 'depth', width: 'beam width',
-      full: 'full tree', beam: 'beam search', peak: 'peak frontier',
-      nodes: 'generated nodes', log: 'log scale'
-    };
-    var branching = 3, depth = 4, width = 4;
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 285);
-    cv.c.setAttribute('role', 'img');
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var fullNodes = 1, fullLevel = 1;
-      for (var d = 0; d < depth; d++) { fullLevel *= branching; fullNodes += fullLevel; }
-      var beamNodes = 1, beamFrontier = 1, peakFrontier = 1;
-      for (var level = 0; level < depth; level++) {
-        var generated = beamFrontier * branching;
-        beamNodes += generated;
-        beamFrontier = Math.min(width, generated);
-        peakFrontier = Math.max(peakFrontier, beamFrontier);
-      }
-      var bars = [
-        { n: L.full, v: fullNodes, c: 'rgba(128,128,128,0.55)' },
-        { n: L.beam, v: beamNodes, c: t.accent },
-        { n: L.peak, v: peakFrontier, c: t.accent2 }
-      ];
-      var maxLog = Math.max.apply(null, bars.map(function (b) { return Math.log10(1 + b.v); }));
-      function X(i) { return pd + (i + 0.5) * (W - 2 * pd) / 3; }
-      function Y(v) { return H - pd - Math.log10(1 + v) / maxLog * (H - 2 * pd); }
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
-      bars.forEach(function (b, i) {
-        var x = X(i), bw = 58 * cv.dpr, y = Y(b.v);
-        ctx.fillStyle = b.c; ctx.fillRect(x - bw / 2, y, bw, H - pd - y);
-        ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-        ctx.fillText(b.n, x, H - pd + 20 * cv.dpr);
-        ctx.fillText(b.v.toLocaleString('en-US'), x, y - 8 * cv.dpr);
-      });
-      ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'right';
-      ctx.fillText(L.log, W - pd, pd - 10 * cv.dpr);
-      read.textContent = L.full + '=' + fullNodes.toLocaleString('en-US') + ' · ' + L.beam + '=' + beamNodes.toLocaleString('en-US');
-      cv.c.setAttribute('aria-label', L.nodes + ': ' + read.textContent + ' · ' + L.peak + '=' + peakFrontier.toLocaleString('en-US'));
-    }
-    host.appendChild(slider(L.branching, 1, 6, 1, branching, function (v) { branching = Math.round(v); draw(); }).wrap);
-    host.appendChild(slider(L.depth, 1, 7, 1, depth, function (v) { depth = Math.round(v); draw(); }).wrap);
-    host.appendChild(slider(L.width, 1, 16, 1, width, function (v) { width = Math.round(v); draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Preference-signal mixer: a pairwise preference label is a weighted
   // multi-attribute judgment. Change the implicit rubric weights and the chosen
   // answer can flip even though the candidate responses do not move.
