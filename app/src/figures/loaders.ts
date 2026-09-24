@@ -148,4 +148,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "burn-rate-alerts": () => import("./burn-rate-alerts.ts"),
   "chunk-overlap": () => import("./chunk-overlap.ts"),
   "judge-qualification": () => import("./judge-qualification.ts"),
+  "trace-sampling": () => import("./trace-sampling.ts"),
 };
