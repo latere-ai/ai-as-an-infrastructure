@@ -7,8 +7,10 @@
 // component, so the correlation control moves every learned layer's holes into
 // or out of alignment: at correlation 0 the layers are independent and the
 // share reaching the end is the product of the miss rates; at correlation 1 an
-// attempt that passes one learned layer passes them all, and the stack is no
-// stronger than its weakest layer. This is the chapter's claim that a separate
+// attempt that passes the strongest learned layer passes them all, so the
+// share reaching the end is the strongest layer's own miss rate and the stack
+// is only as strong as its single strongest layer. This is the chapter's claim
+// that a separate
 // guard is not automatically statistically independent of the target model.
 //
 // The effect gate is deterministic, not learned. It enforces a narrow property
