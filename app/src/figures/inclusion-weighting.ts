@@ -29,7 +29,7 @@ import { textWidth, wrap } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { logitNormalQuantiles } from "./lib/stats.ts";
 import { rng } from "./lib/random.ts";
-import { int, pct, sig, tpl } from "./lib/format.ts";
+import { int, sig, tpl } from "./lib/format.ts";
 
 const N = 2000;
 const DRAWS = 400;
@@ -145,7 +145,6 @@ const labels = {
   },
 };
 
-type Lbl = typeof labels.en;
 const f3 = (v: number) => (Number.isFinite(v) ? v.toFixed(3) : "–");
 const fp = (v: number) => sig(v, 2);
 const lines = (s: string, size: number, w: number, lang: Lang) => (lang === "zh" ? wrapCjk(s, size, w) : wrap(s, size, w));

@@ -39,7 +39,7 @@ import { rng } from "./lib/random.ts";
 import { normalFrom } from "./lib/stats.ts";
 import { svg, el, text, g, linePath } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
-import { linear, log } from "./lib/scale.ts";
+import { linear } from "./lib/scale.ts";
 import { axis, axisHeight } from "./lib/axis.ts";
 import { legend } from "./lib/legend.ts";
 import { textWidth, wrap } from "./lib/labels.ts";
