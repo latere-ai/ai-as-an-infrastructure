@@ -62,24 +62,82 @@ into one near-optimal bit stream, can approach the ideal sequence length
 with small coding and framing overhead [@grunwald2004mdl]. The tokenizer and
 probability model must also be known to both encoder and decoder.
 
-The following runnable compares two fixed probability models. It computes ideal
-model-based codelengths; it does not create a file or charge for transmitting the
-models.
+The cell below implements an arithmetic coder in exact integer arithmetic and
+codes one paragraph under three models: a uniform model over its characters,
+and two adaptive models that start from nothing and update character counts as
+they code, one without context and one conditioned on the previous character.
+Every code is decoded back to the paragraph and checked to lie within two bits
+of the model's ideal codelength $L_q$. The adaptive models learn only from
+characters already coded, so the decoder repeats their predictions and nothing
+besides the code has to be transmitted; their running cost starts at the
+uniform rate and falls as the counts fill in. Change `seen[-1:]` to
+`seen[-2:]` to condition on two characters: on a paragraph this short the code
+gets longer, because each longer context has been seen too few times to
+predict well.
 
 :::: {.runnable}
 ```python
+from itertools import accumulate
 from math import log2
+import matplotlib.pyplot as plt
 
-message = "abracadabra"
-informed = {"a": 0.4, "b": 0.2, "r": 0.2, "c": 0.1, "d": 0.1}
-uniform = {symbol: 0.2 for symbol in informed}
+text = ("an autoregressive model assigns a probability to each token after seeing "
+        "the tokens before it. the probability of the whole sequence is the product "
+        "of those conditional probabilities, and its negative base-two logarithm is "
+        "the ideal codelength of the sequence under the model. an arithmetic coder "
+        "turns that probability into one binary fraction whose length is within two "
+        "bits of the ideal, so a model that predicts better also compresses better.")
+A = sorted(set(text))
 
-def ideal_bits(model):
-    return sum(-log2(model[symbol]) for symbol in message)
+# A model maps the text read so far to integer counts over A. The adaptive
+# ones learn while they code (Krichevsky-Trofimov: 2n + 1 per symbol).
+def uniform(seen):
+    return [1] * len(A)
+def order0(seen):
+    return [2 * seen.count(a) + 1 for a in A]
+def order1(seen):
+    ctx = seen[-1:]  # try seen[-2:]: more context, fewer counts per context
+    return [2 * seen.count(ctx + a) + 1 for a in A]
 
-for name, model in [("uniform", uniform), ("informed", informed)]:
-    total = ideal_bits(model)
-    print(f"{name:8s}: {total:5.2f} ideal bits ({total / len(message):.2f} per symbol)")
+def step(L, W, D, c, j):  # narrow [L, L+W)/D to symbol j's share of the counts
+    return L * sum(c) + sum(c[:j]) * W, W * c[j], D * sum(c)
+
+def encode(model):
+    L, W, D, bits = 0, 1, 1, []
+    for i, x in enumerate(text):
+        c = model(text[:i]); j = A.index(x)
+        bits.append(-log2(c[j] / sum(c)))
+        L, W, D = step(L, W, D, c, j)
+    k = max(0, D.bit_length() - W.bit_length())
+    while True:  # shortest k-bit fraction v/2^k whose [v, v+1) fits in [L, L+W)/D
+        v = -(-L * 2**k // D)
+        if (v + 1) * D <= (L + W) * 2**k:
+            return v, k, bits
+        k += 1
+
+def decode(v, k, model):
+    out, L, W, D = "", 0, 1, 1
+    for _ in text:
+        c = model(out)
+        t = (v * D - L * 2**k) * sum(c) // (W * 2**k)
+        j = next(j for j in range(len(A)) if sum(c[:j + 1]) > t)
+        out += A[j]
+        L, W, D = step(L, W, D, c, j)
+    return out
+
+n = len(text)
+for model in [uniform, order0, order1]:
+    v, k, bits = encode(model)
+    ideal = sum(bits)
+    assert decode(v, k, model) == text and ideal <= k <= ideal + 2
+    running = [b / (i + 1) for i, b in enumerate(accumulate(bits))]
+    plt.plot(range(1, n + 1), running, label=f"{model.__name__}: {k} bits in total")
+    print(f"{model.__name__:8s} ideal {ideal:7.1f} bits, arithmetic code {k} bits")
+plt.xlabel("characters coded")
+plt.ylabel("bits per character so far")
+plt.ylim(3, 6)
+plt.title("Adaptive models pay while they learn, then code shorter")
+plt.legend()
 ```
 ::::
 

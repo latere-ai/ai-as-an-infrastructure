@@ -43,6 +43,62 @@ $$
 
 上图中的两套工作流共享一种系统结构，解决的却是不同的学习问题。推荐排序模型预测或优化条目的效果；检索增强生成系统则把检索到的证据作为输入，完成开放式生成。因此，检索机制可以在两者之间沿用，最终模型、目标和评估方法则各有不同。
 
+下面的单元格测量近似搜索放弃了多少召回率。它构建一个倒排文件索引，也就是 FAISS 提供的粗量化结构 [@johnson2017faiss]：k-means 把 20,000 个成簇分布的物品嵌入分进 64 个列表，查询只给质心得分最高的 `n_probe` 个列表中的物品打分。召回率 recall@10 以穷举的 top-$k$ 检索为基准；单元格还检验了探查全部 64 个列表时，返回结果与穷举检索完全相同，顺序也一致。在这组嵌入上，只给目录中十分之一的物品打分，就能找回真实前十名中的约 95%，远高于同样大小的随机子集。把 `spread` 提高到 1.2，让物品离各自的主题更远，达到同样的召回率就要给约四分之一的目录打分：索引能省下多少计算，取决于嵌入的聚簇程度。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+N, d, k, n_lists = 20_000, 32, 10, 64
+spread = 0.6  # 物品在其主题周围的离散程度；试试 1.2
+topics = rng.normal(size=(200, d))
+items = topics[rng.integers(200, size=N)] + spread * rng.normal(size=(N, d))
+queries = topics[rng.integers(200, size=100)] + spread * rng.normal(size=(100, d))
+scores = queries @ items.T  # 每个查询对每个物品的 a_i：穷举得到 C_k(u)
+top = np.argpartition(-scores, k, axis=1)[:, :k]
+exact = np.take_along_axis(top, np.argsort(-np.take_along_axis(scores, top, 1)), 1)
+
+# 倒排文件索引：k-means 把每个物品放进离它最近的质心所在的列表。
+cent = items[rng.choice(N, n_lists, replace=False)]
+for _ in range(8):
+    assign = ((cent**2).sum(1) - 2 * items @ cent.T).argmin(1)
+    cent = np.array([items[assign == j].mean(0) for j in range(n_lists)])
+lists = [np.flatnonzero(assign == j) for j in range(n_lists)]
+
+def search(q, n_probe):  # 只给得分最高的 n_probe 个列表中的物品打分
+    cand = np.concatenate([lists[j] for j in np.argsort(-(cent @ q))[:n_probe]])
+    s = items[cand] @ q
+    best = np.argpartition(-s, k)[:k]
+    return cand[best[np.argsort(-s[best])]], len(cand)
+
+probes = [1, 2, 4, 8, 16, 32, 64]
+recall, scored = [], []
+for n_probe in probes:
+    runs = [search(q, n_probe) for q in queries]
+    recall.append(np.mean([len(set(top) & set(e)) / k for (top, _), e in zip(runs, exact)]))
+    scored.append(np.mean([n for _, n in runs]) / N)
+# 探查所有列表就是穷举搜索：前 k 个结果相同，顺序也相同。
+assert all((search(q, n_lists)[0] == e).all() for q, e in zip(queries[:20], exact))
+
+plt.plot(scored, recall, "o-", label="IVF 索引，n_probe = 1 … 64")
+plt.plot(scored, scored, ":", c="grey", label="同样大小的随机子集")
+for p, x, y in zip(probes, scored, recall):
+    plt.annotate(str(p), (x, y), xytext=(4, -12), textcoords="offset points", fontsize=9)
+i = next(i for i, r in enumerate(recall) if r >= 0.9)
+plt.xscale("log")
+plt.xticks([0.01, 0.03, 0.1, 0.3, 1], ["1%", "3%", "10%", "30%", "100%"])
+plt.xlabel("每个查询打分的目录占比")
+plt.ylabel(f"recall@{k}")
+plt.title(f"给 {N:,} 个物品中的 {scored[i]:.1%} 打分，召回率 {recall[i]:.0%}")
+plt.legend(loc="center right")
+print("n_probe  打分占比  recall@10")
+for p, x, y in zip(probes, scored, recall):
+    print(f"{p:7d}  {x:6.1%}  {y:9.3f}")
+```
+::::
+
 ## 继承下来的做法
 
 旧技术栈有三个部分成为生成式系统的基础。

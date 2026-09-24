@@ -79,6 +79,72 @@ retrieval-augmented generator uses retrieved evidence as input to an open-ended
 generation process. The retrieval machinery can therefore transfer between
 them, while the final model, objective, and evaluation are specific to each.
 
+The cell below measures the recall that approximate search gives up. It builds
+an inverted-file index, the coarse-quantizer structure that FAISS provides
+[@johnson2017faiss]: k-means assigns each of 20,000 clustered item embeddings
+to one of 64 lists, and a query scores only the items in the `n_probe` lists
+whose centroids score highest. Recall@10 is measured against exhaustive top-$k$
+retrieval, and the cell checks that probing all 64 lists returns the exhaustive
+result in the same order. On these embeddings, scoring a tenth of the catalog
+finds about 95% of the true top ten, far above a random subset of the same
+size. Raise `spread` to 1.2, so items sit farther from their topics, and the
+same recall costs about a quarter of the catalog: how much an index saves
+depends on how clustered the embeddings are.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+N, d, k, n_lists = 20_000, 32, 10, 64
+spread = 0.6  # item scatter around its topic; try 1.2
+topics = rng.normal(size=(200, d))
+items = topics[rng.integers(200, size=N)] + spread * rng.normal(size=(N, d))
+queries = topics[rng.integers(200, size=100)] + spread * rng.normal(size=(100, d))
+scores = queries @ items.T  # a_i for every query and item: exhaustive C_k(u)
+top = np.argpartition(-scores, k, axis=1)[:, :k]
+exact = np.take_along_axis(top, np.argsort(-np.take_along_axis(scores, top, 1)), 1)
+
+# Inverted-file index: k-means puts every item in the list of its nearest centroid.
+cent = items[rng.choice(N, n_lists, replace=False)]
+for _ in range(8):
+    assign = ((cent**2).sum(1) - 2 * items @ cent.T).argmin(1)
+    cent = np.array([items[assign == j].mean(0) for j in range(n_lists)])
+lists = [np.flatnonzero(assign == j) for j in range(n_lists)]
+
+def search(q, n_probe):  # score only the items in the n_probe best lists
+    cand = np.concatenate([lists[j] for j in np.argsort(-(cent @ q))[:n_probe]])
+    s = items[cand] @ q
+    best = np.argpartition(-s, k)[:k]
+    return cand[best[np.argsort(-s[best])]], len(cand)
+
+probes = [1, 2, 4, 8, 16, 32, 64]
+recall, scored = [], []
+for n_probe in probes:
+    runs = [search(q, n_probe) for q in queries]
+    recall.append(np.mean([len(set(top) & set(e)) / k for (top, _), e in zip(runs, exact)]))
+    scored.append(np.mean([n for _, n in runs]) / N)
+# Probing every list is exhaustive search: the same top k, in the same order.
+assert all((search(q, n_lists)[0] == e).all() for q, e in zip(queries[:20], exact))
+
+plt.plot(scored, recall, "o-", label="IVF index, n_probe = 1 … 64")
+plt.plot(scored, scored, ":", c="grey", label="random subset of the same size")
+for p, x, y in zip(probes, scored, recall):
+    plt.annotate(str(p), (x, y), xytext=(4, -12), textcoords="offset points", fontsize=9)
+i = next(i for i, r in enumerate(recall) if r >= 0.9)
+plt.xscale("log")
+plt.xticks([0.01, 0.03, 0.1, 0.3, 1], ["1%", "3%", "10%", "30%", "100%"])
+plt.xlabel("share of the catalog scored per query")
+plt.ylabel(f"recall@{k}")
+plt.title(f"{recall[i]:.0%} recall scoring {scored[i]:.1%} of {N:,} items")
+plt.legend(loc="center right")
+print("n_probe  scored  recall@10")
+for p, x, y in zip(probes, scored, recall):
+    print(f"{p:7d}  {x:6.1%}  {y:9.3f}")
+```
+::::
+
 ## What transferred
 
 Three parts of the older stack became foundations for generative systems.

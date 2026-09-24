@@ -39,22 +39,71 @@ $$
 
 之所以称为“理想”编码长度，是因为二进制码字的长度必须是整数：概率为 $q(x)$ 的符号通常无法得到一个长度恰好为 $-\log_2 q(x)$ 比特的实际码字。Shannon 编码可以为每个符号使用 $\lceil-\log_2 q(x)\rceil$ 比特。对整个序列进行熵编码还可以更接近理想值：@gls-arithmetic-coding，也就是把序列概率转换成一条接近最优的比特流，能够以很小的编码和分帧开销逼近理想序列长度 [@grunwald2004mdl]。编码方和解码方还必须共享同一个分词器与概率模型。
 
-下面的可运行示例比较两个固定的概率模型。它计算的是模型给出的理想编码长度，不会生成文件，也没有计入传输模型本身的成本。
+下面的单元格用精确的整数运算实现一个算术编码器，并在三个模型下编码同一段文字：一个在其字符上均匀分布的模型，以及两个自适应模型。自适应模型从零开始，边编码边更新字符计数，其中一个不看上下文，另一个以前一个字符为条件。每段编码都会被解码回原文，并检验其长度与模型的理想编码长度 $L_q$ 相差不超过 2 比特。自适应模型只从已经编码的字符中学习，所以解码方可以重复同样的预测，除了编码本身不需要传输任何东西；它们的累计平均成本从均匀模型的水平起步，随着计数逐渐充实而下降。把 `seen[-1:]` 改为 `seen[-2:]`，以前两个字符为条件：在这么短的一段文字上，编码反而更长，因为每个更长的上下文出现的次数太少，还不足以做出好的预测。
 
 :::: {.runnable}
 ```python
+from itertools import accumulate
 from math import log2
+import matplotlib.pyplot as plt
 
-message = "abracadabra"
-informed = {"a": 0.4, "b": 0.2, "r": 0.2, "c": 0.1, "d": 0.1}
-uniform = {symbol: 0.2 for symbol in informed}
+text = ("an autoregressive model assigns a probability to each token after seeing "
+        "the tokens before it. the probability of the whole sequence is the product "
+        "of those conditional probabilities, and its negative base-two logarithm is "
+        "the ideal codelength of the sequence under the model. an arithmetic coder "
+        "turns that probability into one binary fraction whose length is within two "
+        "bits of the ideal, so a model that predicts better also compresses better.")
+A = sorted(set(text))
 
-def ideal_bits(model):
-    return sum(-log2(model[symbol]) for symbol in message)
+# 模型把已读文本映射为 A 上的整数计数。自适应模型边编码边学习
+# （Krichevsky-Trofimov 估计：每个符号计 2n + 1）。
+def uniform(seen):
+    return [1] * len(A)
+def order0(seen):
+    return [2 * seen.count(a) + 1 for a in A]
+def order1(seen):
+    ctx = seen[-1:]  # 试试 seen[-2:]：上下文更长，每个上下文的计数更少
+    return [2 * seen.count(ctx + a) + 1 for a in A]
 
-for name, model in [("uniform", uniform), ("informed", informed)]:
-    total = ideal_bits(model)
-    print(f"{name:8s}: {total:5.2f} ideal bits ({total / len(message):.2f} per symbol)")
+def step(L, W, D, c, j):  # 把 [L, L+W)/D 缩小到符号 j 在计数中所占的份额
+    return L * sum(c) + sum(c[:j]) * W, W * c[j], D * sum(c)
+
+def encode(model):
+    L, W, D, bits = 0, 1, 1, []
+    for i, x in enumerate(text):
+        c = model(text[:i]); j = A.index(x)
+        bits.append(-log2(c[j] / sum(c)))
+        L, W, D = step(L, W, D, c, j)
+    k = max(0, D.bit_length() - W.bit_length())
+    while True:  # 找最短的 k 位小数 v/2^k，使 [v, v+1) 落在 [L, L+W)/D 内
+        v = -(-L * 2**k // D)
+        if (v + 1) * D <= (L + W) * 2**k:
+            return v, k, bits
+        k += 1
+
+def decode(v, k, model):
+    out, L, W, D = "", 0, 1, 1
+    for _ in text:
+        c = model(out)
+        t = (v * D - L * 2**k) * sum(c) // (W * 2**k)
+        j = next(j for j in range(len(A)) if sum(c[:j + 1]) > t)
+        out += A[j]
+        L, W, D = step(L, W, D, c, j)
+    return out
+
+n = len(text)
+for model in [uniform, order0, order1]:
+    v, k, bits = encode(model)
+    ideal = sum(bits)
+    assert decode(v, k, model) == text and ideal <= k <= ideal + 2
+    running = [b / (i + 1) for i, b in enumerate(accumulate(bits))]
+    plt.plot(range(1, n + 1), running, label=f"{model.__name__}：共 {k} 比特")
+    print(f"{model.__name__:8s} 理想长度 {ideal:7.1f} 比特，算术编码 {k} 比特")
+plt.xlabel("已编码字符数")
+plt.ylabel("截至当前的每字符比特数")
+plt.ylim(3, 6)
+plt.title("自适应模型先为学习付出代价，随后编码更短")
+plt.legend()
 ```
 ::::
 
