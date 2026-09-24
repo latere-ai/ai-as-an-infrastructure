@@ -1,12 +1,205 @@
 # 集成技术栈 {#sec-wiring-stack}
 
-当每道边界都有明确契约，每个会影响行为的组件都有稳定身份，并且发布失败后能够沿着经过测试的路径恢复时，一组兼容的产品才组成一个系统。因此，本章的交付物是一项**集成发布**：它用版本化记录说明哪些组件连接在一起、每条连接具有什么含义、由谁负责，以及哪些证据足以证明组装后的系统可以安全发布。
+到 2026 年，一个投入生产的 LLM 应用由一组大多数团队已经熟悉的部件组装而成：客户端与智能体运行时、检索服务、通过模型上下文协议接入的工具、运行模型所写代码的沙箱、位于托管模型和自托管模型之前的模型网关、GPU 算力，以及可观测性与评测。本篇前面几章逐个讨论过这些部件：模型（@sec-choosing-model）、服务与算力（@sec-serving-stack）、训练（@sec-training-practice）、智能体与沙箱（@sec-agents-practice）、检索（@sec-retrieval-practice）和评测（@sec-eval-practice）。本章把它们组装成一个系统，分为两半。前一半展示组装后的技术栈：一套列出示例项目和产品的参考架构、各组件共用的线上格式、大部分调用都要经过的模型网关、三种典型技术栈，以及接缝处的代码。后一半说明让这套组装可以发布的契约：固定的系统身份、明确的兼容性、每次模型操作的状态机、有界的重试、彼此分离的凭据与操作、作为证据的遥测，以及经过测试的切换。
 
-集成的起点是发布决策，而非产品清单。发布决策要写明本次发布的能力、面向的用户和租户、允许处理的数据类别与操作、质量和运营门槛，以及回滚触发条件。随后，发布会固定一份**系统指纹**，其中包括模型修订版本、提示词修订版本、检索快照、工具 Schema、策略修订版本、路由配置、遥测 Schema 和可执行制品摘要。模型名称本身无法标识生成某个答案的系统。
+契约优先的后一半来自更早的系统研究。Fielding 用受约束的接口，而不是具体产品，来描述网络化系统 [@fielding2000rest]。Sculley 等人随后说明，胶水代码、配置和未声明的消费方会在机器学习系统周围积累技术债 [@sculley2015debt]。Breck 等人又把这项认识转化为生产就绪测试 [@breck2017mltest]。@sec-eval-practice 把评测证据绑定到实际发布的那套系统上。本章让这些组件的组合可以接受检验，把 @sec-whole-stack 梳理过的端到端技术栈落到实践中。
 
-这种契约优先的思路来自更早的系统研究。Fielding 用受约束的接口，而不是具体产品，来描述网络化系统 [@fielding2000rest]。Sculley 等人随后说明，胶水代码、配置和未声明的消费方会在机器学习系统周围积累技术债 [@sculley2015debt]。Breck 等人又把这项认识转化为生产就绪测试 [@breck2017mltest]。本篇前面几章给出了各个组件，@sec-eval-practice 则把评测证据绑定到实际发布的那套系统上。本章让这些组件的组合可以接受检验，把 @sec-whole-stack 梳理过的端到端技术栈落到实践中。
+## 参考架构
+
+@fig-reference-arch 按层画出这套技术栈。从上往下读，就是一次请求的路径。客户端调用运行时；运行时检索证据，经 MCP 网关调用工具，在沙箱里运行代码，并经模型@gls-gateway调用模型，网关再把每次调用转发给托管 API，或转发给运行在团队自有 GPU 上的自托管推理服务。底部的可观测性与评测层接收所有组件发出的 span，自己的裁判调用也经网关发出。箭头颜色表示该调用携带的凭据。
+
+```{figure}
+//| figure: reference-stack
+//| label: fig-reference-arch
+//| fig-cap: "按层划分的 LLM 应用参考技术栈，图中的项目和产品是截至 2026 年 9 月的示例。箭头表示调用，箭头颜色表示该调用携带的凭据；虚线总线传送 OpenTelemetry GenAI span，它们不授予任何权限。选中一个组件，可以查看它的作用、可选的实现，以及本章中约束它的契约；不选组件时，读数区按凭据列出全部调用。图中列出的项目只是示例，并非推荐。"
+```
+
+大部分流量经过两个网关：模型调用经过模型网关，工具调用经过 MCP 网关。沙箱是运行模型所写代码的算力接缝，与模型网关承担的模型调用接缝相对应。抽象地看，图中每条路径的形状都相同：调用方、准入决策、把调用方契约转换为提供商契约的适配器，以及提供商。工具操作走一条单独授权的路径，进入记录每项操作的执行器；检索返回带标识的证据；遥测观察每项决策，但不授予任何权限。本章后一半的契约都用这些抽象角色来表述，在图中选中某个组件，就能看到约束它的那一份契约。
+
+这套架构的中心不属于任何一个产品。图中列出的只是示例，而且有的产品同时占据多个位置：agentgateway 和 Agent Router 都能同时承载模型流量和 MCP 流量，托管沙箱也可能自带出站控制。任何一个位置都可以换成满足同一契约的其他产品，因此图中真正稳定的，是这些位置本身和箭头上的凭据。
+
+凭据遵循一条规则：应用、智能体、评测套件和沙箱都不持有原始的提供商凭据。它们持有的是虚拟密钥，即网关代替提供商密钥签发的凭据，限定于模型白名单、预算和限流。这样，轮换提供商密钥或给失控的智能体封顶，都只需在网关上修改，客户端无需重新部署。同一条规则也适用于沙箱。密钥留在沙箱之外，沙箱内的代码拿到的，要么是短期的受限令牌，要么是一个占位符，出站代理在请求发往白名单主机时再把它替换成真正的密钥（@sec-security-authorization）。在图中，提供商密钥的颜色只出现在网关到提供商的调用和出站代理向外的调用上。
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+E2B 为每个沙箱分配一台独立的 Firecracker microVM [@e2b2026runtime]，Vercel Sandbox 也是如此 [@vercel2026sandbox]；Modal 则用 gVisor 对计算任务做虚拟化隔离 [@modal2026security]。图中两种开源推理服务引擎的最新版本分别是 vLLM v0.30.0 和 SGLang v0.5.20 [@vllm2026repo; @sglang2026serving44]。今年有两款评测与可观测性工具易主：ClickHouse 收购了 Langfuse [@clickhouse2026langfuse]，Promptfoo 宣布将通过收购并入 OpenAI [@promptfoo2026openai]。
+:::
+
+## 各组件共用的线上格式
+
+这些组件功能各异，却能组合起来，是因为它们共用少数几种线上格式。每种格式都是一个狭窄的接口，接口背后的实现可以更换，接口前面的调用方不必改写。
+
+模型调用使用少数几种 HTTP 方言。承载大部分流量的有三种：OpenAI Chat Completions（`/v1/chat/completions`），vLLM、SGLang 等开源权重服务器提供的就是它；OpenAI Responses（`/v1/responses`）；以及 Anthropic Messages（`/v1/messages`）。编码运行框架绑定在各自的母语方言上：Codex 使用 Responses，Claude Code 使用 Messages。网关接收一种方言、转发成另一种方言时，就要在两者之间转换，而语义恰恰可能在转换中丢失，比如工具调用约定、思考配置、缓存提示或字段长度。报告转换中丢掉了什么的网关，让调用方自己决定如何处理；悄悄近似的网关，则在不留记录的情况下改变了系统。也正是这道负责转换的接缝，让自托管模型和托管模型可以共用一个模型名。
+
+工具流量比模型流量收敛得更彻底。@gls-mcp让一台工具服务器可以被所有智能体宿主复用（@sec-agents-practice）；位于工具服务器之前的 MCP 网关负责这些服务器的凭据、工具白名单和审计记录，正如模型网关负责模型流量。
+
+遥测收敛到 OpenTelemetry 的 GenAI 语义约定上。这是一套与厂商无关的 `gen_ai.*` span 属性，覆盖模型调用、检索和智能体步骤（@sec-eval-practice）。组件只需埋点一次，同一批 span 就能发往 Langfuse、Phoenix 或通用的追踪后端，无需重新埋点。
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+Codex 的模型提供方只支持 `responses` 这一种线上协议 [@openai2026codexconfig]。Claude Code 可以经网关使用，前提是网关提供 Anthropic Messages、Bedrock InvokeModel 或 Vertex rawPredict 格式之一，并原样转发 `anthropic-version` 和 `anthropic-beta` 请求头 [@anthropic2026gatewayprotocol]；Anthropic 不支持经网关把 Claude Code 路由到非 Claude 模型 [@anthropic2026claudecodegateway]。vLLM 在 OpenAI 兼容 API 之外也提供 Anthropic Messages API [@vllm2026repo]。当前的 MCP 修订版 2026-07-28 把协议改为无状态：它去掉了初始化握手和协议层会话，每个请求都自带协议版本和客户端能力 [@mcp2026release]。GenAI 语义约定现在放在单独的代码库中，仍标记为开发中，也没有打过版本标签，因此集成时要固定自己发出的约定版本 [@otel2026genaisemconv]。
+:::
+
+## 贯穿技术栈的三条路径
+
+本书沿三条路径搭起了这套技术栈，参考架构正是它们交汇的地方。沿着 @fig-reference-arch 逐条走一遍，就能看出各层之间如何相互依赖。
+
+### 从聊天机器人到智能体
+
+聊天机器人只是一次模型调用：输入提示词，输出补全。智能体则给这次调用套上一个执行循环：模型提出工具调用，运行时执行并返回结果，模型再决定下一步，可能这样往复许多轮（@sec-agent-architectures、@sec-the-harness）。从前者到后者要补上三样东西，每一样都是图中的一个组件。
+
+- **用检索提供依据。** 智能体检索当前的、私有的或权威的上下文，而不只依赖权重中记住的内容（@sec-rag-retrieval、@sec-retrieval-practice）。常见的流水线是@gls-hybrid-search：先用倒数排名融合合并 BM25 词法得分和稠密向量相似度，即对每个文档在各个排序列表中累加 $1/(k + \text{rank})$，其中 $k$ 是一个较小的平滑常数；再由重排模型针对查询给一小批候选重新打分并排序。嵌入模型和重排模型都经网关调用，所以它们和其他模型调用一样受密钥与预算约束。检索通常比塞满长上下文窗口更便宜，也更忠实于来源，因为长提示词的每个词元在每次调用时都要计费（@sec-economics）。
+- **用 MCP 和沙箱执行操作。** 读取结果只是容易的那一半。智能体一旦运行代码、调用 API 或写文件，安全就更多取决于运行时，而不是模型（@sec-agents-practice）：网关上的越狱过滤器，拦不住模型被诱导发出的破坏性 shell 命令。@gls-sandbox限定这类命令能触及的范围，并配以默认拒绝出站、严格的时间上限，以及对不可逆操作的人工审批（@sec-security-authorization）。
+- **用检查点保存持久状态。** 长时间运行的智能体必须能从重启中恢复，因此它的状态保存在带检查点的存储中，而不是进程内存里（@sec-memory-systems）。LangGraph 以检查点保存图的状态，并为生产环境提供 Postgres 实现 [@langgraph2026persistence]；Pydantic AI 把持久化执行交给 Temporal、DBOS、Prefect、Restate 等工作流引擎 [@pydantic2026durable]。有了检查点，人才能在任务中途暂停、检查，然后继续。
+
+智能体的可靠性不可能超过它之下的网关、推理服务和沙箱。持久化执行和检查点之所以成为智能体框架的标准功能，原因就在这里：框架靠它们挺过下层的故障。
+
+### 从托管模型到自有模型
+
+技术栈的大部分工作是推断：在网关之后服务一个固定的模型。挡在托管模型前面的网关地址，同样可以挡在团队自己服务的模型前面，也可以挡在团队微调或后训练过的模型前面（@sec-serving-stack、@sec-training-practice）。沿这条路径前进，就是从租用能力走向拥有能力，而网关让两者对每个调用方都可以互换。
+
+使用托管 API 时，推断服务器由提供商运行：批处理、@gls-kv-cache、投机解码和加速器都归提供商管理（@sec-serving-problem），团队只能通过缓存输入定价、优先级档位这类价格条款接触到它们。当流量和控制需求足以支撑时，团队就自己服务开源权重模型，常用 vLLM，共享长提示词前缀的流量也可以用 SGLang，每词元成本随之从厂商账单变成自己调度的 GPU 账单。微调（@sec-sft-peft）还要在算力层上运行训练任务，由成组调度器安排，让一个任务的所有工作进程要么同时启动，要么都不启动（@sec-orchestration-data-infra、@sec-accelerators-networking）。决定工作负载落在哪里的变量是持续利用率。按用量付费的算力闲置时不花钱，长期预留的算力只有在利用率超过全月的某个盈亏平衡比例后才更便宜，下文的核算一节会用两份当前报价算出这个比例。
+
+### 从用量到评测
+
+应用发出的每一次模型调用和工具调用都是用量，每一单位用量都可以被观测和打分（@sec-eval-practice）。在公开排行榜上领先的模型，放进具体产品里仍可能表现不佳，因为基准测的是通用能力（@sec-benchmarks），而产品在智能体循环里，用自己的检索上下文运行一条特定的提示词。
+
+这个循环由两半组成，在遥测格式上交汇。可观测性记录一次请求的追踪，包括每次模型调用、检索和工具调用，以及它们的输入、输出、耗时、词元数和成本。评测用确定性断言、基于参考答案的指标和@gls-llm-as-judge为这些追踪打分，也就是让第二个模型按照校准过的评分细则给第一个模型打分（@sec-judging-holistic）。在线检查没有通过的生产追踪会被转入离线回归数据集，由它为下一次发布把关（@sec-evaluating-agents）。由于应用、评测套件和裁判都调用网关，两个模型之间的 A/B 比较只是一条路由规则，裁判也使用自己那把设有预算上限的密钥。这个循环还反过来供给另外两条路径：评测数据变成训练数据，失败的智能体追踪变成加固智能体的测试用例。
+
+## 模型网关
+
+模型网关，也叫 LLM 网关或 AI 网关，是应用代码与其调用的各家模型提供商之间的控制点。它最简单的形态是一个反向代理：接收一种 API，转发给多家提供商。它的职责是把五件事集中在一处，而不是散落在应用代码里：统一的 API、提供商密钥的保管、成本核算、路由与回退，以及预算与策略。有些网关还通过 MCP 承载工具流量、通过 A2A 承载智能体之间的流量，从而成为技术栈中大部分流量的统一策略点。
+
+| 名称 | 是什么 | 部署方式与许可 | 适合 |
+| --- | --- | --- | --- |
+| **LiteLLM** | Python SDK 加代理，以 OpenAI 格式接入 100 多家提供商；虚拟密钥、预算、消费追踪、负载均衡、管理界面 | 自托管；enterprise 目录之外为 MIT 许可，另有付费企业版 | 用一个自托管代理覆盖最多的提供商 |
+| **OpenRouter** | 托管聚合服务：一个端点、预付额度、支持自带密钥 | 托管服务，购买额度时收取手续费 | 无需运维即可访问庞大的模型目录 |
+| **Portkey** | 带护栏、重试与回退、虚拟密钥和缓存的网关 | 开源（MIT），也提供托管服务 | 希望把护栏和路由规则放在网关里的团队 |
+| **agentgateway** | 用 Rust 编写的代理，同时充当 LLM 网关、MCP 网关和 A2A 网关 | 自托管；Apache 2.0；Linux Foundation 项目 | 让模型、工具和智能体间流量共用一个策略点 |
+| **Agent Router**（原名 Envoy AI Gateway） | 基于 Envoy 和 Envoy Gateway 的网关：模型路由、基于词元的限流与配额、InferencePool 支持、MCP | 在 Kubernetes 上自托管；Apache 2.0；Agentic AI Foundation 项目 | 已经在运行 Envoy 或 Kubernetes Gateway API 的平台团队 |
+| **Cloudflare AI Gateway** | 托管网关：分析、日志、缓存、限流、重试与回退、统一计费 | 托管服务；核心功能免费 | 已在使用 Cloudflare、不想自己运维网关的团队 |
+| **Bifrost**（Maxim AI） | 用 Go 编写的网关，以统一的 OpenAI 兼容 API 接入 20 多家提供商，支持回退、负载均衡和语义缓存 | 自托管；Apache 2.0，另有企业功能 | 把单请求开销低列为设计目标的自托管网关 |
+| **Lux**（latere.ai） | 用 Go 编写的网关：一个地址接收 OpenAI、Anthropic 和 Gemini 三种方言；密封保存提供商凭据；密钥可设模型选择器、限额和预算；OIDC 身份；授权 webhook | 自托管；Apache 2.0；尚未正式发布 | 作者自己的网关，列在这里时已说明这一点，并非中立推荐 |
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+LiteLLM 的最新版本是 v1.102.1 [@litellm2026gateway]。OpenRouter 的 Standard 方案对购买额度收取 5.5% 的手续费，列出的模型超过 500 个，来自 80 多家提供商 [@openrouter2026pricing]。Portkey 开源网关的版本是 v1.15.2 [@portkey2026gateway]，agentgateway 是 v1.5.0 [@agentgateway2026github44]。Envoy AI Gateway 于 2026 年 9 月更名为 Agent Router，代码、维护者和许可都没有变化，最新版本是 v1.1.0 [@agentrouter2026]。Cloudflare AI Gateway 的核心功能免费，统一计费对购买的额度收取 5% 的费用 [@cloudflare2026aigatewaypricing]。Bifrost 的 README 报告，在每秒 5,000 个请求下，每个请求只增加 11 µs 开销，这是厂商自己的测量 [@bifrost2026maxim44]。Lux 尚未正式发布，v0.7.2 于 2026 年 9 月 24 日发布 [@lux2026gateway44]。
+:::
+
+比功能清单更重要的是两个区分：托管还是自托管；只承载模型流量，还是同时承载模型、工具和智能体流量。
+
+- **托管**网关（OpenRouter、Cloudflare AI Gateway、Portkey 的托管服务）无需任何基础设施，很快就能接入广泛的模型目录。它适合原型和小团队，前提是能接受提供商密钥和请求元数据经过第三方。
+- **自托管**网关（LiteLLM、agentgateway、Agent Router、Bifrost）把提供商密钥留在团队自己的环境里，请求日志、数据驻留和审计也都由团队掌控。它适合受监管的工作负载和平台团队。
+- 同时承载**工具与智能体流量**的网关（agentgateway、Agent Router）把 MCP 调用和智能体之间的调用纳入与模型调用相同的策略点，省得日后再给只管模型的代理补上工具治理。
+
+网关厂商公布的延迟和吞吐数字，都是在厂商自己的条件下测得的。对大多数工作负载来说，提供商和模型本身的延迟比网关开销高出几个数量级，所以单请求开销很少成为选型的决定因素。在智能体负载下真正可能起决定作用的，是网关达到饱和时的请求速率，而这取决于实现方式，也取决于网关对每个请求做了多少工作。直通基准只测量转发路径。生产网关还要鉴权、计量、执行策略、写入消费记录，所以真正有意义的，是团队按自己的配置、在自己的峰值并发下测得的结果。
+
+对于想自己掌握密钥和成本的团队，通常的起点是一个自托管网关，再配一个可观测性后端。在自托管网关之间做选择时，上面这两个区分比任何基准都更有决定性：要覆盖最多的提供商就选 LiteLLM；要让工具和智能体流量经过同一个策略点，就选 agentgateway 或 Agent Router；如果自己运维网关换来的控制权不值得，就选托管网关。无论哪个产品占据这个位置，本章后一半的契约都同样适用。Lux 出现在表中，是因为它由作者开发。
+
+::: {.callout-tip}
+## 约束如何传导
+网关是下层经济性影响整个应用的地方。每次模型调用都经过同一个地址，于是托管前沿模型的每词元价格（@sec-economics）和自托管推理服务的每词元成本（@sec-serving-problem）都变成了路由规则，而不必改代码。把困难步骤交给昂贵模型，或在负载高时回退到便宜模型，这类决定只需在网关上做一次，网关之上的每个调用方都会继承。
+:::
+
+## 选择一套参考技术栈
+
+没有一套技术栈适合所有团队，但三种典型形态覆盖了大多数情况。表中的行对应 @fig-reference-arch 的各层；团队选出与自身约束相符的一列，从上往下读即可。表中各项是截至 2026 年 9 月的示例，是可以改造的起点，不是排名。
+
+| 层 | 精简、托管 | 受监管、自托管 | 云原生 Kubernetes |
+| --- | --- | --- | --- |
+| **模型** | 托管前沿 API（Anthropic、OpenAI、Google），固定模型 ID | 困难步骤用托管模型，批量流量用自托管开源权重模型 | 同左，另在集群内服务开源权重模型 |
+| **网关** | OpenRouter 或 Cloudflare AI Gateway | 自托管的 LiteLLM、agentgateway 或 Bifrost，配虚拟密钥和预算 | 集群内的 Agent Router 或 agentgateway |
+| **推理服务** | 不自己运维，API 就是服务器 | OpenAI 兼容端点之后的 vLLM，使用 FP8 权重和前缀缓存 | vLLM 或 SGLang，规模化时用 llm-d 或 NVIDIA Dynamo 做感知缓存的路由 |
+| **智能体运行时** | OpenAI Agents SDK 或 Claude Agent SDK | 带检查点的 LangGraph，或带持久化执行的 Pydantic AI | 使用 Postgres 检查点的 LangGraph |
+| **沙箱** | E2B 或 Vercel Sandbox，托管 microVM | 自托管 Firecracker 或 gVisor，默认拒绝出站 | 同一集群中运行在 gVisor 下的沙箱，配受限令牌 |
+| **检索** | 托管搜索服务（turbopuffer、Pinecone），配 Cohere Embed 和 Rerank | 带 pgvector 和 pgvectorscale 的 Postgres，配 BGE-M3 等开源嵌入模型 | 使用混合查询的 Qdrant，配开源重排模型 |
+| **评测与可观测性** | 托管的 LangSmith 或 Braintrust | 自托管 Langfuse，CI 中运行 Promptfoo 或 DeepEval | Phoenix 或其他 OpenTelemetry 后端，CI 中运行 DeepEval |
+| **算力** | 按用量计费的 GPU（Modal、Baseten、Fireworks、Together） | 向新型云（CoreWeave、Lambda）承诺用量的算力，配 Slurm 和 Kubernetes | 带 Kueue 配额、用 Volcano 或 KAI Scheduler 成组调度的 Kubernetes |
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+Cohere 当前的检索模型是 `embed-v4.0`，以及重排模型 `rerank-v4.0-pro` 和 `rerank-v4.0-fast` [@cohere2026models]。Qdrant 在一次混合查询中融合稠密结果和稀疏结果，并把倒数排名融合称为稳妥的默认选择 [@qdrant2026hybrid]。Modal 按使用秒数对 GPU 计费，NVIDIA H100 的标价是每秒 0.001097 美元 [@modal2026pricing44]。
+:::
+
+表中的具体条目会变，表下这几条建议更经久。新增的活动部件越少越好。质量预算要花在见效的地方：先做好检索和重排，再考虑更精巧的向量数据库；先校准裁判，再增加基准。让每一层都通过共用的线上格式访问，使每一层都能替换，也不要把任何单一厂商写死在代码里。团队起步时的形态很少就是最终的形态，让迁移保持低成本的，正是这些线上格式和契约。
+
+## 接缝处的代码
+
+真正重要的胶水代码在接缝处，就是让各层可以互换的那几行。下面两段代码展示了这种模式：一段网关配置，把托管模型和自托管模型放在同一个名字之后并设好回退；一个智能体，用虚拟密钥访问这个名字。
+
+这段网关配置暴露一个别名 `smart`，从托管模型回退到自托管模型，应用始终不知道是哪个模型处理了请求。它只示意配置的形态，不对应任何一款产品的 schema：LiteLLM 把它写成 YAML 模型列表，其他网关则通过管理 API 或仪表板把路由策略绑定到某把虚拟密钥上。无论哪种方式，应用看到的接缝都一样。
+
+```yaml
+# Illustrative gateway configuration: one alias, two hosted targets, and a
+# self-hosted fallback. Each gateway has its own schema; this is the shape.
+models:
+  - alias: smart                     # the name the application requests
+    target: anthropic/claude-opus-5-5
+    api_key: ${ANTHROPIC_API_KEY}    # the provider secret stays in the gateway
+  - alias: smart                     # same alias, second provider
+    target: openai/gpt-6-sol
+    api_key: ${OPENAI_API_KEY}
+    upstream_api: responses          # tool calls with reasoning need Responses
+  - alias: local                     # self-hosted, behind the same address
+    target: vllm/open-weight-model
+    base_url: http://vllm.inference.svc:8000/v1
+
+routing:
+  smart:
+    strategy: fallback               # targets prequalified for one capability profile
+    fallback: [local]
+    retries: 2                       # the gateway is the single retry owner
+# Virtual keys, budgets, and spend caps are issued through the admin API,
+# not in this file.
+```
+
+智能体持有的是网关虚拟密钥，而不是提供商密钥。它通过一个工具检索上下文，始终不知道是哪个模型给出了回答。为了简洁，这里的工具是进程内的 MCP 服务器；在生产环境中，它位于 MCP 网关之后，通过 HTTP 访问，智能体代码几乎不用改，因为 MCP 是一种线上协议，而不是库接口。这段示例使用 Claude Agent SDK [@anthropic2026claudeagentsdk44]，它的自定义工具命名为 `mcp__<server>__<tool>`，列入 `allowed_tools` 后调用时不再弹出权限确认 [@anthropic2026agentsdktools]。
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, query, tool
+
+@tool("search_docs", "Retrieve grounding context for a query", {"q": str})
+async def search_docs(args):
+    # 混合检索加重排；嵌入和重排调用同样经过网关
+    hits = await retriever.hybrid_search(args["q"], top_k=8)
+    return {"content": [{"type": "text", "text": "\n\n".join(h.text for h in hits)}]}
+
+rag = create_sdk_mcp_server(name="rag", version="1.0.0", tools=[search_docs])
+
+options = ClaudeAgentOptions(
+    mcp_servers={"rag": rag},
+    allowed_tools=["mcp__rag__search_docs"],  # 预先批准；其他工具仍需确认
+    env={
+        "ANTHROPIC_BASE_URL": "https://llm-gateway.internal",  # 唯一的模型地址
+        "ANTHROPIC_AUTH_TOKEN": virtual_key,  # 受限的网关密钥，不是提供商密钥
+        "CLAUDE_CODE_MAX_RETRIES": "0",       # 重试由网关负责
+    },
+)
+
+async for message in query(prompt="Summarize our refund policy and cite the source.",
+                           options=options):
+    print(message)
+```
+
+评测套件遵循同样的纪律。Promptfoo 配置把提供方的 `apiBaseUrl` 指向网关，用 `apiKeyEnvar` 指定评测套件自己的密钥 [@promptfoo2026openaiprovider]，裁判则选用另一个模型家族的模型，使用单独设定预算的密钥（@sec-eval-practice）。模型调用、工具调用、检索和裁判都汇集到两个地址，即模型网关和 MCP 网关，并发出同一种 span 格式。正因为如此，这套组装才是一个系统，而不是几款并排摆放的工具。
+
+集成往往坏在接缝处的转换上，而且坏在细小的线上约束上，而不是大的不兼容：一个字段长度上限，一种上一代模型接受、下一代模型拒绝的请求形态，或一个含义已经改变的参数。发现这类问题的办法成本很低。每新配一对模型和运行框架，先用一个带工具的请求做冒烟测试，再让任何东西依赖它。这就是本章后面所说的符合性测试用例最简单的形式。
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+OpenAI 的 Responses API 把取代已弃用 `user` 字段的 `safety_identifier` 限制在 64 个字符以内，因此网关收到运行框架发来的更长会话标识时，需要先做哈希或截短 [@openai2026responsescreate]。从 GPT-5.4 起，Chat Completions 在推理强度不为 `none` 时不支持工具调用，因此网关若把智能体带工具的 Chat Completions 流量转发给当前的推理模型，就必须改走 Responses [@openai2026migrateresponses]。Anthropic 用由推理强度档位引导的自适应思考取代了固定思考预算：Claude 4.7 及之后的模型会以 400 错误拒绝预算形式，而包括 Haiku 4.5 在内的 Claude 4.5 系列只接受预算形式 [@anthropic2026thinkingtroubleshooting]。因此，同时服务两代模型的网关需要为每个模型准备一份能力说明，而不能只用一条转换规则。推理强度只是引导，不是配额：在每个档位上，模型都会逐个请求决定是否思考，只处理工具结果的请求即使在最高档位也可能不思考 [@anthropic2026steeringthinking]。
+:::
+
+到这里，架构说明了什么和什么相连。相连的产品要成为一个可以发布的系统，需要每道边界都有契约，每个会影响行为的组件都有身份，并且发布失败后有一条经过测试的回退路径。本章其余部分说明这些契约，@fig-reference-arch 中的每个组件都标明了约束它的那一份。
 
 ## 固定集成发布
+
+后一半的交付物是一项**集成发布**：它用版本化记录说明哪些组件连接在一起、每条连接具有什么含义、由谁负责，以及哪些证据足以证明组装后的系统可以安全发布。它的起点是发布决策，而非产品清单。发布决策要写明本次发布的能力、面向的用户和租户、允许处理的数据类别与操作、质量和运营门槛，以及回滚触发条件。随后，发布会固定一份**系统指纹**，其中包括模型修订版本、提示词修订版本、检索快照、工具 Schema、策略修订版本、路由配置、遥测 Schema 和可执行制品摘要。模型名称本身无法标识生成某个答案的系统。
 
 一次集成发布需要维护两类记录。**系统清单**标识组装后的完整系统，**边界契约**定义每一对生产方和消费方之间的连接。两者都不得使用 `latest` 之类的可变别名。
 
@@ -45,38 +238,6 @@
 能力说明应列出模态、端点和状态模型、工具及并行调用语义、支持的 JSON Schema 方言与子集、带类型的流事件、上下文和输出限制、用量字段、区域、保留规则以及策略限制。JSON Schema 是一组可以明确标识方言的语言，提供商可能只实现其中一部分关键字 [@jsonschema2020core]。转换只有三种合理结果：保留、明确降级或拒绝。悄然丢弃工具、截短标识符或强行转换未知字段，都是未经声明的语义改变。
 
 路由也要遵守同样的纪律。路由器先按硬性约束筛选，包括能力、租户策略、数据驻留、保留规则、区域和权限，然后按照实测质量、延迟、可用性或成本，对符合条件的候选项排序。每个被接纳的操作都会解析出并记录不可变的提供商、模型修订版本、适配器修订版本、能力说明修订版本和路由策略修订版本。实验和金丝雀发布使用粘性分配，让重复的工作始终落在同一个系统上。
-
-## 参考架构
-
-@fig-reference-arch 展示了满足这些要求的最小架构。应用是调用方，策略层决定是否接纳请求，适配器把调用方契约转换为提供商契约。工具操作走另一条路径，先完成授权，再交给执行器。检索服务返回带标识的证据。遥测观察每项决策，但不授予任何权限。
-
-```{dot}
-//| label: fig-reference-arch
-//| fig-cap: "一套与厂商无关的集成架构。模型调用从调用方经过策略层和适配器进入提供商；工具提议沿着独立授权路径进入执行器和操作账本；检索与遥测仍是彼此独立的服务。"
-digraph {
-  bgcolor="transparent"; rankdir=TB; nodesep=0.16; ranksep=0.25;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
-        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1"];
-  edge [fontname="Helvetica", fontsize=9, color="#6b7280", arrowsize=0.65];
-  caller [label="调用方"];
-  policy [label="策略"];
-  adapter [label="适配器"];
-  provider [label="提供商"];
-  retrieval [label="检索"];
-  executor [label="工具执行器"];
-  ledger [label="操作账本"];
-  telemetry [label="遥测"];
-  caller -> policy -> adapter -> provider;
-  policy -> retrieval [label="证据"];
-  policy -> executor [label="已授权"];
-  executor -> ledger;
-  policy -> telemetry [style=dashed];
-  adapter -> telemetry [style=dashed];
-  executor -> telemetry [style=dashed];
-}
-```
-
-图中没有哪一个产品处在中心位置。模型边界、工具边界、检索边界以及记录证据的遥测解决的是不同问题，分别由 @sec-serving-stack、@sec-agents-practice、@sec-retrieval-practice 和 @sec-eval-practice 进一步展开。
 
 ## 定义模型操作状态机
 
@@ -129,7 +290,7 @@ $$
 
 网关凭据、工作负载身份、委托用户令牌和下游提供商密钥回答的是不同问题。首选机制是短期工作负载身份和 OAuth 令牌交换 [@rfc8693tokenexchange]。令牌应绑定受众、作用域、已验证的租户、主体或行动者以及有效期。每个资源服务器都必须验证自己的受众，不能把签发给一个资源的令牌继续传给另一个资源。
 
-**虚拟密钥**是网关代替提供商密钥签发的凭据，用来实现模型预算与路由策略；工具调用则在工具边界另行授权。如果提供商只支持静态密钥，就由凭据代理保存它，并且只在允许的出站边界完成替换。应用和沙箱都不应接触原始提供商密钥。零信任架构同样认为，网络位置本身不足以构成权限 [@nist2020zerotrust]。
+参考架构一节介绍的**虚拟密钥**用来实现模型预算与路由策略；工具调用则在工具边界另行授权。如果提供商只支持静态密钥，就由凭据代理保存它，并且只在允许的出站边界完成替换。应用和沙箱都不应接触原始提供商密钥。零信任架构同样认为，网络位置本身不足以构成权限 [@nist2020zerotrust]。
 
 ### 工具与 MCP
 
@@ -277,7 +438,7 @@ digraph {
 
 ::: {.callout-important}
 ## 争议所在
-有些团队让整个系统统一使用某个提供商风格的 API，有些团队则把提供商原生客户端放在更窄的领域接口之后。有些团队由网关集中负责准入判断，另一些团队把这项职责分散到各个服务中。两种做法都可能成立，但无论采用哪种拓扑，都要满足同样的要求：明确呈现语义损失、坚持最小权限、保持有界故障、保留不可变身份和端到端证据，并且具备经过测试的回滚。
+有些团队让整个系统统一使用某个提供商风格的 API，有些团队则把提供商原生客户端放在更窄的领域接口之后。有些团队用一个同时承载工具流量和智能体间流量的网关集中负责准入，另一些团队把模型、工具和智能体流量放在各自的代理上，让其中一个出故障或被攻破时波及不到其他部分。两种做法都可能成立，但无论采用哪种拓扑，都要满足同样的要求：明确呈现语义损失、坚持最小权限、保持有界故障、保留不可变身份和端到端证据，并且具备经过测试的回滚。本章的参考技术栈只是列出具体产品的一张快照，预计能比它存在得更久的是这些契约。
 :::
 
 ## 延伸阅读
