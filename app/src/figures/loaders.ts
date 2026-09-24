@@ -37,4 +37,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "recurrent-state": () => import("./recurrent-state.ts"),
   "hybrid-schedule": () => import("./hybrid-schedule.ts"),
   "kv-block-lifecycle": () => import("./kv-block-lifecycle.ts"),
+  "trusted-monitoring": () => import("./trusted-monitoring.ts"),
 };
