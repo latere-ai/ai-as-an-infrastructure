@@ -186,8 +186,10 @@ const labels = {
     base: "base {v}",
     high: "high {v}",
     expected: "expected, π = ¼, ½, ¼",
-    describe: "At {d} tokens per month the API bill is {b0} a month now and {bT} in {T} yr, against {s} for self-hosting on {k} replicas. The break-even demand is {v0} now and {vT} in {T} yr; discounted over the horizon the API totals {cb} and self-hosting {cs}.",
-    never: "none",
+    describe: "At {d} tokens per month the API bill is {b0} a month now and {bT} in {T} yr, against {s} for self-hosting on {k} replicas. {be}; discounted over the horizon the API totals {cb} and self-hosting {cs}.",
+    beBoth: "The break-even demand is {v0} now and {vT} in {T} yr",
+    beEndNone: "The break-even demand is {v0} now, and in {T} yr self-hosting is cheaper at no demand",
+    beNone: "Self-hosting is cheaper at no demand, now or in {T} yr",
   },
   zh: {
     title: "容量台阶与价格下降下的自建或购买",
@@ -225,8 +227,10 @@ const labels = {
     base: "基准 {v}",
     high: "高 {v}",
     expected: "期望，π = ¼、½、¼",
-    describe: "每月需求为 {d} 词元时，API 当前每月 {b0}，{T} 年后每月 {bT}；自托管用 {k} 个副本，每月 {s}。盈亏平衡需求当前为 {v0}，{T} 年后为 {vT}；按整个规划期折现，API 共 {cb}，自托管共 {cs}。",
-    never: "不存在",
+    describe: "每月需求为 {d} 词元时，API 当前每月 {b0}，{T} 年后每月 {bT}；自托管用 {k} 个副本，每月 {s}。{be}；按整个规划期折现，API 共 {cb}，自托管共 {cs}。",
+    beBoth: "盈亏平衡需求当前为 {v0}，{T} 年后为 {vT}",
+    beEndNone: "盈亏平衡需求当前为 {v0}，{T} 年后已不存在",
+    beNone: "当前和 {T} 年后都不存在盈亏平衡需求",
   },
 };
 
@@ -246,10 +250,13 @@ function describe(st: State<P>, lang: Lang): string {
   const c0 = crossing(p, m, m.priceAt(0));
   const cT = crossing(p, m, m.priceAt(p.horizon));
   const t = totals(p, m, V);
-  const at = (c: Crossing) => (c.first == null ? L.never : tok(c.first));
+  const T = p.horizon;
+  const be = c0.first == null ? tpl(L.beNone, { T })
+    : cT.first == null ? tpl(L.beEndNone, { v0: tok(c0.first), T })
+    : tpl(L.beBoth, { v0: tok(c0.first), vT: tok(cT.first), T });
   return tpl(L.describe, {
     d: tok(V), b0: usd(p.buyFixed + m.priceAt(0) * V), bT: usd(p.buyFixed + m.priceAt(p.horizon) * V), T: p.horizon,
-    s: usd(m.S(V)), k: m.n(V), v0: at(c0), vT: at(cT), cb: usd(t.buy), cs: usd(t.self),
+    s: usd(m.S(V)), k: m.n(V), be, cb: usd(t.buy), cs: usd(t.self),
   });
 }
 
