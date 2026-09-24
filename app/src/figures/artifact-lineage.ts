@@ -160,10 +160,16 @@ function describe(st: State<P>, lang: Lang): string {
 const LH = 15;
 
 // wrapCJK, rewrapped one glyph narrower when its line-start rule pushes a
-// line past the width.
+// line past the width, and with an opening bracket never ending a line.
 function lines(s: string, size: number, width: number): string[] {
   let out = wrapCJK(s, size, width);
   if (out.some((ln) => textWidth(ln, size) > width)) out = wrapCJK(s, size, width - size * 1.02);
+  for (let i = 0; i < out.length - 1; i++) {
+    while (/[（「]$/u.test(out[i])) {
+      out[i + 1] = out[i].slice(-1) + out[i + 1];
+      out[i] = out[i].slice(0, -1);
+    }
+  }
   return out;
 }
 
