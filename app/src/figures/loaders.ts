@@ -84,4 +84,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "finite-difference-step": () => import("./finite-difference-step.ts"),
   "resume-cursor": () => import("./resume-cursor.ts"),
   "run-lifecycle": () => import("./run-lifecycle.ts"),
+  "block-diffusion-decode": () => import("./block-diffusion-decode.ts"),
 };
