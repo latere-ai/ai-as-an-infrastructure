@@ -110,4 +110,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "tree-search": () => import("./tree-search.ts"),
   "search-budget": () => import("./search-budget.ts"),
   "process-supervision": () => import("./process-supervision.ts"),
+  "sink-window-eviction": () => import("./sink-window-eviction.ts"),
 };
