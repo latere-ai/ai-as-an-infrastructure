@@ -782,61 +782,6 @@
     watchTheme(host, draw);
   };
 
-  // MinHash + LSH candidate probability. For b bands of r rows and true
-  // Jaccard similarity s, the probability that at least one band matches is
-  // 1 - (1 - s^r)^b. Increasing rows per band makes the gate stricter; it does
-  // not remove the false-positive/false-negative tradeoff.
-  R['minhash-buckets'] = function (host) {
-    var rows = 5, bands = 20;
-    var xLabel = host.getAttribute('data-xlabel') || 'Jaccard similarity';
-    var yLabel = host.getAttribute('data-ylabel') || 'candidate probability';
-    var parameterLabel = host.getAttribute('data-plabel') || 'rows per band';
-    var bandsLabel = host.getAttribute('data-bands-label') || 'bands';
-    var rowsLabel = host.getAttribute('data-rows-label') || 'rows';
-    var midpointLabel = host.getAttribute('data-midpoint-label') || '50% candidate at';
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 250);
-    function candidateProbability(s) {
-      return 1 - Math.pow(1 - Math.pow(s, rows), bands);
-    }
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
-      var left = 45 * cv.dpr, right = 16 * cv.dpr, top = 18 * cv.dpr, bottom = 38 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      function X(s) { return left + s * (W - left - right); }
-      function Y(p) { return H - bottom - p * (H - top - bottom); }
-
-      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
-      for (var tick = 0; tick <= 4; tick++) {
-        var value = tick / 4, x = X(value), y = Y(value);
-        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, H - bottom); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(W - right, y); ctx.stroke();
-      }
-
-      ctx.strokeStyle = t.accent; ctx.lineWidth = 2.2 * cv.dpr; ctx.beginPath();
-      for (var i = 0; i <= 200; i++) {
-        var s = i / 200, xCurve = X(s), yCurve = Y(candidateProbability(s));
-        if (i === 0) ctx.moveTo(xCurve, yCurve); else ctx.lineTo(xCurve, yCurve);
-      }
-      ctx.stroke();
-
-      var s50 = Math.pow(1 - Math.pow(0.5, 1 / bands), 1 / rows);
-      ctx.strokeStyle = t.accent2; ctx.setLineDash([4 * cv.dpr, 3 * cv.dpr]);
-      ctx.beginPath(); ctx.moveTo(X(s50), Y(0)); ctx.lineTo(X(s50), Y(0.5)); ctx.lineTo(X(0), Y(0.5)); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(X(s50), Y(0.5), 4 * cv.dpr, 0, 7); ctx.fill();
-
-      ctx.fillStyle = t.ink; ctx.font = (10.5 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(xLabel, (left + W - right) / 2, H - 8 * cv.dpr);
-      ctx.save(); ctx.translate(12 * cv.dpr, (top + H - bottom) / 2); ctx.rotate(-Math.PI / 2);
-      ctx.fillText(yLabel, 0, 0); ctx.restore();
-      read.textContent = bands + ' ' + bandsLabel + ' × ' + rows + ' ' + rowsLabel + ' · ' + midpointLabel + ' J=' + s50.toFixed(2);
-    }
-    host.appendChild(slider(parameterLabel, 1, 12, 1, rows, function (v) { rows = Math.round(v); draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Blast radius of ambient authority: one standing token reaches every resource
   // its scope covers, so a single injected instruction acts on the union. Widen
   // the scope and the reachable set fans out; a longer TTL brightens the exposure.
