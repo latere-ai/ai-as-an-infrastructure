@@ -41,7 +41,7 @@ const labels = {
     lgHeld: "held-out point",
     lgBand: "80% bootstrap band",
     floorLine: "L∞ = {v}",
-    summary: "Fit on the {k} budgets up to {c} FLOP; {h} larger budgets held out",
+    summary: "Fit on the {k} budgets up to {c} FLOP; {h:larger budget/larger budgets} held out",
     summaryAll: "Fit on all {k} budgets up to {c} FLOP; nothing held out",
     coefPure: "A = {A}, α = {a}",
     coefFloor: "L∞ = {Li}, A = {A}, α = {a}",
@@ -52,7 +52,7 @@ const labels = {
     gap: "The two fits differ by at most {a} over the fitted budgets and by {b} at {c} FLOP.",
     source: "Points: the lowest loss of a parabola through the runs at each IsoFLOP budget, from Hoffmann et al. (2022) Figure 4 as reconstructed by Besiroglu et al. (2024), loss read to about 0.01. Bands: 10th to 90th percentile over 1,000 bootstrap resamples of the runs.",
     describe: "Fitted on the {k} budgets up to {c} FLOP, the pure power law forecasts L = {vp} at {t} FLOP and the fit with a floor L∞ = {li} forecasts {vf}, a gap of {b}; over the fitted budgets they differ by at most {a}. {held}",
-    heldDesc: "On the {h} held-out budgets the median error is {ep} for the pure law and {ef} with the floor.",
+    heldDesc: "On the {h:held-out budget/held-out budgets} the median error is {ep} for the pure law and {ef} with the floor.",
     heldDescNone: "No budgets are held out.",
   },
   zh: {
