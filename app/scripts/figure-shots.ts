@@ -123,7 +123,9 @@ try {
       await Bun.sleep(300);
       await js(`(() => { const f = document.getElementById(${JSON.stringify(id)}); f.scrollIntoView({ block: "start", behavior: "instant" }); return true; })()`);
       await Bun.sleep(300);
-      const b = await js<{ x: number; y: number; w: number; h: number }>(`(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
+      // The clip is in page coordinates, so the document's scroll offset is
+      // added to the figure's viewport position.
+      const b = await js<{ x: number; y: number; w: number; h: number }>(`(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height }; })()`);
       const shot = await send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false, clip: { x: Math.max(0, b.x - 8), y: Math.max(0, b.y - 8), width: b.w + 16, height: b.h + 16, scale: 1 } });
       const file = `${id}__${w}${dark ? "-dark" : ""}${noJs ? "-nojs" : ""}.png`;
       writeFileSync(join(OUT, file), Buffer.from(shot.data, "base64"));

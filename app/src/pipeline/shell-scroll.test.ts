@@ -56,3 +56,11 @@ test("an open drawer or the search dialog holds the page still", () => {
   expect(reader).toContain("const overlayOpen = drawer || tocDrawer || searchOpen;");
   expect(reader).toContain('document.body.style.overflow = "hidden";');
 });
+
+// Screenshot clips are in page coordinates. With the document as the scroller
+// a figure's viewport position is off by the scroll offset, and the figure
+// shots came out blank until the script added it.
+test("figure shots clip in page coordinates", () => {
+  const shots = readFileSync(new URL("../../scripts/figure-shots.ts", import.meta.url), "utf8");
+  expect(shots).toMatch(/x: r\.left \+ scrollX, y: r\.top \+ scrollY/);
+});
