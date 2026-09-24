@@ -964,42 +964,6 @@
     watchTheme(host, draw);
   };
 
-  // LoRA low-rank reconstruction: a weight update ΔW (left) approximated by a
-  // rank-r product B·A (right). The update a fine-tune wants has low intrinsic
-  // rank, so a few components recover most of it and detail saturates; the
-  // readout shows the parameter saving r(d+k) vs dk and the shrinking residual.
-  R['lora-lowrank'] = function (host) {
-    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
-    var L = zh
-      ? { target: '目标更新 ΔW', rank: '秩', params: '参数', versus: '对比', residual: '残差', slider: '秩 r' }
-      : { target: 'target ΔW', rank: 'rank', params: 'params', versus: 'vs', residual: 'residual', slider: 'rank r' };
-    var d = 16, RANK = 12, r = 2;
-    function uk(k, i) { return Math.sin(1.3 + k * 2.1 + i * 0.7) * Math.cos(0.5 + k * 1.1); }
-    function vk(k, j) { return Math.cos(0.9 + k * 1.7 + j * 0.6) * Math.sin(0.3 + k * 0.9); }
-    var sv = []; for (var k = 0; k < RANK; k++) sv.push(Math.exp(-k / 2.4));
-    function val(i, j, rank) { var eff = Math.min(rank, RANK); var s = 0; for (var k = 0; k < eff; k++) s += sv[k] * uk(k, i) * vk(k, j); return s; }
-    var mx = 0; for (var i = 0; i < d; i++) for (var j = 0; j < d; j++) { var v = Math.abs(val(i, j, RANK)); if (v > mx) mx = v; }
-    function color(v) { var u = Math.max(-1, Math.min(1, v / mx)); return u >= 0 ? 'rgba(45,99,168,' + (0.12 + 0.85 * u) + ')' : 'rgba(224,147,107,' + (0.12 + 0.85 * (-u)) + ')'; }
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 250);
-    function draw() {
-      var th = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 20 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var panel = Math.min((W - 3 * pd) / 2, H - 2.2 * pd), cell = panel / d, ox2 = pd + panel + pd;
-      function grid(ox, rank, label) {
-        for (var i = 0; i < d; i++) for (var j = 0; j < d; j++) { ctx.fillStyle = color(val(i, j, rank)); ctx.fillRect(ox + j * cell, pd + i * cell, cell - cv.dpr, cell - cv.dpr); }
-        ctx.fillStyle = th.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(label, ox + panel / 2, pd + panel + 15 * cv.dpr);
-      }
-      grid(pd, RANK, L.target);
-      grid(ox2, r, L.rank + '-' + r + ' B·A');
-      var num = 0, den = 0; for (var k = 0; k < RANK; k++) { if (k >= r) num += sv[k] * sv[k]; den += sv[k] * sv[k]; }
-      read.textContent = L.rank + ' ' + r + ' · ' + L.params + ' ' + (2 * d * r) + ' ' + L.versus + ' ' + (d * d) + ' · ' + L.residual + ' ' + Math.sqrt(num / den).toFixed(2);
-    }
-    host.appendChild(slider(L.slider, 1, d, 1, r, function (v) { r = Math.round(v); draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Task arithmetic: a task vector τ = θ_ft − θ_base is a direction in weight
   // space. Two such vectors add (a model good at both), one negates (unlearn),
   // and when they point opposite ways their sum cancels, the sign conflict that
