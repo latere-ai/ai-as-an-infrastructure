@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.7.0 - 2026-09-24
+
 ### Added
 
 - Figures across the book are rebuilt on a native figure system: one
