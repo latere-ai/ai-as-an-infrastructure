@@ -524,51 +524,6 @@
     watchTheme(host, draw);
   };
 
-  // Superposition geometry (Toy Models): how many features a 2-D space packs in
-  // as sparsity rises. Low sparsity -> a few near-orthogonal directions; high
-  // sparsity -> more features sharing the plane as a regular polygon, paying
-  // interference (the mean pairwise overlap, shown live). Illustrative.
-  R['superposition'] = function (host) {
-    var cv = canvas(host, 300), sparsity = 0.5;
-    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
-    var zh = lang === 'zh';
-    var L = zh ? {
-      features: '二维空间中的特征数', interference: '干扰', sparsity: '稀疏度',
-      description: '特征方向共享二维空间的示意图'
-    } : {
-      features: 'features in 2 dimensions', interference: 'interference', sparsity: 'sparsity',
-      description: 'Illustration of feature directions sharing a two-dimensional space'
-    };
-    cv.c.setAttribute('role', 'img');
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, cx = W / 2, cy = (H - 26 * cv.dpr) / 2, R = Math.min(W, H) * 0.3;
-      ctx.clearRect(0, 0, W, H);
-      var k = Math.round(2 + sparsity * 6); // 2..8 features represented
-      var ang = [];
-      for (var i = 0; i < k; i++) ang.push(-Math.PI / 2 + i * 2 * Math.PI / k);
-      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
-      ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.stroke();
-      ang.forEach(function (a) {
-        var x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R;
-        ctx.strokeStyle = t.accent; ctx.lineWidth = 2.4 * cv.dpr;
-        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(x, y); ctx.stroke();
-        ctx.fillStyle = t.accent; ctx.beginPath(); ctx.arc(x, y, 4 * cv.dpr, 0, 7); ctx.fill();
-      });
-      var sum = 0, n = 0;
-      for (var p = 0; p < k; p++) for (var q = p + 1; q < k; q++) { sum += Math.abs(Math.cos(ang[p] - ang[q])); n++; }
-      var overlap = n ? sum / n : 0;
-      var summary = zh
-        ? L.features + '：' + k + '   ·   ' + L.interference + '：' + overlap.toFixed(2)
-        : k + ' ' + L.features + '   ·   ' + L.interference + ' ' + overlap.toFixed(2);
-      ctx.fillStyle = t.ink; ctx.font = (13 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(summary, cx, H - 8 * cv.dpr);
-      cv.c.setAttribute('aria-label', L.description + (zh ? '。' : '. ') + summary);
-    }
-    host.appendChild(slider(L.sparsity, 0, 1, 0.01, sparsity, function (v) { sparsity = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Tree of thoughts: the same reasoning space searched three ways. A chain
   // follows one path. A tree explores every branch (wide but costly). A
   // value-guided beam scores each node and keeps only the best few, pruning the

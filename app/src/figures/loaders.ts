@@ -40,4 +40,6 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "trusted-monitoring": () => import("./trusted-monitoring.ts"),
   "oversight-evidence": () => import("./oversight-evidence.ts"),
   "load-latency-knee": () => import("./load-latency-knee.ts"),
+  "superposition-toy": () => import("./superposition-toy.ts"),
+  "sae-readback": () => import("./sae-readback.ts"),
 };
