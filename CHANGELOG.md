@@ -10,6 +10,18 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- The reading frame is flat and edge to edge: a 48 px sticky header, a
+  navigation column on the left and an "On this page" column on the right,
+  separated by 1 px rules, with no floating panels, article card or glass.
+  The page itself scrolls, so elastic scrolling, scroll restoration, links
+  to a section and find-in-page behave as in any web page. Body text is full
+  contrast at about 70 characters per line, the "On this page" column moves
+  into a drawer where it would narrow the article, phones get 16 px margins,
+  and the chapter details, previous and next links, comments and page
+  footer take less space.
+
 ## v0.7.0 - 2026-09-24
 
 ### Added
