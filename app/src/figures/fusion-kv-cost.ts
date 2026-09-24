@@ -14,7 +14,7 @@
 //
 // The media term assumes the cross-attention layers use the same KV-head
 // count and width as self-attention and are spaced evenly through the stack.
-// The model shape is the one the chapter's runnable uses (L = 32, n_kv = 8,
+// The model shape is the chapter's running example (L = 32, n_kv = 8,
 // d_h = 128, b_kv = 2 bytes); n_special = 0. Features per image follow the
 // chapter's examples: a fixed 14-pixel patch grid at 336 or 672 pixels, a
 // 2 × 2 merge of the 672-pixel grid, and a 64-query resampler. The decode

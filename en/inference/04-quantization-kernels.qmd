@@ -179,30 +179,8 @@ activation behavior motivated methods such as SmoothQuant, while weight-only
 methods use calibration activations to decide which weight errors matter
 [@xiao2022smoothquant; @lin2023awq].
 
-The runnable uses a deliberately small, synthetic vector. It is not a measured
-activation distribution. It shows only how a shared symmetric scale reacts to
-one large value.
-
-:::: {.runnable}
-```python
-def quantize(values, bits=4):
-    qmax = 2 ** (bits - 1) - 1
-    maximum = max(abs(v) for v in values)
-    scale = maximum / qmax if maximum else 1.0
-    codes = [max(-qmax, min(qmax, round(v / scale))) for v in values]
-    return [scale * q for q in codes], scale
-
-bulk = [0.7, -0.4, 0.9, -0.8, 0.3, -0.6, 0.5, -0.2, 0.75, -0.5, 0.6]
-cases = [("no outlier", bulk), ("one outlier", [7.0] + bulk)]
-
-for name, values in cases:
-    reconstructed, scale = quantize(values)
-    original_bulk = values if name == "no outlier" else values[1:]
-    quantized_bulk = reconstructed if name == "no outlier" else reconstructed[1:]
-    error = sum(abs(a - b) for a, b in zip(original_bulk, quantized_bulk)) / len(bulk)
-    print(f"{name:12s} scale={scale:.3f}  bulk mean abs error={error:.3f}")
-```
-::::
+The SmoothQuant runnable later in this chapter measures this effect in a whole
+matrix product.
 
 <figure id="fig-quantization-kernels-outlier-quant">
 <div class="viz" data-viz="outlier-quant"></div>
@@ -344,6 +322,84 @@ activation channels easier to quantize by transferring part of their range to
 the corresponding weight rows, then applies W8A8 quantization. The scales are
 chosen from calibration statistics, often with a parameter that balances
 activation and weight ranges [@xiao2022smoothquant].
+
+The runnable below applies that identity to one synthetic layer whose input
+channels have lognormally varying scales. Six of its 512 input channels are
+made $g$ times larger in every token while their weight rows shrink by $g$, so
+$\mathbf X\mathbf W$ is the same product at every $g$ and only the split of its
+range changes. Each case runs W8A8 with one weight scale per output channel and
+one activation scale per tensor or per token, scales that an integer matrix
+multiply can apply after accumulation. The cell asserts the bound
+$|x_i-\hat x_i|\le s_g/2$ for every element, that the smoothed factors multiply
+to the original product, and that they are identical at every $g$: the factors
+$s_j=\max|\mathbf X_{:,j}|^{\alpha}/\max|\mathbf W_{j,:}|^{1-\alpha}$ undo any
+split of range between a channel and its weight row. A per-token scale cannot
+isolate the outliers, because they occupy the same channels in every token, so
+its error grows with $g$ once the outliers pass the ordinary channels' own
+spread; only migration keeps the error flat. The right panel sweeps the
+migration strength $\alpha$ at the largest $g$. At $\alpha=0$ the ordinary
+channels' spread of scales stays in the activations, and at $\alpha=1$ it moves
+entirely into the weights. Set `alpha` to 0 or 1 to see the flat line rise.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+T, d, m = 256, 512, 512                        # tokens, input channels, output channels
+X0 = rng.normal(0, 1, (T, d)) * rng.lognormal(0, 1, d)   # channel scales vary
+W = rng.normal(0, d ** -0.5, (d, m))
+Y = X0 @ W                                     # every case below computes this product
+hot = rng.choice(d, 6, replace=False)          # outlier channels, large in every token
+alpha = 0.5                                    # migration strength
+
+def q8(x, axis):
+    """Symmetric INT8, one absmax scale per slice along axis (None: whole tensor)."""
+    s = np.abs(x).max(axis=axis, keepdims=True) / 127
+    xq = np.clip(np.round(x / s), -127, 127) * s
+    assert np.all(abs(x - xq) <= s / 2 + 1e-12)   # |x - x_hat| <= s_g / 2
+    return xq
+
+def error(X, W, act_axis):
+    # W8A8: activation scale per token (axis 1) or per tensor; weight scale per output channel
+    return np.linalg.norm(q8(X, act_axis) @ q8(W, 0) - Y) / np.linalg.norm(Y)
+
+def smooth(X, W, a):
+    s = np.abs(X).max(0) ** a / np.abs(W).max(1) ** (1 - a)   # one factor per input channel
+    return X / s, s[:, None] * W
+
+gains = np.array([1, 2, 5, 10, 20, 50, 100])
+curves = {"per-tensor": [], "per-token": [], "SmoothQuant, per-token": []}
+for g in gains:
+    X, Wg = X0.copy(), W.copy()
+    X[:, hot] *= g; Wg[hot] /= g               # move range into the activations
+    Xs, Ws = smooth(X, Wg, alpha)
+    ref = Xs if g == 1 else ref
+    assert np.allclose(X @ Wg, Y) and np.allclose(Xs @ Ws, Y)   # the layer is unchanged
+    assert np.allclose(Xs, ref)                # smoothing undoes the split for any g
+    curves["per-tensor"].append(error(X, Wg, None))
+    curves["per-token"].append(error(X, Wg, 1))
+    curves["SmoothQuant, per-token"].append(error(Xs, Ws, 1))
+assert curves["SmoothQuant, per-token"][-1] < curves["per-token"][-1] / 3
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.4))
+for k, (name, e) in enumerate(curves.items()):
+    ax.loglog(gains, e, "o-", ms=3, color=f"C{k}", label=name)
+ax.set(xlabel="outlier channel magnitude (x ordinary)", ylabel="relative error of XW",
+       title="W8A8 error for one product XW")
+ax.legend(fontsize=9)
+alphas = np.linspace(0, 1, 21)
+bx.plot(alphas, [error(*smooth(X, Wg, a), 1) for a in alphas], color="C2")
+bx.axvline(alpha, color="gray", ls=":", lw=1)
+bx.set(xlabel="migration strength alpha", ylabel="relative error of XW",
+       title="Too little or too much migration")
+fig.tight_layout()
+for name, e in curves.items():
+    print(f"{name}: {e[0]:.4f} at 1x, {e[-1]:.4f} at {gains[-1]}x")
+```
+::::
+
 
 None of these methods makes quantization lossless. Each chooses where to place
 approximation error and which calibration data to use.

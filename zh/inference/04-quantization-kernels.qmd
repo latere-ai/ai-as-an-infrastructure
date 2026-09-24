@@ -89,28 +89,7 @@ $$
 
 多个经过研究的模型系列中，Transformer 激活都存在幅度远高于其他通道的少数通道 [@dettmers2022llmint8]。若整个张量共用一个缩放因子，离群值会拉宽可表示范围，使普通数值使用的网格变粗。每通道或每组缩放可以隔离这部分范围，但会增加元数据与内核成本。这类激活行为推动了 SmoothQuant 等方法；权重专用量化方法则利用校准激活判断哪些权重误差更重要 [@xiao2022smoothquant; @lin2023awq]。
 
-下面的可运行示例使用特意构造的小型合成向量。它不是实测的激活分布，只展示共享的对称缩放因子如何响应一个较大数值。
-
-:::: {.runnable}
-```python
-def quantize(values, bits=4):
-    qmax = 2 ** (bits - 1) - 1
-    maximum = max(abs(v) for v in values)
-    scale = maximum / qmax if maximum else 1.0
-    codes = [max(-qmax, min(qmax, round(v / scale))) for v in values]
-    return [scale * q for q in codes], scale
-
-bulk = [0.7, -0.4, 0.9, -0.8, 0.3, -0.6, 0.5, -0.2, 0.75, -0.5, 0.6]
-cases = [("no outlier", bulk), ("one outlier", [7.0] + bulk)]
-
-for name, values in cases:
-    reconstructed, scale = quantize(values)
-    original_bulk = values if name == "no outlier" else values[1:]
-    quantized_bulk = reconstructed if name == "no outlier" else reconstructed[1:]
-    error = sum(abs(a - b) for a, b in zip(original_bulk, quantized_bulk)) / len(bulk)
-    print(f"{name:12s} scale={scale:.3f}  bulk mean abs error={error:.3f}")
-```
-::::
+本章后面的 SmoothQuant 可运行示例会在完整的矩阵乘积中测量这种效应。
 
 <figure id="fig-quantization-kernels-outlier-quant">
 <div class="viz" data-viz="outlier-quant" data-lang="zh"></div>
@@ -175,6 +154,68 @@ $$
 $$
 
 这里，$\mathbf X$ 是激活矩阵，$\mathbf W$ 是权重矩阵，$\operatorname{diag}(\mathbf s)$ 是由通道缩放因子构成的对角矩阵，等号右侧两个因子的内维相容。SmoothQuant 不改变全精度层的代数结果。它把一部分激活范围转移到相应的权重行，使激活通道更容易量化，再应用 W8A8 量化。缩放因子由校准统计量确定，通常还带有一个平衡激活范围与权重范围的参数 [@xiao2022smoothquant]。
+
+下面的可运行示例把这个恒等式用于一个合成层，它的各输入通道尺度服从对数正态分布。512 个输入通道中有 6 个在每个词元里都被放大 $g$ 倍，对应的权重行同时缩小 $g$ 倍，因此无论 $g$ 取多少，$\mathbf X\mathbf W$ 都是同一个乘积，变化的只是范围在两个因子之间如何分配。每种情形都运行 W8A8：权重每个输出通道一个缩放因子，激活则整个张量或每个词元一个缩放因子，这两种缩放都可以在整数矩阵乘法累加之后再施加。代码对每个元素断言误差界 $|x_i-\hat x_i|\le s_g/2$，断言平滑后的两个因子相乘仍得到原乘积，并断言它们在每个 $g$ 下完全相同：因子 $s_j=\max|\mathbf X_{:,j}|^{\alpha}/\max|\mathbf W_{j,:}|^{1-\alpha}$ 会抵消范围在通道与其权重行之间的任何分配。逐词元缩放无法隔离离群值，因为离群值在每个词元中都落在同样的通道上；一旦离群值超出普通通道自身的尺度差异，它的误差就随 $g$ 增长。只有迁移能让误差保持平坦。右图在最大的 $g$ 下扫描迁移强度 $\alpha$：$\alpha=0$ 时，普通通道的尺度差异留在激活中；$\alpha=1$ 时，这种差异全部移入权重。把 `alpha` 设为 0 或 1，可以看到那条平线上升。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+T, d, m = 256, 512, 512                        # 词元数、输入通道数、输出通道数
+X0 = rng.normal(0, 1, (T, d)) * rng.lognormal(0, 1, d)   # 各通道尺度不同
+W = rng.normal(0, d ** -0.5, (d, m))
+Y = X0 @ W                                     # 下面每种情形计算的都是这个乘积
+hot = rng.choice(d, 6, replace=False)          # 离群通道，在每个词元中都很大
+alpha = 0.5                                    # 迁移强度
+
+def q8(x, axis):
+    """对称 INT8：沿 axis 的每个切片取一个绝对值最大缩放因子（None 表示整个张量）。"""
+    s = np.abs(x).max(axis=axis, keepdims=True) / 127
+    xq = np.clip(np.round(x / s), -127, 127) * s
+    assert np.all(abs(x - xq) <= s / 2 + 1e-12)   # |x - x_hat| <= s_g / 2
+    return xq
+
+def error(X, W, act_axis):
+    # W8A8：激活按词元（axis 1）或整个张量缩放，权重按输出通道缩放
+    return np.linalg.norm(q8(X, act_axis) @ q8(W, 0) - Y) / np.linalg.norm(Y)
+
+def smooth(X, W, a):
+    s = np.abs(X).max(0) ** a / np.abs(W).max(1) ** (1 - a)   # 每个输入通道一个因子
+    return X / s, s[:, None] * W
+
+gains = np.array([1, 2, 5, 10, 20, 50, 100])
+curves = {"整张量": [], "逐词元": [], "SmoothQuant + 逐词元": []}
+for g in gains:
+    X, Wg = X0.copy(), W.copy()
+    X[:, hot] *= g; Wg[hot] /= g               # 把范围移入激活
+    Xs, Ws = smooth(X, Wg, alpha)
+    ref = Xs if g == 1 else ref
+    assert np.allclose(X @ Wg, Y) and np.allclose(Xs @ Ws, Y)   # 层的计算结果不变
+    assert np.allclose(Xs, ref)                # 对任意 g，平滑都会抵消这种范围分配
+    curves["整张量"].append(error(X, Wg, None))
+    curves["逐词元"].append(error(X, Wg, 1))
+    curves["SmoothQuant + 逐词元"].append(error(Xs, Ws, 1))
+assert curves["SmoothQuant + 逐词元"][-1] < curves["逐词元"][-1] / 3
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.4))
+for k, (name, e) in enumerate(curves.items()):
+    ax.loglog(gains, e, "o-", ms=3, color=f"C{k}", label=name)
+ax.set(xlabel="离群通道幅度（普通通道的倍数）", ylabel="XW 的相对误差",
+       title="同一个乘积 XW 的 W8A8 误差")
+ax.legend(fontsize=9)
+alphas = np.linspace(0, 1, 21)
+bx.plot(alphas, [error(*smooth(X, Wg, a), 1) for a in alphas], color="C2")
+bx.axvline(alpha, color="gray", ls=":", lw=1)
+bx.set(xlabel="迁移强度 alpha", ylabel="XW 的相对误差",
+       title="迁移过少或过多都会增大误差")
+fig.tight_layout()
+for name, e in curves.items():
+    print(f"{name}：1 倍 {e[0]:.4f}，{gains[-1]} 倍 {e[-1]:.4f}")
+```
+::::
+
 
 这些方法都不会让量化变成无损操作。每种方法选择的是把近似误差放在哪里，以及使用哪些校准数据。
 

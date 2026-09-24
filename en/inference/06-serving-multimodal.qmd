@@ -83,7 +83,7 @@ it should not be charged as though every feature were an ordinary text prefix.
 ```{figure}
 //| figure: fusion-kv-cost
 //| label: fig-mm-input-contracts
-//| fig-cap: "The per-request KV cache of the two fusion contracts, drawn as layers by positions so that area is bytes, for the model shape of this chapter's runnable: 32 layers, 8 KV heads of width 128, 2 bytes per value. Decoder-only fusion stores keys and values for every media position at every layer. Cross-attention fusion stores the text at every layer and media keys and values only at its cross-attention layers, assumed here to be evenly spaced and to use the same head shape. Features per image follow the chapter's examples: 576 for a 336-pixel image in 14-pixel patches (LLaVA-1.5), 2,304 at 672 pixels, 576 after a 2 × 2 merge, and 64 from a Flamingo-style resampler. Separator positions are not counted, so one 336-pixel image with no text gives the runnable's 72.0 MiB."
+//| fig-cap: "The per-request KV cache of the two fusion contracts, drawn as layers by positions so that area is bytes, for a model with 32 layers, 8 KV heads of width 128, 2 bytes per value. Decoder-only fusion stores keys and values for every media position at every layer. Cross-attention fusion stores the text at every layer and media keys and values only at its cross-attention layers, assumed here to be evenly spaced and to use the same head shape. Features per image follow the chapter's examples: 576 for a 336-pixel image in 14-pixel patches (LLaVA-1.5), 2,304 at 672 pixels, 576 after a 2 × 2 merge, and 64 from a Flamingo-style resampler. Separator positions are not counted, so one 336-pixel image with no text gives 72.0 MiB."
 media: grid336
 images: 1
 text: 500
@@ -139,32 +139,13 @@ removed, its $24\times24$ patch grid contributes 576 projected image
 positions [@liu2023llava15]. That is a model-specific result, not a generic
 property of CLIP or of 336-pixel images.
 
-The runnable below isolates that one fixed-grid policy. It assumes divisible
-dimensions, no class or separator positions, no tiling or merge, and insertion
-of every patch into all 32 language-model layers. It uses explicit head
-dimensions for grouped-query attention (GQA), in which several query heads share
-one cached key-value head, and reports binary MiB.
-
-:::: {.runnable}
-```python
-def visual_tokens(width, height, patch=14):
-    if width <= 0 or height <= 0 or patch <= 0:
-        raise ValueError("dimensions and patch must be positive")
-    if width % patch or height % patch:
-        raise ValueError("this fixed-grid example requires divisible dimensions")
-    return (width // patch) * (height // patch)
-
-def kv_mib(tokens, layers=32, n_kv_heads=8, head_dim=128, bytes_per_value=2):
-    if min(tokens, layers, n_kv_heads, head_dim, bytes_per_value) <= 0:
-        raise ValueError("KV dimensions must be positive")
-    kv_bytes = 2 * layers * tokens * n_kv_heads * head_dim * bytes_per_value
-    return kv_bytes / 2**20
-
-for width, height in [(336, 336), (672, 672)]:
-    tokens = visual_tokens(width, height)
-    print(f"{width}x{height}: {tokens:4d} visual tokens, {kv_mib(tokens):5.1f} MiB KV")
-```
-::::
+Under that fixed-grid policy, with no class or separator positions and every
+patch inserted into all 32 layers of a language model that caches eight
+128-dimensional key-value heads per layer at 2 bytes per value, as in
+grouped-query attention (GQA), where several query heads share one cached
+key-value head, one 336-pixel image holds 72.0 MiB of KV cache. A 672-pixel
+image has 2,304 patches and holds 288.0 MiB. @fig-mm-input-contracts draws the
+same accounting.
 
 Real systems use several mechanisms to change this count:
 
@@ -238,6 +219,73 @@ also allow admission control and fairness policies to prevent a burst of
 high-resolution requests from causing head-of-line blocking for short text or
 small-image traffic. Production traces are commonly heavy-tailed and bursty,
 so averages hide the requests that set tail latency [@qiu2025modserve].
+
+The runnable below simulates that head-of-line blocking on one accelerator
+over ten seconds of traffic: 200 text requests with 20 ms of prefill each, and
+20 image requests whose encoder and prefill work follows a heavy-tailed
+distribution, twelve of them in a burst between the second and third second.
+It serves the same trace twice, once from a single first-in, first-out queue in
+which every request runs to completion, and once from separate text and image
+queues in which text goes first and image work runs in 25 ms slices. Both
+policies keep the accelerator busy whenever work is waiting, so the cell
+asserts that they finish the trace at the same instant: separating queues
+moves waiting time between classes and removes none. Set `chunk = 1e9` so
+that image work is not sliced: text then waits behind one image at a time
+instead of the whole burst.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+horizon = 10000.0                                    # ms of offered traffic
+text = rng.uniform(0, horizon, 200)                  # short text requests, 20 ms prefill each
+image = np.concatenate([rng.uniform(0, horizon, 8),  # steady image traffic
+                        rng.uniform(2000, 3000, 12)])   # a burst of high-resolution images
+work = 40 + rng.lognormal(np.log(120), 0.6, len(image))  # encoder plus prefill, ms
+jobs = sorted([(a, 20.0, 0) for a in text] + [(a, w, 1) for a, w in zip(image, work)])
+chunk = 25.0                                         # ms of image work per scheduling slice
+
+def serve(two_queues):
+    """One accelerator. False: one FIFO queue, each request runs to completion.
+    True: text and image queues; text goes first, image work runs in chunk slices."""
+    t, i, queues = 0.0, 0, ([], [])
+    left, done = [w for _, w, _ in jobs], np.zeros(len(jobs))
+    while i < len(jobs) or queues[0] or queues[1]:
+        while i < len(jobs) and jobs[i][0] <= t:
+            queues[jobs[i][2] if two_queues else 0].append(i); i += 1
+        if not (queues[0] or queues[1]):
+            t = jobs[i][0]; continue                 # idle until the next arrival
+        q = queues[0] or queues[1]
+        j = q[0]
+        run = min(chunk, left[j]) if two_queues and jobs[j][2] else left[j]
+        t += run; left[j] -= run
+        if left[j] <= 1e-9:
+            done[j] = t; q.pop(0)
+    return done
+
+arrive, kind = np.array([a for a, _, _ in jobs]), np.array([c for _, _, c in jobs])
+fig, axes = plt.subplots(2, 1, figsize=(5.6, 5.4), sharex=True)
+names = {False: "one FIFO queue", True: "text and image queues"}
+for k, two in enumerate([False, True]):
+    ttft = serve(two) - arrive
+    for ax, c in zip(axes, (0, 1)):
+        ax.semilogy(arrive[kind == c] / 1000, ttft[kind == c], ".", ms=4, color=f"C{k}",
+                    label=names[two])
+    print(f"{names[two]}: p95 TTFT text {np.percentile(ttft[kind == 0], 95):.0f} ms, "
+          f"image {np.percentile(ttft[kind == 1], 95):.0f} ms")
+last = [serve(two).max() for two in (False, True)]
+assert abs(last[0] - last[1]) < 1e-6               # same work, same finish: waiting only moves
+for ax, label in zip(axes, ("text TTFT (ms)", "image TTFT (ms)")):
+    ax.axvspan(2, 3, color="gray", alpha=0.15, lw=0)
+    ax.set_ylabel(label)
+axes[0].set_title("An image burst (gray) delays text only when they share a queue")
+axes[1].legend(fontsize=9, loc="upper left")
+axes[1].set_xlabel("arrival time (s)")
+fig.tight_layout()
+```
+::::
 
 Colocation keeps media features on the same accelerator and avoids network
 transfer, but encoder work can interfere with prefill and decode. Disaggregation
@@ -358,32 +406,69 @@ evaluation. Video adds a temporal factor after temporal compression and
 patching. Dense global attention can add a quadratic term in $N_z$; local,
 factorized, or sparse attention changes that term.
 
-The runnable computes a token-pass proxy, latent tokens multiplied by denoiser
-evaluations, for a 1024-pixel square,
-8-fold latent compression on each spatial axis, $2\times2$ latent patches, and
-two guidance branches. It is not a FLOPs estimate: it omits attention shape,
-model width, fixed stages, communication, sparsity, batching, and utilization.
+The runnable below takes the cost side of this formula as given, a 1024-pixel
+square with 8-fold latent compression, $2\times2$ latent patches, and two
+guidance branches, and measures what the number of denoiser evaluations buys.
+It samples a two-dimensional Gaussian mixture with the exact flow-matching
+field, so the only error is the solver's, integrates the same noise with
+Euler's method and with Heun's second-order method at step counts from 1 to
+128, and marks the 4- and 50-evaluation budgets in token-passes, latent tokens
+multiplied by evaluations and branches. The cell asserts that each solver's
+error falls at its order of accuracy, in proportion to the inverse of the
+evaluation count for Euler and to its inverse square for Heun. At 50
+evaluations the second-order solver is far more accurate; at 4, the two
+coincide and neither is close to the exact endpoint, so a few-step deployment
+needs a model trained for it. The proxy omits attention shape, model width,
+fixed stages, communication, sparsity, batching, and utilization. Narrow the
+modes with `sig = 0.15`: at four evaluations Euler's method then beats Heun's,
+which spends its four evaluations on only two steps.
 
 :::: {.runnable}
 ```python
-def latent_tokens(width, height, compression=8, patch=2):
-    if min(width, height, compression, patch) <= 0:
-        raise ValueError("all dimensions must be positive")
-    stride = compression * patch
-    return ((width + stride - 1) // stride) * ((height + stride - 1) // stride)
+import numpy as np
+import matplotlib.pyplot as plt
 
-def token_pass_proxy(tokens, steps, guidance_branches=2):
-    if min(tokens, steps, guidance_branches) <= 0:
-        raise ValueError("tokens, steps, and branches must be positive")
-    return tokens * steps * guidance_branches
+tokens = (1024 // (8 * 2)) ** 2            # 1024-pixel square, 8x latent, 2x2 latent patches
+branches = 2                               # conditional and unconditional guidance passes
+mu = np.array([[-2.0, 0.0], [2.0, 1.0], [0.0, -2.5]])     # a 2-D stand-in for the data
+w, sig = np.array([0.5, 0.3, 0.2]), 0.35
 
-tokens = latent_tokens(1024, 1024)
-base = token_pass_proxy(tokens, 50)
-fast = token_pass_proxy(tokens, 4)
-print(f"latent tokens: {tokens}")
-print(f"50-step proxy: {base} token-passes")
-print(f" 4-step proxy: {fast} token-passes")
-print(f"denoiser-only ratio: {base / fast:.1f}x")
+def velocity(x, t):
+    """Exact flow-matching field for x_t = (1 - t) x_0 + t x_1, x_0 ~ N(0, I)."""
+    var = (1 - t) ** 2 + (t * sig) ** 2
+    d = x[:, None, :] - t * mu
+    logr = np.log(w) - (d ** 2).sum(-1) / (2 * var)
+    r = np.exp(logr - logr.max(1, keepdims=True))
+    r /= r.sum(1, keepdims=True)           # posterior over mixture components
+    return (r[..., None] * (mu + (t * sig**2 - (1 - t)) / var * d)).sum(1)
+
+def sample(x, steps, heun):
+    h = 1.0 / steps
+    for i in range(steps):
+        k1 = velocity(x, i * h)
+        x = x + h / 2 * (k1 + velocity(x + h * k1, (i + 1) * h)) if heun else x + h * k1
+    return x
+
+x0 = np.random.default_rng(0).normal(size=(1000, 2))
+exact = sample(x0, 1000, heun=True)        # reference endpoint of the same ODE
+steps = np.array([1, 2, 4, 8, 16, 32, 64, 128])
+plt.figure(figsize=(5.6, 4.2))
+for k, (heun, name) in enumerate([(False, "Euler, 1 evaluation per step"),
+                                   (True, "Heun, 2 evaluations per step")]):
+    nfe = steps * (2 if heun else 1)
+    err = [np.linalg.norm(sample(x0, s, heun) - exact, axis=1).mean() for s in steps]
+    order = -np.polyfit(np.log(nfe[-4:]), np.log(err[-4:]), 1)[0]
+    assert abs(order - (2 if heun else 1)) < 0.3   # the solver's order of accuracy
+    plt.loglog(nfe, err, "o-", ms=3, color=f"C{k}", label=f"{name}: order {order:.2f}")
+for n in (4, 50):
+    plt.axvline(n, color="gray", ls=":", lw=1)
+    plt.text(n, 0.97, f" {n * tokens * branches:,}\n token-passes", fontsize=8, va="top",
+             transform=plt.gca().get_xaxis_transform())
+plt.xlabel("denoiser evaluations per sample")
+plt.ylabel("mean distance to the exact endpoint")
+plt.title("At 4 evaluations, a higher-order solver no longer helps")
+plt.legend(fontsize=9, loc="lower left")
+print(f"latent tokens per evaluation: {tokens}, branches: {branches}")
 ```
 ::::
 

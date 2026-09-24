@@ -33,27 +33,8 @@ $$
 
 这里，当 $\alpha=1$ 时，$\mathbb E[Y]=\gamma+1$。这个量表示每轮验证的期望产出词元数，不是延迟加速比。它还没有计入这一轮花费的时间与内存。
 
-下面的可运行示例用一组不相同的条件接受概率计算前缀存活率，再与独立同分布估计比较，后者在每个位置都使用这些概率的算术平均值。即使在这个很小的确定性示例中，两者也不相同。
+@fig-faster-decoding-cycle 之后的可运行示例会在一个接受率随位置下降的草稿上测量这种差异。
 
-:::: {.runnable}
-```python
-conditional = [0.85, 0.75, 0.60, 0.40]
-
-survival = []
-alive = 1.0
-for probability in conditional:
-    alive *= probability
-    survival.append(alive)
-
-expected = 1.0 + sum(survival)
-alpha = sum(conditional) / len(conditional)
-iid_estimate = sum(alpha**k for k in range(len(conditional) + 1))
-
-print("survival by position:", ", ".join(f"{value:.4f}" for value in survival))
-print(f"expected tokens/cycle: {expected:.4f}")
-print(f"iid estimate at alpha={alpha:.2f}: {iid_estimate:.4f}")
-```
-::::
 
 ## 修正拒绝采样保持目标分布不变
 
@@ -84,6 +65,81 @@ $$
 //| label: fig-faster-decoding-cycle
 //| fig-cap: "在只有 6 个词元的词表上，用固定的随机种子运行 1,000 轮推测采样。分布是示意性的：每个位置都使用同一个目标分布 $p$ 和同一个草稿分布 $q$，并构造成每个位置的接受概率 $\sum_v \min(p(v), q(v))$ 都等于 $\alpha$。前三轮逐项操作展示，之后每次显示一整轮。每个候选位置显示候选词元 $x \sim q$、它的 $q(x)$、目标模型一次传播给出的 $p(x)$，以及接受检验：均匀随机数 $u$（竖线）落在阴影 $a = \min(1, p(x)/q(x))$ 之内即接受。第一次拒绝时从残差分布 $r$ 中采样修正词元，其后的候选全部丢弃；全部接受时从 $p$ 中采样奖励词元。直方图把每轮输出 $Y$ 个词元的轮数占比与 $\alpha^{Y-1}(1-\alpha)$ 对照（$Y = \gamma + 1$ 时为 $\alpha^\gamma$），其均值即 $\mathbb E[Y]$。词元图按来源堆叠输出词元，并与 $p$ 和 $q$ 对照。"
 ```
+
+@fig-faster-decoding-cycle 只在单个位置上检验这个恒等式，而且每个位置的 $p$ 和 $q$ 都相同。下面的可运行示例在二元目标模型上运行完整的推测周期：$p$ 取决于前一个词元，草稿的模糊程度 `lam` 随位置加深而增大，所以越靠后的草稿位置越难被接受。代码输出两次 40,000 个词元，一次使用残差 $r$，另一次采用一种看似合理的错误做法：被拒绝的位置直接从 $p$ 重新采样。随后以标准误为单位，测量输出的转移频率偏离 $p$ 多远：残差规则的偏差在采样噪声之内，从 $p$ 重采样则明显超出。接着，代码把实测的每轮词元数与 $\mathbb E[Y]=1+\sum_k s_k$ 比较，后者由各草稿位置的 $\min(p,q_k)$ 连乘精确算出，同时给出按平均接受率计算的 IID 估计。把 `lam` 的每一项都设为 0.5，接受率不再随位置下降，IID 估计就与实测值吻合。
+
+:::: {.runnable}
+```python
+import random
+from bisect import bisect
+import numpy as np
+import matplotlib.pyplot as plt
+
+V, n = 4, 40_000                               # 词表大小、要输出的词元数
+lam = [0.2, 0.4, 0.6, 0.8]                     # 草稿第 1 到 gamma 个位置的模糊程度
+gamma = len(lam)
+rng = np.random.default_rng(1)
+p = rng.dirichlet(np.ones(V), V)               # 目标二元模型：第 u 行是 p(· | 前一个词元 u)
+noise = rng.dirichlet(np.ones(V), V)
+q = [(1 - l) * p + l * noise for l in lam]     # 位置越靠后，草稿离 p 越远
+a = [np.minimum(1, p / qk).tolist() for qk in q]    # 接受概率 a(v)
+P, Q = np.cumsum(p, 1).tolist(), [np.cumsum(qk, 1).tolist() for qk in q]
+R = {True: [np.cumsum(np.maximum(p - qk, 0), 1).tolist() for qk in q],   # 残差分布 r
+     False: [P] * gamma}                                                  # 错误做法：从 p 重新采样
+
+def draw(c):
+    return min(bisect(c, random.random() * c[-1]), V - 1)
+
+def generate(residual):
+    random.seed(0)
+    out, starts, tests, accepts = [0], [], np.zeros(gamma), np.zeros(gamma)
+    while len(out) < n:
+        u = prev = out[-1]
+        starts.append(u)
+        drafts = []
+        for i in range(gamma):                 # 提议：一条含 gamma 个草稿词元的链
+            drafts.append(draw(Q[i][drafts[-1] if drafts else u]))
+        for i, x in enumerate(drafts):         # 从左到右验证
+            tests[i] += 1
+            if random.random() >= a[i][prev][x]:
+                out.append(draw(R[residual][i][prev])); break   # 修正词元结束本轮
+            out.append(x); prev = x; accepts[i] += 1
+        else:
+            out.append(draw(P[prev]))          # 全部接受：从 p 采样奖励词元
+    return np.array(out), np.array(starts), tests, accepts
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.8))
+for k, residual in enumerate([True, False]):
+    out, starts, tests, accepts = generate(residual)
+    counts = np.zeros((V, V)); np.add.at(counts, (out[:-1], out[1:]), 1)
+    N = counts.sum(1, keepdims=True)
+    z = abs(counts / N - p) / np.sqrt(p * (1 - p) / N)   # 以标准误为单位的偏差
+    ax.plot(p.ravel(), (counts / N).ravel(), "ox"[k], color=f"C{k}",
+            label=f"{['残差 r', '从 p 重采样'][k]}：最大 {z.max():.1f} 个标准误")
+    assert (z.max() < 4) == residual           # 只有残差规则是精确的
+ax.plot([0, 1], [0, 1], color="gray", lw=0.8)
+ax.set(xlabel="目标 p(v | u)", ylabel="u 之后输出 v 的比例", title="输出的转移频率")
+ax.legend(fontsize=9)
+
+out, starts, tests, accepts = generate(True)
+s, exact = np.eye(V), np.ones(V)               # E[Y | u] = 1 + 对 k 求和 s_k(u)
+for qk in q:
+    s = s @ np.minimum(p, qk)                  # 被接受的概率质量转移到下一个上下文
+    exact += s @ np.ones(V)
+measured = (len(out) - 1) / len(starts)
+alpha = accepts.sum() / tests.sum()
+iid = (1 - alpha ** (gamma + 1)) / (1 - alpha)
+assert abs(measured - exact[starts].mean()) < 0.03
+bx.bar(range(1, gamma + 1), accepts / tests, color="C0", alpha=0.6)
+bx.axhline(alpha, color="C1", ls="--", lw=1.2, label=f"平均 alpha = {alpha:.2f}")
+bx.set(xlabel="草稿位置 k", ylabel="到达该位置后的接受率", xticks=range(1, gamma + 1),
+       ylim=(0, 1), title=f"E[Y]：实测 {measured:.2f}，IID {iid:.2f}")
+bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"每轮词元数：实测 {measured:.3f}，精确值 {exact[starts].mean():.3f}，"
+      f"按平均 alpha 的 IID 估计 {iid:.3f}")
+```
+::::
 
 这里的“精确”是指输出分布相同，并不等于在同一随机种子下得到完全相同的词元序列。浮点内核、批处理方式和随机数消耗顺序都可能改变某次具体采样。要保持精确，比较的分布还必须采用相同的采样变换与停止策略；温度、截断、约束与词元映射不能暗中不同。EOS、停止序列和最大长度都可能缩短一轮执行，并使奖励词元不再产生。
 

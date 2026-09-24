@@ -129,42 +129,74 @@ $$
 
 自回归请求会在不同数量的解码步骤后结束。静态批始终受其中最长的请求牵制：短请求结束后留下的槽位处于空闲状态，新到的任务也只能等待。Orca 引入了迭代级调度。每轮模型迭代结束后，服务器都可以移除已完成的请求，再从仍在运行和正在等待的任务中组成下一批 [@yu2022orca]。现代系统通常把这种做法称为@gls-continuous-batching。
 
-下面的可运行示例只呈现这种调度方式带来的差异。四个请求都在零时刻就绪，系统有两个槽位，输出长度分别为 `[2, 8, 3, 7]` 个解码步骤。示例忽略预填充、内存限制、新请求到达和内核成本，因此只是一个记账示例，而不是性能模型。
+下面的可运行示例把两种策略实现为按步推进的调度器：每轮迭代记为一步，不计预填充、内存限制和内核成本，因此它是记账模型，不是性能模型。代码先检查 @fig-serving-continuous-batching 中的“可运行示例”负载：四个请求都在零时刻就绪，输出长度为 `[2, 8, 3, 7]` 个解码步骤，共两个槽位，静态批处理用 15 步，迭代级调度用 12 步。随后它给八个槽位输入泊松到达的请求，输出长度服从均值为 16 步的对数正态分布，并扫描到达速率。图只展示一条请求序列；扫描则显示每种策略的队列从哪里开始发散。代码还断言完成速率会饱和在闭式容量上：迭代级调度的容量是槽位数除以平均输出长度；静态批处理在饱和时一批接一批地满载运行，所以容量是槽位数除以每批中最长请求长度的均值。把 `sigma` 设为 0，每个请求都是 16 步，两种容量随即相同。可见容量上的收益来自输出长度的离散；不过在轻负载下，静态批处理仍会让新到的请求等待正在运行的那一批。
 
 :::: {.runnable}
 ```python
-lengths = [2, 8, 3, 7]
-slots = 2
+import heapq
+import numpy as np
+import matplotlib.pyplot as plt
 
-static_steps = sum(
-    max(lengths[start:start + slots])
-    for start in range(0, len(lengths), slots)
-)
+def serve(arrive, length, slots, policy):
+    """按步调度：返回每个请求完成时所在的步。"""
+    done, t, i, n = np.empty(len(arrive)), 0, 0, len(arrive)
+    if policy == "continuous":        # 空出的槽位立即交给下一个请求
+        free = [0] * slots
+        for i in range(n):
+            start = max(np.ceil(arrive[i]), free[0])
+            done[i] = start + length[i]
+            heapq.heapreplace(free, done[i])
+        return done
+    while i < n:                      # 静态批：同一批请求占住全部槽位
+        t = max(t, np.ceil(arrive[i]))
+        j = i + 1
+        while j < n and j - i < slots and np.ceil(arrive[j]) <= t:
+            j += 1
+        done[i:j] = t + length[i:j].max()
+        t, i = done[i], j
+    return done
 
-waiting = list(lengths)
-running = []
-continuous_steps = 0
-active_slot_steps = 0
+ex = np.array([2, 8, 3, 7])           # 上文的四个请求，两个槽位
+assert serve(np.zeros(4), ex, 2, "static").max() == 15
+assert serve(np.zeros(4), ex, 2, "continuous").max() == 12
 
-while waiting or running:
-    while waiting and len(running) < slots:
-        running.append(waiting.pop(0))
-    active_slot_steps += len(running)
-    running = [remaining - 1 for remaining in running if remaining > 1]
-    continuous_steps += 1
-
-tokens = sum(lengths)
-print("static steps:", static_steps)
-print("continuous steps:", continuous_steps)
-print("static slot utilization:", f"{tokens / (static_steps * slots):.1%}")
-print("continuous slot utilization:", f"{active_slot_steps / (continuous_steps * slots):.1%}")
+rng = np.random.default_rng(0)
+slots, n = 8, 3000
+sigma = 0.8                           # 长度离散度；设为 0 时每个请求都是 16 步
+L = np.maximum(1, np.round(16 * rng.lognormal(-sigma**2 / 2, sigma, n)))
+cap = {"continuous": slots / L.mean(),
+       "static": slots / L[: n // slots * slots].reshape(-1, slots).max(1).mean()}
+gap = rng.exponential(1.0, n)
+names = {"continuous": "连续批处理", "static": "静态批处理"}
+rates = np.linspace(0.15, 1.25, 12) * cap["continuous"]
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.4), sharex=True)
+for k, (policy, c) in enumerate(cap.items()):
+    ttft, thr = [], []
+    for lam in rates:
+        arrive = np.cumsum(gap / lam)
+        done = serve(arrive, L, slots, policy)
+        ttft.append(np.mean(done - L + 1 - arrive))
+        thr.append(n / done.max())
+    assert abs(thr[-1] / c - 1) < 0.03   # 饱和吞吐量等于闭式容量
+    ax.semilogy(rates, ttft, "o-", ms=3, color=f"C{k}", label=names[policy])
+    bx.plot(rates, thr, "o-", ms=3, color=f"C{k}")
+    for a in (ax, bx):
+        a.axvline(c, color=f"C{k}", ls=":", lw=1)
+bx.plot(rates, rates, color="gray", lw=0.8, ls="--")
+ax.set(ylabel="平均 TTFT（步）")
+bx.set(xlabel="提供负载（请求/步）", ylabel="完成速率（请求/步）")
+ax.legend()
+ax.set_title("负载到达各自容量（虚线）时，TTFT 急剧上升")
+fig.tight_layout()
+print(f"容量：静态批处理 {cap['static']:.3f}，连续批处理 {cap['continuous']:.3f} 请求/步")
+print(f"平均长度 {L.mean():.1f} 步，每 {slots} 个请求中最长者的均值 {slots / cap['static']:.1f} 步")
 ```
 ::::
 
 ```{figure}
 //| figure: continuous-batching
 //| label: fig-serving-continuous-batching
-//| fig-cap: "同一条合成请求序列在相同数量的批内槽位上调度两次，记账方式与上面的可运行示例相同：每轮迭代都记为一步，不计预填充、内存和内核成本。每一行是一个槽位。色条开头颜色最实的一格，是接纳请求并输出首个词元的那轮迭代，后面较淡的部分是它的解码步骤；每个面板下方的灰色区域是排队请求数。静态批处理在批为空时，把正在排队的请求组成一批，一直占住全部槽位，直到这一批中最长的请求结束；斜线表示槽位空闲、要等这一批结束，原因可能是请求提前结束，也可能是这一批没有填满。迭代级调度在下一步就把空出的槽位交给排队的请求。到达序列是带固定种子的泊松到达，输出长度服从均值为 16 步的对数正态分布；选择“可运行示例”负载并使用两个槽位时，图中数值与可运行示例的输出一致。标有 ≥ 的 TTFT 把仍在排队的请求按已等待的时间计入。"
+//| fig-cap: "同一条合成请求序列在相同数量的批内槽位上调度两次，记账方式与上面的可运行示例相同：每轮迭代都记为一步，不计预填充、内存和内核成本。每一行是一个槽位。色条开头颜色最实的一格，是接纳请求并输出首个词元的那轮迭代，后面较淡的部分是它的解码步骤；每个面板下方的灰色区域是排队请求数。静态批处理在批为空时，把正在排队的请求组成一批，一直占住全部槽位，直到这一批中最长的请求结束；斜线表示槽位空闲、要等这一批结束，原因可能是请求提前结束，也可能是这一批没有填满。迭代级调度在下一步就把空出的槽位交给排队的请求。到达序列是带固定种子的泊松到达，输出长度服从均值为 16 步的对数正态分布；选择“可运行示例”负载并使用两个槽位时，图中的步数与可运行示例断言的步数一致。标有 ≥ 的 TTFT 把仍在排队的请求按已等待的时间计入。"
 ```
 
 连续批处理并不会减少生成这些词元所需的模型计算，它改变的是空闲槽位何时可以重新使用。真实的调度器还必须决定接纳哪个等待中的请求、为未来增长预留多少 KV 内存、优先处理预填充还是解码，以及何时抢占正在运行的任务。调度策略属于服务约定的一部分，因为它决定了服务能满足哪些延迟目标。

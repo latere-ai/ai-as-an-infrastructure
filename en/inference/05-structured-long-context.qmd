@@ -42,36 +42,6 @@ implementation guarantees that the emitted byte string belongs to the
 implemented language. A maximum-token stop,
 cancellation, or engine failure can still leave an incomplete document.
 
-The following runnable shows the renormalization itself. It starts from logits,
-the unnormalized scores that softmax turns into probabilities, and uses a small
-hand-picked allowed set in place of a JSON parser.
-
-:::: {.runnable}
-```python
-from math import exp
-
-def constrained_softmax(logits, allowed):
-    if not allowed:
-        raise ValueError("empty allowed set")
-    peak = max(logits[i] for i in allowed)
-    weights = [exp(logits[i] - peak) if i in allowed else 0.0
-               for i in range(len(logits))]
-    total = sum(weights)
-    return [weight / total for weight in weights]
-
-vocab = ["{", "}", '"', "name", "age", ":", ",", "true", "hello", "42"]
-logits = [2.1, 0.3, 3.0, 1.2, 1.0, 0.5, 0.4, 0.8, 2.5, 1.1]
-allowed = {2}  # Just after "{", this toy state accepts only an opening quote.
-probabilities = constrained_softmax(logits, allowed)
-
-for token, probability in zip(vocab, probabilities):
-    print(f"{token:>6}  {probability:.3f}")
-print("legal mass:", round(sum(probabilities[i] for i in allowed), 3))
-print("illegal mass:", round(sum(probabilities[i] for i in range(len(vocab))
-                                 if i not in allowed), 3))
-```
-::::
-
 ### The parser runs on token bytes
 
 A model emits tokenizer IDs, while a grammar is defined over an alphabet such
@@ -127,6 +97,96 @@ probability mass lies beyond each prefix. Grammar-Aligned Decoding formalizes
 this distinction and reports cases where ordinary grammar-constrained decoding
 produces valid but lower-quality outputs [@park2024grammaraligned]. The effect is
 workload- and model-dependent, so compare content accuracy as well as parse rate.
+
+The runnable below makes both claims executable on a grammar small enough to
+enumerate: balanced parentheses of at most `N = 6` characters, a vocabulary of
+single- and two-character tokens such as `()` and `((`, and a random bigram
+model over those tokens. The parser consumes each token's characters, and with
+`lookahead` on it also rejects a token that leaves more open parentheses than
+the remaining length can close, which is the reachability condition in
+$A(s_t)$. The cell walks every path of the masked decoder to get its exact
+string distribution $p_G$, samples the same decoder 4,000 times, asserts that
+every sample parses and that the sample frequencies match $p_G$, and compares
+$p_G$ with the model conditioned on the grammar,
+$p(x)\mathbf 1[x\in L]/\sum_{y\in L}p(y)$. Both emit only valid strings, yet
+the masked decoder puts most of its mass on longer strings that the model
+itself rarely completes, because a renormalized step cannot see how little
+valid mass lies beyond the prefix it commits to. Set `lookahead = False`, so
+that $A(s_t)$ checks only the next characters: the decoder then reaches dead
+ends, legal prefixes with no legal continuation, with the probability the cell
+prints.
+
+:::: {.runnable}
+```python
+import random
+from collections import Counter, defaultdict
+import numpy as np
+import matplotlib.pyplot as plt
+
+vocab = ["(", ")", "()", "))", "((", "<eos>"]
+N = 6                                    # the grammar: balanced strings of 2 to N characters
+lookahead = True                         # False: check only that each character is legal
+rng = np.random.default_rng(0)
+logits = rng.normal(0, 1.0, (len(vocab), len(vocab)))
+P = np.exp(logits) / np.exp(logits).sum(1, keepdims=True)   # bigram LM: row = previous token
+
+def step(state, v):
+    """Parser: consume token v's characters from (depth, length); None if v is not allowed."""
+    depth, n = state
+    if vocab[v] == "<eos>":
+        return "accept" if depth == 0 and n > 0 else None
+    for c in vocab[v]:
+        depth, n = depth + (1 if c == "(" else -1), n + 1
+        if depth < 0 or n > N:
+            return None
+    return None if lookahead and depth > N - n else (depth, n)   # can it still close?
+
+target, masked, dead = defaultdict(float), defaultdict(float), [0.0]
+def walk(prev, state, text, p_lm, p_g):  # every path of the masked decoder, exactly
+    allowed = [v for v in range(len(vocab)) if step(state, v)]
+    if not allowed:
+        dead[0] += p_g; return           # a legal prefix with no legal continuation
+    Z = P[prev, allowed].sum()           # legal mass, the renormalizer
+    for v in allowed:
+        nxt = step(state, v)
+        if nxt == "accept":
+            target[text] += p_lm * P[prev, v]; masked[text] += p_g * P[prev, v] / Z
+        else:
+            walk(v, nxt, text + vocab[v], p_lm * P[prev, v], p_g * P[prev, v] / Z)
+walk(len(vocab) - 1, (0, 0), "", 1.0, 1.0)
+
+random.seed(0)
+samples = Counter()
+for _ in range(4000):                    # the same decoder, sampled
+    prev, state, text = len(vocab) - 1, (0, 0), ""
+    while state not in ("accept", None):
+        allowed = [v for v in range(len(vocab)) if step(state, v)]
+        if not allowed:
+            state = None; break
+        prev = random.choices(allowed, weights=P[prev, allowed])[0]
+        state = step(state, prev); text += vocab[prev] * (state != "accept")
+    samples[text if state == "accept" else None] += 1
+for text in samples:
+    assert text is None or (text.count("(") == text.count(")") and all(
+        text[:i].count("(") >= text[:i].count(")") for i in range(len(text))))
+
+strings = sorted(target, key=target.get, reverse=True)
+lm = np.array([target[s] for s in strings]) / sum(target.values())
+g = np.array([masked[s] for s in strings])
+assert abs(g.sum() + dead[0] - 1) < 1e-12 and (dead[0] == 0 or not lookahead)
+assert all(abs(samples[s] / 4000 - masked[s]) < 0.03 for s in strings)
+x = np.arange(len(strings))
+plt.figure(figsize=(5.6, 3.8))
+plt.bar(x - 0.2, lm, 0.4, label="LM conditioned on the grammar")
+plt.bar(x + 0.2, g, 0.4, label="token-by-token masking")
+plt.xticks(x, strings, fontsize=9)
+plt.ylabel("probability of the string")
+plt.title(f"Both only emit valid strings, with total variation {0.5 * abs(lm - g).sum():.2f}")
+plt.legend(fontsize=9)
+print(f"unconstrained LM output in the grammar: {sum(target.values()):.3f}; "
+      f"masked decoder dead ends: {dead[0]:.3f}")
+```
+::::
 
 ## Making grammar execution affordable
 

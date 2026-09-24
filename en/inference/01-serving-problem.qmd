@@ -235,45 +235,89 @@ iteration-level scheduling: after each model iteration, the server can remove
 finished requests and form the next batch from the remaining and waiting work
 [@yu2022orca]. Modern systems commonly call this @gls-continuous-batching.
 
-The following runnable isolates that scheduling effect. Four requests are
-available at time zero, two slots are available, and output lengths are
-`[2, 8, 3, 7]` decode steps. It ignores prefill, memory limits, arrivals, and
-kernel cost, so it is an accounting example rather than a performance model.
+The following runnable implements both policies as a step-level scheduler:
+every iteration costs one step, and prefill, memory limits, and kernel cost are
+left out, so it is an accounting model rather than a performance model. It
+first checks the runnable-example workload of @fig-serving-continuous-batching,
+four requests at time zero with output lengths `[2, 8, 3, 7]` on two slots,
+which take 15 steps under static batching and 12 under iteration-level
+scheduling. It then feeds eight slots Poisson arrivals with lognormal output
+lengths of mean 16 steps and sweeps the arrival rate. The figure follows one
+trace; the sweep shows where each policy's queue diverges, and the cell asserts
+that the completion rate saturates at a closed-form capacity: the slot count
+divided by the mean output length for iteration-level scheduling, and divided
+by the mean of each cohort's longest request for static batching, because a
+saturated static batch runs full cohorts back to back. Set `sigma = 0` to give
+every request 16 steps: the two capacities then coincide, so the capacity gain
+comes from the spread of output lengths, while a static cohort still makes a
+new arrival wait at light load.
 
 :::: {.runnable}
 ```python
-lengths = [2, 8, 3, 7]
-slots = 2
+import heapq
+import numpy as np
+import matplotlib.pyplot as plt
 
-static_steps = sum(
-    max(lengths[start:start + slots])
-    for start in range(0, len(lengths), slots)
-)
+def serve(arrive, length, slots, policy):
+    """Step-level scheduler: the step at which each request finishes."""
+    done, t, i, n = np.empty(len(arrive)), 0, 0, len(arrive)
+    if policy == "continuous":        # a freed slot takes the next request
+        free = [0] * slots
+        for i in range(n):
+            start = max(np.ceil(arrive[i]), free[0])
+            done[i] = start + length[i]
+            heapq.heapreplace(free, done[i])
+        return done
+    while i < n:                      # static: a cohort holds every slot
+        t = max(t, np.ceil(arrive[i]))
+        j = i + 1
+        while j < n and j - i < slots and np.ceil(arrive[j]) <= t:
+            j += 1
+        done[i:j] = t + length[i:j].max()
+        t, i = done[i], j
+    return done
 
-waiting = list(lengths)
-running = []
-continuous_steps = 0
-active_slot_steps = 0
+ex = np.array([2, 8, 3, 7])           # the four requests above, two slots
+assert serve(np.zeros(4), ex, 2, "static").max() == 15
+assert serve(np.zeros(4), ex, 2, "continuous").max() == 12
 
-while waiting or running:
-    while waiting and len(running) < slots:
-        running.append(waiting.pop(0))
-    active_slot_steps += len(running)
-    running = [remaining - 1 for remaining in running if remaining > 1]
-    continuous_steps += 1
-
-tokens = sum(lengths)
-print("static steps:", static_steps)
-print("continuous steps:", continuous_steps)
-print("static slot utilization:", f"{tokens / (static_steps * slots):.1%}")
-print("continuous slot utilization:", f"{active_slot_steps / (continuous_steps * slots):.1%}")
+rng = np.random.default_rng(0)
+slots, n = 8, 3000
+sigma = 0.8                           # length spread; 0 gives every request 16 steps
+L = np.maximum(1, np.round(16 * rng.lognormal(-sigma**2 / 2, sigma, n)))
+cap = {"continuous": slots / L.mean(),
+       "static": slots / L[: n // slots * slots].reshape(-1, slots).max(1).mean()}
+gap = rng.exponential(1.0, n)
+names = {"continuous": "continuous batching", "static": "static batching"}
+rates = np.linspace(0.15, 1.25, 12) * cap["continuous"]
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.4), sharex=True)
+for k, (policy, c) in enumerate(cap.items()):
+    ttft, thr = [], []
+    for lam in rates:
+        arrive = np.cumsum(gap / lam)
+        done = serve(arrive, L, slots, policy)
+        ttft.append(np.mean(done - L + 1 - arrive))
+        thr.append(n / done.max())
+    assert abs(thr[-1] / c - 1) < 0.03   # saturates at the closed-form capacity
+    ax.semilogy(rates, ttft, "o-", ms=3, color=f"C{k}", label=names[policy])
+    bx.plot(rates, thr, "o-", ms=3, color=f"C{k}")
+    for a in (ax, bx):
+        a.axvline(c, color=f"C{k}", ls=":", lw=1)
+bx.plot(rates, rates, color="gray", lw=0.8, ls="--")
+ax.set(ylabel="mean TTFT (steps)")
+bx.set(xlabel="offered load (requests/step)", ylabel="completed (requests/step)")
+ax.legend()
+ax.set_title("Each policy's TTFT explodes at its capacity (dotted)")
+fig.tight_layout()
+print(f"capacity: static {cap['static']:.3f}, continuous {cap['continuous']:.3f} requests/step")
+print(f"mean length {L.mean():.1f} steps, mean longest of {slots}: {slots / cap['static']:.1f} steps")
 ```
 ::::
 
 ```{figure}
 //| figure: continuous-batching
 //| label: fig-serving-continuous-batching
-//| fig-cap: "One synthetic request trace scheduled twice on the same number of batch slots, with the runnable's accounting: every iteration costs one step, and prefill, memory, and kernel cost are left out. Each row is a slot. A bar starts with a solid cell for the iteration that admits a request and emits its first token; its fainter remainder is the decode steps. The gray area under each panel counts waiting requests. Static batching forms a cohort from whatever is waiting when the batch is empty and holds every slot until the cohort's longest request finishes; hatching marks a slot that idles until the cohort ends, because its request finished early or the cohort never filled it. Iteration-level scheduling gives a freed slot to a waiting request at the next step. The arrival trace is seeded Poisson arrivals with lognormal output lengths of mean 16 steps; the runnable-example workload on two slots reproduces the runnable's numbers. A TTFT marked ≥ counts requests still waiting at their wait so far."
+//| fig-cap: "One synthetic request trace scheduled twice on the same number of batch slots, with the runnable's accounting: every iteration costs one step, and prefill, memory, and kernel cost are left out. Each row is a slot. A bar starts with a solid cell for the iteration that admits a request and emits its first token; its fainter remainder is the decode steps. The gray area under each panel counts waiting requests. Static batching forms a cohort from whatever is waiting when the batch is empty and holds every slot until the cohort's longest request finishes; hatching marks a slot that idles until the cohort ends, because its request finished early or the cohort never filled it. Iteration-level scheduling gives a freed slot to a waiting request at the next step. The arrival trace is seeded Poisson arrivals with lognormal output lengths of mean 16 steps; the runnable-example workload on two slots reproduces the step counts the runnable asserts. A TTFT marked ≥ counts requests still waiting at their wait so far."
 ```
 
 Continuous batching does not reduce the model work needed for those tokens. It

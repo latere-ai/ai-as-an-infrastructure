@@ -7,7 +7,7 @@
 //   b_eff = b + b_s / g   bits per value (the chapter's effective payload).
 //
 // q rounds to the nearest element value, ties to even. Elements:
-// - INT4: the integers −7 … 7 (q_max = 7), as in the chapter's runnable.
+// - INT4: the integers −7 … 7 (q_max = 7), symmetric with no zero point.
 // - FP4 E2M1: 0, ±0.5, ±1, ±1.5, ±2, ±3, ±4, ±6 (q_max = 6), the MXFP4 and
 //   NVFP4 element (OCP Microscaling Formats v1.0).
 // - FP8 E4M3: 1 sign, 4 exponent, 3 mantissa bits, bias 7, subnormals, no

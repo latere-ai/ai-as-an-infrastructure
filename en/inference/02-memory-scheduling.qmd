@@ -70,34 +70,96 @@ differently:
 | External fragmentation | Variable contiguous extents leave holes that cannot satisfy a larger request | Any free fixed block can satisfy the next block request |
 | Tail waste | The last block is only partly occupied | Bound the waste to fewer than $B$ token positions |
 
-The runnable below performs exact discrete accounting. Four requests retain
-`[37, 81, 130, 211]` tokens and each declares a maximum of 256. It reports
-allocated token slots and tail waste for several block sizes. It does not turn
-block-table entries into a synthetic runtime cost; that side of the trade-off
-needs measurements of the kernels, the compiled accelerator routines that run
-attention and the other model operations.
+The runnable below measures all three on one pool of 4,096 token slots over
+800 decode steps. One backlog of 2,000 requests, prompts of 32 to 479 tokens
+and outputs of 16 to 255, is served three ways: a contiguous allocator that
+reserves each request's prompt plus the declared maximum `cap` at the first
+hole large enough, and a paged allocator with 16-token and with 256-token
+blocks that adds a block when the next token needs one and, when the pool is
+full, preempts the most recently admitted request for recomputation. After
+every step the cell asserts the allocator invariants: each paged request's
+tail waste stays below $B$, and contiguous extents never overlap. It also
+counts the steps in which the next request found enough free slots in total
+but no hole to hold them, which is external fragmentation. Raise `cap` to 1024,
+as a client declaring a larger output limit would: live KV in the contiguous
+pool falls below a fifth, while the paged allocators never read `cap`. The cell
+does not turn block-table entries into a runtime cost; that side of the
+trade-off needs measurements of the kernels, the compiled accelerator routines
+that run attention and the other model operations.
 
 :::: {.runnable}
 ```python
-from math import ceil
+import numpy as np
+import matplotlib.pyplot as plt
 
-lengths = [37, 81, 130, 211]
-declared_max = 256
+rng = np.random.default_rng(0)
+P, steps = 4096, 800            # pool tokens, decode steps
+cap = 256                       # declared output maximum; outputs stay below 256
+jobs = list(zip(rng.integers(32, 480, 2000).tolist(), rng.integers(16, 256, 2000).tolist()))
 
-print("block  entries  allocated  tail-waste")
-for block_tokens in [1, 8, 16, 32, 64]:
-    entries = sum(ceil(length / block_tokens) for length in lengths)
-    allocated = entries * block_tokens
-    waste = allocated - sum(lengths)
-    print(f"{block_tokens:>5}  {entries:>7}  {allocated:>9}  {waste:>10}")
+def first_fit(used, need):
+    edges = np.diff(np.concatenate(([0], (~used).astype(int), [0])))
+    starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+    fits = np.flatnonzero(ends - starts >= need)
+    return starts[fits[0]] if len(fits) else None
 
-contiguous = len(lengths) * declared_max
-print("contiguous max-reservation slots:", contiguous)
+def run(B):
+    """B = None: reserve prompt + cap contiguously, first fit; else B-token blocks on demand."""
+    queue, running, used = list(jobs), [], np.zeros(P, bool)
+    batch, share, frag, preempt = [], [], 0, 0
+    for t in range(steps):
+        while queue:                                  # admit in arrival order
+            p, o = queue[0]
+            held = p + cap if B is None else -(-(p + 1) // B) * B
+            a = first_fit(used, held) if B is None else None
+            if B is None and a is None:
+                frag += (~used).sum() >= held         # enough free tokens, no hole fits
+                break
+            if B and held > P - sum(r[2] for r in running):
+                break
+            if B is None:
+                used[a:a + held] = True
+            running.append([p + 1, o - 1, held, a]); queue.pop(0)   # prefill emits a token
+        for r in list(running):                       # one decode step per request
+            if r not in running:
+                continue                              # preempted earlier in this step
+            if r[1] == 0:
+                running.remove(r)
+                if B is None:
+                    used[r[3]:r[3] + r[2]] = False
+                continue
+            r[0] += 1; r[1] -= 1
+            while B and r[0] > r[2] and r in running and sum(q[2] for q in running) + B > P:
+                v = running.pop(); preempt += 1       # newest request is recomputed later
+                queue.insert(0, (v[0] - 1, v[1] + 1))
+            if B and r[0] > r[2] and r in running:
+                r[2] += B                             # the next token opens a new block
+        live, held = sum(r[0] for r in running), sum(r[2] for r in running)
+        assert all(0 <= r[2] - r[0] < B for r in running) if B else used.sum() == held
+        batch.append(len(running)); share.append((live / P, (held - live) / P))
+    return np.array(batch), np.mean(share, 0), frag, preempt
+
+names = {None: "contiguous max", 16: "paged B=16", 256: "paged B=256"}
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.2), height_ratios=(3, 2))
+for k, B in enumerate(names):
+    batch, (live, idle), frag, preempt = run(B)
+    ax.plot(batch, color=f"C{k}", lw=1.2, label=f"{names[B]}: mean {batch.mean():.1f}")
+    bx.barh(k, live, color=f"C{k}")
+    bx.barh(k, idle, left=live, color=f"C{k}", alpha=0.35)
+    print(f"{names[B]}: {frag} steps blocked by holes, {preempt} preemptions")
+ax.set(xlabel="decode step", ylabel="running requests", title="Batch the same pool sustains")
+bx.set(yticks=range(3), yticklabels=list(names.values()), xlabel="share of pool (mean)", xlim=(0, 1))
+bx.set_title("solid: live KV, pale: held unused", fontsize=10)
+ax.set_ylim(0, 1.5 * ax.get_ylim()[1])
+ax.legend(fontsize=9, loc="upper left")
+bx.invert_yaxis()
+fig.tight_layout()
 ```
 ::::
 
-Larger blocks reduce table entries but can increase tail waste. Neither count
-is a complete performance model. A deployment chooses $B$ using its sequence
+Larger blocks reduce table entries but increase tail waste: with 256-token
+blocks, more than a quarter of the pool is held but unused. Neither count is a
+complete performance model. A deployment chooses $B$ using its sequence
 distribution, cache layout, kernel implementation, and measured latency.
 
 ## Block tables remove the contiguity requirement

@@ -37,28 +37,79 @@ $$
 | 外部碎片 | 大小不一的连续内存段留下空洞，较大的新请求无法利用 | 任何空闲固定块都能满足下一次块申请 |
 | 末块浪费 | 最后一个块没有填满 | 将浪费限制在少于 $B$ 个词元位置 |
 
-下面的可运行示例进行精确的离散记账。四个请求分别保留 `[37, 81, 130, 211]` 个词元，并且都声明最大长度为 256。示例报告不同块大小下分配的词元槽位与末块浪费。它不会把块表条目虚构成运行时成本，这一侧的取舍需要测量内核，也就是在加速器上执行注意力及其他模型运算的编译例程。
+下面的可运行示例在一个 4,096 个词元槽位的内存池上运行 800 个解码步，同时测量这三种浪费。同一批 2,000 个排队请求（提示词 32 到 479 个词元，输出 16 到 255 个词元）按三种方式服务：一种是连续分配器，为每个请求预留提示词加声明上限 `cap`，放进第一个足够大的空洞；另两种是分页分配器，块大小分别为 16 和 256 个词元，下一个词元需要新块时才分配，内存池满时抢占最近接纳的请求，稍后重算。每一步之后，代码都断言分配器的不变量：分页请求的末块浪费始终小于 $B$，连续分配的区段互不重叠。它还统计另一种情形出现的步数：空闲槽位总数足以容纳下一个请求，却没有一个空洞放得下，这就是外部碎片。把 `cap` 提高到 1024，相当于客户端声明了更大的输出上限：连续内存池中的活跃 KV 降到不足五分之一，而分页分配器根本不读取 `cap`。示例不会把块表条目虚构成运行时成本，这一侧的取舍需要测量内核，也就是在加速器上执行注意力及其他模型运算的编译例程。
 
 :::: {.runnable}
 ```python
-from math import ceil
+import numpy as np
+import matplotlib.pyplot as plt
 
-lengths = [37, 81, 130, 211]
-declared_max = 256
+rng = np.random.default_rng(0)
+P, steps = 4096, 800            # 内存池词元槽位数、解码步数
+cap = 256                       # 声明的输出上限；实际输出都短于 256
+jobs = list(zip(rng.integers(32, 480, 2000).tolist(), rng.integers(16, 256, 2000).tolist()))
 
-print("block  entries  allocated  tail-waste")
-for block_tokens in [1, 8, 16, 32, 64]:
-    entries = sum(ceil(length / block_tokens) for length in lengths)
-    allocated = entries * block_tokens
-    waste = allocated - sum(lengths)
-    print(f"{block_tokens:>5}  {entries:>7}  {allocated:>9}  {waste:>10}")
+def first_fit(used, need):
+    edges = np.diff(np.concatenate(([0], (~used).astype(int), [0])))
+    starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+    fits = np.flatnonzero(ends - starts >= need)
+    return starts[fits[0]] if len(fits) else None
 
-contiguous = len(lengths) * declared_max
-print("contiguous max-reservation slots:", contiguous)
+def run(B):
+    """B 为 None：按首次适配连续预留提示词加 cap；否则按需分配 B 个词元的块。"""
+    queue, running, used = list(jobs), [], np.zeros(P, bool)
+    batch, share, frag, preempt = [], [], 0, 0
+    for t in range(steps):
+        while queue:                                  # 按到达顺序接纳
+            p, o = queue[0]
+            held = p + cap if B is None else -(-(p + 1) // B) * B
+            a = first_fit(used, held) if B is None else None
+            if B is None and a is None:
+                frag += (~used).sum() >= held         # 空闲槽位总数足够，却没有放得下的空洞
+                break
+            if B and held > P - sum(r[2] for r in running):
+                break
+            if B is None:
+                used[a:a + held] = True
+            running.append([p + 1, o - 1, held, a]); queue.pop(0)   # 预填充输出一个词元
+        for r in list(running):                       # 每个请求解码一步
+            if r not in running:
+                continue                              # 本步中已被抢占
+            if r[1] == 0:
+                running.remove(r)
+                if B is None:
+                    used[r[3]:r[3] + r[2]] = False
+                continue
+            r[0] += 1; r[1] -= 1
+            while B and r[0] > r[2] and r in running and sum(q[2] for q in running) + B > P:
+                v = running.pop(); preempt += 1       # 最新接纳的请求被抢占，稍后重算
+                queue.insert(0, (v[0] - 1, v[1] + 1))
+            if B and r[0] > r[2] and r in running:
+                r[2] += B                             # 下一个词元需要新块
+        live, held = sum(r[0] for r in running), sum(r[2] for r in running)
+        assert all(0 <= r[2] - r[0] < B for r in running) if B else used.sum() == held
+        batch.append(len(running)); share.append((live / P, (held - live) / P))
+    return np.array(batch), np.mean(share, 0), frag, preempt
+
+names = {None: "连续预留上限", 16: "分页 B=16", 256: "分页 B=256"}
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.2), height_ratios=(3, 2))
+for k, B in enumerate(names):
+    batch, (live, idle), frag, preempt = run(B)
+    ax.plot(batch, color=f"C{k}", lw=1.2, label=f"{names[B]}：均值 {batch.mean():.1f}")
+    bx.barh(k, live, color=f"C{k}")
+    bx.barh(k, idle, left=live, color=f"C{k}", alpha=0.35)
+    print(f"{names[B]}：因空洞受阻 {frag} 步，抢占 {preempt} 次")
+ax.set(xlabel="解码步", ylabel="运行中的请求数", title="同一内存池能维持的批大小")
+bx.set(yticks=range(3), yticklabels=list(names.values()), xlabel="占内存池的比例（均值）", xlim=(0, 1))
+bx.set_title("实色：活跃 KV；浅色：占用未用", fontsize=10)
+ax.set_ylim(0, 1.5 * ax.get_ylim()[1])
+ax.legend(fontsize=9, loc="upper left")
+bx.invert_yaxis()
+fig.tight_layout()
 ```
 ::::
 
-块越大，块表条目越少，但末块浪费可能越多。这两个数字都不是完整的性能模型。部署时应根据序列长度分布、缓存布局、内核实现和实测延迟选择 $B$。
+块越大，块表条目越少，但末块浪费越多：块大小为 256 个词元时，超过四分之一的内存池被占用却没有使用。这两个数字都不是完整的性能模型。部署时应根据序列长度分布、缓存布局、内核实现和实测延迟选择 $B$。
 
 ## 块表消除连续内存要求
 

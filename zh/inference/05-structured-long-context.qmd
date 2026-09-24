@@ -18,34 +18,6 @@ $$
 
 $A(s_t)$ 的定义比“下一个字符合法”更严格。词元只有在消费后至少仍有一个可接受的完整结果可达，才属于这个集合。否则，局部合法的词元可能把解析器带入死路，再也无法形成完整文档。若生成在接受配置中正常结束，正确实现能够保证输出字节串属于所实现的语言；最大词元数停止、取消或引擎故障仍可能留下不完整文档。
 
-下面的可运行示例只演示重新归一化。输入是 logits，即模型给每个词元打的未归一化分数，经 softmax 才变成概率。示例用一个手写的小允许集合代替 JSON 解析器。
-
-:::: {.runnable}
-```python
-from math import exp
-
-def constrained_softmax(logits, allowed):
-    if not allowed:
-        raise ValueError("empty allowed set")
-    peak = max(logits[i] for i in allowed)
-    weights = [exp(logits[i] - peak) if i in allowed else 0.0
-               for i in range(len(logits))]
-    total = sum(weights)
-    return [weight / total for weight in weights]
-
-vocab = ["{", "}", '"', "name", "age", ":", ",", "true", "hello", "42"]
-logits = [2.1, 0.3, 3.0, 1.2, 1.0, 0.5, 0.4, 0.8, 2.5, 1.1]
-allowed = {2}  # Just after "{", this toy state accepts only an opening quote.
-probabilities = constrained_softmax(logits, allowed)
-
-for token, probability in zip(vocab, probabilities):
-    print(f"{token:>6}  {probability:.3f}")
-print("legal mass:", round(sum(probabilities[i] for i in allowed), 3))
-print("illegal mass:", round(sum(probabilities[i] for i in range(len(vocab))
-                                 if i not in allowed), 3))
-```
-::::
-
 ### 解析器处理词元字节
 
 模型输出分词器 ID，语法却定义在字节或 Unicode 码点等字母表上，运行时必须把两者组合起来。对于每个候选词元，运行时取得分词器产生的完整字节串，再判断解析器能否完整消费它。一个词元可能跨过多次语法转移，一个字符的字节序列也可能拆到多个词元中。特殊词元不一定会解码成普通文本，因此需要明确规则。
@@ -70,6 +42,80 @@ JSON Schema 的支持范围又带来一层限制。引擎通常把自己支持�
 消费方仍要再次验证完成的对象，拒绝额外字节、不受支持的 schema 特性、错误字段值、不安全操作和截断输出。约束解码只消除了语法错误这一类故障，其余故障仍由应用验证器和授权层负责。
 
 硬词元掩码也会改变模型的序列分布。上面的局部归一化通常不等于从原模型中按“最终属于语法”这一条件采样，因为它没有考虑每个前缀之后还剩多少有效概率质量。Grammar-Aligned Decoding 形式化了这项差别，并报告了普通语法约束解码虽然生成有效输出、内容质量却更低的案例 [@park2024grammaraligned]。影响取决于工作负载和模型，因此内容准确率与解析成功率都要比较。
+
+下面的可运行示例在一个小到可以穷举的文法上验证这两点：长度至多 `N = 6` 个字符的配对括号串，词表由 `()`、`((` 这类一到两个字符的词元组成，语言模型是这些词元上的随机二元模型。解析器逐字符消费每个词元；开启 `lookahead` 时，如果某个词元留下的未闭合括号多于剩余长度能闭合的数量，解析器也会拒绝它，这正是 $A(s_t)$ 中的可达性条件。代码遍历掩码解码器的每一条路径，得到它精确的字符串分布 $p_G$；再用同一个解码器采样 4,000 次，断言每个样本都能通过解析、样本频率与 $p_G$ 一致；最后把 $p_G$ 与以文法为条件的模型分布 $p(x)\mathbf 1[x\in L]/\sum_{y\in L}p(y)$ 比较。两者都只输出合法字符串，但掩码解码器把大部分概率质量放在较长的字符串上，而模型自己很少会生成完这些字符串，因为逐步重新归一化看不到它所选前缀之后还剩多少有效概率质量。把 `lookahead` 设为 `False`，$A(s_t)$ 就只检查接下来的字符：解码器会走入死路，即没有合法后续的合法前缀，代码会打印出现这种情况的概率。
+
+:::: {.runnable}
+```python
+import random
+from collections import Counter, defaultdict
+import numpy as np
+import matplotlib.pyplot as plt
+
+vocab = ["(", ")", "()", "))", "((", "<eos>"]
+N = 6                                    # 文法：长度 2 到 N 个字符的配对括号串
+lookahead = True                         # 设为 False 时只检查每个字符当下是否合法
+rng = np.random.default_rng(0)
+logits = rng.normal(0, 1.0, (len(vocab), len(vocab)))
+P = np.exp(logits) / np.exp(logits).sum(1, keepdims=True)   # 二元语言模型：行是前一个词元
+
+def step(state, v):
+    """解析器：从 (深度, 长度) 出发消费词元 v 的字符；不允许时返回 None。"""
+    depth, n = state
+    if vocab[v] == "<eos>":
+        return "accept" if depth == 0 and n > 0 else None
+    for c in vocab[v]:
+        depth, n = depth + (1 if c == "(" else -1), n + 1
+        if depth < 0 or n > N:
+            return None
+    return None if lookahead and depth > N - n else (depth, n)   # 剩余长度还能闭合吗？
+
+target, masked, dead = defaultdict(float), defaultdict(float), [0.0]
+def walk(prev, state, text, p_lm, p_g):  # 精确遍历掩码解码器的每条路径
+    allowed = [v for v in range(len(vocab)) if step(state, v)]
+    if not allowed:
+        dead[0] += p_g; return           # 合法前缀，却没有合法的后续
+    Z = P[prev, allowed].sum()           # 合法概率质量，即归一化因子
+    for v in allowed:
+        nxt = step(state, v)
+        if nxt == "accept":
+            target[text] += p_lm * P[prev, v]; masked[text] += p_g * P[prev, v] / Z
+        else:
+            walk(v, nxt, text + vocab[v], p_lm * P[prev, v], p_g * P[prev, v] / Z)
+walk(len(vocab) - 1, (0, 0), "", 1.0, 1.0)
+
+random.seed(0)
+samples = Counter()
+for _ in range(4000):                    # 同一个解码器，改为采样
+    prev, state, text = len(vocab) - 1, (0, 0), ""
+    while state not in ("accept", None):
+        allowed = [v for v in range(len(vocab)) if step(state, v)]
+        if not allowed:
+            state = None; break
+        prev = random.choices(allowed, weights=P[prev, allowed])[0]
+        state = step(state, prev); text += vocab[prev] * (state != "accept")
+    samples[text if state == "accept" else None] += 1
+for text in samples:
+    assert text is None or (text.count("(") == text.count(")") and all(
+        text[:i].count("(") >= text[:i].count(")") for i in range(len(text))))
+
+strings = sorted(target, key=target.get, reverse=True)
+lm = np.array([target[s] for s in strings]) / sum(target.values())
+g = np.array([masked[s] for s in strings])
+assert abs(g.sum() + dead[0] - 1) < 1e-12 and (dead[0] == 0 or not lookahead)
+assert all(abs(samples[s] / 4000 - masked[s]) < 0.03 for s in strings)
+x = np.arange(len(strings))
+plt.figure(figsize=(5.6, 3.8))
+plt.bar(x - 0.2, lm, 0.4, label="以文法为条件的语言模型")
+plt.bar(x + 0.2, g, 0.4, label="逐词元掩码")
+plt.xticks(x, strings, fontsize=9)
+plt.ylabel("字符串的概率")
+plt.title(f"两者都只输出合法字符串，全变差距离为 {0.5 * abs(lm - g).sum():.2f}")
+plt.legend(fontsize=9)
+print(f"无约束语言模型的输出属于该文法的概率：{sum(target.values()):.3f}；"
+      f"掩码解码器走入死路的概率：{dead[0]:.3f}")
+```
+::::
 
 ## 控制语法执行成本
 

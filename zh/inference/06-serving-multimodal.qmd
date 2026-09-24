@@ -41,7 +41,7 @@ $$
 ```{figure}
 //| figure: fusion-kv-cost
 //| label: fig-mm-input-contracts
-//| fig-cap: "两种融合契约下单个请求的 KV 缓存，按层与位置画成面积，面积即字节数。模型形状取自本章的可运行示例：32 层、8 个宽度为 128 的 KV 头、每个值 2 字节。仅解码器融合在每一层为每个媒体位置保存键和值。交叉注意力融合在每一层保存文本，媒体的键和值只存在交叉注意力层中；这里假设这些层均匀分布，头的形状与自注意力相同。每张图的特征数取自本章的例子：336 像素图像按 14 像素图块切分得到 576 个（LLaVA-1.5），672 像素得到 2,304 个，2 × 2 合并后为 576 个，Flamingo 式重采样器为 64 个。图中不计分隔位置，因此一张 336 像素图像、不带文本时，结果正是可运行示例给出的 72.0 MiB。"
+//| fig-cap: "两种融合契约下单个请求的 KV 缓存，按层与位置画成面积，面积即字节数。模型形状为 32 层、8 个宽度为 128 的 KV 头、每个值 2 字节。仅解码器融合在每一层为每个媒体位置保存键和值。交叉注意力融合在每一层保存文本，媒体的键和值只存在交叉注意力层中；这里假设这些层均匀分布，头的形状与自注意力相同。每张图的特征数取自本章的例子：336 像素图像按 14 像素图块切分得到 576 个（LLaVA-1.5），672 像素得到 2,304 个，2 × 2 合并后为 576 个，Flamingo 式重采样器为 64 个。图中不计分隔位置，因此一张 336 像素图像、不带文本时，结果为 72.0 MiB。"
 media: grid336
 images: 1
 text: 500
@@ -75,28 +75,7 @@ $$
 
 例如，LLaVA-1.5 使用输入为 336 像素的 CLIP ViT-L/14 编码器，这是一种以 14 像素见方的图块为输入单元的大型视觉 Transformer。去掉类别特征后，$24\times24$ 的图块网格会贡献 576 个投影图像位置 [@liu2023llava15]。这是模型特定的结果，并非 CLIP 或 336 像素图像的通用属性。
 
-下面的可运行示例只描述这一种固定网格策略。它假设尺寸能够整除，不含类别位置和分隔位置，不使用切片或合并，并把每个图块都插入语言模型的全部 32 层。示例显式使用分组查询注意力（GQA，多个查询头共用一个缓存的键值头）的头尺寸，并以二进制 MiB 报告结果。
-
-:::: {.runnable}
-```python
-def visual_tokens(width, height, patch=14):
-    if width <= 0 or height <= 0 or patch <= 0:
-        raise ValueError("dimensions and patch must be positive")
-    if width % patch or height % patch:
-        raise ValueError("this fixed-grid example requires divisible dimensions")
-    return (width // patch) * (height // patch)
-
-def kv_mib(tokens, layers=32, n_kv_heads=8, head_dim=128, bytes_per_value=2):
-    if min(tokens, layers, n_kv_heads, head_dim, bytes_per_value) <= 0:
-        raise ValueError("KV dimensions must be positive")
-    kv_bytes = 2 * layers * tokens * n_kv_heads * head_dim * bytes_per_value
-    return kv_bytes / 2**20
-
-for width, height in [(336, 336), (672, 672)]:
-    tokens = visual_tokens(width, height)
-    print(f"{width}x{height}: {tokens:4d} visual tokens, {kv_mib(tokens):5.1f} MiB KV")
-```
-::::
+在这种固定网格策略下，如果不含类别位置和分隔位置，并把每个图块都插入语言模型的全部 32 层，而该模型每层缓存 8 个 128 维的键值头、每个值占 2 字节（分组查询注意力，即 GQA，多个查询头共用一个缓存的键值头），那么一张 336 像素图像会占用 72.0 MiB 的 KV 缓存。672 像素图像有 2,304 个图块，占用 288.0 MiB。@fig-mm-input-contracts 画出的正是这笔账。
 
 真实系统会用多种机制改变这个数量：
 
@@ -125,6 +104,62 @@ for width, height in [(336, 336), (672, 672)]:
 2. 语言侧按总预填充与 KV 需求组批。系统必须按投影词元数与输出词元上限预留足够缓存，也可以把很长的多模态预填充分块，避免它长期独占引擎。
 
 编码器与语言模型使用独立队列，可以暴露各自的积压情况，还能让接纳控制与公平策略阻止一波高分辨率请求为短文本或小图请求造成队首阻塞。生产流量通常呈长尾并带有突发性，平均值会掩盖决定尾延迟的那些请求 [@qiu2025modserve]。
+
+下面的可运行示例在一块加速器上模拟这种队首阻塞，流量持续十秒：200 个文本请求，每个预填充 20 毫秒；20 个图像请求，编码器与预填充的工作量服从长尾分布，其中 12 个集中在第 2 秒到第 3 秒之间突发到达。同一条请求序列服务两次：一次只用一个先进先出队列，每个请求一直运行到完成；另一次把文本和图像分成两个队列，文本优先，图像工作按 25 毫秒切片运行。两种策略只要有待处理的工作就不会让加速器空闲，所以代码断言它们在同一时刻处理完整条序列：分开队列只是在请求类别之间转移等待时间，并没有消除等待。把 `chunk` 设为 `1e9`，图像工作不再切片，文本请求就要排在单个图像后面，但不必等整波突发处理完。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+horizon = 10000.0                                    # 流量持续的毫秒数
+text = rng.uniform(0, horizon, 200)                  # 短文本请求，每个预填充 20 毫秒
+image = np.concatenate([rng.uniform(0, horizon, 8),  # 平稳的图像流量
+                        rng.uniform(2000, 3000, 12)])   # 一波高分辨率图像突发
+work = 40 + rng.lognormal(np.log(120), 0.6, len(image))  # 编码器加预填充，毫秒
+jobs = sorted([(a, 20.0, 0) for a in text] + [(a, w, 1) for a, w in zip(image, work)])
+chunk = 25.0                                         # 每个调度时间片内的图像工作量，毫秒
+
+def serve(two_queues):
+    """一块加速器。False：单个先进先出队列，每个请求一直运行到完成。
+    True：文本与图像两个队列；文本优先，图像工作按 chunk 切片运行。"""
+    t, i, queues = 0.0, 0, ([], [])
+    left, done = [w for _, w, _ in jobs], np.zeros(len(jobs))
+    while i < len(jobs) or queues[0] or queues[1]:
+        while i < len(jobs) and jobs[i][0] <= t:
+            queues[jobs[i][2] if two_queues else 0].append(i); i += 1
+        if not (queues[0] or queues[1]):
+            t = jobs[i][0]; continue                 # 空闲，直到下一个请求到达
+        q = queues[0] or queues[1]
+        j = q[0]
+        run = min(chunk, left[j]) if two_queues and jobs[j][2] else left[j]
+        t += run; left[j] -= run
+        if left[j] <= 1e-9:
+            done[j] = t; q.pop(0)
+    return done
+
+arrive, kind = np.array([a for a, _, _ in jobs]), np.array([c for _, _, c in jobs])
+fig, axes = plt.subplots(2, 1, figsize=(5.6, 5.4), sharex=True)
+names = {False: "单个先进先出队列", True: "文本与图像分队列"}
+for k, two in enumerate([False, True]):
+    ttft = serve(two) - arrive
+    for ax, c in zip(axes, (0, 1)):
+        ax.semilogy(arrive[kind == c] / 1000, ttft[kind == c], ".", ms=4, color=f"C{k}",
+                    label=names[two])
+    print(f"{names[two]}：p95 TTFT 文本 {np.percentile(ttft[kind == 0], 95):.0f} 毫秒，"
+          f"图像 {np.percentile(ttft[kind == 1], 95):.0f} 毫秒")
+last = [serve(two).max() for two in (False, True)]
+assert abs(last[0] - last[1]) < 1e-6               # 工作量相同，完成时刻相同：等待只是被转移
+for ax, label in zip(axes, ("文本 TTFT（毫秒）", "图像 TTFT（毫秒）")):
+    ax.axvspan(2, 3, color="gray", alpha=0.15, lw=0)
+    ax.set_ylabel(label)
+axes[0].set_title("图像突发（灰色）只在共用队列时拖慢文本请求")
+axes[1].legend(fontsize=9, loc="upper left")
+axes[1].set_xlabel("到达时间（秒）")
+fig.tight_layout()
+```
+::::
 
 同机部署可以让媒体特征留在同一块加速器上，避免网络传输，但编码器工作可能干扰预填充与解码。拆分部署让编码器副本独立扩缩容，也能保护语言层不受模态流量突发影响；代价是特征张量必须跨越另一道服务边界进行序列化、传输、路由与失效处理。传输量会随特征数量和宽度增长，容量不足的编码器池或网络就会成为新的队列。
 
@@ -182,28 +217,54 @@ $$
 
 其中，$H$ 与 $W$ 是输出像素尺寸，$f_h$ 与 $f_w$ 是自编码器的空间压缩系数，$p_h$ 与 $p_w$ 是去噪器的潜变量图块尺寸，$N_z$ 是每次去噪器求值处理的潜变量词元数。视频在时间压缩和图块化后还要乘上时间项。稠密全局注意力可能引入 $N_z$ 的二次项，局部、分解式或稀疏注意力则会改变这一项。
 
-下面的可运行示例为一张 1024 像素正方形图像计算词元遍历代理量（潜变量词元数乘以去噪器求值次数），假设每个空间轴压缩 8 倍、潜变量图块为 $2\times2$，并使用两个引导分支。它不是 FLOPs 估算，因为没有计入注意力形状、模型宽度、固定阶段、通信、稀疏性、组批和利用率。
+下面的可运行示例把这个公式的成本一侧视为已知：一张 1024 像素正方形图像，潜空间每个空间轴压缩 8 倍，潜变量图块为 $2\times2$，使用两个引导分支；它要测量的是去噪器求值次数能换来什么。示例用精确的流匹配速度场对一个二维高斯混合分布采样，因此误差只来自求解器；它用欧拉法和二阶的 Heun 法对同一组噪声积分，步数从 1 到 128，并以词元遍历次数（潜变量词元数乘以求值次数和分支数）标出 4 次和 50 次求值两个预算。代码断言两种求解器的误差按各自的精度阶下降：欧拉法的误差与求值次数成反比，Heun 法的误差与求值次数的平方成反比。在 50 次求值时，二阶求解器准确得多；在 4 次求值时，两者误差相同，而且都离精确终点很远，所以少步部署需要专门为此训练的模型。这个代理量没有计入注意力形状、模型宽度、固定阶段、通信、稀疏性、组批和利用率。把 `sig` 设为 0.15，让各个模态变窄：在 4 次求值时，欧拉法反而胜过 Heun 法，因为后者的 4 次求值只够走两步。
 
 :::: {.runnable}
 ```python
-def latent_tokens(width, height, compression=8, patch=2):
-    if min(width, height, compression, patch) <= 0:
-        raise ValueError("all dimensions must be positive")
-    stride = compression * patch
-    return ((width + stride - 1) // stride) * ((height + stride - 1) // stride)
+import numpy as np
+import matplotlib.pyplot as plt
 
-def token_pass_proxy(tokens, steps, guidance_branches=2):
-    if min(tokens, steps, guidance_branches) <= 0:
-        raise ValueError("tokens, steps, and branches must be positive")
-    return tokens * steps * guidance_branches
+tokens = (1024 // (8 * 2)) ** 2            # 1024 像素正方形，潜空间 8 倍压缩，2x2 潜变量图块
+branches = 2                               # 有条件与无条件两路引导
+mu = np.array([[-2.0, 0.0], [2.0, 1.0], [0.0, -2.5]])     # 用二维数据代替真实数据
+w, sig = np.array([0.5, 0.3, 0.2]), 0.35
 
-tokens = latent_tokens(1024, 1024)
-base = token_pass_proxy(tokens, 50)
-fast = token_pass_proxy(tokens, 4)
-print(f"latent tokens: {tokens}")
-print(f"50-step proxy: {base} token-passes")
-print(f" 4-step proxy: {fast} token-passes")
-print(f"denoiser-only ratio: {base / fast:.1f}x")
+def velocity(x, t):
+    """x_t = (1 - t) x_0 + t x_1、x_0 ~ N(0, I) 时的精确流匹配速度场。"""
+    var = (1 - t) ** 2 + (t * sig) ** 2
+    d = x[:, None, :] - t * mu
+    logr = np.log(w) - (d ** 2).sum(-1) / (2 * var)
+    r = np.exp(logr - logr.max(1, keepdims=True))
+    r /= r.sum(1, keepdims=True)           # 各混合分量的后验
+    return (r[..., None] * (mu + (t * sig**2 - (1 - t)) / var * d)).sum(1)
+
+def sample(x, steps, heun):
+    h = 1.0 / steps
+    for i in range(steps):
+        k1 = velocity(x, i * h)
+        x = x + h / 2 * (k1 + velocity(x + h * k1, (i + 1) * h)) if heun else x + h * k1
+    return x
+
+x0 = np.random.default_rng(0).normal(size=(1000, 2))
+exact = sample(x0, 1000, heun=True)        # 同一个常微分方程的参考终点
+steps = np.array([1, 2, 4, 8, 16, 32, 64, 128])
+plt.figure(figsize=(5.6, 4.2))
+for k, (heun, name) in enumerate([(False, "欧拉法，每步 1 次求值"),
+                                   (True, "Heun 法，每步 2 次求值")]):
+    nfe = steps * (2 if heun else 1)
+    err = [np.linalg.norm(sample(x0, s, heun) - exact, axis=1).mean() for s in steps]
+    order = -np.polyfit(np.log(nfe[-4:]), np.log(err[-4:]), 1)[0]
+    assert abs(order - (2 if heun else 1)) < 0.3   # 求解器的精度阶
+    plt.loglog(nfe, err, "o-", ms=3, color=f"C{k}", label=f"{name}：{order:.2f} 阶")
+for n in (4, 50):
+    plt.axvline(n, color="gray", ls=":", lw=1)
+    plt.text(n, 0.97, f" {n * tokens * branches:,}\n 次词元遍历", fontsize=8, va="top",
+             transform=plt.gca().get_xaxis_transform())
+plt.xlabel("每个样本的去噪器求值次数")
+plt.ylabel("到精确终点的平均距离")
+plt.title("只剩 4 次求值时，高阶求解器不再占优")
+plt.legend(fontsize=9, loc="lower left")
+print(f"每次求值的潜变量词元数：{tokens}，引导分支：{branches}")
 ```
 ::::
 
