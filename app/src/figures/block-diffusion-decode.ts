@@ -24,8 +24,8 @@ import { defineFigure, type Lang, type State } from "./types.ts";
 import { rng } from "./lib/random.ts";
 import { svg, el, text, g } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
+import { wrapCJK } from "./lib/notation.ts";
 import { legend } from "./lib/legend.ts";
-import { wrap } from "./lib/labels.ts";
 import { int, tpl } from "./lib/format.ts";
 
 export const L = 128;
@@ -200,7 +200,7 @@ function renderLane(ln: Lane, t: number, title: string, w: number, y0: number, p
     : tpl(Lx.running, { t, r: int(ln.rounds), so: int(s.scoredSoFar), s: int(ln.scored), n: int(s.scoredNow![1] - s.scoredNow![0]), c: int(s.cached) });
   const statusSize = narrow ? TYPE.body : TYPE.small;
   let y = y0 + size;
-  for (const line of wrap(status, statusSize, w)) {
+  for (const line of wrapCJK(status, statusSize, w * 0.92)) {
     y += statusSize + 5;
     parts.push(text(0, y, line, { "font-size": statusSize, class: "fig-t-muted fig-t-num" }));
   }
@@ -254,7 +254,7 @@ function renderEquations(p: P, w: number, y0: number, Lx: Lb): { svg: string; h:
   const parts: string[] = [el("line", { x1: 0, x2: w, y1: y0, y2: y0, stroke: C.grid, "stroke-width": 1 })];
   let y = y0 + 2;
   for (const e of eqs) {
-    for (const ln of wrap(e, TYPE.body, w)) {
+    for (const ln of wrapCJK(e, TYPE.body, w * 0.92)) {
       y += 17;
       parts.push(text(0, y, ln, { "font-size": TYPE.body, class: "fig-t-num" }));
     }

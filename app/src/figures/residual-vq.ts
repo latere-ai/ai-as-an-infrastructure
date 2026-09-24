@@ -15,8 +15,9 @@
 import { defineFigure, type Lang, type State } from "./types.ts";
 import { svg, el, text, g } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
+import { wrapCJK } from "./lib/notation.ts";
 import { linear } from "./lib/scale.ts";
-import { textWidth, wrap, placeLabels, drawLabels, type Box, type LabelRequest } from "./lib/labels.ts";
+import { textWidth, placeLabels, drawLabels, type Box, type LabelRequest } from "./lib/labels.ts";
 import { fixed, int, tpl } from "./lib/format.ts";
 
 type V = [number, number];
@@ -199,7 +200,7 @@ function stageText(z: V, j: number, q: number, w: number, x: number, y: number, 
   const size = TYPE.body;
   let yy = y;
   const put = (s: string, cls: string) => {
-    for (const ln of wrap(s, size, w)) {
+    for (const ln of wrapCJK(s, size, w * 0.92)) {
       yy += 16;
       parts.push(text(x, yy, ln, { "font-size": size, class: cls }));
     }
@@ -279,7 +280,7 @@ function render(st: State<P>, lang: Lang): string {
     ]
     : [tpl(Lx.none, { e: fixed(norm(z), 3) })];
   for (const line of lines) {
-    for (const part of wrap(line, TYPE.body, w)) {
+    for (const part of wrapCJK(line, TYPE.body, w * 0.92)) {
       y += 17;
       parts.push(text(0, y, part, { "font-size": TYPE.body, class: "fig-t-num" }));
     }

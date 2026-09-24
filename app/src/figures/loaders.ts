@@ -86,4 +86,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "run-lifecycle": () => import("./run-lifecycle.ts"),
   "block-diffusion-decode": () => import("./block-diffusion-decode.ts"),
   "residual-vq": () => import("./residual-vq.ts"),
+  "voice-first-audio": () => import("./voice-first-audio.ts"),
 };
