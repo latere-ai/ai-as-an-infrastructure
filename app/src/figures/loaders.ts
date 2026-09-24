@@ -45,4 +45,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "divergence-direction": () => import("./divergence-direction.ts"),
   "acceptance-weighting": () => import("./acceptance-weighting.ts"),
   "block-scaling": () => import("./block-scaling.ts"),
+  "horizon-threshold": () => import("./horizon-threshold.ts"),
 };
