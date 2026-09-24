@@ -29,6 +29,17 @@ committed: the commit log already holds that.
   the result.
 - Search opens with the pages read most recently, or starting pages on a
   first visit, and a row of suggested topics.
+- Runnable Python cells show every figure a cell draws, in order, and play a
+  matplotlib animation with the same play, pause, step and scrub controls as
+  the book's figures, with a frame counter. Under reduced motion nothing plays
+  and the step buttons move one frame at a time.
+- The runnable cells of the Orientation and Foundations parts now implement
+  the mechanism of their section, draw the result and check it against a
+  closed form or a second method: an uncertain break-even volume, an exact
+  arithmetic coder, an inverted-file index with its recall, an IsoFLOP scaling
+  study, MinHash on shingled text, a BPE trainer and encoder, cached decoding
+  against full recomputation, an animated expert load-balancing controller, a
+  ring all-reduce, and learning-rate decay separated from a data ramp.
 
 ## v0.8.0 - 2026-09-24
 
