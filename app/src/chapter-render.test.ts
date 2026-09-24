@@ -213,9 +213,7 @@ function sampleOf(masked: string | null, lang: Lang): string | null {
 const knownWideFigures = [
   "en:fig-agent-architectures-react-loop",
   "en:fig-harness-state-machine",
-  "en:fig-orchestration-control-loop",
   "zh:fig-agent-architectures-react-loop",
-  "zh:fig-orchestration-control-loop",
 ];
 
 // Hard-wrapped hyphenated compounds already in the sources, as
