@@ -160,6 +160,7 @@ const labels = {
     stActive: "active", stRetained: "last-known-good", stEmpty: "empty", stDownloading: "downloading {p}", stDownloaded: "downloaded, unverified",
     stVerified: "verified", stTested: "verified, smoke-tested", stRejected: "rejected", stCollected: "free",
     fWeights: "weights", fTokenizer: "tokenizer", fTemplate: "template", fManifest: "manifest",
+    cSize: "size", cDigest: "digest", cSignature: "signature", cManifest: "manifest",
     disk: "Device storage",
     app: "app", free: "free {f} GB",
     need: "a second bundle needs {b} GB",
@@ -195,6 +196,7 @@ const labels = {
     stActive: "活动", stRetained: "上一已知正常版本", stEmpty: "空", stDownloading: "下载中 {p}", stDownloaded: "已下载，未验证",
     stVerified: "已验证", stTested: "已验证，冒烟测试通过", stRejected: "已拒绝", stCollected: "空闲",
     fWeights: "权重", fTokenizer: "分词器", fTemplate: "模板", fManifest: "清单",
+    cSize: "大小", cDigest: "摘要", cSignature: "签名", cManifest: "清单",
     disk: "设备存储",
     app: "应用", free: "空闲 {f} GB",
     need: "第二个制品包需要 {b} GB",
@@ -321,8 +323,8 @@ function renderSlot(i: 0 | 1, s: Snap, x0: number, y0: number, w: number, L: L, 
   const by = y0 + tagH;
   const checks: string[] = [];
   const st = slot.status;
-  if (slot.ver === 2 && (st === "verified" || st === "tested" || st === "active")) checks.push("size ✓", "digest ✓", "signature ✓", "manifest ✓");
-  if (slot.ver === 2 && st === "rejected" && s.failed === "verify") checks.push("size ✓", "digest ✕");
+  if (slot.ver === 2 && (st === "verified" || st === "tested" || st === "active")) checks.push(`${L.cSize} ✓`, `${L.cDigest} ✓`, `${L.cSignature} ✓`, `${L.cManifest} ✓`);
+  if (slot.ver === 2 && st === "rejected" && s.failed === "verify") checks.push(`${L.cSize} ✓`, `${L.cDigest} ✕`);
   if (slot.ver === 2 && (st === "tested" || st === "active")) checks.push(L.sSmoke + " ✓");
   if (slot.ver === 2 && st === "rejected" && s.failed === "observe") checks.push(L.mCrash + " ✕");
   const boxH = checks.length || !narrowSlot ? 92 : 70;
@@ -395,8 +397,9 @@ function renderDisk(s: Snap, w: number, L: L, uid: string, y0: number, sc: Scena
   }
   parts.push(el("rect", { x: x(at), y: barY, width: Math.max(0, w - x(at)), height: barH, fill: C.panel }));
   const freeText = tpl(L.free, { f: fixed(s.free, 1) });
-  parts.push(text(w - 4, barY + 14, freeText, { "font-size": fs, "text-anchor": "end", class: "fig-t-muted fig-t-num" }));
-  let y = barY + barH + 6;
+  const inside = w - x(at) > textWidth(freeText, fs) + 10;
+  parts.push(text(w - 4, inside ? barY + 14 : barY + barH + 15, freeText, { "font-size": fs, "text-anchor": "end", class: "fig-t-muted fig-t-num" }));
+  let y = barY + barH + (inside ? 6 : 22);
   // At the space check, the room a second bundle needs, starting where the free space begins.
   if (s.stage === "space") {
     const x0 = x(at), x1 = x(at + BUNDLE);
