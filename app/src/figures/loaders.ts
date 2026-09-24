@@ -97,4 +97,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "credential-reach": () => import("./credential-reach.ts"),
   "attack-surfaces": () => import("./attack-surfaces.ts"),
   "defense-layers": () => import("./defense-layers.ts"),
+  "many-shot-power-law": () => import("./many-shot-power-law.ts"),
 };
