@@ -26,20 +26,26 @@ ax.plot(B, progress, color=DATA, lw=1.8, zorder=2)
 # speedup = 0.5 of the asymptote).
 ax.axvline(B_noise, color=INK, lw=1.0, ls="--", alpha=0.55, zorder=1)
 ax.scatter([B_noise], [0.5], s=36, color=DATA, zorder=3)
+# Labels stay clear of the dashed knee line: the knee name and the
+# near-linear regime to its left, the diminishing-returns regime to its right
+# and below the curve.
 ax.annotate("noise-scale knee",
-            xy=(B_noise, 0.5), xytext=(B_noise * 2.2, 0.30),
-            color=INK, fontsize=9,
+            xy=(B_noise, 0.5), xytext=(0.62, 0.62),
+            color=INK, fontsize=9, ha="right", va="center",
             arrowprops=dict(arrowstyle="->", color=INK, lw=1.0))
 
 # Label the two regimes.
-ax.text(0.04, 0.86, "near-linear regime\nstep savings scale well",
+ax.text(0.012, 0.96, "near-linear regime\nstep savings scale well",
         color=INK, fontsize=8.5, va="top")
-ax.text(30, 0.68, "diminishing returns\nfewer steps, lower efficiency",
-        color=INK, fontsize=8.5, ha="right", va="top")
+ax.text(1.6, 0.40, "diminishing returns\nfewer steps, lower efficiency",
+        color=INK, fontsize=8, ha="left", va="top")
 
 ax.set_xscale("log")
 ax.set_xlabel("batch size (units of noise scale, log scale)", color=INK)
-ax.set_ylabel("progress per optimizer step (normalized)", color=INK)
+# The quantity is named above the axis rather than along it: a rotated label
+# this long overruns the top of the figure in the reader's font.
+ax.text(0, 1.04, "progress per optimizer step (normalized)", transform=ax.transAxes,
+        color=INK, fontsize=10, ha="left", va="bottom")
 ax.set_ylim(0, 1.02)
 
 for spine in ("top", "right"):
