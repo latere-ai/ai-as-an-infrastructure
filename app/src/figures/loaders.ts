@@ -123,4 +123,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "calibration-reward": () => import("./calibration-reward.ts"),
   "refusal-threshold": () => import("./refusal-threshold.ts"),
   "selection-frontier": () => import("./selection-frontier.ts"),
+  "device-memory-budget": () => import("./device-memory-budget.ts"),
 };
