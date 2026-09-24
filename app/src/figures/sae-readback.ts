@@ -141,9 +141,9 @@ const labels = {
     colFeature: "feature",
     colCos: "best cos",
     colRecall: "recall",
-    recovered: "{n} of 5 recovered with cos ≥ 0.95",
+    recovered: "{n} of 5 recovered: cos ≥ 0.95 and the latent fires",
     recallNote: "recall: share of inputs with aᵢ > 0 on which the best-matching latent fires",
-    describe: "TopK autoencoder with {m} latents, k = {k}, seed {s}, on the toy activations: normalized reconstruction error {e}, {d} dead, {n} of 5 true features recovered with cosine at least 0.95.",
+    describe: "TopK autoencoder with {m} latents, k = {k}, seed {s}, on the toy activations: normalized reconstruction error {e}, {d} dead, {n} of 5 true features recovered with cosine at least 0.95 by a latent that fires.",
   },
   zh: {
     title: "用稀疏自编码器读回玩具模型的激活",
@@ -163,15 +163,17 @@ const labels = {
     colFeature: "特征",
     colCos: "最大余弦",
     colRecall: "召回率",
-    recovered: "5 个特征中有 {n} 个以余弦 ≥ 0.95 恢复",
+    recovered: "5 个特征中有 {n} 个恢复：余弦 ≥ 0.95 且潜变量会激活",
     recallNote: "召回率：在 aᵢ > 0 的输入中，与 vᵢ 最对齐的潜变量激活的比例",
-    describe: "TopK 自编码器，{m} 个潜变量，k = {k}，随机种子 {s}，读回玩具模型的激活：归一化重构误差 {e}，死潜变量 {d} 个，5 个真实特征中有 {n} 个以不低于 0.95 的余弦恢复。",
+    describe: "TopK 自编码器，{m} 个潜变量，k = {k}，随机种子 {s}，读回玩具模型的激活：归一化重构误差 {e}，死潜变量 {d} 个，5 个真实特征中有 {n} 个由会激活的潜变量以不低于 0.95 的余弦恢复。",
   },
 };
 
 type P = { width: number; k: number; seed: number };
 
-function recoveredCount(e: Eval) { return e.best.filter((b) => b.cos >= MATCH).length; }
+// A feature is recovered when its best-matching decoder column is within the
+// cosine threshold and that latent fires on held-out inputs.
+function recoveredCount(e: Eval) { return e.best.filter((b) => b.cos >= MATCH && e.freq[b.latent] > 0).length; }
 
 function describe(st: State<P>, lang: Lang): string {
   const e = evaluate(st.p);
