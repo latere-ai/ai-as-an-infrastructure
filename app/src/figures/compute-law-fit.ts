@@ -30,7 +30,7 @@ import { GRID, POINTS, FITS, type CutoffFit, type FormFit } from "./data/compute
 const labels = {
   en: {
     title: "Two fits of the compute law, inside and outside the measured range",
-    panel: "Lowest loss at each compute budget, and two fits of L(C)",
+    panel: "Estimated lowest loss at each compute budget, and two fits of L(C)",
     xC: "training compute C (FLOP)",
     yL: "loss L (log scale)",
     fitted: "fitted budgets",
@@ -57,7 +57,7 @@ const labels = {
   },
   zh: {
     title: "算力扩展律的两种拟合：测量范围之内与之外",
-    panel: "各算力预算下的最低损失，以及 L(C) 的两种拟合",
+    panel: "各算力预算下估计的最低损失，以及 L(C) 的两种拟合",
     xC: "训练算力 C（FLOP）",
     yL: "损失 L（对数坐标）",
     fitted: "参与拟合的预算",
