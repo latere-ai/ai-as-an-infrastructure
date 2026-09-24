@@ -292,19 +292,6 @@ SPECS = {
         "logx": True,
         "ylim": (0.30, 0.90),
     },
-    "evaluating-agents-1": {
-        "type": "line",
-        "x": [1, 2, 4, 8, 16, 32],
-        "series": [
-            {"label": "unit eval", "y": [0.88, 0.84, 0.76, 0.64, 0.50, 0.38], "color": DATA},
-            {"label": "task eval", "y": [0.80, 0.76, 0.70, 0.62, 0.54, 0.48], "color": ACCENT},
-            {"label": "trajectory eval", "y": [0.62, 0.62, 0.61, 0.60, 0.59, 0.58], "color": WARN},
-        ],
-        "xlabel": "task horizon (steps)",
-        "ylabel": "measured pass rate",
-        "logx": True,
-        "ylim": (0.30, 0.95),
-    },
     "scalable-oversight-control-1": {
         "type": "line",
         "x": [1, 2, 4, 8, 16, 32],
