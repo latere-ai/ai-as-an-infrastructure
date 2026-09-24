@@ -186,14 +186,14 @@ function renderPrecision(m: M, x0: number, y0: number, w: number, titleH: number
   marks.push(el("path", { d: linePath(waldPts), fill: "none", stroke: C.c1, "stroke-width": 2 }));
   // Four times the items: the step from (n, h) to (4n, h/2).
   const xn = x(m.n), yn = y(m.h * 100);
-  let stepAt: [number, number] | null = null;
+  let stepAt: [number, number, number, number] | null = null;
   if (4 * m.n <= N_MAX) {
     const x4 = x(4 * m.n), y4 = y((m.h / 2) * 100);
     const step: Array<[number, number]> = [[xn, yn], [x4, yn], [x4, y4]];
     obstacles.push(...lineObstacles(step));
     marks.push(el("path", { d: linePath(step), fill: "none", stroke: C.ink, "stroke-width": 1.2 }));
     marks.push(el("circle", { cx: x4, cy: y4, r: 3.5, fill: C.c1, stroke: C.paper, "stroke-width": 1.5 }));
-    stepAt = [x4, (yn + y4) / 2];
+    stepAt = [xn, yn, x4, y4];
   }
   marks.push(el("circle", { cx: xn, cy: yn, r: 5, fill: C.c1, stroke: C.paper, "stroke-width": 2 }));
   parts.push(g({ "clip-path": `url(#${clip})` }, ...marks));
@@ -215,12 +215,14 @@ function renderPrecision(m: M, x0: number, y0: number, w: number, titleH: number
     const xs = x(m.nStar);
     place(s, [[xs + 5, bottom - 7, "start"], [xs - 5, bottom - 7, "end"]], "fig-t-halo fig-t-num");
   }
+  if (stepAt) {
+    // Next to the step or not at all: the caption explains an unlabeled step.
+    const [ax, ay, bx, by] = stepAt;
+    const my = (ay + by) / 2;
+    place(Lx.step, [[bx + 7, my + 4, "start"], [bx + 7, by + 18, "start"], [bx - 7, by + 18, "end"], [(ax + bx) / 2, ay - 8, "middle"], [bx + 7, ay - 8, "start"], [ax - 7, ay - 8, "end"]], "fig-t-halo fig-t-soft");
+  }
   const need = tpl(Lx.needed, { h: sig(m.hStar * 100, 3) });
   place(need, [[right - 4, yt - 6, "end"], [right - 4, yt + 16, "end"], [left + 6, yt + 16, "start"], [left + 6, yt - 6, "start"]], "fig-t-halo fig-t-soft");
-  if (stepAt) {
-    const [sx, sy] = stepAt;
-    place(Lx.step, [[sx + 7, sy + 4, "start"], [sx + 7, sy + 22, "start"], [sx - 7, sy + 22, "end"], [sx + 7, sy - 14, "start"], [left + 6, bottom - 26, "start"]], "fig-t-halo fig-t-soft");
-  }
   parts.push(text(left, top - 4, Lx.precY, { "font-size": TYPE.body, class: "fig-t-muted" }));
   return { svg: g({ class: "fig-precision" }, ...parts), h: bottom + axisHeight(true, TYPE.body) - y0 };
 }

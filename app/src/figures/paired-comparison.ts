@@ -217,11 +217,21 @@ function renderIntervals(m: M, x0: number, y0: number, w: number, narrow: boolea
     // Gridlines and tick values.
     const ticks: number[] = [];
     for (let v = Math.ceil(domain[0] / step) * step; v <= domain[1] + 1e-9; v += step) ticks.push(Number(v.toFixed(6)));
-    for (const v of ticks) parts.push(el("line", { x1: x(v), x2: x(v), y1: top, y2: bottom, stroke: C.grid, "stroke-width": 1 }));
+    // Vertical lines. In the phone layout each row's label line sits inside
+    // the plot, so vertical lines break around it instead of crossing the text.
+    const gaps: Array<[number, number]> = narrow
+      ? rows.map((_, k) => { const cy = top + 18 + k * rowGap + rowGap / 2 + 6; return [cy - barH / 2 - 21, cy - barH / 2 - 2] as [number, number]; })
+      : [];
+    const vline = (xv: number, a: Record<string, string | number>) => {
+      let y0 = top;
+      for (const [g0, g1] of gaps) { if (g0 > y0) parts.push(el("line", { x1: xv, x2: xv, y1: y0, y2: g0, ...a })); y0 = g1; }
+      parts.push(el("line", { x1: xv, x2: xv, y1: y0, y2: bottom, ...a }));
+    };
+    for (const v of ticks) vline(x(v), { stroke: C.grid, "stroke-width": 1 });
     if (shade && shade[1] > shade[0]) {
       parts.push(el("rect", { x: x(shade[0]), y: top, width: x(shade[1]) - x(shade[0]), height: bottom - top, fill: C.ink, "fill-opacity": 0.07 }));
     }
-    if (zero) parts.push(el("line", { x1: x(0), x2: x(0), y1: top, y2: bottom, stroke: C.ink2, "stroke-width": 1.2, "stroke-dasharray": "4 3" }));
+    if (zero) vline(x(0), { stroke: C.ink2, "stroke-width": 1.2, "stroke-dasharray": "4 3" });
     // The note over the plot: overlap or gap of the separate intervals.
     if (shadeLabel) {
       const cx = shade ? (x(shade[0]) + x(shade[1])) / 2 : (px0 + px1) / 2;
