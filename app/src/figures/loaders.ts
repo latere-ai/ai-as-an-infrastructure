@@ -127,4 +127,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "hybrid-route": () => import("./hybrid-route.ts"),
   "bundle-slots": () => import("./bundle-slots.ts"),
   "split-leakage": () => import("./split-leakage.ts"),
+  "lease-fencing": () => import("./lease-fencing.ts"),
 };
