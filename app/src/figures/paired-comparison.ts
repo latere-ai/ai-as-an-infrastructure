@@ -112,8 +112,8 @@ const labels = {
     nSeP: "SE paired", fSeP: "√(Var(d) / G)",
     nSeU: "SE ignoring pairs", fSeU: "√((Var(A) + Var(B)) / G)",
     nChi: "McNemar χ²", fChi: "(n₁₀ − n₀₁)² / (n₁₀ + n₀₁)",
-    fNeedP: "items for 80% power, paired",
-    fNeedU: "items for 80% power, ignoring pairs",
+    fNeedP: "items to detect this gain at 80% power, paired",
+    fNeedU: "items to detect this gain at 80% power, ignoring pairs",
     chiNote: "χ² above 3.84: incompatible with zero difference at the 5% level",
     needNote: "items = (1.96 + 0.84)² · Var / δ², δ the gain, with Var(d) paired and Var(A) + Var(B) ignoring pairs",
     describe: "{g} items, A {a}, B {b}, per-item correlation {r}: the separate 95% intervals of A and B {ov}. The interval for B − A runs from {u0} to {u1} pp ignoring the pairs and from {p0} to {p1} pp from the paired differences, which {px} zero. Detecting this gain with 80% power needs {np} items paired and {nu} ignoring the pairs.",
@@ -151,8 +151,8 @@ const labels = {
     nSeP: "配对标准误", fSeP: "√(Var(d) / G)",
     nSeU: "忽略配对的标准误", fSeU: "√((Var(A) + Var(B)) / G)",
     nChi: "McNemar χ²", fChi: "(n₁₀ − n₀₁)² / (n₁₀ + n₀₁)",
-    fNeedP: "80% 功效所需项目数，配对",
-    fNeedU: "80% 功效所需项目数，忽略配对",
+    fNeedP: "以 80% 功效检出此提升所需项目数，配对",
+    fNeedU: "以 80% 功效检出此提升所需项目数，忽略配对",
     chiNote: "χ² 超过 3.84：在 5% 水平上与零差异不相容",
     needNote: "项目数 = (1.96 + 0.84)² · Var / δ²，δ 为提升幅度；配对时 Var 取 Var(d)，忽略配对时取 Var(A) + Var(B)",
     describe: "{g} 个项目，A 的准确率 {a}，B 为 {b}，逐项相关系数 {r}：A 和 B 各自的 95% 区间{ov}。B − A 的区间忽略配对时为 {u0} 到 {u1} 个百分点，由配对差值计算时为 {p0} 到 {p1} 个百分点，{px} 0。要以 80% 功效检出这个提升，配对需要 {np} 个项目，忽略配对需要 {nu} 个。",
@@ -361,7 +361,7 @@ function renderReadout(m: M, x0: number, y0: number, w: number, Lx: L, lang: Lan
     parts.push(el("line", { x1: x0, x2: x0 + w, y1: y, y2: y, stroke: C.grid, "stroke-width": 1 }));
     // "name = formula" on one line when it fits, else the formula on its own line.
     const one = f ? `${n} = ${f}` : n;
-    const fl = textWidth(one, TYPE.body) <= w - valW ? [one] : [n, `= ${f}`];
+    const fl = textWidth(one, TYPE.body) <= w - valW ? [one] : f ? [n, `= ${f}`] : lines(n, TYPE.body, w - valW, lang);
     fl.forEach((ln, i) => parts.push(text(x0 + (i ? 10 : 0), y + 14 + i * 15, ln, { "font-size": TYPE.body, class: "fig-t-num" })));
     parts.push(text(x0 + w, y + 14, v, { "font-size": TYPE.body, "text-anchor": "end", class: strong ? "fig-t-strong fig-t-num" : "fig-t-num" }));
     y += 5 + fl.length * 15;
