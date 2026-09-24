@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.8.0 - 2026-09-24
+
 ### Changed
 
 - The eight Practice chapters regain the concrete material a rewrite in
