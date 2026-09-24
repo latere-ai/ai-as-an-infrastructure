@@ -13,7 +13,7 @@ import { C, TYPE } from "./lib/theme.ts";
 import { textWidth, wrap } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { tpl } from "./lib/format.ts";
-import { tile, tileWidth, flow, showChar, showText, type TileStyle } from "./lib/token-tiles.ts";
+import { tile, tileWidth, labelWidth, flow, showChar, showText, TILE_PAD, type TileStyle } from "./lib/token-tiles.ts";
 import { RECORDS, SAMPLES, type PipeRecord } from "./data/tokenizer-pipeline.ts";
 
 type TokKey = "xlmr" | "llama2" | "qwen25";
@@ -228,16 +228,31 @@ function render(st: State<P>, lang: Lang): string {
   // ---- boundary rules: the pretokens, control spans marked
   const controlWords = new Set(r.t.filter((t) => t[5] === K.control).map((t) => t[4]));
   stage(L.sBound, `${info.bound[lang]}; ${tpl(L.pretokens, { n: r.p.length })}`, (y0) => {
-    const labs = r.p.map(showText);
-    const ws = labs.map((l) => tileWidth(l, fs, 18));
-    const lay = flow(ws, cw, 6);
-    const th = 22;
-    labs.forEach((l, i) => {
+    // A pretoken wider than the column (a whole SentencePiece input) wraps
+    // inside one tall tile.
+    const chunks = r.p.map((pt) => {
+      const lines: string[] = [];
+      let line = "";
+      for (const ch of [...showText(pt)]) {
+        if (line && labelWidth(line + ch, fs) + 2 * TILE_PAD > cw) { lines.push(line); line = ""; }
+        line += ch;
+      }
+      lines.push(line);
+      return lines;
+    });
+    const ws = chunks.map((lines) => Math.min(cw, Math.max(...lines.map((l) => tileWidth(l, fs, 18)))));
+    let x0 = 0, yy = y0, rowH = 0;
+    chunks.forEach((lines, i) => {
+      const th = 22 + (lines.length - 1) * 16;
+      if (x0 > 0 && x0 + ws[i] > cw) { x0 = 0; yy += rowH + 6; rowH = 0; }
       const s = controlWords.has(i) ? STYLE.control : {};
       if (controlWords.has(i)) used.add("control");
-      parts.push(tile(cx + lay.at[i].x, y0 + lay.at[i].row * (th + 6), ws[i], th, l, fs, s));
+      parts.push(tile(cx + x0, yy, ws[i], th, "", fs, s));
+      lines.forEach((l, j) => parts.push(text(cx + x0 + (lines.length > 1 ? TILE_PAD : ws[i] / 2), yy + 15 + j * 16, l, { "font-size": fs, "text-anchor": lines.length > 1 ? "start" : "middle" })));
+      x0 += ws[i] + 6;
+      rowH = Math.max(rowH, th);
     });
-    return y0 + lay.rows * (th + 6) - 6;
+    return yy + rowH;
   });
 
   // ---- segmentation and ids: piece, id, offsets per tile, grouped by pretoken

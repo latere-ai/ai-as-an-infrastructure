@@ -48,7 +48,7 @@ const labels = {
     logits: "Output projection: V·d = {f} multiply-adds per position",
     colTable: "merge table",
     colHead: "Tokens per 1,000 UTF-8 bytes at V, and the change from V/2",
-    ends: "ends at {v}",
+    ends: "{t} at its full {v}",
     same: "= GPT-4 below {v}",
     describe: "At V = {v}, English takes {en} tokens per 1,000 bytes and Chinese {zh} across the tables that reach V. P_token = {p} parameters, {s} of {m}.",
     range: "{lo} to {hi}",
@@ -70,7 +70,7 @@ const labels = {
     logits: "输出投影：每个位置 V·d = {f} 次乘加",
     colTable: "合并表",
     colHead: "V 处每 1,000 个 UTF-8 字节的词元数，括号内为相对 V/2 的变化",
-    ends: "最大 {v}",
+    ends: "{t}，满规模 {v}",
     same: "{v} 以下同 GPT-4",
     describe: "V = {v} 时，在能达到该规模的合并表中，英文每 1,000 字节需要 {en} 个词元，中文需要 {zh} 个。P_token = {p} 个参数，占 {m} 的 {s}。",
     range: "{lo} 至 {hi}",
@@ -273,7 +273,7 @@ function render(st: State<P>, lang: Lang): string {
     }
     const cell = (t: Text, x0: number) => {
       const v = tokensAt(f.key, t, V);
-      if (v === null) return text(x0, y, tpl(L.ends, { v: int(f.size) }), { "font-size": TYPE.body, class: "fig-t-faint fig-t-num" });
+      if (v === null) return text(x0, y, tpl(L.ends, { t: int(SWEEP[f.key][t][SWEEP[f.key][t].length - 1]), v: int(f.size) }), { "font-size": TYPE.body, class: "fig-t-faint fig-t-num" });
       const half = V / 2 >= V_MIN ? tokensAt(f.key, t, V / 2) : null;
       const ch = half ? `${v / half - 1 < 0 ? "−" : "+"}${Math.abs((v / half - 1) * 100).toFixed(0)}%` : "";
       return text(x0, y, `${int(v)}${ch ? ` (${ch})` : ""}`, { "font-size": TYPE.body, class: "fig-t-num" });
@@ -292,11 +292,6 @@ export default defineFigure({
   params: {
     V: {
       kind: "range", scale: "log", label: { en: "Vocabulary size V", zh: "词表规模 V" }, min: V_MIN, max: V_MAX, default: 32000,
-      marks: [
-        { value: 32000, label: { en: "Llama 2", zh: "Llama 2" } },
-        { value: 128256, label: { en: "Llama 3", zh: "Llama 3" } },
-        { value: 262144, label: { en: "Gemma 3", zh: "Gemma 3" } },
-      ],
     },
     model: {
       kind: "choice", control: "select", label: { en: "Checkpoint", zh: "检查点" }, default: "qwen25_05b",

@@ -271,7 +271,8 @@ function render(st: State<P>, lang: Lang): string {
       : tpl(L.sampleBest, { a: fixed(p.alpha, 2), q: pct(samp(q), 1), r: pct(1 - samp(q), 1) }),
   ];
   for (const [i, line] of lines.entries()) {
-    for (const part of wrapT(line, w)) {
+    // Bold runs wider than the width estimate, so the first line wraps early.
+    for (const part of wrapT(line, i === 0 ? w * 0.9 : w)) {
       parts.push(text(0, y, part, { "font-size": fs, class: i === 0 ? "fig-t-num fig-t-strong" : "fig-t-muted" }));
       y += 17;
     }

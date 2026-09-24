@@ -22,9 +22,10 @@ export function showChar(ch: string): string {
   return STAND_IN[ch] ?? ch;
 }
 
-// A piece's label: each character through showChar.
+// A piece's label: each character through showChar, except inside ⟨…⟩,
+// which holds raw bytes in hex and is kept as written.
 export function showText(s: string): string {
-  return [...s].map(showChar).join("");
+  return s.split(/(⟨[^⟩]*⟩)/).map((part) => (part.startsWith("⟨") ? part : [...part].map(showChar).join(""))).join("");
 }
 
 export interface TileStyle {
@@ -47,7 +48,7 @@ export function labelWidth(s: string, size: number): number {
     const c = ch.codePointAt(0)!;
     if (c >= 0x300 && c <= 0x36f) continue;
     if (c >= 0x1f000 || (c >= 0x2600 && c <= 0x27bf)) px += 1.3 * size;
-    else if (ch === "▁") px += 0.8 * size;
+    else if (ch === "▁") px += 1.0 * size;
     else if (ch === "⏎" || ch === "⇥" || ch === "◌") px += 0.9 * size;
     else if (ch === "␣") px += 0.65 * size;
     else if (ch === "⟨" || ch === "⟩") px += 0.4 * size;
