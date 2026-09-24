@@ -305,6 +305,12 @@ export default defineFigure({
     span: { kind: "range", label: { en: "Evidence span e", zh: "证据片段长度 e" }, unit: { en: "tokens", zh: "个词元" }, min: 8, max: 192, step: 1, default: 48 },
     start: { kind: "range", label: { en: "Span starts at token", zh: "片段起始词元" }, min: 0, max: L_DOC - 8, step: 1, default: 232 },
   },
+  // The span cannot run past the document end: a longer span or a later start
+  // moves the start back so the control shows the position drawn.
+  update(p, key) {
+    if (key === "span" || key === "start") return { ...p, start: Math.min(p.start, L_DOC - p.span) };
+    return p;
+  },
   render,
   describe,
 });
