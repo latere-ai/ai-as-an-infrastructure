@@ -89,6 +89,23 @@ workflow's external work: completed activities are not rerun during replay, but 
 activity that did not report completion may be retried and execute more than once
 [@temporal2026activity].
 
+A plain append-only log of messages, model responses, tool calls, and tool results
+gives clean replay and audit, but it cannot tell those two histories apart and does
+not say where to resume. Durable-execution engines add the step boundary: each step
+is journaled before it runs and its outcome after, so recovery resumes at the last
+completed step. In an agent loop, each model call and each tool call becomes such a
+step, and a crashed loop resumes after its last completed call instead of starting
+the task again [@ewen2025durable].
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Temporal, Restate, and Inngest offer durable steps as workflow engines. AWS Lambda
+durable functions, Cloudflare Workflows (generally available), and Vercel's Workflow
+DevKit brought the same model to serverless platforms during 2025, and Inngest
+attributes that adoption mainly to AI agents [@poly2026durable].
+:::
+
 ```{figure}
 //| figure: effect-crash-recovery
 //| label: fig-memory-unknown-effect
@@ -175,6 +192,55 @@ period must exceed the maximum replay and retry lifetime. The provider's lookup 
 mutation must share the same deduplication record; otherwise the lookup followed by
 the mutation creates another check-then-act race.
 
+The cell below simulates that race. A retry timer or an expired lease starts a second
+attempt while the first is still in flight; each attempt looks up the key, finds
+nothing, and applies. Two attempts starting uniformly within a retry window collide
+when their lookups are closer than the lookup-to-commit delay $d$, a fraction of the
+window, so the expected ticket count is $2-(1-d)^2$; the cell checks its simulation
+against that closed form. The atomic receiver differs in one line: it checks the key
+when the apply arrives. Change the attempt counts `(2, 4, 8)` to see duplicates grow
+with $n$ at a fixed delay. The crash-point figure above varies where one worker
+fails; the cell varies how many attempts overlap.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+trials = 20000
+d = np.linspace(0, 0.5, 26)  # lookup-to-commit delay, as a fraction of the retry window
+
+def tickets(n, delay, atomic):
+    """Tickets created when n attempts at one step race; lookups start uniformly in the window."""
+    lookups = np.sort(rng.uniform(0, 1, (trials, n)), axis=1)
+    visible_at = np.full(trials, np.inf)  # when the receiver first holds a ticket for the key
+    created = np.zeros(trials, int)
+    for k in range(n):  # attempts in lookup order
+        check = lookups[:, k] + (delay if atomic else 0)  # atomic: checked when the apply arrives
+        new = check < visible_at
+        created += new
+        visible_at = np.where(new, np.minimum(visible_at, lookups[:, k] + delay), visible_at)
+    return created
+
+fig, ax = plt.subplots(figsize=(6.4, 3.8))
+for n in (2, 4, 8):
+    mean = np.array([tickets(n, x, atomic=False).mean() for x in d])
+    ax.plot(d, mean, "o-", ms=3, label=f"lookup, then apply: {n} attempts")
+    assert all((tickets(n, x, atomic=True) == 1).all() for x in d)
+    if n == 2:
+        exact = 2 - (1 - d) ** 2  # two attempts collide when their lookups are closer than d
+        assert np.abs(mean - exact).max() < 0.02, "simulation disagrees with 2 - (1 - d)^2"
+        ax.plot(d, exact, "k--", lw=1, label="closed form, 2 attempts")
+ax.axhline(1, color="0.4", lw=2, label="atomic keyed apply, any n")
+ax.set_xlabel("lookup-to-commit delay / retry window")
+ax.set_ylabel("tickets per recovered step")
+ax.set_title(f"A 10% delay duplicates {1 - 0.9**2:.0%} of two-attempt recoveries")
+ax.legend(fontsize=8, frameon=False)
+plt.show()
+```
+::::
+
 When the receiver has no keyed interface, recovery needs evidence from its own
 system of record: search for the expected ticket, compare a Git reference, reconcile
 an account ledger, or ask an operator. Compensation can undo some committed effects,
@@ -189,6 +255,22 @@ database, calls a service, and writes a file may repeat a partially completed
 sequence. Finer steps isolate retries and store more intermediate results, but
 increase history size and coordination. Choose a boundary at the smallest unit whose retry semantics can be
 stated and tested.
+
+### Files as the task record
+
+Some long-running coding harnesses keep the record of task state in the workspace
+itself. Anthropic's harness for multi-session coding work keeps a progress
+file, a JSON feature list, an initialization script, and descriptive Git commits;
+each fresh context window starts by reading the Git log and the progress file, then
+picks the highest-priority unfinished feature [@anthropic2025harnesses]. For anything
+the filesystem can represent, the two histories of an unfinished step collapse into
+one observable fact: the file holds the new content or it does not, and the commit
+exists or it does not. The ambiguity moves to what the filesystem cannot represent.
+A `git push`, a ticket update, or a payment leaves only a line in the progress file,
+and a line written before the effect has the same two possible histories as a
+scheduled step without a result. The record is also only as accurate as the agent's
+bookkeeping, which is why that harness has the agent mark a feature complete only
+after end-to-end testing.
 
 ## A checkpoint must bind related state
 
@@ -228,6 +310,29 @@ among divergent outcomes is a product policy and sometimes a human decision.
 LangGraph's documented time-travel feature illustrates the distinction: replay re-executes work after a checkpoint,
 whereas a fork creates a new checkpoint branch without modifying the original
 history [@langchain2025timetravel].
+
+Coding agents expose rewind and fork directly, and their documented limits show
+which parts of the bundle a product checkpoint binds.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Claude Code creates a checkpoint at each user prompt, and its rewind menu restores
+code, conversation, or both; `/branch` or `claude --continue --fork-session` forks
+the session and leaves the original intact. Its checkpoints track only edits made
+through its file-editing tools: files changed by shell commands, by most subagents,
+or outside the session are not restored [@anthropic2025checkpointing]. Cursor keeps
+local checkpoints of the files its agent modified, separate from Git; restoring one
+reverts files and leaves the conversation as it is, and terminal commands are not
+captured [@cursor2025checkpoints].
+:::
+
+A checkpoint that snapshots only the tool's own file edits binds $w_k$ for those
+files and nothing else, so a file deleted by a shell command or a branch pushed to a
+remote survives the rewind. Rewind alone covers interactive editing. A forkable tree
+pays off when a user explores alternatives in parallel or an evaluation replays a
+session with a changed prompt, and every abandoned branch keeps its workspace and
+history storage until a TTL reclaims it.
 
 ```{dot}
 //| label: fig-memory-fork-bundle
@@ -283,6 +388,13 @@ differently. A design review should name the actual CSI driver, StorageClass,
 topology constraints, retention policy, and restore path rather than reasoning from
 the PVC label alone.
 
+The order of teardown steps matters as much as the policies. A workspace that syncs
+its contents to durable storage only when it stops loses whatever the final sync
+misses. In one reported Gitpod case, a workspace timed out while its user was away,
+its Pod was terminating before the contents reached the storage backend, and the
+user found about two hours of edits gone on reopening [@gitpod2022data]. A timeout,
+scale-down, or eviction path therefore needs the same restore test as a crash.
+
 ### Snapshot cadence and the recovery point bound
 
 Suppose instantaneous snapshots occur every $\Delta$ minutes and a crash is equally
@@ -316,7 +428,13 @@ created” event is not proof of recoverability.
 Cloning cost also depends on the storage backend. Kubernetes supports PVC cloning through
 compatible CSI drivers, but the API does not promise a particular copy algorithm or
 latency [@kubernetes2023cloning]. Btrfs snapshots initially share a root and isolate
-later changes through copy-on-write [@btrfs2026design]. File-level overlay systems,
+later changes through copy-on-write [@btrfs2026design]. Replit's snapshot engine,
+described in December 2025, is a production example at the block level: filesystems
+are stored as immutable 16 MiB chunks in object storage and addressed through a
+manifest, so copying a disk copies the manifest in constant time regardless of its
+size. Its checkpoints bind the Git commit, the development database, and the agent's
+progress together, a shipped instance of the bundle $C_k$ [@replit2025snapshot].
+File-level overlay systems,
 block-level copy-on-write filesystems, content-addressed manifests, and full copies
 have different copy-up and retention costs; “copy-on-write” alone is not a complete
 performance model.
@@ -351,7 +469,12 @@ retrieved records for later planning [@park2023generative]. MemGPT treated a bou
 context window and external storage as tiers managed through explicit movement
 between them [@packer2023memgpt]. Neither establishes one mandatory store. Logs,
 tables, files, summaries, graphs, lexical indexes, vector indexes, and hybrids can
-all implement parts of the loop.
+all implement parts of the loop. Memory services package these mechanisms with a
+write policy: Letta grew out of MemGPT [@letta2025stateful], Zep stores facts in a
+temporal knowledge graph whose edges carry validity intervals, so a superseded fact
+is invalidated instead of overwritten [@rasmussen2025zep], and Mem0 extracts salient
+facts from each exchange and consolidates them against what it already holds
+[@mem02025memory].
 
 The familiar labels *episodic*, *semantic*, and *procedural* are useful analogies for
 events, facts, and learned ways of acting, but they are not mutually exclusive
@@ -373,6 +496,30 @@ who owns the corpus. A RAG corpus can be private and mutable; a memory store can
 shared and read-only. The two differ in lifecycle: memory is normally updated as the
 agent interacts, while an external corpus may have a separate ingestion owner.
 @sec-rag-retrieval treats retrieval itself in depth.
+
+### Memory as files
+
+A widely used representation skips the index and stores memory as plain files that
+the agent reads and edits with ordinary tools. Anthropic's memory tool gives the
+model a `/memories` directory and six commands to view, create, replace text in,
+insert into, delete, and rename files. The application executes every operation
+against storage it controls, maps the `/memories` prefix onto a per-user directory
+or database keys, and must reject paths that escape the prefix
+[@anthropic2025memorytool]. Instruction files that coding agents load at startup,
+such as `AGENTS.md`, apply the same idea with a human as the main writer. Recall
+becomes a read or a text search chosen by the model instead of a similarity query,
+and curation becomes the model's own editing instead of a service's write policy.
+
+The representation moves several trade-offs. Memory preloaded into every prompt is
+simple and costs tokens on every turn; memory exposed as a tool costs tokens only
+when used but depends on the model knowing when to look. An embedding index ties the
+store to its embedding model: vectors from different models are not comparable, so
+replacing the model means re-embedding every record, a planned migration for a large
+store (@sec-embeddings). File memory carries no such commitment, and
+a per-scope directory can be inspected, exported, and deleted as a unit. Its recall
+reaches only what the agent chose to write down and chose to read back, and its
+records carry provenance and validity only if the write policy puts them in the
+file.
 
 ### Records need provenance and time
 
@@ -466,12 +613,19 @@ tenant label is not an authenticated principal. PostgreSQL row-level security, f
 example, can restrict normal reads and writes, but table owners, superusers, and
 roles with `BYPASSRLS` require deliberate treatment and tests [@postgresql2026rls].
 The security property is zero unauthorized candidates, a requirement that a relevance
-score does not measure.
+score does not measure. The enforcement points fail differently. A per-tenant
+namespace or partition, fixed when the record is written, fails closed: a query
+issued inside one namespace has no path to another's vectors. A filter applied after
+a global similarity search fails open when one predicate is missing, and over an
+approximate index it also returns fewer than the requested results when the
+caller's share of the corpus is small (@sec-retrieval-practice).
 
 Persistent memory also extends the lifetime of poisoned content. A malicious or
 mistaken statement can be extracted, summarized, and retrieved in later sessions;
 AgentPoison demonstrates this class of attack against agent memory and knowledge
-bases [@chen2024agentpoison]. Store writer and source, distinguish quoted evidence
+bases [@chen2024agentpoison]. In a trace, a poisoned read looks like a successful
+retrieval, because the planted text is the correct result for the query; diagnosis
+has to start from the record's writer and source. Store writer and source, distinguish quoted evidence
 from derived inference, quarantine suspicious writes, and never interpret retrieved
 records as privileged instructions. Session logs and RAG corpora can carry the same
 attack; memory makes later reuse part of the default path.
@@ -515,7 +669,16 @@ or looser authorization boundary can be mistaken for a better memory system.
 ::: {.callout-important}
 ## What's contested
 
-There is no universally best memory representation or benchmark. Conversational QA
+There is no universally best memory representation or benchmark, and vendor results
+on the same benchmark conflict. The Mem0 paper reports a 26 percent relative gain in
+LLM-as-a-judge score over OpenAI's memory on LoCoMo, with 91 percent lower p95
+latency and more than 90 percent fewer tokens than answering from the full
+conversation [@mem02025memory]. Letta then reported that an agent given only file
+tools (text search, semantic search, open, and close) over the same conversations
+scored 74.0 percent on LoCoMo with GPT-4o mini, above the 68.5 percent Mem0 reported
+for its graph variant, with little prompt tuning [@letta2025benchmarking]. The two
+results differ in agent, prompts, and judge setup, so neither ranks the
+representations. Conversational QA
 rewards recall but may miss whether memory improves later action. Full history can
 be accurate yet expensive; summaries can be cheap yet erase provenance; vector
 retrieval can find paraphrases yet miss exact identifiers; graphs can preserve
