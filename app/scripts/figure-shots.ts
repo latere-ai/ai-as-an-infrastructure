@@ -81,39 +81,64 @@ async function load(w: number, noJs: boolean, dark: boolean) {
   const loaded = new Promise((res) => events.push((m) => m.method === "Page.loadEventFired" && res(null)));
   await send("Page.navigate", { url: `http://127.0.0.1:${server.port}/${page}.html` });
   await loaded;
-  await Bun.sleep(noJs ? 300 : 900);
+  if (noJs) await Bun.sleep(300); else await hydrated(w);
   if (dark && !noJs) { await js(`document.documentElement.setAttribute("data-theme", "dark")`); await Bun.sleep(200); }
 }
 
+// Wait until every figure host has mounted (.fig-ready) or recorded a failure
+// (data-fig-error), since figure modules load as lazy chunks after the page's
+// load event. The check runs only once the page itself has loaded: the load
+// event awaited above can be the one from about:blank. A host that does
+// neither within the timeout stops the run.
+const HYDRATE_TIMEOUT_MS = 15_000;
+async function hydrated(w: number) {
+  const deadline = Date.now() + HYDRATE_TIMEOUT_MS;
+  const path = JSON.stringify(`/${page}.html`);
+  for (;;) {
+    const waiting = await js<string[] | null>(`location.pathname !== ${path} || document.readyState !== "complete" ? null : [...document.querySelectorAll(".fig[data-figure]")].filter((h) => !h.classList.contains("fig-ready") && !h.dataset.figError).map((h) => h.dataset.figure)`);
+    if (waiting && !waiting.length) break;
+    if (Date.now() > deadline) throw new Error(waiting ? `figures not hydrated ${HYDRATE_TIMEOUT_MS / 1000} s after load of ${page} at ${w} px: ${waiting.join(", ")}` : `${page} did not finish loading within ${HYDRATE_TIMEOUT_MS / 1000} s at ${w} px`);
+    await Bun.sleep(100);
+  }
+  await js(`document.fonts.ready.then(() => true)`);
+  await Bun.sleep(200); // the ResizeObserver redraw at the measured column width
+}
+
 let problems = 0;
-for (const [w, noJs, dark] of [[1280, false, false], [390, false, false], [1280, false, true], [1280, true, false], [390, true, false]] as const) {
-  await load(w, noJs, dark);
-  const ids = await js<string[]>(`[...document.querySelectorAll("figure .fig[data-figure]")].map((h) => h.closest("figure").id)`);
-  if (!noJs) {
-    const cold = await js<string[]>(`[...document.querySelectorAll(".fig[data-figure]:not(.fig-ready)")].map((h) => h.dataset.figure + (h.dataset.figError ? ": " + h.dataset.figError : ""))`);
-    if (cold.length) { problems++; console.log(`  not hydrated at ${w}: ${cold.join(", ")}`); }
+try {
+  for (const [w, noJs, dark] of [[1280, false, false], [390, false, false], [1280, false, true], [1280, true, false], [390, true, false]] as const) {
+    await load(w, noJs, dark);
+    const ids = await js<string[]>(`[...document.querySelectorAll("figure .fig[data-figure]")].map((h) => h.closest("figure").id)`);
+    if (!noJs) {
+      const cold = await js<string[]>(`[...document.querySelectorAll(".fig[data-figure]:not(.fig-ready)")].map((h) => h.dataset.figure + (h.dataset.figError ? ": " + h.dataset.figError : ""))`);
+      if (cold.length) { problems++; console.log(`  not hydrated at ${w}: ${cold.join(", ")}`); }
+    }
+    const sideways = await js<number>(`(() => { const m = document.querySelector("main"); if (!m) return 0; const b = m.scrollLeft; m.scrollLeft = 1e5; const r = m.scrollLeft; m.scrollLeft = b; return r; })()`);
+    if (sideways > 0) { problems++; console.log(`  page scrolls sideways by ${sideways}px at ${w}`); }
+    for (const id of ids) {
+      // Make the viewport tall enough for the figure, then bring it to the top
+      // of the reader's scroll container (<main>, not the document).
+      const h = await js<number>(`document.getElementById(${JSON.stringify(id)}).getBoundingClientRect().height`);
+      await send("Emulation.setDeviceMetricsOverride", { width: w, height: Math.ceil(h + 160), deviceScaleFactor: 2, mobile: w < 600 });
+      await Bun.sleep(300);
+      await js(`(() => { const f = document.getElementById(${JSON.stringify(id)}); f.scrollIntoView({ block: "start", behavior: "instant" }); const m = document.querySelector("main"); if (m) m.scrollBy({ top: -24, behavior: "instant" }); return true; })()`);
+      await Bun.sleep(300);
+      const b = await js<{ x: number; y: number; w: number; h: number }>(`(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
+      const shot = await send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false, clip: { x: Math.max(0, b.x - 8), y: Math.max(0, b.y - 8), width: b.w + 16, height: b.h + 16, scale: 1 } });
+      const file = `${id}__${w}${dark ? "-dark" : ""}${noJs ? "-nojs" : ""}.png`;
+      writeFileSync(join(OUT, file), Buffer.from(shot.data, "base64"));
+      console.log(`${file}  ${Math.round(b.w)}x${Math.round(b.h)}`);
+    }
   }
-  const sideways = await js<number>(`(() => { const m = document.querySelector("main"); if (!m) return 0; const b = m.scrollLeft; m.scrollLeft = 1e5; const r = m.scrollLeft; m.scrollLeft = b; return r; })()`);
-  if (sideways > 0) { problems++; console.log(`  page scrolls sideways by ${sideways}px at ${w}`); }
-  for (const id of ids) {
-    // Make the viewport tall enough for the figure, then bring it to the top
-    // of the reader's scroll container (<main>, not the document).
-    const h = await js<number>(`document.getElementById(${JSON.stringify(id)}).getBoundingClientRect().height`);
-    await send("Emulation.setDeviceMetricsOverride", { width: w, height: Math.ceil(h + 160), deviceScaleFactor: 2, mobile: w < 600 });
-    await Bun.sleep(300);
-    await js(`(() => { const f = document.getElementById(${JSON.stringify(id)}); f.scrollIntoView({ block: "start", behavior: "instant" }); const m = document.querySelector("main"); if (m) m.scrollBy({ top: -24, behavior: "instant" }); return true; })()`);
-    await Bun.sleep(300);
-    const b = await js<{ x: number; y: number; w: number; h: number }>(`(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
-    const shot = await send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false, clip: { x: Math.max(0, b.x - 8), y: Math.max(0, b.y - 8), width: b.w + 16, height: b.h + 16, scale: 1 } });
-    const file = `${id}__${w}${dark ? "-dark" : ""}${noJs ? "-nojs" : ""}.png`;
-    writeFileSync(join(OUT, file), Buffer.from(shot.data, "base64"));
-    console.log(`${file}  ${Math.round(b.w)}x${Math.round(b.h)}`);
-  }
+} catch (e) {
+  problems++;
+  console.log(`  ${(e as Error).message}`);
+} finally {
+  ws.close();
+  chrome.kill();
+  server.stop(true);
+  rmSync(profile, { recursive: true, force: true });
 }
 if (errors.length) { problems++; console.log(`  console exceptions:\n    ${[...new Set(errors)].join("\n    ")}`); }
 console.log(`screenshots in ${OUT}${problems ? `; ${problems} problem(s) above` : ""}`);
-ws.close();
-chrome.kill();
-server.stop(true);
-rmSync(profile, { recursive: true, force: true });
 process.exit(problems ? 1 : 0);
