@@ -64,4 +64,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "layer-pressure": () => import("./layer-pressure.ts"),
   "synthetic-generations": () => import("./synthetic-generations.ts"),
   "data-crossing": () => import("./data-crossing.ts"),
+  "selective-answering": () => import("./selective-answering.ts"),
 };
