@@ -7,15 +7,13 @@ import { readFileSync } from "node:fs";
 const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
 function src(p: string) { return readFileSync(new URL("../../" + p, import.meta.url), "utf8"); }
 
-test("the curve runtime registers the pow-base, u-shape, and elo families", () => {
+test("the curve runtime registers the pow-base and u-shape families", () => {
   expect(rt).toContain("'pow-base'");
   expect(rt).toContain("'u-shape'");
-  expect(rt).toMatch(/elo:\s*function/);
 });
 
 const homes: [string, string][] = [
   ["en/practice/10-reliability-nondeterministic.qmd", "pow-base"],
-  ["en/evaluation/04-judging-holistic.qmd", "elo"],
 ];
 
 test("each curve-reuse home uses its family in both languages", () => {

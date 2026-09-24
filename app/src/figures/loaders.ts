@@ -50,6 +50,7 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "paired-comparison": () => import("./paired-comparison.ts"),
   "benchmark-snr": () => import("./benchmark-snr.ts"),
   "kappa-prevalence": () => import("./kappa-prevalence.ts"),
+  "bradley-terry-ratings": () => import("./bradley-terry-ratings.ts"),
   "binomial-interval": () => import("./binomial-interval.ts"),
   "sft-loss-mask": () => import("./sft-loss-mask.ts"),
   "lora-low-rank": () => import("./lora-low-rank.ts"),
