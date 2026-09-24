@@ -80,7 +80,7 @@ const REQUESTS = 12;
 const SLOTS = 4;
 
 interface Req { id: number; arrival: number; prompt: number; out: number }
-interface Iter { t0: number; t1: number; prefill: number[]; decode: number[]; prefillTokens: number }
+interface Iter { t0: number; t1: number; prefill: number[]; decode: number[]; prefillTokens: number; lengthened: boolean }
 interface Life { start: number; iterStart: number; tokens: number[]; stretched: boolean[] }
 interface Sim { reqs: Req[]; iters: Iter[]; lives: Life[]; end: number }
 
@@ -118,10 +118,15 @@ function simulate(reqs: Req[]): Sim {
     const contexts = running.map((i) => reqs[i].prompt + lives[i].tokens.length);
     const prefillTokens = prompts.reduce((a, b) => a + b, 0);
     const t0 = now;
-    now += iterationCost(prompts, contexts).tau;
-    iters.push({ t0, t1: now, prefill, decode: [...running], prefillTokens });
+    const tau = iterationCost(prompts, contexts).tau;
+    now += tau;
+    // A prefill lengthens the iteration when it takes more than 5 percent
+    // longer than the same decodes alone; a short prompt often fits under the
+    // weight-read time and costs the decodes nothing.
+    const lengthened = prompts.length > 0 && contexts.length > 0 && tau > 1.05 * iterationCost([], contexts).tau;
+    iters.push({ t0, t1: now, prefill, decode: [...running], prefillTokens, lengthened });
     for (const i of prefill) { lives[i].start = t0; lives[i].iterStart = iters.length - 1; }
-    for (const i of running) lives[i].stretched.push(prefill.length > 0);
+    for (const i of running) lives[i].stretched.push(lengthened);
     for (const i of [...running, ...prefill]) lives[i].tokens.push(now);
     running = [...running, ...prefill].filter((i) => lives[i].tokens.length < reqs[i].out);
   }
@@ -171,7 +176,7 @@ const labels = {
     waiting: "waiting",
     prefill: "prefill iteration",
     decode: "decode",
-    band: "iteration that carries a prefill",
+    band: "iteration lengthened by a prefill",
     time: "time since the first arrival (ms)",
     zoom: "R{i}: {p}-token prompt, {o} output tokens",
     since: "time since R{i} arrived (ms)",
@@ -183,7 +188,7 @@ const labels = {
     gapLong: "gap stretched by another request's prefill",
     eqTtft: "TTFT = t₁ − a = {q} ms queueing + {p} ms prefill iteration = {v} ms",
     eqTpot: "TPOT = (t_O − t₁) / (O − 1) = {s} ms / {g} = {v} ms",
-    eqItl: "ITL from {lo} to {hi} ms; {k:gap is/gaps are} stretched by another prefill",
+    eqItl: "ITL from {lo} to {hi} ms; {k:gap is/gaps are} stretched by another request's prefill",
     eqE2e: "E2E = TTFT + Σ ITL = {t} + {s} = {v} ms",
     describe: "At {rate} requests per second, R{i} waits {q} ms before its prefill and its first token leaves {ttft} ms after arrival. Its {g} later gaps average {tpot} ms and reach {hi} ms when another request's prefill shares the iteration; E2E is {e2e} ms.",
   },
@@ -193,7 +198,7 @@ const labels = {
     waiting: "排队",
     prefill: "预填充迭代",
     decode: "解码",
-    band: "带有预填充的迭代",
+    band: "被预填充拉长的迭代",
     time: "距第一个请求到达的时间（ms）",
     zoom: "R{i}：提示词 {p} 个词元，输出 {o} 个词元",
     since: "距 R{i} 到达的时间（ms）",
@@ -224,18 +229,9 @@ function describe(st: State<P>, lang: Lang): string {
   });
 }
 
-// Horizontal bracket with a centered label, or the label beside it when the
-// bracket is too short to hold it.
-function bracket(x0: number, x1: number, y: number, label: string, w: number): string {
-  const parts: string[] = [
-    el("path", { d: `M${x0},${y + 5}V${y}H${x1}V${y + 5}`, fill: "none", stroke: C.ink2, "stroke-width": 1 }),
-  ];
-  const tw = textWidth(label, TYPE.body);
-  const mid = (x0 + x1) / 2;
-  if (tw + 8 <= x1 - x0) parts.push(text(mid, y - 4, label, { "font-size": TYPE.body, "text-anchor": "middle", class: "fig-t-strong" }));
-  else if (x1 + 6 + tw <= w) parts.push(text(x1 + 6, y + 4, label, { "font-size": TYPE.body, class: "fig-t-strong" }));
-  else parts.push(text(x0 - 6, y + 4, label, { "font-size": TYPE.body, "text-anchor": "end", class: "fig-t-strong" }));
-  return parts.join("");
+// Horizontal bracket over a span of the zoomed time axis.
+function bracket(x0: number, x1: number, y: number): string {
+  return el("path", { d: `M${x0},${y + 5}V${y}H${x1}V${y + 5}`, fill: "none", stroke: C.ink2, "stroke-width": 1 });
 }
 
 function render(st: State<P>, lang: Lang): string {
@@ -264,7 +260,7 @@ function render(st: State<P>, lang: Lang): string {
   const x = linear([0, s.end], [labelW, w - 6]);
   // Iterations that carry a prefill, as bands behind every lane.
   for (const it of s.iters) {
-    if (!it.prefill.length) continue;
+    if (!it.lengthened) continue;
     parts.push(el("rect", { x: x(it.t0), y: top - 2, width: Math.max(0.8, x(it.t1) - x(it.t0)), height: plotH + 4, fill: C.c2, "fill-opacity": 0.18 }));
   }
   s.reqs.forEach((r, i) => {
@@ -290,11 +286,26 @@ function render(st: State<P>, lang: Lang): string {
   y += 26;
   const zx = linear([0, f.e2e], [narrow ? 36 : 44, w - (narrow ? 8 : 12)]);
   const at = (t: number) => zx(t - f.r.arrival);
-  const bracketTop = y + 18;
-  // Brackets: TTFT and the decode gaps, then E2E.
-  parts.push(bracket(at(f.r.arrival), at(f.t1), bracketTop, L.ttft, w));
-  parts.push(bracket(at(f.t1), at(f.tO), bracketTop, tpl(L.tpotBr, { g: f.O - 1, v: ms(f.tpot) }), w));
-  parts.push(bracket(at(f.r.arrival), at(f.tO), bracketTop + 22, L.e2e, w));
+  // Brackets: TTFT and the decode gaps side by side, then E2E. A label that
+  // does not fit over its bracket rises one line, and a second one that would
+  // collide with it rises another.
+  const row = [
+    { x0: at(f.r.arrival), x1: at(f.t1), label: L.ttft },
+    { x0: at(f.t1), x1: at(f.tO), label: tpl(L.tpotBr, { g: f.O - 1, v: ms(f.tpot) }) },
+  ].map((b) => {
+    const tw = textWidth(b.label, TYPE.body);
+    const cx = Math.min(Math.max((b.x0 + b.x1) / 2, tw / 2), w - tw / 2);
+    return { ...b, tw, cx, level: tw + 8 <= b.x1 - b.x0 ? 0 : 1 };
+  });
+  if (row[0].level && row[1].level && Math.abs(row[0].cx - row[1].cx) < (row[0].tw + row[1].tw) / 2 + 10) row[1].level = 2;
+  const rise = 16 * Math.max(row[0].level, row[1].level);
+  const bracketTop = y + 18 + rise;
+  for (const b of row) {
+    parts.push(bracket(b.x0, b.x1, bracketTop));
+    parts.push(text(b.cx, bracketTop - 4 - 16 * b.level, b.label, { "font-size": TYPE.body, "text-anchor": "middle", class: "fig-t-strong" }));
+  }
+  parts.push(bracket(at(f.r.arrival), at(f.tO), bracketTop + 22));
+  parts.push(text(zx(f.e2e / 2), bracketTop + 18, L.e2e, { "font-size": TYPE.body, "text-anchor": "middle", class: "fig-t-strong" }));
   // The request's own track: waiting, prefill iteration, tokens as ticks.
   const trackY = bracketTop + 34;
   const trackH = 14;
@@ -344,11 +355,11 @@ function render(st: State<P>, lang: Lang): string {
 
 // Break a readout line at " = " or ", " boundaries when it does not fit.
 function wrapEq(s: string, w: number): string[] {
-  if (textWidth(s, TYPE.body) <= w) return [s];
+  if (textWidth(s, TYPE.body) <= w - 6) return [s];
   const out: string[] = [];
   let line = "";
   for (const tok of s.split(/(?<= = |; |，|；)/)) {
-    if (line && textWidth(line + tok, TYPE.body) > w) { out.push(line.trimEnd()); line = "  " + tok; } else line += tok;
+    if (line && textWidth(line + tok, TYPE.body) > w - 6) { out.push(line.trimEnd()); line = "  " + tok; } else line += tok;
   }
   if (line) out.push(line.trimEnd());
   return out;

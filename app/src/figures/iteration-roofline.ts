@@ -202,9 +202,9 @@ function render(st: State<P>, lang: Lang): string {
   }
   y += 22;
   const k = fmtK((p.n / cur.tau) * 1000);
-  const rate = p.phase === "decode" ? tpl(L.rateDecode, { n: Math.round(p.n), t: fmtT(cur.tau), k }) : tpl(L.ratePrefill, { n: Math.round(p.n).toLocaleString("en-US"), t: fmtT(cur.tau), k });
+  const rate = p.phase === "decode" ? tpl(L.rateDecode, { n: Math.round(p.n).toLocaleString("en-US"), t: fmtT(cur.tau), k }) : tpl(L.ratePrefill, { n: Math.round(p.n).toLocaleString("en-US"), t: fmtT(cur.tau), k });
   const put = (line: string, attrs: Record<string, string | number | undefined>) => {
-    for (const ln of wrap(line, TYPE.body, w)) { rp.push(text(0, y, ln, { "font-size": TYPE.body, ...attrs })); y += 17; }
+    for (const ln of wrap(line, TYPE.body, w - 6)) { rp.push(text(0, y, ln, { "font-size": TYPE.body, ...attrs })); y += 17; }
     y += 2;
   };
   put(rate, {});

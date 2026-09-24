@@ -399,21 +399,23 @@ function render(st: State<P>, lang: Lang): string {
   parts.push(lg.svg);
   let y = 24 + lg.height + 6;
   if (p.workload === "example") {
-    for (const ln of wrap(L.exampleNote, TYPE.body, w)) { parts.push(text(0, y + 12, ln, { "font-size": TYPE.body, class: "fig-t-muted" })); y += 17; }
+    for (const ln of wrap(L.exampleNote, TYPE.body, w - 6)) { parts.push(text(0, y + 12, ln, { "font-size": TYPE.body, class: "fig-t-muted" })); y += 17; }
     y += 5;
   }
   const labelW = narrow ? 0 : Math.max(textWidth(tpl(L.slotsRow, { n: p.slots }), TYPE.body), textWidth(L.queueRow, TYPE.body), textWidth(tpl(L.peak, { n: 99 }), TYPE.body)) + 14;
   const x1 = w - 4;
   const x = linear([0, all.duration + 1], [labelW, x1]);
-  // The cursor label rides above the first panel.
+  // The cursor label rides above the first panel, at the cursor.
   const maxQ = Math.max(...all.static.waiting, ...all.iteration.waiting, 0);
   const cl = tpl(L.cursor, { t });
   const clw = textWidth(cl, TYPE.body);
   const cx = x(Math.min(t, all.duration) + 1);
   const pA = panel(p, all.static, all.reqs, t, L.static, x, labelW, x1, y, narrow, maxQ, st.uid, L);
   const titleW = textWidth(narrow ? tpl(L.titleSlots, { name: L.static, n: p.slots }) : L.static, TYPE.label) + 12;
-  const clx = Math.min(Math.max(cx, titleW + clw / 2), w - clw / 2 - 2);
-  parts.push(pA.svg, text(clx, y + 13, cl, { "font-size": TYPE.body, "text-anchor": "middle", class: "fig-t-strong fig-t-num" }));
+  const clx = Math.min(cx, w - clw / 2 - 2);
+  parts.push(pA.svg);
+  // Only where it clears the panel title; the readout below names the step too.
+  if (clx - clw / 2 >= titleW) parts.push(text(clx, y + 13, cl, { "font-size": TYPE.body, "text-anchor": "middle", class: "fig-t-strong fig-t-num" }));
   y += pA.h + 16;
   const pB = panel(p, all.iteration, all.reqs, t, L.iteration, x, labelW, x1, y, narrow, maxQ, st.uid, L);
   parts.push(pB.svg);

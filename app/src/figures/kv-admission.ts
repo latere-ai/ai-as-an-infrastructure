@@ -45,7 +45,9 @@ function model(p: P) {
   };
 }
 
-const gb = (v: number) => (v >= 10e9 ? (v / 1e9).toFixed(1) : v >= 1e9 ? (v / 1e9).toFixed(2) : sig(v / 1e9, 2));
+const gb = (v: number) => (v >= 10e9 ? (v / 1e9).toFixed(1) : v >= 1e9 ? (v / 1e9).toFixed(2) : sig(v / 1e9, 3));
+// A byte count with its unit: GB from 1 GB up, otherwise the SI prefix that fits.
+const bytesText = (v: number) => (v >= 1e9 || v === 0 ? `${gb(v)} GB` : si(v, "B"));
 const tokens = (v: number) => Math.round(v).toLocaleString("en-US");
 
 const labels = {
@@ -54,10 +56,10 @@ const labels = {
     device: "H100 SXM, 80 GB of device memory",
     weights: "weights, 8B parameters in BF16",
     reserve: "workspace and reserve",
-    kv: "KV state, {n:request/requests} × {m} GB",
+    kv: "KV state, {n:request/requests} × {m}",
     free: "free",
-    reject: "the next request needs {m} GB and {f} GB is free, so it waits or is rejected",
-    rejectNone: "one request needs {m} GB, more than the {b} GB left for KV state, so none can be admitted",
+    reject: "the next request needs {m} and {f} is free, so it waits or is rejected",
+    rejectNone: "one request needs {m}, more than the {b} left for KV state, so none can be admitted",
     fit: "{n:request/requests} of {t} tokens fit",
     chart: "KV bytes of one request against its context length",
     x: "context length T (tokens)",
@@ -67,20 +69,20 @@ const labels = {
     mha: "MHA, n_kv = 32",
     gqa: "GQA, n_kv = 8",
     mqa: "MQA, n_kv = 1",
-    eqM: "m = 2 · L · n_kv · d_head · b_kv · T = 2 · 32 · {h} · 128 · {b} · {t} = {v} GB",
-    eqU: "M_used = {w} + {n} × {m} + {r} = {u} GB ≤ 80 GB",
+    eqM: "m = 2 · L · n_kv · d_head · b_kv · T = 2 · 32 · {h} · 128 · {b} · {t} = {v}",
+    eqU: "M_used = {w} + {n} × {m} + {r} = {u} GB ≤ 80\u00a0GB",
     cross: "one request's cache equals the weights at T = {a} tokens and fills the KV budget alone at T = {c}",
-    describe: "With {h} KV heads, {b}-byte cache elements, and {t}-token requests, each request needs {m} GB of KV state, so {n} fit beside {w} GB of weights and {r} GB of workspace and reserve on an 80 GB H100.",
+    describe: "With {h} KV heads, {b}-byte cache elements, and {t}-token requests, each request needs {m} of KV state, so {n} fit beside {w} GB of weights and {r} GB of workspace and reserve on an 80 GB H100.",
   },
   zh: {
     title: "KV 状态让内存成为接纳约束",
     device: "H100 SXM，80 GB 设备内存",
     weights: "权重，8B 参数，BF16",
     reserve: "工作区与预留",
-    kv: "KV 状态，{n} 个请求 × {m} GB",
+    kv: "KV 状态，{n} 个请求 × {m}",
     free: "空闲",
-    reject: "下一个请求需要 {m} GB，只剩 {f} GB 空闲，只能排队或被拒绝",
-    rejectNone: "一个请求就需要 {m} GB，超过留给 KV 状态的 {b} GB，一个也接纳不了",
+    reject: "下一个请求需要 {m}，只剩 {f} 空闲，只能排队或被拒绝",
+    rejectNone: "一个请求就需要 {m}，超过留给 KV 状态的 {b}，一个也接纳不了",
     fit: "能容纳 {n} 个 {t} 词元的请求",
     chart: "单个请求的 KV 字节数与上下文长度",
     x: "上下文长度 T（词元）",
@@ -90,10 +92,10 @@ const labels = {
     mha: "MHA，n_kv = 32",
     gqa: "GQA，n_kv = 8",
     mqa: "MQA，n_kv = 1",
-    eqM: "m = 2 · L · n_kv · d_head · b_kv · T = 2 · 32 · {h} · 128 · {b} · {t} = {v} GB",
-    eqU: "M_used = {w} + {n} × {m} + {r} = {u} GB ≤ 80 GB",
+    eqM: "m = 2 · L · n_kv · d_head · b_kv · T = 2 · 32 · {h} · 128 · {b} · {t} = {v}",
+    eqU: "M_used = {w} + {n} × {m} + {r} = {u} GB ≤ 80\u00a0GB",
     cross: "上下文达到 {a} 个词元时，单个请求的缓存与权重一样大；达到 {c} 个词元时，一个请求就占满 KV 预算",
-    describe: "KV 头数为 {h}、每个缓存元素 {b} 字节、每个请求 {t} 个词元时，每个请求需要 {m} GB 的 KV 状态；80 GB 的 H100 放下 {w} GB 权重和 {r} GB 工作区与预留之后，能容纳 {n} 个请求。",
+    describe: "KV 头数为 {h}、每个缓存元素 {b} 字节、每个请求 {t} 个词元时，每个请求需要 {m} 的 KV 状态；80 GB 的 H100 放下 {w} GB 权重和 {r} GB 工作区与预留之后，能容纳 {n} 个请求。",
   },
 };
 
@@ -103,7 +105,7 @@ function describe(st: State<P>, lang: Lang): string {
   const L = labels[lang];
   const p = st.p;
   const k = model(p);
-  return tpl(L.describe, { h: p.kvHeads, b: p.bytes, t: tokens(p.context), m: gb(k.m), n: k.fit, w: gb(WEIGHT_BYTES), r: gb(RESERVE) });
+  return tpl(L.describe, { h: p.kvHeads, b: p.bytes, t: tokens(p.context), m: bytesText(k.m), n: tokens(k.fit), w: gb(WEIGHT_BYTES), r: gb(RESERVE) });
 }
 
 function render(st: State<P>, lang: Lang): string {
@@ -149,16 +151,16 @@ function render(st: State<P>, lang: Lang): string {
   parts.push(el("rect", { x: nx0 + 0.75, y: nextY, width: Math.max(2, nx1 - nx0 - 1.5), height: 14, rx: 2, fill: C.bad, "fill-opacity": 0.12, stroke: C.bad, "stroke-width": 1.5, "stroke-dasharray": "3 2" }));
   if (nx0 + slabW > w - 2) parts.push(el("path", { d: `M${w - 8},${nextY + 1}l6,6l-6,6`, fill: "none", stroke: C.bad, "stroke-width": 1.5 }));
   let y = nextY + 14 + 22;
-  const rej = k.fit > 0 ? tpl(L.reject, { m: gb(k.m), f: gb(k.free) }) : tpl(L.rejectNone, { m: gb(k.m), b: gb(BUDGET) });
-  for (const ln of wrap(rej, TYPE.body, w)) { parts.push(text(0, y, ln, { "font-size": TYPE.body })); y += 16; }
+  const rej = k.fit > 0 ? tpl(L.reject, { m: bytesText(k.m), f: bytesText(k.free) }) : tpl(L.rejectNone, { m: bytesText(k.m), b: bytesText(BUDGET) });
+  for (const ln of wrap(rej, TYPE.body, w - 6)) { parts.push(text(0, y, ln, { "font-size": TYPE.body })); y += 16; }
   y += 6;
 
   // Key with values, one row each.
   const rows: Array<[string, string, Record<string, string | number>]> = [
     [L.weights, `${gb(WEIGHT_BYTES)} GB`, { fill: C.c2 }],
     [L.reserve, `${gb(RESERVE)} GB`, { fill: `url(#${st.uid}-res)` }],
-    [tpl(L.kv, { n: k.fit, m: gb(k.m) }), `${gb(k.kv)} GB`, { fill: C.c1, "fill-opacity": 0.85 }],
-    [L.free, `${gb(k.free)} GB`, { fill: C.panel, stroke: C.rule, "stroke-width": 1 }],
+    [tpl(L.kv, { n: tokens(k.fit), m: bytesText(k.m) }), bytesText(k.kv), { fill: C.c1, "fill-opacity": 0.85 }],
+    [L.free, bytesText(k.free), { fill: C.panel, stroke: C.rule, "stroke-width": 1 }],
   ];
   for (const [name, val, attrs] of rows) {
     parts.push(el("rect", { x: 0, y: y - 10, width: 12, height: 12, rx: 2, ...attrs }));
@@ -167,7 +169,7 @@ function render(st: State<P>, lang: Lang): string {
     y += 19;
   }
   y += 8;
-  parts.push(text(0, y + 4, tpl(L.fit, { n: k.fit, t: tokens(p.context) }), { "font-size": TYPE.title, class: "fig-t-strong" }));
+  parts.push(text(0, y + 4, tpl(L.fit, { n: tokens(k.fit), t: tokens(p.context) }), { "font-size": TYPE.title, class: "fig-t-strong" }));
   y += 28;
 
   // ---- per-request KV bytes against context length, log-log
@@ -210,13 +212,13 @@ function render(st: State<P>, lang: Lang): string {
   // ---- readout: the equations with this configuration's terms
   const used = WEIGHT_BYTES + k.kv + RESERVE;
   const lines = [
-    tpl(L.eqM, { h: p.kvHeads, b: p.bytes, t: tokens(p.context), v: gb(k.m) }),
-    tpl(L.eqU, { w: gb(WEIGHT_BYTES), n: k.fit, m: gb(k.m), r: gb(RESERVE), u: gb(used) }),
+    tpl(L.eqM, { h: p.kvHeads, b: p.bytes, t: tokens(p.context), v: bytesText(k.m) }),
+    tpl(L.eqU, { w: gb(WEIGHT_BYTES), n: tokens(k.fit), m: gb(k.m), r: gb(RESERVE), u: gb(used) }),
     tpl(L.cross, { a: tokens(k.crossWeights), c: tokens(k.crossBudget) }),
   ];
   const ro: string[] = [];
   lines.forEach((ln, i) => {
-    for (const part of wrap(ln, TYPE.body, w)) { ro.push(text(0, y + 12, part, { "font-size": TYPE.body, class: i < 2 ? "fig-t-num" : "fig-t-muted fig-t-num" })); y += 17; }
+    for (const part of wrap(ln, TYPE.body, w - 6)) { ro.push(text(0, y + 12, part, { "font-size": TYPE.body, class: i < 2 ? "fig-t-num" : "fig-t-muted fig-t-num" })); y += 17; }
     y += 4;
   });
   parts.push(g({ class: "fig-readout" }, ...ro));
