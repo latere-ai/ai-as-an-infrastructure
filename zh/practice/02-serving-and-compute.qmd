@@ -2,7 +2,7 @@
 
 一个模型是否已经投入服务，取决于已声明的一类请求能否在延迟、可用性、成本和策略边界内得到合格结果；端点能返回文本，只是其中一个前提。因此，需要运营的对象是一份**版本化的服务契约**：模型制品、运行时、适配器、请求语义、路由策略和算力放置共同产生结果。这把 @sec-choosing-model 中版本化线上系统的原则延伸到了生产环境。
 
-运行时背后的原理见 @sec-serving-problem 和 @sec-memory-scheduling。本章把原理落实为运营方法：先固定契约，再用代表性负载测量完整路径，最后才选择引擎、加入 @gls-gateway，也就是模型调用的路由与策略层，或采购容量。
+运行时背后的原理见 @sec-serving-problem 和 @sec-memory-scheduling。本章把原理落实为运营方法：先固定契约，再用代表性负载测量完整路径，最后才选择引擎、加入 @gls-gateway，也就是模型调用的路由与策略层，或采购容量。讨论这些选择的各节会列出当前的引擎、算力档位和调度器，以及各自的适用场景。
 
 ## 固定服务契约
 
@@ -93,7 +93,86 @@ $$
 
 前缀复用不是语义缓存，语义相近并不代表 KV 状态可以复用。它也只节省预填充工作。当解码占主导或前缀很少重复时，保留缓存状态反而可能浪费容量。同理，如果运行时缺少高效内核，需要反复转换，低比特制品可能更慢。必须在准确的硬件上验证准确的制品，再重新运行 @sec-eval-practice 中的任务质量门。
 
+复用之所以必须精确，源于引擎查找缓存状态的方式。vLLM 用块内词元和前一个块来计算哈希，以此标识 KV 缓存中的每个完整块，另加适配器、多模态输入和按租户设置的缓存盐等附加键，并且只缓存完整的块 [@vllm2026prefixcaching]。SGLang 则把同样的信息保存在一棵以词元序列为键的基数树中 [@zheng2024sglang]。因此，请求只能复用到第一个不同的词元之前的缓存块。下面的可运行代码实现了这条哈希链，并处理 40 个请求，它们共享同一段系统提示，并各自使用五份文档之一。每个请求都有一个时间戳：放在共享部分之后，大部分提示词元仍可复用；放在最前面，每个块的键都是新的。把 `BLOCK` 设为 256 可以看到粗粒度分块的代价：共享前缀末尾那个不完整的块，每个请求都要重新计算。
+
+:::: {.runnable}
+```python
+import hashlib
+
+BLOCK = 16                      # 每个 KV 缓存块的词元数
+
+def block_keys(tokens):
+    """每个完整块一个键，并与前一个块的键串联。"""
+    key, keys = b"", []
+    for i in range(0, len(tokens) // BLOCK * BLOCK, BLOCK):
+        key = hashlib.sha256(key + " ".join(tokens[i:i + BLOCK]).encode()).digest()
+        keys.append(key)
+    return keys
+
+def reused_fraction(requests):
+    cache, reused, total = set(), 0, 0
+    for tokens in requests:
+        keys = block_keys(tokens)
+        hits = next((k for k, key in enumerate(keys) if key not in cache), len(keys))
+        reused, total = reused + hits * BLOCK, total + len(tokens)
+        cache.update(keys)
+    return reused / total
+
+system = [f"sys{i}" for i in range(400)]                  # 指令和工具模式
+docs = [[f"doc{d}.{i}" for i in range(300)] for d in range(5)]
+stamp = lambda r: [f"time={r}"]                           # 每个请求都不同
+ask = lambda r: [f"q{r}.{i}" for i in range(20)]
+
+late = [system + docs[r % 5] + stamp(r) + ask(r) for r in range(40)]
+early = [stamp(r) + system + docs[r % 5] + ask(r) for r in range(40)]
+print(f"时间戳在共享前缀之后：复用了 {reused_fraction(late):.0%} 的提示词元")
+print(f"时间戳在最前面：    复用了 {reused_fraction(early):.0%} 的提示词元")
+```
+::::
+
 语法约束解码同样只保证语法，因此生成结束后，服务路径仍要检查结束原因、解析与模式验证结果、业务领域不变量、调用方授权，以及副作用对应的前置条件。转账请求在语法上有效，仍然需要授权；这类授权决定如何作出，@sec-security-authorization 会进一步展开。
+
+### 各引擎及其适用场景
+
+上述机制集中在少数几个开源引擎里。引擎的选择主要取决于模型运行在哪里、流量是什么形态；每个引擎都是系统指纹中的一项 $e$。
+
+| 引擎 | 是什么 | 许可证与硬件 | 适用于 |
+| --- | --- | --- | --- |
+| **vLLM** | PagedAttention 的起源，模型和功能覆盖最广；其服务器支持 OpenAI 和 Anthropic Messages API [@vllm2026repo] | Apache 2.0；GPU 及其他加速器 | 通用 GPU 服务，常见的默认选择 |
+| **SGLang** | 基于 RadixAttention 前缀复用的引擎，附带用于结构化生成程序的前端 [@sglang2026serving44] | Apache 2.0；GPU | 前缀大量重复的流量，例如智能体、RAG 和多轮对话 |
+| **TensorRT-LLM** | NVIDIA 的推理库，内核针对自家 GPU 和低精度调优 [@nvidia2023tensorrtllm] | Apache 2.0；仅限 NVIDIA GPU | 在新一代 NVIDIA GPU 上追求吞吐与延迟，包括 FP8 和 FP4 |
+| **LMDeploy** | 带 TurboMind 引擎、内置权重与 KV 缓存量化的工具包 [@lmdeploy2026repo] | Apache 2.0；NVIDIA GPU | 量化服务 |
+| **llama.cpp** | 面向 GGUF 量化模型的可移植 C/C++ 引擎 [@llamacpp] | MIT；CPU、CUDA、ROCm、Vulkan、Metal | 本地、边缘、CPU 和多厂商混合硬件 |
+| **Ollama** | 本地模型运行器，提供模型仓库、命令行和 HTTP API，以 llama.cpp 为基础 [@ollama2026repo] | MIT；笔记本和工作站 | 开发，以及少数内部用户 |
+| **MLX LM** | Apple MLX 框架上的语言模型软件包，MLX 直接使用 Apple 芯片的统一内存 [@mlxlm2026repo] | MIT；仅限 Apple 芯片 | Mac |
+| **NVIDIA Dynamo** | 位于引擎之上的编排层：预填充与解码分离、KV 感知路由、KV 传输 [@nvidia2026dynamo150] | Apache 2.0；可运行 vLLM、SGLang 或 TensorRT-LLM 工作进程 | 有延迟目标的多节点集群 |
+| **llm-d** | 基于 vLLM 工作进程、支持缓存感知路由和阶段分离的 Kubernetes 原生分布式推理 [@llmd2026repo] | Apache 2.0；CNCF 沙箱项目 | 按缓存内容路由的 Kubernetes 集群 |
+| **Text Generation Inference** | Hugging Face 以前的服务引擎，现已归档并处于维护模式 [@hf2026tgi] | Apache 2.0 | 仅限已有部署 |
+
+选择时参考以下条件，每一条都要先在生产流量轨迹上确认：
+
+- 在 GPU 上需要一个支持面广的默认选项，而不在意某一种流量形态上最后那点性能时，选 **vLLM**。
+- 流量以共享前缀为主时，例如智能体和检索增强生成，选 **SGLang**。
+- 集群全是 NVIDIA，且吞吐和延迟足以抵消其工具链的投入时，选 **TensorRT-LLM**。
+- 目标是笔记本、边缘设备、CPU 或少数内部用户时，选 **llama.cpp、Ollama 或 MLX LM**。它们是单节点工具，并发能力有限（@sec-edge）。
+- 单个节点不够用，集群需要缓存感知路由、阶段分离，并按延迟目标自动伸缩时，选 **Dynamo 或 llm-d**。
+- **新部署不再使用 Text Generation Inference**，其维护者现在建议改用 vLLM、SGLang、llama.cpp 或 MLX。
+
+下面是为支持工具调用的模型启动单节点 vLLM 的命令，可以看出这些调节手段如何变成参数。模型本身带量化权重，而对支持的模型，前缀缓存和分块预填充默认开启，所以命令只需指定结构化输出后端和工具调用解析器。KV 缓存精度是另一个参数 `--kv-cache-dtype`，它对质量的影响要像其他量化一样测试。
+
+```bash
+# gpt-oss-120b 自带 MXFP4 权重；前缀缓存和分块预填充默认开启
+vllm serve openai/gpt-oss-120b \
+  --structured-outputs-config.backend xgrammar \
+  --enable-auto-tool-choice --tool-call-parser openai
+# 在 8000 端口提供 OpenAI 兼容端点和 Anthropic Messages 端点
+```
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+最新版本分别为 vLLM v0.30.0、SGLang v0.5.20、LMDeploy v0.17.0、llm-d v0.9.0 和 Dynamo v1.5.0 [@vllm2026repo; @sglang2026serving44; @lmdeploy2026repo; @llmd2026repo; @nvidia2026dynamo150]。vLLM 的结构化输出后端默认为 `auto`，按请求在 xgrammar、guidance、outlines 和 lm-format-enforcer 之间选择；`--structured-outputs-config` 选项取代了旧的引导解码参数 [@vllm2026repo]。llm-d 于 2026 年 3 月作为沙箱项目加入 CNCF [@llmd2026repo]。Hugging Face 已将 Text Generation Inference 代码仓库归档 [@hf2026tgi]。
+:::
 
 ### 对完整系统指纹做基准测试
 
@@ -138,6 +217,8 @@ $H_j$ 覆盖许可证、区域、接口和容量等所有硬约束；$Q_s$ 是�
 ## 只在边界能够落实时引入中介层
 
 网关或中介服务是一种可选的设计。当许多调用方或供应商会重复实现身份、凭据引用、配额、路由、预算和遥测时，中介层可以集中这些职责。只有一个应用和一个供应商时，经过充分测试的直接适配器可能更简单。只有当集中管理形成团队能够执行和运营的边界时，才值得引入。
+
+承担这一角色的产品都集中处理同样五件事：跨供应商统一的请求模式，把供应商密钥托管在限定范围的虚拟密钥之后，按密钥和团队统计支出，带重试与故障切换的路由，以及带速率限制和防护规则的预算。它们的区别在于是托管还是自托管，以及是否同时承载 MCP 工具流量和智能体之间的流量。@sec-wiring-stack 比较了当前的产品，包括 LiteLLM、OpenRouter、Portkey、agentgateway、Agent Router、Cloudflare AI Gateway 和 Bifrost。厂商公布的单请求网关开销是在它们自己的条件下测得的；对大多数工作负载，供应商和模型的延迟比网关开销高出几个数量级。真正起决定作用的测量，是网关在团队自己的策略、计量和日志配置下达到饱和时的请求速率。
 
 中介边界只有明确维持以下不变量时才有价值：
 
@@ -193,6 +274,15 @@ telemetry:
 
 部署与采购是两个不同的决定。团队可以使用**第一方 API**、由供应商运营并承载指定制品的**托管端点**，也可以在租用或自有加速器上运行**自主管理的引擎**。比较三者时，必须使用相同的硬约束、质量门、工作负载和核算期。
 
+大多数应用团队从第一方 API 起步，只有出现具体压力时才自主管理：
+
+- 利用率持续较高，按词元计价主导账单，而预留或自有容量能够保持繁忙；
+- 数据驻留或合规规则要求权重、提示和输出留在组织自己的环境中；
+- 需要某个开放权重模型或微调模型，而没有 API 提供（@sec-training-practice）；
+- 需要控制延迟和尾部行为，而没有供应商作出承诺。
+
+由于每条分支上的内部契约相同，这个选择可以撤回：自主管理的路由作为又一个通过验证的候选加入，只需改动路由即可接收流量。
+
 | 方面 | 需要记录的问题 |
 | --- | --- |
 | 计费 | 按词元、请求、加速器秒，还是预留时段计费？计费粒度和最低承诺是什么？ |
@@ -203,6 +293,24 @@ telemetry:
 | 硬件 | 实际分配了哪种加速器、内存容量、互连、主机带宽和拓扑？ |
 | 运营 | 谁负责补丁、发布、监控、事故响应和容量预测？ |
 | 退出路径 | 制品、日志、适配器和评测证据能否迁移，并且不改变服务契约？ |
+
+供应方可以分成几个档位，它们在计费方式上的差别比小时价格的差别更大。
+
+| 档位 | 例子 | 计费方式 | 适用于 |
+| --- | --- | --- | --- |
+| 无服务器 GPU 与托管推理 | Modal、Baseten、Fireworks、Together、RunPod Serverless | 按秒或按词元计费，可缩容到零 | 突发或低利用率的推理，无需运维机器 |
+| GPU 云 | CoreWeave、Lambda、Nebius、Crusoe | 按需或预留的 GPU 小时 | 稳定、高利用率的服务与训练集群 |
+| 算力市场与竞价容量 | Vast.ai，以及大型云上的竞价实例 | 按小时计费，可被中断 | 能容忍故障的批处理，绝不用于延迟敏感的服务 |
+| 超大规模云 | AWS、Google Cloud、Microsoft Azure | 按需、预留或承诺用量，除 GPU 外还有 TPU 和 Trainium | 已在该云上的组织、托管流水线、定制加速器 |
+| 托管机房中的自有硬件 | 自行运营 | 资本支出加运营成本 | 有运维团队、利用率持续很高 |
+
+SkyPilot 用同一份作业或服务定义，在预留 GPU、Kubernetes 集群、Slurm 集群或 20 多家云上运行，使工作负载可以在这些档位之间迁移 [@skypilot2026repo]。@sec-wiring-stack 根据两份当前报价，计算出预留容量比按秒计费更便宜时所需的月度使用比例。
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+Modal 列出的 NVIDIA H100 价格为每秒使用 0.001097 美元，约合每小时 3.95 美元 [@modal2026pricing44]。Lambda 列出的八卡实例中，H100 SXM 按需价格为每 GPU 小时 3.99 美元，B200 为 6.69 美元，预留容量只接受询价 [@lambda2026pricing]。可见无服务器平台与 GPU 云的按需小时价格相差不大。两个档位的区别在于闲置时间，无服务器计费不收这部分费用，以及需要协商的预留折扣。
+:::
 
 不存在通用的利用率百分比，可以判定哪种模式更便宜。容量按台阶购买，需求具有突发性，热副本和冗余也要付费，而便宜的路由可能产出更少合格结果。应建立低、中、高需求情景，把容量台阶、承诺用量、中断、出口费用、运维人力和事故成本都纳入。随后比较 @sec-choosing-model 和 @sec-economics 中定义的每项合格任务的端到端成本。
 
@@ -238,6 +346,17 @@ $$
 - Python 或其他应用执行框架可以管理任务和执行单元，但不能替代集群准入、设备分配或服务生命周期控制。
 
 Slurm 是集群工作负载管理器，负责资源分配、排队和作业步骤执行 [@slurmOverview]。Kubernetes 提供服务控制器和 Pod 放置，Kueue 等扩展可以增加配额和工作负载准入，但不会取代调度器或作业控制器 [@kueueOverview]。两者都可以扩展，有些组织也会组合使用。选择取决于工作负载所需的生命周期和调度语义；“训练用 Slurm，推理用 Kubernetes”这类常见说法过于粗糙，不足以作出判断。
+
+每种控制平面都有相应的扩展，补上 AI 工作负载在其原生语义之外所需的能力。
+
+| 控制平面 | 原生能力 | 面向 AI 工作负载的扩展 |
+| --- | --- | --- |
+| Slurm | 排队、分配和全有或全无的多节点作业 [@slurmOverview] | 拓扑感知放置、检查点与重新排队 |
+| Kubernetes | 服务控制器、滚动更新、自动伸缩、入口流量 | Kueue 负责配额与准入 [@kueueOverview]；Volcano [@volcano2026repo] 或 KAI Scheduler [@kai2026scheduler] 负责成组调度和拓扑感知调度；动态资源分配负责设备申请 [@kubernetesDRA] |
+| Kubernetes 上的 Ray | 用 Python 任务和执行单元在同一框架中完成训练、数据处理和服务 | KubeRay 把 Ray 集群、作业和 Ray Serve 应用作为 Kubernetes 资源运行 [@kuberay2026repo] |
+| Kubernetes 上的 Slurm | 在共享的 Kubernetes 集群上保留 Slurm 的作业语义 | Slinky 的 slurm-operator [@slinky2026operator] 和 Nebius 的 Soperator [@nebius2026soperator] |
+
+在 Kubernetes 上运行 Slurm，同一个资源池就能同时承载长期运行的推理服务和成组调度的训练作业，两者各自由语义合适的控制平面管理。
 
 自动伸缩受副本启动时间限制。如果一个副本需要几分钟才能分配硬件、加载权重、编译内核并预热缓存，几秒前的队列信号再触发扩容，也赶不上当前的请求突发。填补这段空档，要靠保持热容量或减少准入流量、根据已知峰值提前预测，以及经过测试的完整扩容路径。设备插件和动态分配同样不能证明模型能够装入设备、所需拓扑确实存在，或降级硬件仍可安全服务。
 
