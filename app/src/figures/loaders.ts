@@ -38,4 +38,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "hybrid-schedule": () => import("./hybrid-schedule.ts"),
   "kv-block-lifecycle": () => import("./kv-block-lifecycle.ts"),
   "trusted-monitoring": () => import("./trusted-monitoring.ts"),
+  "oversight-evidence": () => import("./oversight-evidence.ts"),
 };
