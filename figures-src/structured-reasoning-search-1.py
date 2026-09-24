@@ -2,7 +2,8 @@ import matplotlib
 
 matplotlib.use("svg")
 import matplotlib.pyplot as plt
-from matplotlib.patches import FancyArrowPatch
+from matplotlib.lines import Line2D
+from matplotlib.patches import FancyArrowPatch, Patch
 
 from common import ACCENT, DATA, INK, MUTED, WARN, save_bilingual
 
@@ -10,10 +11,10 @@ from common import ACCENT, DATA, INK, MUTED, WARN, save_bilingual
 SUBTLE = "#d1d5db"
 
 LANES = [
-    ("chain", 0.82),
-    ("tree search", 0.61),
-    ("graph reuse", 0.40),
-    ("value-guided", 0.19),
+    ("chain", 0.88),
+    ("tree search", 0.69),
+    ("graph reuse", 0.50),
+    ("value-guided", 0.31),
 ]
 
 
@@ -97,9 +98,11 @@ def graph(ax, y):
 
 
 def value_guided(ax, y):
+    # Bars are evaluator scores of partial states; the low-scored last state is
+    # not expanded. Teal stays reserved for an accepted terminal.
     xs = [0.31, 0.44, 0.57, 0.70, 0.83]
-    heights = [0.03, 0.10, 0.05, 0.14, 0.025]
-    colors = [DATA, ACCENT, DATA, ACCENT, MUTED]
+    heights = [0.025, 0.08, 0.04, 0.11, 0.02]
+    colors = [DATA, DATA, DATA, DATA, MUTED]
     for i, (x, h, color) in enumerate(zip(xs, heights, colors)):
         filled = color != MUTED
         node(ax, x, y, color, filled=filled)
@@ -116,13 +119,32 @@ ax.axis("off")
 for label, y in LANES:
     lane_label(ax, label, y)
 
-for y in [0.715, 0.505, 0.295]:
+for y in [0.785, 0.595, 0.405]:
     ax.hlines(y, 0.035, 0.94, color=SUBTLE, linewidth=0.65, alpha=0.75)
 
 chain(ax, LANES[0][1])
 tree(ax, LANES[1][1])
 graph(ax, LANES[2][1])
 value_guided(ax, LANES[3][1])
+
+LEGEND = [
+    Line2D([], [], marker="o", linestyle="none", markersize=6.5, markerfacecolor=DATA, markeredgecolor=DATA, label="retained state"),
+    Line2D([], [], marker="o", linestyle="none", markersize=6.5, markerfacecolor="none", markeredgecolor=MUTED, label="pruned state"),
+    Line2D([], [], marker="o", linestyle="none", markersize=6.5, markerfacecolor=ACCENT, markeredgecolor=ACCENT, label="accepted terminal"),
+    Line2D([], [], marker="o", linestyle="none", markersize=6.5, markerfacecolor="none", markeredgecolor=WARN, label="rejected terminal"),
+    Patch(facecolor=DATA, edgecolor=DATA, label="evaluator score"),
+]
+ax.legend(
+    handles=LEGEND,
+    loc="lower center",
+    bbox_to_anchor=(0.5, -0.02),
+    ncol=3,
+    frameon=False,
+    fontsize=9.5,
+    labelcolor=INK,
+    handletextpad=0.3,
+    columnspacing=1.2,
+)
 
 fig.tight_layout()
 save_bilingual(fig, "structured-reasoning-search-1")
