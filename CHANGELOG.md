@@ -12,6 +12,15 @@ committed: the commit log already holds that.
 
 ### Changed
 
+- The eight Practice chapters regain the concrete material a rewrite in
+  August 2026 had removed, each item checked against current sources and
+  updated or dropped: comparison tables of hosted and open-weight models,
+  serving engines, on-device runtimes, fine-tuning engines and managed
+  services, queues, vector stores and evaluation tools, configuration
+  examples and worked cost numbers. Wiring the Stack again draws a
+  reference architecture with named components and adds reference stacks
+  for three kinds of product. Their runnable examples now implement the
+  mechanism they illustrate and check a result.
 - The reading frame is flat and edge to edge: a 48 px sticky header, a
   navigation column on the left and an "On this page" column on the right,
   separated by 1 px rules, with no floating panels, article card or glass.
