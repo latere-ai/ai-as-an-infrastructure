@@ -646,13 +646,16 @@ function TocLinks({ chapter, activeId, onNavigate }: { chapter: ChapterData; act
 function MiniToc({ t, chapter, activeId, onClose, width = 208, onStartDrag }: { t: Strings; chapter: ChapterData; activeId: string; onClose: () => void; width?: number; onStartDrag?: (e: React.PointerEvent) => void }) {
   return (
     <aside className="rdr-toc" style={{ width }}>
-      <div className="rdr-toc-head">
-        <span className="rdr-toc-title">{t.onThisPage}</span>
-        <button onClick={onClose} aria-label="close" className="rdr-btn" style={{ width: 22, height: 22 }}>
-          <Icon d={<path d="M3 3l8 8M11 3l-8 8" strokeLinecap="round" />} size={12} />
-        </button>
+      {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize" style={{ left: -4 }} />}
+      <div className="rdr-toc-scroll">
+        <div className="rdr-toc-head">
+          <span className="rdr-toc-title">{t.onThisPage}</span>
+          <button onClick={onClose} aria-label="close" className="rdr-btn" style={{ width: 22, height: 22 }}>
+            <Icon d={<path d="M3 3l8 8M11 3l-8 8" strokeLinecap="round" />} size={12} />
+          </button>
+        </div>
+        <TocLinks chapter={chapter} activeId={activeId} />
       </div>
-      <TocLinks chapter={chapter} activeId={activeId} />
     </aside>
   );
 }
