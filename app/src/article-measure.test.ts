@@ -1,6 +1,6 @@
-// The article panel's reading measure. It is a CSS cascade rather than an inline
+// The article column's reading measure. It is a CSS cascade rather than an inline
 // React style so a persisted layout can be applied before first paint, which
-// means a missing or mis-ordered override is silent: the panel just renders at
+// means a missing or mis-ordered override is silent: the column just renders at
 // the wrong width. These tests resolve the cascade the way a browser would and
 // assert the width every (language, layout) pair actually lands on.
 
@@ -35,34 +35,45 @@ function measure(lang: "en" | "zh", layout: string): string {
   return best?.value ?? "";
 }
 
-test("the panel takes its cap from the cascade, not an inline width", () => {
-  expect(css).toContain(".lq-article-panel { max-width: var(--article-max); }");
-  expect(reader).not.toContain("maxWidth: 940");
+// Resolve a cap to px at the default 18 px text size, with the 640 px floor
+// the column applies (max(640px, var(--article-max))).
+const px = (v: string) => (v.endsWith("em") ? Math.max(640, parseFloat(v) * 18) : NaN);
+
+test("the column takes its cap from the cascade, not an inline width", () => {
+  expect(css).toContain(".rdr-col { max-width: max(640px, var(--article-max)); }");
   expect(reader).not.toContain("maxWidth: articleMaxWidth");
+  expect(reader).toContain('className="rdr-col"');
 });
 
-test("every layout resolves to its own cap, and zh reads narrower than en", () => {
-  expect(measure("en", "manuscript")).toBe("900px");
-  expect(measure("en", "codex")).toBe("1360px");
-  expect(measure("en", "atlas")).toBe("none");
-  expect(measure("zh", "manuscript")).toBe("780px");
-  expect(measure("zh", "codex")).toBe("1180px");
-  // A CJK glyph is ~2x the advance width of a Latin one, so the same pixel
-  // measure holds ~2x the characters; the zh caps must stay the narrower pair.
-  for (const layout of ["manuscript", "codex"]) {
-    expect(parseInt(measure("zh", layout), 10)).toBeLessThan(parseInt(measure("en", layout), 10));
+test("caps are in em, so the measure holds its character count at any text size", () => {
+  for (const lang of ["en", "zh"] as const) {
+    for (const layout of ["manuscript", "codex"]) expect(measure(lang, layout)).toMatch(/^\d+(\.\d+)?em$/);
   }
 });
 
-test("atlas is uncapped in both languages, so the panel fills the row", () => {
-  expect(measure("en", "atlas")).toBe("none");
-  expect(measure("zh", "atlas")).toBe("none");
+test("the default measure reads about 66 to 72 Latin characters, zh narrower", () => {
+  expect(DEFAULT_SETTINGS.layout).toBe("codex");
+  // Inter at 18 px advances about 0.48 em per character of running English.
+  const chars = (parseFloat(measure("en", "codex")) / 0.48);
+  expect(chars).toBeGreaterThanOrEqual(66);
+  expect(chars).toBeLessThanOrEqual(76);
+  // A CJK glyph is ~2x the advance width of a Latin one, so the zh caps must
+  // stay the narrower pair.
+  for (const layout of ["manuscript", "codex"]) {
+    expect(parseFloat(measure("zh", layout))).toBeLessThan(parseFloat(measure("en", layout)));
+  }
+  expect(parseFloat(measure("en", "manuscript"))).toBeLessThan(parseFloat(measure("en", "codex")));
 });
 
-test("the default layout is codex and it is wider than the old fixed 940", () => {
-  expect(DEFAULT_SETTINGS.layout).toBe("codex");
-  expect(parseInt(measure("en", "codex"), 10)).toBeGreaterThan(940);
-  expect(parseInt(measure("zh", "codex"), 10)).toBeGreaterThan(940);
+test("no layout drops the column below the 640 px figure modules need", () => {
+  for (const lang of ["en", "zh"] as const) {
+    for (const layout of ["manuscript", "codex"]) expect(px(measure(lang, layout))).toBeGreaterThanOrEqual(640);
+  }
+});
+
+test("atlas is uncapped in both languages, so the column fills the row", () => {
+  expect(measure("en", "atlas")).toBe("100%");
+  expect(measure("zh", "atlas")).toBe("100%");
 });
 
 test("a saved layout is applied before first paint, so the width does not jump", () => {
@@ -81,10 +92,12 @@ test("the layout control is reachable and named in both languages", () => {
   }
 });
 
-// The server render carries the desktop shell's mini-TOC gutter as inline
-// padding on <main>. Below 992 px the TOC is hidden, so the stylesheet must
-// drop that gutter or a reader without script gets a sliver of an article.
-test("narrow viewports drop the mini-TOC gutter before hydration", () => {
-  expect(reader).toMatch(/<main[^>]*paddingRight: showMiniToc/);
-  expect(css).toMatch(/@media \(max-width: 991px\) \{ \.reader main \{ padding-right: 0 !important; \} \}/);
+// The server render assumes a desktop, so the side columns must be hidden by
+// the stylesheet on narrow viewports, or a reader without script gets the
+// article squeezed between them.
+test("narrow viewports hide the side columns before hydration", () => {
+  expect(css).toMatch(/@media \(max-width: 991\.98px\) \{[^}]*\.rdr-desktop-aside[^{]*\{ display: none !important; \}/);
+  expect(css).toMatch(/@media \(max-width: 1199\.98px\) \{ \.rdr-toc-wrap \{ display: none; \} \}/);
+  expect(reader).toContain("const TOC_MIN_VW = 1200;");
+  expect(reader).toContain("const MAIN_MIN = 640 + 2 * 32;");
 });

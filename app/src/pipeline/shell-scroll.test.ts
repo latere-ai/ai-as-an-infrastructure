@@ -1,8 +1,9 @@
-// Regression guard for the fixed-height app shell: only <main> may scroll, so
-// the document must be locked. Without this, a 100vh-shell-vs-100%-body delta
-// (e.g. always-visible OS scrollbars) or scroll-chaining off <main>'s end drags
-// the whole shell (sticky header included) off-screen, leaving blank gaps and a
-// page that can't scroll back to the top. See deep-link reports on long chapters.
+// Guard for the reader's scroll model: the document is the scroll container.
+// The window scrolls the article, so elastic overscroll, scroll restoration,
+// #fragment links and find-in-page are the browser's own; the header and the
+// side columns are sticky. An earlier fixed-height shell scrolled an inner
+// <main> and locked the document, which lost all four and needed a script to
+// re-implement anchor scrolling.
 
 import { test, expect } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -10,22 +11,34 @@ import { readFileSync } from "node:fs";
 const css = readFileSync(new URL("../theme.css", import.meta.url), "utf8");
 const reader = readFileSync(new URL("../Reader.tsx", import.meta.url), "utf8");
 
-test("the document viewport is locked so the app shell cannot scroll", () => {
-  // html, body must hide overflow; the shell is 100vh and only <main> scrolls.
-  expect(css).toMatch(/html,\s*body\s*\{[^}]*overflow:\s*hidden/);
+test("the document is not locked, so the window scrolls the page", () => {
+  expect(css).not.toMatch(/html,\s*body\s*\{[^}]*overflow:\s*hidden/);
+  expect(css).not.toMatch(/html,\s*body\s*\{[^}]*height:\s*100%/);
+  expect(css).not.toMatch(/overscroll-behavior:\s*none/);
+  expect(reader).not.toMatch(/overscrollBehavior:\s*"none"/);
+  expect(reader).not.toMatch(/overflowY:\s*"auto"[^}]*borderRadius: 28/);
 });
 
-test("<main> disables overscroll so it neither chains nor rubber-band bounces", () => {
-  // `none` (not `contain`): contain stops scroll-chaining but still allows the
-  // macOS elastic bounce that drags content and reveals blank above/below.
-  expect(reader).toMatch(/overscrollBehavior:\s*"none"/);
-  expect(css).toMatch(/html,\s*body\s*\{[^}]*overscroll-behavior:\s*none/);
+test("the header and side columns are sticky; only the nav scrolls within itself", () => {
+  expect(css).toMatch(/\.rdr-header \{[^}]*position: sticky; top: 0;/);
+  expect(css).toMatch(/\.rdr-nav \{[^}]*position: sticky; top: var\(--hdr-h\);[^}]*height: calc\(100vh - var\(--hdr-h\)\)/);
+  expect(css).toMatch(/\.rdr-nav-scroll \{[^}]*overflow-y: auto; overscroll-behavior: contain;/);
+  expect(css).toMatch(/\.rdr-toc \{[^}]*position: sticky; top: var\(--hdr-h\);/);
 });
 
-test("the reader owns #fragment scrolling and pins the document to the top", () => {
-  // Defensive: the native anchor scroll can move the document (header off-
-  // screen) in this inner-scroll shell, so the reader resets document scroll to
-  // 0 and scrolls <main> itself. Guard the document-pin so it isn't dropped.
-  expect(reader).toMatch(/scrollingElement/);
-  expect(reader).toMatch(/document\.addEventListener\("scroll"/);
+test("anchors are native and land below the sticky header", () => {
+  // No script pins the document or scrolls a container to the fragment.
+  expect(reader).not.toMatch(/scrollingElement;\s*if \(se\) se\.scrollTop = 0/);
+  expect(reader).not.toMatch(/addEventListener\("hashchange"/);
+  expect(css).toMatch(/html \{[^}]*scroll-padding-top: calc\(var\(--hdr-h\) \+ 12px\)/);
+});
+
+test("reading progress and the active heading follow the window's scroll", () => {
+  expect(reader).toMatch(/window\.addEventListener\("scroll", onScroll/);
+  expect(reader).toMatch(/document\.scrollingElement/);
+});
+
+test("an open drawer or the search dialog holds the page still", () => {
+  expect(reader).toContain("const overlayOpen = drawer || tocDrawer || searchOpen;");
+  expect(reader).toContain('document.body.style.overflow = "hidden";');
 });

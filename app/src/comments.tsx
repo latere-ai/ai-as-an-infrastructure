@@ -114,9 +114,9 @@ function timeAgo(iso: string): string {
 function Avatar({ src, name }: { src: string; name: string }) {
   const initials = (name || "?").trim().slice(0, 1).toUpperCase();
   return src ? (
-    <img src={src} alt="" width={28} height={28} style={{ borderRadius: "50%", flex: "none" }} />
+    <img src={src} alt="" width={24} height={24} style={{ borderRadius: "50%", flex: "none", marginTop: 1 }} />
   ) : (
-    <span style={{ width: 28, height: 28, borderRadius: "50%", flex: "none", display: "grid", placeItems: "center", background: "var(--bg-raised)", color: "var(--fg-2)", fontSize: 13, fontWeight: 600 }}>{initials}</span>
+    <span style={{ width: 24, height: 24, borderRadius: "50%", flex: "none", marginTop: 1, display: "grid", placeItems: "center", background: "var(--bg-raised)", color: "var(--fg-2)", fontSize: 11.5, fontWeight: 600 }}>{initials}</span>
   );
 }
 
@@ -261,16 +261,16 @@ function Reactions({ c, me, api, refresh }: { c: Comment; me: Me | null; api: Ap
   const [open, setOpen] = useState(false);
   const toggle = async (emoji: string) => { if (!me) return; await api.react(c.id, emoji); setOpen(false); refresh(); };
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginTop: 6 }}>
+    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center", marginTop: 4 }}>
       {c.reactions?.map((r) => (
         <button key={r.emoji} type="button" disabled={!me} onClick={() => toggle(r.emoji)}
-          style={{ display: "flex", gap: 4, alignItems: "center", padding: "1px 8px", borderRadius: 999, cursor: me ? "pointer" : "default", fontSize: 13, border: `1px solid ${r.mine ? "var(--accent)" : "var(--border)"}`, background: r.mine ? "var(--accent-glow)" : "transparent", color: "var(--fg-1)" }}>
+          style={{ display: "flex", gap: 4, alignItems: "center", padding: "0 6px", height: 22, borderRadius: "var(--radius-sm)", cursor: me ? "pointer" : "default", fontSize: 12.5, border: `1px solid ${r.mine ? "var(--accent)" : "var(--border)"}`, background: r.mine ? "var(--accent-glow)" : "transparent", color: "var(--fg-1)" }}>
           {r.emoji} <span style={{ color: "var(--fg-3)" }}>{r.count}</span>
         </button>
       ))}
       {me && (
         <div style={{ position: "relative" }}>
-          <button type="button" onClick={() => setOpen((o) => !o)} title="react" style={{ border: "1px solid var(--border)", background: "transparent", color: "var(--fg-3)", borderRadius: 999, cursor: "pointer", padding: "1px 8px", fontSize: 13 }}>＋</button>
+          <button type="button" onClick={() => setOpen((o) => !o)} title="react" style={{ border: "1px solid var(--border)", background: "transparent", color: "var(--fg-3)", borderRadius: "var(--radius-sm)", cursor: "pointer", padding: "0 6px", height: 22, fontSize: 12.5 }}>＋</button>
           {open && (
             <div style={{ position: "absolute", zIndex: 5, display: "flex", gap: 2, padding: 4, background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", boxShadow: "var(--shadow-md)" }}>
               {REACTIONS.map((e) => <button key={e} type="button" onClick={() => toggle(e)} style={{ border: 0, background: "none", cursor: "pointer", fontSize: 16, padding: 2 }}>{e}</button>)}
@@ -291,11 +291,11 @@ function CommentItem({ c, me, api, t, refresh, onReply, onDelete }: {
   const canEdit = c.mine && !c.deleted;
   const canDel = (c.mine || me?.admin) && !c.deleted;
   return (
-    <div id={`rdr-comment-${c.id}`} style={{ display: "flex", gap: 10, scrollMarginTop: 80 }}>
+    <div id={`rdr-comment-${c.id}`} style={{ display: "flex", gap: 10, scrollMarginTop: 60 }}>
       <Avatar src={c.avatar} name={c.author} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, color: "var(--fg-2)" }}>
-          <strong style={{ color: "var(--fg-1)" }}>{c.deleted ? t.deleted : c.author}</strong>
+        <div style={{ fontSize: 13, color: "var(--fg-3)", lineHeight: "26px" }}>
+          <strong style={{ color: "var(--fg-1)", fontWeight: 600 }}>{c.deleted ? t.deleted : c.author}</strong>
           {!c.deleted && <span> · {timeAgo(c.createdAt)}{c.updatedAt !== c.createdAt ? " ·✎" : ""}</span>}
         </div>
         {c.anchor?.exact && !c.deleted && (
@@ -306,18 +306,21 @@ function CommentItem({ c, me, api, t, refresh, onReply, onDelete }: {
             onSubmit={async (b) => { await api.update(c.id, b); setEditing(false); refresh(); }}
             onCancel={() => setEditing(false)} />
         ) : (
-          <div className="rdr-cmt-body" style={{ fontSize: 14, lineHeight: 1.6 }}
+          <div className="rdr-cmt-body" style={{ fontSize: 14.5, lineHeight: 1.6 }}
             dangerouslySetInnerHTML={{ __html: c.deleted ? `<p>${t.deleted}</p>` : renderMd(c.body) }} />
         )}
         {!c.deleted && <Reactions c={c} me={me} api={api} refresh={refresh} />}
-        <div style={{ display: "flex", gap: 12, marginTop: 4, fontSize: 12 }}>
+        <div style={{ display: "flex", gap: 12, marginTop: 2, fontSize: 12 }}>
           {me && onReply && !c.deleted && <button type="button" onClick={() => onReply(c.id)} style={linkBtn}>{t.reply}</button>}
           {canEdit && <button type="button" onClick={() => setEditing(true)} style={linkBtn}>{t.edit}</button>}
           {canDel && <button type="button" onClick={() => onDelete(c)} style={linkBtn}>{t.del}</button>}
         </div>
-        {c.replies?.map((r) => (
-          <div key={r.id} style={{ marginTop: 12 }}><CommentItem c={r} me={me} api={api} t={t} refresh={refresh} onDelete={onDelete} /></div>
-        ))}
+        {c.replies?.length ? (
+          // Replies hang off a 1 px rule, one level deep.
+          <div style={{ marginTop: 10, paddingLeft: 12, borderLeft: "1px solid var(--border-strong)", display: "flex", flexDirection: "column", gap: 10 }}>
+            {c.replies.map((r) => <CommentItem key={r.id} c={r} me={me} api={api} t={t} refresh={refresh} onDelete={onDelete} />)}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -438,16 +441,15 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
 
   const top = list ?? [];
   return (
-    <section className="rdr-comments" style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid var(--border)", fontFamily: "var(--font-ui)", fontSize: 14, lineHeight: 1.6, color: "var(--fg-1)" }}>
-      <h2 style={{ fontFamily: "var(--font-ui)", fontSize: 17, fontWeight: 600, marginBottom: 16 }}>{t.title}{list ? ` · ${countAll(top)}` : ""}</h2>
-      {me ? (
-        <Composer t={t} busy={false} onSubmit={(b) => post(b)} />
-      ) : (
-        <a href="/login" className="lq-smoke-btn" style={{ display: "inline-flex", alignItems: "center", height: 38, padding: "0 18px", borderRadius: 999, border: "1px solid transparent", background: "var(--glass-smoke-strong)", color: "var(--glass-smoke-ink)", fontFamily: "var(--font-ui)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}>{t.login}</a>
-      )}
+    <section className="rdr-comments" style={{ marginTop: 36, paddingTop: 18, borderTop: "1px solid var(--border)", fontFamily: "var(--font-ui)", fontSize: 14, lineHeight: 1.6, color: "var(--fg-1)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+        <h2 style={{ fontFamily: "var(--font-ui)", fontSize: 15, fontWeight: 600 }}>{t.title}{list ? <span style={{ color: "var(--fg-3)", fontWeight: 500 }}>{` · ${countAll(top)}`}</span> : ""}</h2>
+        {!me && <a href="/login" className="rdr-primary">{t.login}</a>}
+      </div>
+      {me && <Composer t={t} busy={false} onSubmit={(b) => post(b)} />}
 
       {orphans.length > 0 && (
-        <details style={{ marginTop: 20, fontSize: 13, color: "var(--fg-3)" }}>
+        <details style={{ marginTop: 14, fontSize: 13, color: "var(--fg-3)" }}>
           <summary style={{ cursor: "pointer" }}>{t.moved} · {orphans.length}</summary>
           <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: 12 }}>
             {orphans.map((c) => <CommentItem key={c.id} c={c} me={me} api={api} t={t} refresh={refresh} onDelete={setDelTarget} />)}
@@ -455,15 +457,15 @@ export function Comments({ lang, path }: { lang: "en" | "zh"; path: string }) {
         </details>
       )}
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 22, marginTop: 24 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16, marginTop: me ? 16 : 0 }}>
         {list === null ? null : top.length === 0 ? (
-          <p style={{ color: "var(--fg-3)" }}>{t.empty}</p>
+          <p style={{ color: "var(--fg-3)", fontSize: 13.5 }}>{t.empty}</p>
         ) : (
           top.map((c) => (
             <div key={c.id}>
               <CommentItem c={c} me={me} api={api} t={t} refresh={refresh} onReply={setReplyTo} onDelete={setDelTarget} />
               {replyTo === c.id && (
-                <div style={{ marginLeft: 38, marginTop: 10 }}>
+                <div style={{ marginLeft: 34, marginTop: 10 }}>
                   <Composer t={t} busy={false} autoFocus onSubmit={(b) => post(b, c.id)} onCancel={() => setReplyTo(null)} />
                 </div>
               )}

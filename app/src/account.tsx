@@ -47,15 +47,12 @@ export function HeaderAuth({ lang }: { lang: "en" | "zh" }) {
     return () => document.removeEventListener("mousedown", away);
   }, []);
   // Reserve the pill's footprint so the header doesn't jump when auth resolves.
-  if (!ready) return <div style={{ flex: "none", width: 64, height: 38 }} />;
-  if (!me) return (
-    // Smoke-glass pill: inverse-emphasis in the Liquid Glass chrome (matches the
-    // round 38px glass buttons beside it, not the old square accent button).
-    <a href="/login" className="lq-smoke-btn" style={{ flex: "none", display: "inline-flex", alignItems: "center", height: 38, padding: "0 18px", borderRadius: 999, border: "1px solid transparent", background: "var(--glass-smoke-strong)", color: "var(--glass-smoke-ink)", fontFamily: "var(--font-ui)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}>{t.login}</a>
-  );
+  if (!ready) return <div style={{ flex: "none", width: 64, height: 30 }} />;
+  // Logged out: the header's one solid control, sized with the 32 px buttons.
+  if (!me) return <a href="/login" className="rdr-primary">{t.login}</a>;
   return (
     <div ref={box} style={{ position: "relative", flex: "none" }}>
-      <button onClick={() => setOpen((o) => !o)} title={me.name} aria-label={me.name} style={{ border: 0, background: "none", padding: 2, cursor: "pointer", display: "grid", placeItems: "center" }}><Avatar me={me} /></button>
+      <button onClick={() => setOpen((o) => !o)} title={me.name} aria-label={me.name} aria-expanded={open} className="rdr-btn"><Avatar me={me} size={24} /></button>
       {open && <UserMenu me={me} t={t} lang={lang} />}
     </div>
   );
@@ -73,7 +70,7 @@ function UserMenu({ me, t, lang }: { me: NonNullable<Me>; t: typeof A.en; lang: 
     <button onClick={() => setTab(k)} style={{ flex: 1, border: 0, background: "none", padding: "8px 4px", cursor: "pointer", fontFamily: "var(--font-ui)", fontSize: 12, color: tab === k ? "var(--fg-1)" : "var(--fg-3)", borderBottom: `2px solid ${tab === k ? "var(--accent)" : "transparent"}` }}>{label}</button>
   );
   return (
-    <div className="rdr-glass lq-rise" style={{ position: "absolute", top: 46, right: 0, width: 280, zIndex: 60, borderRadius: 18, fontFamily: "var(--font-ui)", overflow: "hidden" }}>
+    <div className="rdr-pop" style={{ width: 280, fontFamily: "var(--font-ui)", overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: "1px solid var(--border)" }}>
         <Avatar me={me} size={28} />
         <span style={{ flex: 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: "var(--fg-1)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{me.name}</span>
@@ -110,7 +107,7 @@ export function BookmarkButton({ lang, path }: { lang: "en" | "zh"; path: string
   if (!me) return null;
   const toggle = async () => { const r = await csrfWrite(me, "PUT", "/api/bookmark", { lang, path }); const d = await r.json(); setOn(!!d.bookmarked); };
   return (
-    <button onClick={toggle} title={on ? t.saved : t.save} style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 6, height: 30, padding: "0 12px", borderRadius: "var(--radius-md)", border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent-glow)" : "transparent", color: on ? "var(--accent)" : "var(--fg-2)", fontFamily: "var(--font-ui)", fontSize: 13, cursor: "pointer" }}>
+    <button onClick={toggle} title={on ? t.saved : t.save} aria-pressed={on} style={{ flex: "none", display: "inline-flex", alignItems: "center", gap: 5, height: 24, padding: "0 8px", borderRadius: "var(--radius-sm)", border: `1px solid ${on ? "var(--accent)" : "var(--border)"}`, background: on ? "var(--accent-glow)" : "transparent", color: on ? "var(--accent)" : "var(--fg-2)", fontFamily: "var(--font-ui)", fontSize: 12.5, cursor: "pointer" }}>
       {on ? "★" : "☆"} {on ? t.saved : t.save}
     </button>
   );
@@ -126,9 +123,8 @@ export function ChapterStats({ lang, path }: { lang: "en" | "zh"; path: string }
   }, [lang, path]);
   if (!st) return null;
   const item = (label: string, value: number) => (
-    <div className="rdr-meta-item" style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-      <span className="rdr-meta-label" style={{ fontSize: 11, color: "var(--fg-3)" }}>{label}</span>
-      <span className="rdr-meta-value" style={{ fontSize: 14, color: "var(--fg-1)" }}>{value.toLocaleString()}</span>
+    <div className="rdr-meta-item" style={{ display: "flex", alignItems: "baseline", gap: 5 }}>
+      <span className="rdr-meta-label">{label}</span><span className="rdr-meta-value">{value.toLocaleString()}</span>
     </div>
   );
   return <>{item(t.views, st.views)}{item(t.readers, st.visitors)}</>;

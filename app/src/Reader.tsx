@@ -1,7 +1,8 @@
-// The reader shell: a faithful React port of the approved "AI 基建 Reader"
-// design. Renders chrome (top bar, full-book sidebar, glass mini-TOC, settings,
-// chapter opener) around a compiled article body. SSR-safe: all browser access
-// is guarded and runs in effects so renderToString works.
+// The reader shell: chrome (sticky header, full-book navigation column, "On
+// this page" column, settings, chapter opener, page footer) around a compiled
+// article body. The document is the scroll container, so the browser owns
+// scrolling, anchors and find-in-page. SSR-safe: all browser access is guarded
+// and runs in effects so renderToString works.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChapterData, Lang, Layout, Palette, ReaderSettings } from "./types.ts";
@@ -45,6 +46,14 @@ const STRINGS: Record<Lang, Strings> = {
 
 const LS_KEY = "aaai-reader-settings";
 
+// Frame geometry, mirrored in theme.css: the header height (--hdr-h), the
+// narrowest article column that keeps figure modules on their wide layout plus
+// its gutters, and the viewport width from which the "On this page" column is
+// docked instead of living in a drawer.
+const HEADER_H = 48;
+const MAIN_MIN = 640 + 2 * 32;
+const TOC_MIN_VW = 1200;
+
 const SIDEBAR_EXTERNAL_LINKS = [
   { labelKey: "aboutAuthor", href: "https://changkun.de" },
   { labelKey: "aboutLatere", href: "https://latere.ai" },
@@ -76,16 +85,6 @@ function LatereLogo() {
   );
 }
 
-// Cursor-following spotlight: write the pointer's position (relative to the
-// hovered item) into --mx/--my so the CSS radial-gradient hover tracks it. One
-// handler shared by every sidebar nav item; only the hovered element fires.
-function spotMove(e: React.PointerEvent<HTMLElement>) {
-  const el = e.currentTarget;
-  const r = el.getBoundingClientRect();
-  el.style.setProperty("--mx", `${e.clientX - r.left}px`);
-  el.style.setProperty("--my", `${e.clientY - r.top}px`);
-}
-
 function Icon({ d, size = 16 }: { d: React.ReactNode; size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden>
@@ -110,7 +109,11 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const [drawer, setDrawer] = useState(false);
   const [tocDrawer, setTocDrawer] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const mainRef = useRef<HTMLElement>(null);
+  // Viewport width, for fitting the side columns around a 640 px article. The
+  // SSR value assumes a desktop; CSS media queries hide the columns on narrow
+  // screens before hydration corrects it.
+  const [vw, setVw] = useState(1440);
+  const [tocFits, setTocFits] = useState(true);
   const settingsRef = useRef<HTMLDivElement>(null);
 
   // Spotlight search: Cmd/Ctrl+K opens it from anywhere (preventDefault so the
@@ -141,12 +144,29 @@ export default function Reader({ chapter, initial }: ReaderProps) {
         if (saved.layout) document.documentElement.dataset.layout = saved.layout;
       }
     } catch {}
-    const mq = window.matchMedia("(max-width: 991px)");
-    const onMq = () => setMobile(mq.matches);
+    const mq = window.matchMedia("(max-width: 991.98px)");
+    const wide = window.matchMedia(`(min-width: ${TOC_MIN_VW}px)`);
+    const onMq = () => { setMobile(mq.matches); setTocFits(wide.matches); setVw(document.documentElement.clientWidth); };
     onMq();
     mq.addEventListener("change", onMq);
-    return () => mq.removeEventListener("change", onMq);
+    wide.addEventListener("change", onMq);
+    window.addEventListener("resize", onMq, { passive: true });
+    return () => {
+      mq.removeEventListener("change", onMq);
+      wide.removeEventListener("change", onMq);
+      window.removeEventListener("resize", onMq);
+    };
   }, []);
+
+  // With the document as the scroller, an open drawer or the search dialog
+  // would let the page scroll underneath it; hold the page still meanwhile.
+  const overlayOpen = drawer || tocDrawer || searchOpen;
+  useEffect(() => {
+    if (!overlayOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [overlayOpen]);
 
   useEffect(() => {
     try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch {}
@@ -162,64 +182,30 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [settingsOpen]);
 
-  // The <main> column is the scroll container (the design model: a fixed-height
-  // shell with a non-moving header). Progress + active heading track it.
+  // The document is the scroll container. Progress and the active heading
+  // track the window's scroll; #fragment links, scroll restoration and
+  // find-in-page are left to the browser (scroll-padding clears the header).
   useEffect(() => {
-    const el = mainRef.current;
-    if (!el) return;
     let ticking = false;
     const ids = chapter.headings.map((h) => h.id);
     const update = () => {
       ticking = false;
-      const max = el.scrollHeight - el.clientHeight;
-      setProgress(max > 0 ? Math.min(1, Math.max(0, el.scrollTop / max)) : 0);
+      const se = document.scrollingElement ?? document.documentElement;
+      const max = se.scrollHeight - se.clientHeight;
+      setProgress(max > 0 ? Math.min(1, Math.max(0, se.scrollTop / max)) : 0);
       let cur = ids[0] ?? "";
       for (const id of ids) {
-        const h = el.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
-        if (h && h.getBoundingClientRect().top <= 90) cur = id;
+        const h = document.getElementById(id);
+        if (h && h.getBoundingClientRect().top <= HEADER_H + 40) cur = id;
       }
       setActiveId(cur);
     };
     const onScroll = () => { if (!ticking) { ticking = true; requestAnimationFrame(update); } };
-    el.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onScroll, { passive: true });
     update();
-    return () => { el.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onScroll); };
+    return () => { window.removeEventListener("scroll", onScroll); window.removeEventListener("resize", onScroll); };
   }, [chapter.headings]);
-
-  // Own the #fragment scroll. The browser's native anchor scroll is unreliable
-  // in this inner-scroll shell: arriving via a deep-link it can scroll the
-  // DOCUMENT (pushing the fixed header off-screen) rather than <main>, and the
-  // overflow:hidden lock then traps it there with no way back. So always pin the
-  // document to the top (the header can never leave) and scroll <main> to the
-  // target ourselves, with a small gap below the header.
-  useEffect(() => {
-    const align = () => {
-      const se = document.scrollingElement;
-      if (se) se.scrollTop = 0;
-      const main = mainRef.current;
-      const id = decodeURIComponent(location.hash.replace(/^#/, ""));
-      if (!main || !id) return;
-      const el = main.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
-      if (!el) return;
-      const delta = el.getBoundingClientRect().top - main.getBoundingClientRect().top;
-      main.scrollTo({ top: main.scrollTop + delta - 16, behavior: "auto" });
-    };
-    // The document must never scroll in this fixed shell; snap any stray scroll
-    // (a late/programmatic native fragment scroll) back so the header can't be
-    // pushed off. document-level 'scroll' does not fire for <main>'s own scroll.
-    const pin = () => { const se = document.scrollingElement; if (se && se.scrollTop !== 0) se.scrollTop = 0; };
-    // Correct across hydration + late native scroll + async diagram layout.
-    const r1 = requestAnimationFrame(() => requestAnimationFrame(align));
-    const t1 = setTimeout(align, 120);
-    window.addEventListener("hashchange", align);
-    document.addEventListener("scroll", pin, { passive: true });
-    return () => {
-      cancelAnimationFrame(r1); clearTimeout(t1);
-      window.removeEventListener("hashchange", align);
-      document.removeEventListener("scroll", pin);
-    };
-  }, [chapter.path]);
 
   // Initialize the article runtimes (interactive viz/3d, figure modules,
   // runnable Python, table wrapping) AFTER React has hydrated the article. They
@@ -282,178 +268,157 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   };
   const fontScale = Math.min(1.4, Math.max(0.8, s.fontScale));
 
+  // Column fit: the article column keeps at least MAIN_MIN, so a widened nav
+  // gives way first, and the mini-TOC docks only where it still fits beside it.
+  // Below that it lives in the same drawer the phone layout uses.
   const showSidebar = !mobile && !s.navCollapsed;
-  const showMiniToc = !mobile && !s.tocCollapsed;
+  const navW = Math.max(200, Math.min(s.navW, vw - MAIN_MIN));
+  const tocRoom = vw - (showSidebar ? navW : 0) - MAIN_MIN;
+  const tocDocked = !mobile && tocFits && tocRoom >= 170;
+  const tocW = Math.max(170, Math.min(s.tocW, tocRoom));
+  const hasToc = chapter.headings.length > 0;
+  const showMiniToc = tocDocked && hasToc && !s.tocCollapsed;
   const bodyFont = s.serifBody ? "var(--font-cjk)" : "var(--font-ui)";
   const showBreadcrumbTitle = !chapter.isPartIntro && !!chapter.chapterNum && chapter.title !== chapter.crumbChapter;
 
-  // Round glass pill buttons in the floating header. The resting fill is inline
-  // (active vs idle); `.lq-iconbtn:hover` overrides it via !important in CSS.
-  const iconBtn = (active: boolean): React.CSSProperties => ({
-    flex: "none", width: 38, height: 38, display: "inline-flex", alignItems: "center", justifyContent: "center",
-    border: "1px solid var(--glass-border)", background: active ? "var(--glass-pill-fill)" : "var(--glass-ultrathin)",
-    borderRadius: 999, color: "var(--fg-1)", cursor: "pointer",
-  });
-
   // Header progress ring: an 8px-radius circle (circumference ~50.27) whose dash
-  // offset shrinks as the reader scrolls <main>.
+  // offset shrinks as the reader scrolls the page.
   const progressDash = (50.27 * (1 - progress)).toFixed(2);
   const progressLabel = `${Math.round(progress * 100)}%`;
-  const articlePadding = mobile ? "28px 22px 48px" : "44px clamp(28px, 5vw, 60px) 56px";
+  const searchIcon = <Icon d={<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" strokeLinecap="round" /></>} size={14} />;
 
   return (
     <div
-      className="reader lq-reader"
+      className="reader"
       data-layout={s.layout}
       style={{
-        height: "100%", overflow: "hidden", position: "relative",
-        background: "var(--bg)", color: "var(--fg-1)", fontFamily: "var(--font-ui)",
+        background: "var(--bg-surface)", color: "var(--fg-1)", fontFamily: "var(--font-ui)",
         fontSize: `calc(18px * ${fontScale})`,
       }}
     >
-      {/* dotted-paper backdrop the glass diffuses */}
-      <div className="lq-bg" aria-hidden><div className="lq-dots" /></div>
-
-      {/* ===== FLOATING PILL HEADER (only <main> scrolls beneath it) ===== */}
-      <header className="glass-thin" style={{
-        position: "absolute", top: 12, left: 16, right: 16, height: 56, zIndex: 50,
-        borderRadius: 999, display: "flex", alignItems: "center", gap: 10, padding: "0 10px",
-      }}>
+      {/* ===== STICKY HEADER ===== */}
+      <header className="rdr-header">
         <button onClick={() => (mobile ? (setTocDrawer(false), setDrawer((d) => !d)) : set({ navCollapsed: !s.navCollapsed }))}
-          title={t.sidebar} aria-label={t.sidebar} className="glass-ultrathin lq-iconbtn" style={iconBtn(mobile ? drawer : !s.navCollapsed)}>
-          <Icon d={<><rect x="2" y="3" width="12" height="10" rx="3" /><line x1="6.5" y1="3" x2="6.5" y2="13" /></>} />
+          title={t.sidebar} aria-label={t.sidebar} aria-pressed={mobile ? drawer : !s.navCollapsed} className="rdr-btn">
+          <Icon d={<><rect x="2" y="3" width="12" height="10" rx="2" /><line x1="6.5" y1="3" x2="6.5" y2="13" /></>} />
         </button>
 
-        <a href={chapter.prefix || "./"} style={{ display: "flex", alignItems: "center", gap: 9, flex: "none", padding: "0 6px", color: "var(--fg-1)", textDecoration: "none" }}>
+        <a href={chapter.prefix || "./"} className="rdr-brand">
           <LatereLogo />
-          <span style={{ fontFamily: "var(--font-serif)", fontStyle: lang === "zh" ? "normal" : "italic", fontSize: 21, letterSpacing: "-.01em" }}>
+          <span style={{ fontFamily: "var(--font-serif)", fontStyle: lang === "zh" ? "normal" : "italic", fontSize: 19, letterSpacing: "-.01em", lineHeight: 1 }}>
             {lang === "zh" ? "AI 基建" : "AI Infra"}
           </span>
         </a>
 
-        {!mobile && (
-          <nav aria-label="breadcrumb" style={{
-            display: "flex", alignItems: "center", gap: 9, flex: "1 1 auto", minWidth: 0, paddingLeft: 14, marginLeft: 2,
-            borderLeft: "1px solid var(--border-strong)", fontFamily: "var(--font-mono)", fontSize: 11,
-            letterSpacing: ".02em", color: "var(--fg-3)", whiteSpace: "nowrap", overflow: "hidden",
-          }}>
+        {!mobile ? (
+          <nav aria-label="breadcrumb" className="rdr-crumb rdr-desk">
             <span style={{ flex: "none", overflow: "hidden", textOverflow: "ellipsis" }}>{chapter.partShort}</span>
-            <span style={{ opacity: 0.5 }}>·</span>
-            <span style={{ flex: "none", color: "var(--fg-1)", whiteSpace: "nowrap" }}>{chapter.crumbChapter}</span>
+            <span className="is-sep">·</span>
+            <span className="is-here" style={{ flex: "none" }}>{chapter.crumbChapter}</span>
             {showBreadcrumbTitle && (
               <>
-                <span style={{ opacity: 0.5 }}>·</span>
-                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", color: "var(--fg-1)", whiteSpace: "nowrap" }}>{chapter.title}</span>
+                <span className="is-sep">·</span>
+                <span className="is-title">{chapter.title}</span>
               </>
             )}
           </nav>
+        ) : (
+          <div style={{ flex: "1 1 auto" }} />
         )}
 
-        <div style={{ flex: "1 1 10px" }} />
+        {!mobile ? (
+          <button onClick={() => setSearchOpen(true)} aria-label={t.search} className="rdr-search rdr-desk">
+            {searchIcon}
+            <span>{t.search}</span>
+            <kbd className="rdr-kbd">⌘K</kbd>
+          </button>
+        ) : (
+          <button onClick={() => setSearchOpen(true)} title={t.search} aria-label={t.search} className="rdr-btn">{searchIcon}</button>
+        )}
 
         {!mobile && (
-          <div title={progressLabel} style={{
-            flex: "none", display: "inline-flex", alignItems: "center", gap: 7, height: 38, padding: "0 12px",
-            borderRadius: 999, border: "1px solid var(--glass-border)", background: "var(--glass-ultrathin)",
-          }}>
-            <svg width={16} height={16} viewBox="0 0 20 20" aria-hidden style={{ flex: "none", transform: "rotate(-90deg)" }}>
+          <div title={progressLabel} className="rdr-pct rdr-desk">
+            <svg width={14} height={14} viewBox="0 0 20 20" aria-hidden style={{ flex: "none", transform: "rotate(-90deg)" }}>
               <circle cx="10" cy="10" r="8" fill="none" stroke="var(--border-strong)" strokeWidth={2.5} />
               <circle cx="10" cy="10" r="8" fill="none" stroke="var(--accent)" strokeWidth={2.5} strokeLinecap="round"
                 strokeDasharray="50.27" strokeDashoffset={progressDash} style={{ transition: "stroke-dashoffset .15s linear" }} />
             </svg>
-            <span style={{ flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".08em", color: "var(--fg-3)", minWidth: 26, textAlign: "right" }}>{progressLabel}</span>
+            <span style={{ minWidth: 26, textAlign: "right" }}>{progressLabel}</span>
           </div>
         )}
 
         {!mobile && (
-          <a href={REPO_URL} target="_blank" rel="noreferrer" title={t.sourceRepo} aria-label={t.sourceRepo}
-            className="glass-ultrathin lq-iconbtn" style={{ ...iconBtn(false), textDecoration: "none" }}>
+          <a href={REPO_URL} target="_blank" rel="noreferrer" title={t.sourceRepo} aria-label={t.sourceRepo} className="rdr-btn rdr-desk">
             <GitHubMark />
           </a>
         )}
 
-        {(!mobile || chapter.headings.length > 0) && (
-          <button onClick={() => (mobile ? (setDrawer(false), setTocDrawer((d) => !d)) : set({ tocCollapsed: !s.tocCollapsed }))}
-            title={t.onThisPage} aria-label={t.onThisPage} className="glass-ultrathin lq-iconbtn" style={iconBtn(mobile ? tocDrawer : !s.tocCollapsed)}>
-            <Icon d={<><rect x="2" y="3" width="12" height="10" rx="3" /><line x1="9.5" y1="3" x2="9.5" y2="13" /></>} />
+        {hasToc && (
+          <button onClick={() => (tocDocked ? set({ tocCollapsed: !s.tocCollapsed }) : (setDrawer(false), setTocDrawer((d) => !d)))}
+            title={t.onThisPage} aria-label={t.onThisPage} aria-pressed={tocDocked ? !s.tocCollapsed : tocDrawer} className="rdr-btn">
+            <Icon d={<><rect x="2" y="3" width="12" height="10" rx="2" /><line x1="9.5" y1="3" x2="9.5" y2="13" /></>} />
           </button>
         )}
 
         <div ref={settingsRef} style={{ position: "relative", flex: "none" }}>
-          <button onClick={() => setSettingsOpen((o) => !o)} title={t.settings} aria-label={t.settings} className="glass-ultrathin lq-iconbtn" style={iconBtn(settingsOpen)}>
+          <button onClick={() => setSettingsOpen((o) => !o)} title={t.settings} aria-label={t.settings} aria-expanded={settingsOpen} className="rdr-btn">
             <Icon d={<><path d="M2 4.5h7M11 4.5h3M2 11.5h3M7 11.5h7" strokeLinecap="round" /><circle cx="10" cy="4.5" r="2" /><circle cx="5.5" cy="11.5" r="2" /></>} />
           </button>
           {settingsOpen && <SettingsPanel t={t} s={s} set={set} chapter={chapter} />}
         </div>
 
         <HeaderAuth lang={lang} />
+
+        <div className="rdr-progress" aria-hidden style={{ transform: `scaleX(${progress})` }} />
       </header>
 
-      {/* ===== BODY: floating glass panels over the backdrop; only <main> scrolls ===== */}
-      <div style={{ position: "absolute", inset: "80px 16px 16px", display: "flex", gap: 16, zIndex: 1 }}>
+      {/* ===== BODY ROW: nav | article | on this page. The window scrolls. ===== */}
+      <div className="rdr-body">
         {/* Desktop nav. Wrapped so a CSS media query can hide it on mobile before
-            JS hydrates (mobile starts false in SSR, so these would otherwise flash
+            JS hydrates (mobile starts false in SSR, so it would otherwise flash
             open on phones until the matchMedia effect runs). */}
         <div className="rdr-desktop-aside">
-          {showSidebar && <SidebarTree t={t} chapter={chapter} width={s.navW} onOpenSearch={() => setSearchOpen(true)} />}
           {showSidebar && (
-            <div onPointerDown={(e) => startDrag("nav", e)} title={t.resize} className="rdr-resize"
-              style={{ flex: "none", width: 8, margin: "0 -12px", cursor: "col-resize", zIndex: 6, borderRadius: 4 }} />
+            <SidebarTree t={t} chapter={chapter} width={navW}
+              onStartDrag={(e) => startDrag("nav", e)} />
           )}
         </div>
 
-        {/* The mini-TOC floats absolutely over main's right edge, so reserve a
-            right gutter for it when shown; the article column then clears it
-            instead of running underneath. */}
-        <main ref={mainRef} style={{ flex: 1, minWidth: 0, overflowY: "auto", overscrollBehavior: "none", scrollBehavior: "smooth", borderRadius: 28, paddingRight: showMiniToc ? s.tocW + 24 : 0 }}>
-          <article className="lq-article-panel lq-rise" style={{
-            margin: "4px auto 40px",
-            padding: articlePadding,
-            fontFamily: bodyFont, lineHeight: 1.85, color: "var(--fg-2)",
-          }}>
+        <main className="rdr-main">
+          <article className="rdr-col" style={{ fontFamily: bodyFont }}>
             <ChapterOpener chapter={chapter} t={t} />
             {articleBody}
             <PrevNextNav chapter={chapter} t={t} />
-            <ContributeStrip chapter={chapter} t={t} />
             <Comments lang={chapter.lang} path={chapter.path} />
+            <PageFooter chapter={chapter} t={t} />
           </article>
         </main>
 
-        <div className="rdr-desktop-aside">
+        <div className="rdr-desktop-aside rdr-toc-wrap">
           {showMiniToc && (
-            <MiniToc t={t} chapter={chapter} activeId={activeId} width={s.tocW}
+            <MiniToc t={t} chapter={chapter} activeId={activeId} width={tocW}
               onStartDrag={(e) => startDrag("toc", e)} onClose={() => set({ tocCollapsed: true })} />
           )}
         </div>
       </div>
 
-      {/* mobile nav drawer */}
+      {/* nav drawer (phones) */}
       {mobile && drawer && (
         <>
-          <div onClick={() => setDrawer(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", zIndex: 60 }} />
-          <div className="glass-thick rdr-glass lq-rise" style={{ position: "fixed", top: 78, bottom: 14, left: 14, width: 300, maxWidth: "84vw", zIndex: 61, overflowY: "auto", borderRadius: 22, padding: "16px 8px 24px" }}>
-            <SidebarTree t={t} chapter={chapter} embedded onNavigate={() => setDrawer(false)}
-              onOpenSearch={() => { setDrawer(false); setSearchOpen(true); }} />
+          <div className="rdr-scrim" onClick={() => setDrawer(false)} />
+          <div className="rdr-drawer is-left">
+            <SidebarTree t={t} chapter={chapter} embedded onNavigate={() => setDrawer(false)} />
           </div>
         </>
       )}
 
-      {/* mobile "on this page" drawer */}
-      {mobile && tocDrawer && (
+      {/* "on this page" drawer: phones, and desktops too narrow to dock it */}
+      {!tocDocked && tocDrawer && (
         <>
-          <div onClick={() => setTocDrawer(false)} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", backdropFilter: "blur(3px)", WebkitBackdropFilter: "blur(3px)", zIndex: 60 }} />
-          <div className="glass-thick rdr-glass lq-rise" style={{ position: "fixed", top: 78, bottom: 14, right: 14, width: 300, maxWidth: "84vw", zIndex: 61, overflowY: "auto", borderRadius: 22, padding: "16px 18px 24px" }}>
-            <div className="rdr-eyebrow" style={{ fontSize: 10, color: "var(--fg-3)", marginBottom: 12 }}>{t.onThisPage}</div>
-            <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-              {chapter.headings.map((h) => (
-                <a key={h.id} href={`#${h.id}`} onClick={() => setTocDrawer(false)} className="lq-nav-item" style={{
-                  display: "block", padding: "7px 10px", borderRadius: 9, textDecoration: "none",
-                  marginLeft: h.level === 3 ? 12 : 0,
-                  fontSize: 13.5, lineHeight: 1.4, color: activeId === h.id ? "var(--accent)" : "var(--fg-2)", fontWeight: activeId === h.id ? 600 : 400,
-                  background: activeId === h.id ? "var(--accent-subtle)" : "transparent",
-                }}>{h.text}</a>
-              ))}
-            </nav>
+          <div className="rdr-scrim" onClick={() => setTocDrawer(false)} />
+          <div className="rdr-drawer is-right">
+            <div className="rdr-toc-title" style={{ marginBottom: 10 }}>{t.onThisPage}</div>
+            <TocLinks chapter={chapter} activeId={activeId} onNavigate={() => setTocDrawer(false)} />
           </div>
         </>
       )}
@@ -463,6 +428,9 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   );
 }
 
+// Chapter metadata on one compact line that wraps as needed: author, review
+// date, reading time, then the view counts and the bookmark toggle once the
+// account API answers.
 function MetaRow({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   // One date per page: the review date when the chapter has one, else the git
   // modification date (empty in the production build, which has no .git).
@@ -473,47 +441,24 @@ function MetaRow({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   ].filter((i) => i.v);
   if (!items.length) return null;
   return (
-    <div className="rdr-meta-row" style={{ display: "flex", flexWrap: "wrap", gap: "10px 28px", paddingTop: 14, borderTop: "1px solid var(--border)" }}>
+    <div className="rdr-meta-row">
       {items.map((i) => (
-        <div key={i.l} className="rdr-meta-item" style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
-          <span className="rdr-meta-label" style={{ flex: "none", fontSize: 11, color: "var(--fg-3)" }}>{i.l}</span>
-          <span className="rdr-meta-value" style={{ minWidth: 0, fontSize: 14, color: "var(--fg-1)" }}>{i.v}</span>
+        <div key={i.l} className="rdr-meta-item" style={{ display: "flex", alignItems: "baseline", gap: 5, minWidth: 0 }}>
+          <span className="rdr-meta-label">{i.l}</span><span className="rdr-meta-value">{i.v}</span>
         </div>
       ))}
       <ChapterStats lang={chapter.lang} path={chapter.path} />
+      <BookmarkButton lang={chapter.lang} path={chapter.path} />
     </div>
   );
 }
 
 function ChapterOpener({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   return (
-    <div style={{ marginBottom: 26 }}>
-      <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, letterSpacing: ".15em", textTransform: "uppercase", color: "var(--accent)", marginBottom: 10 }}>{chapter.eyebrow}</div>
-      <h1 style={{ fontFamily: "var(--font-ui)", fontWeight: 600, letterSpacing: "-.025em", lineHeight: 1.1, fontSize: "clamp(2rem,4vw,2.9rem)", color: "var(--fg-1)", marginBottom: 14 }}>{chapter.title}</h1>
-      <div style={{ marginBottom: 14 }}><BookmarkButton lang={chapter.lang} path={chapter.path} /></div>
+    <div>
+      {chapter.eyebrow && <div className="rdr-kicker">{chapter.eyebrow}</div>}
+      <h1 className="rdr-title">{chapter.title}</h1>
       <MetaRow chapter={chapter} t={t} />
-    </div>
-  );
-}
-
-// The sticky search trigger that lives at the top of the sidebar. It looks like
-// an input but only opens the spotlight modal (so the real search field has one
-// home, reachable from the sidebar, the mobile drawer, and Cmd/Ctrl+K).
-function SearchTrigger({ t, onOpen }: { t: Strings; onOpen: () => void }) {
-  return (
-    <div style={{ flex: "none", padding: "0 14px 12px" }}>
-      <button onClick={onOpen} aria-label={t.search} className="glass-ultrathin lq-iconbtn" style={{
-        width: "100%", height: 38, padding: "0 12px 0 14px", display: "flex", alignItems: "center", gap: 8,
-        border: "1px solid var(--glass-border)", background: "var(--glass-ultrathin)", borderRadius: 999,
-        color: "var(--fg-3)", cursor: "pointer", fontFamily: "var(--font-ui)", fontSize: 13, textAlign: "left",
-      }}>
-        <Icon d={<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" strokeLinecap="round" /></>} size={14} />
-        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.search}</span>
-        <kbd style={{
-          flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, letterSpacing: ".02em",
-          color: "var(--fg-3)", border: "1px solid var(--border-strong)", borderRadius: 6, padding: "1px 5px",
-        }}>⌘K</kbd>
-      </button>
     </div>
   );
 }
@@ -560,32 +505,26 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, zIndex: 80, display: "flex", justifyContent: "center", alignItems: "flex-start",
-      padding: "12vh 16px 16px", background: "rgba(0,0,0,.3)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)",
+      padding: "12vh 16px 16px", background: "rgba(0,0,0,.32)",
     }}>
-      <div onClick={(e) => e.stopPropagation()} onKeyDown={onKey} className="glass-thick rdr-glass lq-rise" role="dialog" aria-modal="true" aria-label={t.search} style={{
-        width: "100%", maxWidth: 620, maxHeight: "76vh", display: "flex", flexDirection: "column", overflow: "hidden",
-        borderRadius: 28,
-      }}>
-        <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 11, padding: "0 16px", borderBottom: "1px solid var(--border)" }}>
+      <div onClick={(e) => e.stopPropagation()} onKeyDown={onKey} className="rdr-dialog" role="dialog" aria-modal="true" aria-label={t.search}>
+        <div style={{ flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 14px", borderBottom: "1px solid var(--border-strong)" }}>
           <span style={{ flex: "none", color: "var(--fg-3)" }}>
             <Icon d={<><circle cx="7" cy="7" r="4.5" /><path d="M10.5 10.5L14 14" strokeLinecap="round" /></>} size={17} />
           </span>
           <input ref={inputRef} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t.search} style={{
-            flex: 1, height: 52, border: "none", background: "transparent", color: "var(--fg-1)",
+            flex: 1, height: 48, border: "none", background: "transparent", color: "var(--fg-1)",
             fontFamily: "var(--font-ui)", fontSize: 16, outline: "none",
           }} />
           <kbd style={{
             flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, color: "var(--fg-3)",
-            border: "1px solid var(--border-strong)", borderRadius: 999, padding: "3px 9px",
+            border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)", padding: "2px 6px",
           }}>ESC</kbd>
         </div>
         {results.length > 0 && (
-          <div ref={listRef} style={{ overflowY: "auto", padding: 8 }}>
+          <div ref={listRef} style={{ overflowY: "auto", padding: 6 }}>
             {results.map(({ doc: d, snip }, i) => (
-              <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} className="lq-nav-item" style={{
-                display: "block", padding: "9px 14px", textDecoration: "none", borderRadius: 14,
-                color: "var(--fg-1)", background: i === sel ? "var(--accent-subtle)" : "transparent",
-              }}>
+              <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} className="rdr-hit" style={{ background: i === sel ? "var(--accent-subtle)" : "transparent" }}>
                 <div style={{ fontSize: 13.5, fontWeight: 500 }}>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>
                   {d.title}
@@ -618,7 +557,7 @@ export function navInitialScrollTop(offsetTop: number, viewport: number): number
   return offsetTop >= viewport / 2 ? offsetTop : 0;
 }
 
-function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 264 }:{ t: Strings; chapter: ChapterData; embedded?: boolean; onNavigate?: () => void; onOpenSearch: () => void; width?: number }) {
+function SidebarTree({ t, chapter, embedded, onNavigate, onStartDrag, width = 264 }:{ t: Strings; chapter: ChapterData; embedded?: boolean; onNavigate?: () => void; onStartDrag?: (e: React.PointerEvent) => void; width?: number }) {
   // Parts collapse; the part holding the active chapter starts open.
   const [closed, setClosed] = useState<Record<string, boolean>>({});
   const isOpen = (part: { id: string; chapters: { active?: boolean }[] }) =>
@@ -626,190 +565,144 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onOpenSearch, width = 2
   // On load, scroll the nav so the part holding the active chapter sits at the
   // top of the list. Setting scrollTop past the max clamps to the bottom, so a
   // part near the end lands as far up as it can: visible either way.
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const sc = scrollRef.current, el = activeRef.current;
+    const sc = embedded ? scrollRef.current?.parentElement : scrollRef.current;
+    const el = activeRef.current;
     if (sc && el) sc.scrollTop = navInitialScrollTop(el.offsetTop, sc.clientHeight);
-  }, []);
-  return (
-    <aside className={embedded ? undefined : "glass-regular"} style={{ flex: "none", width: embedded ? "100%" : width, height: embedded ? "100%" : undefined, borderRadius: embedded ? undefined : 22, background: embedded ? "transparent" : undefined, display: "flex", flexDirection: "column", paddingTop: 16, alignSelf: "stretch", minHeight: 0, overflow: "hidden" }}>
-      <SearchTrigger t={t} onOpen={onOpenSearch} />
-      <nav ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative", padding: "0 8px 50px" }}>
-        <SidebarExternalLinks t={t} />
-        {chapter.toc.map((part) => {
-          const active = !!part.active || part.chapters.some((ch) => ch.active);
-          if (part.single) {
-            return (
-              <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
-                {part.chapters.map((ch) => (
-                  <a key={ch.href} href={ch.href} onClick={onNavigate} className="lq-nav-item lq-spot" onPointerMove={spotMove} style={{ display: "block", padding: "7px 12px", borderRadius: 10, fontSize: 13.5, fontWeight: 500, color: ch.active ? "var(--accent)" : "var(--fg-2)", textDecoration: "none", background: ch.active ? "var(--accent-subtle)" : "transparent" }}>{ch.label}</a>
-                ))}
-              </div>
-            );
-          }
-          const open = isOpen(part);
-          const labelStyle: React.CSSProperties = {
-            flex: 1,
-            minWidth: 0,
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            fontWeight: 500,
-            letterSpacing: ".15em",
-            textTransform: "uppercase",
-            color: active ? "var(--accent)" : "var(--fg-2)",
-            textDecoration: "none",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          };
-          const chevron = (
-            <svg width={12} height={12} viewBox="0 0 12 12" fill="none" stroke="var(--fg-3)" strokeWidth={1.5} style={{ flex: "none", transform: open ? "none" : "rotate(-90deg)", transition: "transform .2s" }}>
-              <path d="M3 4.5L6 7.5L9 4.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          );
+  }, [embedded]);
+  const list = (
+    <nav ref={scrollRef} className={embedded ? undefined : "rdr-nav-scroll"} style={embedded ? { padding: "8px 8px 32px", position: "relative" } : { position: "relative" }}>
+      <SidebarExternalLinks t={t} />
+      {chapter.toc.map((part) => {
+        const active = !!part.active || part.chapters.some((ch) => ch.active);
+        if (part.single) {
           return (
-            <div key={part.id} ref={active ? activeRef : undefined} style={{ marginBottom: 2 }}>
-              <div style={{
-                width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
-                padding: "9px 4px 5px 12px", textAlign: "left",
-              }}>
-                {part.href ? (
-                  <a href={part.href} onClick={onNavigate} style={labelStyle}>{part.label}</a>
-                ) : (
-                  <button onClick={() => setClosed((c) => ({ ...c, [part.id]: open }))} style={{
-                    ...labelStyle,
-                    display: "block",
-                    padding: 0,
-                    background: "none",
-                    border: "none",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}>{part.label}</button>
-                )}
-                <button onClick={() => setClosed((c) => ({ ...c, [part.id]: open }))} aria-label={open ? "collapse part" : "expand part"} style={{
-                  flex: "none", width: 24, height: 24, display: "inline-flex", alignItems: "center", justifyContent: "center",
-                  border: "none", background: "none", borderRadius: "var(--radius-sm)", cursor: "pointer", color: "var(--fg-3)",
-                }}>
-                  {chevron}
-                </button>
-              </div>
-              {open && part.chapters.map((ch) => (
-                <a key={ch.href} href={ch.href} onClick={onNavigate} className="lq-nav-item lq-spot" onPointerMove={spotMove} style={{
-                  display: "flex", gap: 9, padding: "6px 12px", margin: "1px 0", borderRadius: 10, textDecoration: "none",
-                  background: ch.active ? "var(--accent-subtle)" : "transparent",
-                }}>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--fg-3)", flex: "none", minWidth: 15 }}>{ch.n}</span>
-                  <span style={{ fontSize: 13.5, lineHeight: 1.35, color: ch.active ? "var(--accent)" : "var(--fg-2)", fontWeight: ch.active ? 600 : 400 }}>{ch.label}</span>
-                </a>
+            <div key={part.id} ref={active ? activeRef : undefined}>
+              {part.chapters.map((ch) => (
+                <a key={ch.href} href={ch.href} onClick={onNavigate} className="rdr-nav-row" aria-current={ch.active ? "page" : undefined} style={{ fontWeight: 500 }}>{ch.label}</a>
               ))}
             </div>
           );
-        })}
-      </nav>
+        }
+        const open = isOpen(part);
+        const toggle = () => setClosed((c) => ({ ...c, [part.id]: open }));
+        return (
+          <div key={part.id} ref={active ? activeRef : undefined}>
+            <div className={active ? "rdr-part is-active" : "rdr-part"}>
+              {part.href ? (
+                <a href={part.href} onClick={onNavigate} className="rdr-part-label">{part.label}</a>
+              ) : (
+                <button onClick={toggle} className="rdr-part-label">{part.label}</button>
+              )}
+              <button onClick={toggle} aria-label={open ? "collapse part" : "expand part"} aria-expanded={open} className="rdr-part-toggle">
+                <svg width={12} height={12} viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth={1.5} aria-hidden>
+                  <path d="M3 4.5L6 7.5L9 4.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            </div>
+            {open && part.chapters.map((ch) => (
+              <a key={ch.href} href={ch.href} onClick={onNavigate} className="rdr-nav-row" aria-current={ch.active ? "page" : undefined}>
+                <span className="rdr-nav-num">{ch.n}</span>
+                <span>{ch.label}</span>
+              </a>
+            ))}
+          </div>
+        );
+      })}
+    </nav>
+  );
+  if (embedded) return list;
+  return (
+    <aside className="rdr-nav" style={{ width }}>
+      {list}
+      {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize" style={{ right: -4 }} />}
     </aside>
   );
 }
 
 function SidebarExternalLinks({ t }: { t: Strings }) {
   return (
-    <div style={{ margin: "0 0 10px", padding: "0 0 10px", borderBottom: "1px solid var(--border)" }}>
+    <div className="rdr-nav-links">
       {SIDEBAR_EXTERNAL_LINKS.map((link) => (
-        <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="lq-nav-item lq-spot" onPointerMove={spotMove} style={{
-          display: "block",
-          padding: "7px 12px",
-          borderRadius: 10,
-          fontSize: 13.5,
-          fontWeight: 500,
-          color: "var(--fg-2)",
-          textDecoration: "none",
-        }}>{t[link.labelKey]} ↗</a>
+        <a key={link.href} href={link.href} target="_blank" rel="noreferrer" className="rdr-nav-row">{t[link.labelKey]} ↗</a>
       ))}
     </div>
   );
 }
 
+function TocLinks({ chapter, activeId, onNavigate }: { chapter: ChapterData; activeId: string; onNavigate?: () => void }) {
+  return (
+    <nav className="rdr-toc-list">
+      {chapter.headings.map((h) => {
+        const cls = ["rdr-toc-link", h.level === 3 ? "is-l3" : "", activeId === h.id ? "is-active" : ""].filter(Boolean).join(" ");
+        return <a key={h.id} href={`#${h.id}`} onClick={onNavigate} className={cls} aria-current={activeId === h.id ? "location" : undefined}>{h.text}</a>;
+      })}
+    </nav>
+  );
+}
+
 function MiniToc({ t, chapter, activeId, onClose, width = 208, onStartDrag }: { t: Strings; chapter: ChapterData; activeId: string; onClose: () => void; width?: number; onStartDrag?: (e: React.PointerEvent) => void }) {
   return (
-    <aside className="glass-regular" style={{
-      position: "absolute", top: 8, right: 0, width, maxHeight: "calc(100% - 24px)", overflowY: "auto", zIndex: 8,
-      borderRadius: 18, padding: "14px 16px 12px",
-    }}>
-      {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize"
-        style={{ position: "absolute", top: 0, left: 0, bottom: 0, width: 8, cursor: "col-resize", zIndex: 2, borderRadius: "18px 0 0 18px" }} />}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 11 }}>
-        <span className="rdr-eyebrow" style={{ fontSize: 10, color: "var(--fg-3)" }}>{t.onThisPage}</span>
-        <button onClick={onClose} aria-label="close" style={{ width: 22, height: 22, display: "inline-flex", alignItems: "center", justifyContent: "center", border: "none", background: "none", borderRadius: "var(--radius-sm)", cursor: "pointer", color: "var(--fg-3)" }}>
-          <Icon d={<path d="M3 3l8 8M11 3l-8 8" strokeLinecap="round" />} size={13} />
+    <aside className="rdr-toc" style={{ width }}>
+      <div className="rdr-toc-head">
+        <span className="rdr-toc-title">{t.onThisPage}</span>
+        <button onClick={onClose} aria-label="close" className="rdr-btn" style={{ width: 22, height: 22 }}>
+          <Icon d={<path d="M3 3l8 8M11 3l-8 8" strokeLinecap="round" />} size={12} />
         </button>
       </div>
-      <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {chapter.headings.map((h) => (
-          <a key={h.id} href={`#${h.id}`} className="lq-nav-item" style={{
-            display: "block", padding: "5px 10px", borderRadius: 9, textDecoration: "none",
-            marginLeft: h.level === 3 ? 12 : 0,
-            fontSize: 12.5, lineHeight: 1.4, color: activeId === h.id ? "var(--accent)" : "var(--fg-2)", fontWeight: activeId === h.id ? 600 : 400,
-            background: activeId === h.id ? "var(--accent-subtle)" : "transparent",
-          }}>{h.text}</a>
-        ))}
-      </nav>
+      <TocLinks chapter={chapter} activeId={activeId} />
     </aside>
   );
 }
 
 function PrevNextNav({ chapter, t }: { chapter: ChapterData; t: Strings }) {
-  const card: React.CSSProperties = {
-    flex: 1, minWidth: 200, padding: "16px 20px", borderRadius: 18, textDecoration: "none",
-  };
-  const kicker: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", color: "var(--fg-3)", marginBottom: 6 };
+  if (!chapter.prev && !chapter.next) return null;
   return (
-    <nav style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 48, paddingTop: 24, borderTop: "1px solid var(--border)" }}>
+    <nav className="rdr-pager" aria-label={`${t.prev} / ${t.next}`}>
       {chapter.prev && (
-        <a href={chapter.prev.href} className="glass-regular lq-card" style={card}>
-          <div style={kicker}>← {t.prev}</div>
-          <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--fg-1)" }}>{chapter.prev.label}</div>
+        <a href={chapter.prev.href} rel="prev">
+          <div className="rdr-pager-kicker">← {t.prev}</div>
+          <div className="rdr-pager-title">{chapter.prev.label}</div>
         </a>
       )}
       {chapter.next && (
-        <a href={chapter.next.href} className="glass-regular lq-card" style={{ ...card, textAlign: "right" }}>
-          <div style={kicker}>{t.next} →</div>
-          <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--fg-1)" }}>{chapter.next.label}</div>
+        <a href={chapter.next.href} rel="next" className="is-next">
+          <div className="rdr-pager-kicker">{t.next} →</div>
+          <div className="rdr-pager-title">{chapter.next.label}</div>
         </a>
       )}
     </nav>
   );
 }
 
-// The book is written in the open, so each page ends by saying so: one line
-// offering the two ways a reader can act on what they just read, both landing
-// on this exact chapter rather than on the repository's front door.
-function ContributeStrip({ chapter, t }: { chapter: ChapterData; t: Strings }) {
+// The book is written in the open, so each page ends by saying so: one footer
+// line offering the two ways a reader can act on what they just read, both
+// landing on this exact chapter rather than on the repository's front door.
+function PageFooter({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   const here = pageUrl(chapter.lang, chapter.path);
-  const link: React.CSSProperties = { color: "var(--accent)", textDecoration: "none", fontWeight: 500 };
   return (
-    <aside style={{
-      display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-      marginTop: 22, padding: "12px 16px", borderRadius: 14,
-      border: "1px solid var(--border)", fontSize: 13.5, color: "var(--fg-3)",
-    }}>
-      <span style={{ flex: "none", display: "inline-flex", color: "var(--fg-3)" }}><GitHubMark size={15} /></span>
+    <footer className="rdr-footer">
+      <span style={{ flex: "none", display: "inline-flex" }}><GitHubMark size={14} /></span>
       <span>{t.contributePrompt}</span>
-      <span style={{ display: "inline-flex", gap: 10, flexWrap: "wrap" }}>
-        <a href={issueUrl(chapter.title, here)} target="_blank" rel="noreferrer" style={link}>{t.reportIssue} ↗</a>
+      <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
+        <a href={issueUrl(chapter.title, here)} target="_blank" rel="noreferrer">{t.reportIssue} ↗</a>
         <span aria-hidden style={{ opacity: 0.5 }}>·</span>
-        <a href={editUrl(chapter.sourcePath)} target="_blank" rel="noreferrer" style={link}>{t.editPage} ↗</a>
+        <a href={editUrl(chapter.sourcePath)} target="_blank" rel="noreferrer">{t.editPage} ↗</a>
       </span>
-    </aside>
+    </footer>
   );
 }
 
 function SettingsPanel({ t, s, set, chapter }:{ t: Strings; s: ReaderSettings; set: (p: Partial<ReaderSettings>) => void; chapter: ChapterData }) {
-  const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 14 };
-  const label: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".15em", textTransform: "uppercase", fontWeight: 500, color: "var(--fg-3)", flex: "none" };
-  const seg: React.CSSProperties = { display: "flex", gap: 2, padding: 3, background: "var(--accent-subtle)", border: "1px solid var(--glass-border)", borderRadius: 999 };
+  const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12 };
+  const label: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 500, color: "var(--fg-3)", flex: "none" };
+  const seg: React.CSSProperties = { display: "flex", gap: 2, padding: 2, background: "var(--bg)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)" };
   const langSeg: React.CSSProperties = { ...seg, width: 150, flex: "none" };
   const segBtn = (active: boolean): React.CSSProperties => ({
     border: "none", cursor: "pointer", minWidth: 34, fontFamily: "var(--font-ui)", fontSize: 12, fontWeight: 500,
-    padding: "5px 12px", borderRadius: 999, color: active ? "var(--bg-surface)" : "var(--fg-2)", background: active ? "var(--accent)" : "transparent",
+    padding: "4px 10px", borderRadius: "var(--radius-sm)", color: active ? "var(--bg-surface)" : "var(--fg-2)", background: active ? "var(--accent)" : "transparent",
   });
   const langChoice = (value: Lang, text: string) => {
     const active = chapter.lang === value;
@@ -821,10 +714,7 @@ function SettingsPanel({ t, s, set, chapter }:{ t: Strings; s: ReaderSettings; s
     <div style={seg}>{opts.map((o) => <button key={o.v} style={segBtn(cur === o.v)} onClick={() => on(o.v)}>{o.l}</button>)}</div>
   );
   return (
-    <div className="rdr-glass lq-rise" role="dialog" aria-label={t.settings} style={{
-      position: "absolute", top: 46, right: 0, zIndex: 60, width: 276, padding: "16px 18px 18px",
-      borderRadius: 22,
-    }}>
+    <div className="rdr-pop" role="dialog" aria-label={t.settings} style={{ width: 276, padding: "14px 14px 16px" }}>
       <div style={{ ...row, marginTop: 0 }}><span style={label}>{t.language}</span><div style={langSeg}>{langChoice("en", "English")}{langChoice("zh", "中文")}</div></div>
       <div style={{ ...row, flexDirection: "column", alignItems: "stretch", gap: 7 }}>
         <span style={label}>{t.palette}</span>
