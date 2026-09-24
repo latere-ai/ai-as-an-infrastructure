@@ -205,7 +205,7 @@ const labels = {
   en: {
     title: "A staged rollout gated on L ≥ −δ",
     exposure: "Share of traffic on the candidate",
-    evidence: "Gate evidence for the current stage: the estimate of Δ and its always-valid 95% interval",
+    evidence: "Gate evidence, one segment per stage: the estimate of Δ and its always-valid 95% interval",
     x: "hours since the first user exposure",
     cell: "first cell", canary: "canary", wave1: "wave 1", wave2: "wave 2", full: "full",
     zero: "0%",
@@ -256,7 +256,7 @@ const labels = {
   zh: {
     title: "以 L ≥ −δ 为闸门的分阶段发布",
     exposure: "候选版本承接的流量份额",
-    evidence: "当前阶段的闸门证据：Δ 的估计值及其始终有效的 95% 区间",
+    evidence: "闸门证据，每个阶段一段：Δ 的估计值及其始终有效的 95% 区间",
     x: "自首次向用户暴露起的小时数",
     cell: "首个单元", canary: "金丝雀", wave1: "波次 1", wave2: "波次 2", full: "全量",
     zero: "0%",
