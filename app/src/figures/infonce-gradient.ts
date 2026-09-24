@@ -98,7 +98,7 @@ const labels = {
     lOthers: "push, other negatives",
     lNegs: "push, negatives",
     lNet: "net",
-    describe: "Hardness {h}, temperature {tau}: loss {L}, positive weight {pp}, hardest negative weight {ph}, {share} of all negative weight. Along the circle the query moves {net} toward the positive.{fn}",
+    describe: "Hardness {h}, temperature {tau}: loss {L}, positive weight {pp}, hardest negative weight {ph}, {share} of all negative weight. The query's movement along the circle is {net}, where positive values point toward the positive.{fn}",
     fnDescribe: " The relevant candidate labeled negative holds {share} of the negative weight and pushes the query {fnt}.",
   },
   zh: {
@@ -126,7 +126,7 @@ const labels = {
     lOthers: "推力，其余负样本",
     lNegs: "推力，负样本",
     lNet: "合计",
-    describe: "难度 {h}，温度 {tau}：损失 {L}，正样本权重 {pp}，最难负样本权重 {ph}，占全部负样本权重的 {share}。查询沿圆周朝正样本移动 {net}。{fn}",
+    describe: "难度 {h}，温度 {tau}：损失 {L}，正样本权重 {pp}，最难负样本权重 {ph}，占全部负样本权重的 {share}。查询沿圆周的移动为 {net}，正值表示朝向正样本。{fn}",
     fnDescribe: "被标为负样本的相关候选占负样本权重的 {share}，把查询推动 {fnt}。",
   },
 };
