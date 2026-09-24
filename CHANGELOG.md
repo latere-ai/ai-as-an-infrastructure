@@ -19,6 +19,14 @@ committed: the commit log already holds that.
 
 ### Changed
 
+- Eight chapters outside the Practice part regain explanation and evidence
+  the August 2026 rewrite had removed, each item checked and updated or
+  dropped: Memory Systems, The Harness, Embeddings and Representation
+  Learning, Security and Authorization, Benchmarks as Measurement Contracts,
+  Evaluating Agents and Capabilities, Frameworks and Automatic
+  Differentiation, and Compute Markets and Unit Economics.
+  Each gains a runnable example that implements its mechanism and checks
+  the result.
 - Search opens with the pages read most recently, or starting pages on a
   first visit, and a row of suggested topics.
 
