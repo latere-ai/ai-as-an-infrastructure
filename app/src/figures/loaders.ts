@@ -56,4 +56,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "reward-overoptimization": () => import("./reward-overoptimization.ts"),
   "ppo-clip": () => import("./ppo-clip.ts"),
   "preference-losses": () => import("./preference-losses.ts"),
+  "dpo-derivation": () => import("./dpo-derivation.ts"),
 };
