@@ -173,7 +173,7 @@ function regions(m: Measured, w: number) {
 function describe(st: State<P>, lang: Lang): string {
   const L = labels[lang];
   const p = st.p;
-  const t = Math.round(st.t);
+  const t = Math.min(LAST, Math.max(0, Math.round(st.t)));
   const full = run(0, 0);
   const k = resident(t, p.sinks, p.window);
   if (p.window === 0) {
@@ -193,7 +193,7 @@ function render(st: State<P>, lang: Lang): string {
   const p = st.p;
   const w = st.w;
   const narrow = w < 480;
-  const t = Math.round(st.t);
+  const t = Math.min(LAST, Math.max(0, Math.round(st.t)));
   const fs = TYPE.body;
   const s = p.window === 0 ? 0 : p.sinks;
   const win = p.window;
