@@ -107,14 +107,22 @@ its reported ablations (runs that swap one component at a time), but that
 experiment does not make mean pooling universal [@reimers2019sbert].
 Decoder-based embedders may use the last token, bidirectional attention, or a
 learned pooler. Those are separate designs, not stages in a single historical
-progression.
+progression. The causal mask a generator needs, under which each position attends
+only to earlier ones, leaves early tokens blind to the rest of the text, so several
+decoder-based embedders remove it. LLM2Vec converts a decoder in three unsupervised
+steps: enable bidirectional attention, adapt with masked next-token prediction, then
+train contrastively in the SimCSE style [@behnamghader2024llm2vec]. NV-Embed also
+trains with bidirectional attention and replaces mean and last-token pooling with a
+learned latent-attention layer [@lee2024nvembed].
 
 Unadapted language-model states are not a retrieval metric by default. The
 pretraining objective supervises token prediction and places no constraint on
 how pooled query-document scores are ordered. Early contextual models also
 exhibited anisotropy: randomly sampled token representations often had a
 positive mean cosine rather than spreading evenly around the origin
-[@ethayarajh2019contextual]. That result concerned contextual token occurrences
+[@ethayarajh2019contextual]. In GPT-2's last layer the average cosine between two
+random token representations was close to 0.99, which leaves cosine similarity
+almost no range to separate related from unrelated text. That result concerned contextual token occurrences
 in particular BERT, ELMo, and GPT-2 checkpoints. It is a geometric warning, not
 proof that anisotropy causes every pooling failure or that an isotropic space
 must retrieve well. Later analyses found that correcting anisotropy alone does
@@ -122,6 +130,18 @@ not necessarily restore semantic isometry, the property that distances between
 representations track differences in meaning [@fuster2022anisotropy]. The
 operational test is still ranking quality on the intended query and corpus
 distribution.
+
+Two effects share the word "cone" and are easy to conflate. Representation
+degeneration concerns the static token-embedding matrix: in a likelihood-trained
+model with tied input and output embeddings, the softmax gradient for rare tokens
+pushes their embeddings toward a shared direction [@gao2019degeneration].
+Contextual anisotropy concerns per-token hidden states and appears in the
+bidirectional BERT as well as in GPT-2, so autoregression alone does not explain it.
+Post-hoc corrections spread the space from outside, by whitening the
+representations [@su2021whitening] or mapping them to a Gaussian with a normalizing
+flow [@li2020bertflow]. SimCSE's analysis found that these corrections improve
+uniformity at the cost of alignment, both defined in the next section, while its
+contrastive objective improved uniformity and kept alignment [@gao2021simcse].
 
 ## Contrastive learning shapes the ranking
 
@@ -171,17 +191,96 @@ theorem about every dual encoder. SimCSE demonstrated the mechanism for sentence
 similarity: dropout, which randomly zeroes some activations during a forward
 pass, created two views of one sentence in its unsupervised setting, while
 entailment and contradiction pairs supplied positives and hard negatives in its
-supervised setting [@gao2021simcse].
+supervised setting [@gao2021simcse]. The same paper explains why the objective
+opens the cone. With negatives drawn from the data distribution, the uniformity
+term upper-bounds the sum of the entries of the embedding Gram matrix, which bounds
+its largest eigenvalue when the entries are positive, so minimizing the loss
+flattens the singular-value spectrum of the embeddings instead of letting a few
+directions dominate [@gao2021simcse].
 
 Temperature controls how the loss distributes gradient across candidates. A
 high-scoring negative receives more softmax mass and therefore a larger
-gradient pushing its score down.
+gradient pushing its score down; the weight grows with $\exp(s/\tau)$, so the loss
+is hardness-aware. As $\tau$ approaches zero nearly all of the gradient goes to the
+single hardest negative and the loss approaches a margin loss, while a large
+$\tau$ spreads the gradient evenly and ignores hardness [@wang2021behaviour].
 Lowering $\tau$ concentrates relative weight on the highest-scoring negatives,
 but it also amplifies mislabeled negatives and can destroy useful local
-neighborhoods. There is no task-independent best temperature. Tune it together
+neighborhoods; Wang and Liu call this the uniformity-tolerance dilemma. There is no task-independent best temperature. Tune it together
 with normalization, batch composition, duplicate masking, and the negative
 miner; a numerical value copied from another model has no stable meaning when
 the score scale changes.
+
+The cell below trains a linear encoder with the in-batch loss above, on synthetic
+texts whose raw features share one large offset and therefore start in a narrow
+cone. It checks its analytic gradient, including the normalization step, against a
+finite difference, then trains at six temperatures and tracks Wang and Isola's two
+quantities on held-out pairs. The untrained cone scores well on alignment only
+because every pair is close; training spreads the space and gives some alignment
+back, and recall peaks at an intermediate temperature. Change the noise level in
+`view` or the embedding size `k` and the best temperature moves, which is the sense
+in which a temperature copied from another model has no stable meaning.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+K, D, k, B = 512, 32, 16, 64  # topics, raw feature size, embedding size, batch size
+topics = rng.normal(size=(K, D))
+offset = 4 * rng.normal(size=D)  # a shared direction: raw features start in a narrow cone
+def view(ids):  # one noisy text about each topic, as raw features
+    return topics[ids] + offset + 0.8 * rng.normal(size=(len(ids), D))
+
+def loss_and_grad(W, X, Y, tau):
+    """Mean in-batch InfoNCE on normalized embeddings, and its gradient in W."""
+    zu, zv = X @ W, Y @ W
+    nu, nv = np.linalg.norm(zu, axis=1, keepdims=True), np.linalg.norm(zv, axis=1, keepdims=True)
+    u, v = zu / nu, zv / nv
+    S = u @ v.T / tau
+    P = np.exp(S - S.max(1, keepdims=True)); P /= P.sum(1, keepdims=True)
+    dS = (P - np.eye(len(X))) / (len(X) * tau)  # softmax minus one-hot, per query
+    gu, gv = dS @ v, dS.T @ u
+    gzu, gzv = (gu - (gu * u).sum(1, keepdims=True) * u) / nu, (gv - (gv * v).sum(1, keepdims=True) * v) / nv
+    return -np.mean(np.log(np.diag(P))), X.T @ gzu + Y.T @ gzv
+
+def geometry(W, q, d):  # Wang and Isola's alignment and uniformity, plus recall@1
+    u, v = [(x @ W) / np.linalg.norm(x @ W, axis=1, keepdims=True) for x in (q, d)]
+    sq = 2 - 2 * (v @ v.T)[np.triu_indices(K, 1)]
+    return np.mean(np.sum((u - v) ** 2, 1)), np.log(np.mean(np.exp(-2 * sq))), np.mean(np.argmax(u @ v.T, 1) == np.arange(K))
+
+W0 = 0.3 * np.random.default_rng(1).normal(size=(D, k))
+X, Y = view(np.arange(B)), view(np.arange(B))
+E = np.zeros_like(W0); E[3, 5] = 1e-6  # check the analytic gradient against a finite difference
+fd = (loss_and_grad(W0 + E, X, Y, 0.1)[0] - loss_and_grad(W0 - E, X, Y, 0.1)[0]) / 2e-6
+assert abs(fd - loss_and_grad(W0, X, Y, 0.1)[1][3, 5]) < 1e-6
+
+q, d = view(np.arange(K)), view(np.arange(K))  # held-out queries and documents
+start = geometry(W0, q, d)
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 3.6))
+taus, recall = [0.02, 0.05, 0.1, 0.2, 0.5, 1.0], []
+for tau in taus:
+    W, path = W0.copy(), [start]
+    for step in range(1, 401):
+        g = loss_and_grad(W, *(lambda ids: (view(ids), view(ids)))(rng.choice(K, B, replace=False)), tau)[1]
+        W -= 0.05 * g / np.linalg.norm(g)  # normalized step, comparable across temperatures
+        if step % 50 == 0:
+            path.append(geometry(W, q, d))
+    a, un, r = np.array(path).T
+    assert un[-1] < un[0] and r[-1] > r[0], "training spreads the cone and improves recall"
+    recall.append(r[-1])
+    if tau in (0.05, 0.1, 1.0):
+        ax1.plot(un, a, "o-", ms=3, label=f"τ = {tau}")
+ax1.annotate("untrained", (start[1], start[0]), fontsize=8, ha="right", va="bottom")
+ax1.set_xlabel("uniformity (lower = more spread)"); ax1.set_ylabel("alignment (lower = pairs closer)")
+ax1.set_title("Training trades alignment for uniformity"); ax1.legend(frameon=False, fontsize=8)
+ax2.plot(taus, recall, "o-", color="0.3"); ax2.axhline(start[2], color="0.6", ls=":", lw=1)
+ax2.set_xscale("log"); ax2.set_xlabel("temperature τ"); ax2.set_ylabel(f"recall@1 among {K} documents")
+ax2.set_title(f"Best here: τ = {taus[int(np.argmax(recall))]}")
+fig.tight_layout(); plt.show()
+```
+::::
 
 ## Interaction placement fixes the cost envelope
 
@@ -198,7 +297,11 @@ A dual encoder is the usual first-stage dense retriever because the corpus side
 is independent of the query. A cross-encoder is more expressive because it
 reads the pair jointly, but that expressiveness does not guarantee the best
 result on every workload. Its common production role is reranking a bounded
-candidate set, where the number of pairwise passes is affordable.
+candidate set, where the number of pairwise passes is affordable. Sentence-BERT
+put numbers on the gap: finding the most similar pair among 10,000 sentences with
+a BERT cross-encoder takes about 50 million inference passes, roughly 65 hours,
+and about 5 seconds when each sentence is encoded once by a siamese dual encoder
+[@reimers2019sbert].
 
 ColBERT occupies the middle. It encodes query and document tokens independently
 and applies late interaction through MaxSim:
@@ -241,16 +344,22 @@ In-batch negatives reuse the other $B-1$ documents of the batch in the loss
 above. In the $B\times B$ matrix of scores $s(u_i,v_j)$, the diagonal holds the
 labeled pairs and each off-diagonal cell is treated as a negative. Dense Passage
 Retrieval used this efficiently and added BM25-mined candidates in its
-open-domain QA experiments [@karpukhin2020dense]. Some reused documents are
+open-domain QA experiments, where it outperformed BM25 by 9 to 19 points of
+absolute top-20 passage accuracy [@karpukhin2020dense]. Some reused documents are
 relevant to the query: two batch rows may share a relevant document,
 duplicate one another, or contain different valid answers to the same query.
 Known positives and duplicate groups must be masked before the loss treats
 off-diagonal cells as negatives. Larger batches add compute, communication, and
 false-negative exposure as well as more candidates.
 
-Once random negatives become easy, a frozen checkpoint can retrieve high-scoring
-unjudged documents from the corpus. ANCE refreshed such an index asynchronously
-so the miner tracked the model over training [@xiong2021ance]. Those candidates
+Once random negatives become easy, they stop teaching: a negative far from the
+query receives almost no softmax weight, so its gradient nearly vanishes. A frozen
+checkpoint can instead retrieve high-scoring unjudged documents from the corpus.
+ANCE refreshed such an index asynchronously so the miner tracked the model over
+training, and its dot-product retriever nearly matched BM25 retrieval followed by
+BERT reranking while running about 100 times faster [@xiong2021ance]. RocketQA also
+shared negatives across the devices of a data-parallel batch, so each query saw
+many more candidates than one device holds [@qu2021rocketqa]. Those candidates
 are *unjudged*, not known to be irrelevant. RocketQA reported that sparse labels
 made many top retrieved passages false negatives and used a cross-encoder to
 filter candidates [@qu2021rocketqa]. A teacher model of this kind, a stronger
@@ -265,41 +374,23 @@ teacher score directly into truth.
 //| fig-cap: "The in-batch loss $\mathcal{L}_i$ of one query on two-dimensional unit vectors, with 16 negatives at illustrative angles, 15 of them seeded and one fixed near the query. Scores are cosines, the bars are the softmax weights $p_j$ of $s_j/\tau$, and $\mathcal{L}_i = -\log p_+$. At the query, the arrows split the descent direction exactly, $-\tau\,\partial\mathcal{L}_i/\partial u = (1-p_+)(v_+ - u) + \sum_{j \ne +} p_j (u - v_j)$: a pull along the chord to the positive, and a push away from each negative weighted by its softmax share. Renormalizing $u$ keeps only the part of each term along the circle, which the panel on the movement of $u$ lists term by term. Hardness moves every negative toward the query by the same fraction of its angle, and a lower $\tau$ concentrates the weight, and with it the push, on the nearest negatives. With the toggle on, the nearest negative is a relevant document that the labels call negative: the larger its weight, the harder the loss pushes the query away from a correct answer."
 ```
 
-:::: {.runnable}
-```python
-import numpy as np
-
-rng = np.random.default_rng(0)
-
-def unit(vector):
-    norm = np.linalg.norm(vector)
-    return vector / norm if norm else vector
-
-def infonce(query, positive, negatives, temperature=0.08):
-    candidates = [positive, *negatives]
-    logits = np.array([query @ item for item in candidates]) / temperature
-    logits -= logits.max()
-    probabilities = np.exp(logits) / np.exp(logits).sum()
-    return -np.log(probabilities[0])
-
-query = unit(rng.normal(size=32))
-positive = unit(query + 0.4 * rng.normal(size=32))
-
-for hardness in [0.0, 0.3, 0.6]:
-    negatives = [
-        unit(hardness * query + (1 - hardness) * rng.normal(size=32))
-        for _ in range(16)
-    ]
-    print(hardness, round(infonce(query, positive, negatives), 3))
-```
-::::
-
 Weak supervision, which takes labels from noisy automatic signals instead of
-human judgment, expands positive coverage at the cost of label noise. E5
-filtered naturally occurring web pairs before contrastive pretraining
-[@wang2022e5]. Later work generated diverse tasks and pairs with a language
-model, then trained an embedder on the synthetic data
-[@wang2023e5mistral]. Synthetic generation can cover rare intents and languages,
+human judgment, expands positive coverage at the cost of label noise. Contriever
+needed no labels at all: it took two random crops of one document as a positive
+pair, kept negatives in a momentum queue so their number did not depend on the
+batch, and outperformed BM25 on 11 of 15 BEIR datasets by recall@100
+[@izacard2022contriever]. E5 filtered naturally occurring web pairs, such as
+posts with their comments, questions with their answers, and titles with their
+passages, before contrastive pretraining [@wang2022e5], and GTE and the BGE models
+of C-Pack follow the same shape of large mined pretraining followed by a supervised
+stage [@li2023gte; @xiao2023cpack]. Scaling the backbone was a separate lever:
+Sentence-T5 and GTR took T5 encoders to billions of parameters and found that the
+larger dual encoders generalized better out of domain [@ni2022sentencet5;
+@ni2022gtr]. Later work generated diverse tasks and pairs with a language
+model, then fine-tuned a decoder into the embedder on the synthetic data
+[@wang2023e5mistral], and decoder-initialized embedders such as Gemini Embedding
+and the open Qwen3 Embedding models continue that line [@lee2025gemini;
+@zhang2025qwen3embedding]. Synthetic generation can cover rare intents and languages,
 but it also copies the generator's factual errors, style, and task assumptions.
 Keep prompts, generator revisions, filters, and source rights with the dataset.
 Split by source and time before mining so near duplicates cannot leak across
@@ -308,7 +399,11 @@ train and evaluation.
 Distillation, training one model to reproduce a stronger model's scores, is
 another label source. A cross-encoder can score a bounded set of
 query-document pairs, and the dual encoder can learn its pairwise margins rather
-than its raw score scale. Distillation inherits the teacher's bias and is limited
+than its raw score scale, because the two architectures score on different scales;
+Margin-MSE is that objective [@hofstatter2020marginmse]. TAS-B combined it with
+topic-aware sampling, drawing each batch from one cluster of queries so the
+in-batch negatives are topically hard, and trained a strong dense retriever on a
+single consumer GPU [@hofstatter2021tasb]. Distillation inherits the teacher's bias and is limited
 to the candidate set the teacher sees. It cannot teach a distinction that mining
 never presents.
 
@@ -433,7 +528,13 @@ dominated every task in its study, while later large and multilingual models
 changed the frontier without removing that task dependence
 [@muennighoff2022mteb; @enevoldsen2025mmteb]. On the evidence so far, model
 choice is conditional on the task mixture, languages, corpus, and cost envelope
-being measured.
+being measured. The size of the model settles less than it appears to: at the time
+of the MMTEB study the
+best publicly available model was a 560-million-parameter multilingual encoder,
+ahead of decoder-based embedders an order of magnitude larger
+[@enevoldsen2025mmteb], and BEIR found that dense retrievers of its time
+generalized worse than BM25 outside their training domain [@thakur2021beir], so a
+leaderboard won in distribution may not transfer.
 :::
 
 ::: {.callout-tip}
