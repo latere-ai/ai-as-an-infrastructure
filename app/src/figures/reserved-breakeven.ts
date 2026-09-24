@@ -188,12 +188,18 @@ function renderChart(m: M, w: number, y0: number, narrow: boolean, Lx: L, lang: 
     obstacles.push(...lineObstacles([[xb, guideTop], [xb, bottom]]));
     if (!near) {
       const anchor = xb + 6 + textWidth(beText, TYPE.body) <= right ? "start" : "end";
-      parts.push(text(anchor === "start" ? xb + 6 : xb - 6, top + TYPE.body + 4, beText, { "font-size": TYPE.body, "text-anchor": anchor, class: "fig-t-halo fig-t-strong" }));
+      const bx = anchor === "start" ? xb + 6 : xb - 6, byy = top + TYPE.body + 4;
+      parts.push(text(bx, byy, beText, { "font-size": TYPE.body, "text-anchor": anchor, class: "fig-t-halo fig-t-strong" }));
+      obstacles.push(textBox(bx, byy, beText, TYPE.body, anchor));
     }
   } else {
     const t = tpl(Lx.beyond, { u: pct(m.uStar) });
     const tl = lines(t, TYPE.body, Math.min(280, right - left - 12), lang);
-    tl.forEach((ln, i) => parts.push(text(right - 6, top + TYPE.body + 4 + i * (TYPE.body + 4), ln, { "font-size": TYPE.body, "text-anchor": "end", class: "fig-t-halo fig-t-strong" })));
+    tl.forEach((ln, i) => {
+      const yy = top + TYPE.body + 4 + i * (TYPE.body + 4);
+      parts.push(text(right - 6, yy, ln, { "font-size": TYPE.body, "text-anchor": "end", class: "fig-t-halo fig-t-strong" }));
+      obstacles.push(textBox(right - 6, yy, ln, TYPE.body, "end"));
+    });
   }
 
   // Region names in a corner of each region, top first, clear of both lines.
