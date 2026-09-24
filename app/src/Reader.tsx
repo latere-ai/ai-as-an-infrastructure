@@ -684,8 +684,7 @@ function PageFooter({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   const here = pageUrl(chapter.lang, chapter.path);
   return (
     <footer className="rdr-footer">
-      <span style={{ flex: "none", display: "inline-flex" }}><GitHubMark size={14} /></span>
-      <span>{t.contributePrompt}</span>
+      <span><span className="rdr-footer-mark"><GitHubMark size={14} /></span>{t.contributePrompt}</span>
       <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
         <a href={issueUrl(chapter.title, here)} target="_blank" rel="noreferrer">{t.reportIssue} ↗</a>
         <span aria-hidden style={{ opacity: 0.5 }}>·</span>
