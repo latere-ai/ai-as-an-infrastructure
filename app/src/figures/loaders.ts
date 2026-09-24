@@ -134,4 +134,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "infonce-gradient": () => import("./infonce-gradient.ts"),
   "claim-evidence": () => import("./claim-evidence.ts"),
   "pass-k-suite": () => import("./pass-k-suite.ts"),
+  "release-frontier": () => import("./release-frontier.ts"),
 };

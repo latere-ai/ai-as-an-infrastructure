@@ -447,59 +447,6 @@
     watchTheme(host, draw);
   };
 
-  // Operational frontier: quality alone is not the production decision. A
-  // model can be dominated once cost and latency count. Weight the two penalties
-  // and see which point survives as the operating choice.
-  R['eval-frontier'] = function (host) {
-    var cw = 0.25, lw = 0.15;
-    var lang = host.getAttribute('data-lang') || (document.documentElement.lang.indexOf('zh') === 0 ? 'zh' : 'en');
-    var L = lang === 'zh' ? {
-      small: '小模型', routed: '路由组合', frontier: '前沿点', slow: '慢速大模型', cheap: '低价弱模型',
-      xAxis: '每项任务的相对成本', yAxis: '任务质量',
-      costWeight: '成本权重', latencyWeight: '延迟权重', chosen: '当前选择'
-    } : {
-      small: 'small', routed: 'routed', frontier: 'frontier', slow: 'slow giant', cheap: 'cheap weak',
-      xAxis: 'relative cost per task', yAxis: 'task quality',
-      costWeight: 'cost weight', latencyWeight: 'latency weight', chosen: 'chosen'
-    };
-    var pts = [
-      { n: L.small, q: 0.68, c: 0.22, l: 0.18 },
-      { n: L.routed, q: 0.80, c: 0.55, l: 0.32 },
-      { n: L.frontier, q: 0.87, c: 1.35, l: 0.72 },
-      { n: L.slow, q: 0.875, c: 2.25, l: 1.2 },
-      { n: L.cheap, q: 0.55, c: 0.12, l: 0.12 }
-    ];
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 260);
-    cv.c.setAttribute('role', 'img');
-    read.setAttribute('aria-live', 'polite');
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 42 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      function X(c) { return pd + c / 2.5 * (W - 2 * pd); }
-      function Y(q) { return H - pd - (q - 0.5) / 0.42 * (H - 2 * pd); }
-      var best = 0, bestU = -Infinity;
-      pts.forEach(function (p, i) { var u = p.q - cw * p.c - lw * p.l; if (u > bestU) { bestU = u; best = i; } });
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
-      ctx.strokeStyle = t.accent; ctx.lineWidth = 1.5 * cv.dpr; ctx.beginPath(); [0, 1, 2].forEach(function (i, k) { var p = pts[i]; if (k === 0) ctx.moveTo(X(p.c), Y(p.q)); else ctx.lineTo(X(p.c), Y(p.q)); }); ctx.stroke();
-      pts.forEach(function (p, i) {
-        var r = (7 + 10 * p.l) * cv.dpr;
-        ctx.fillStyle = i === best ? t.accent : 'rgba(128,128,128,0.33)';
-        ctx.beginPath(); ctx.arc(X(p.c), Y(p.q), r, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = i === best ? '#fff' : t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-        ctx.fillText(p.n, X(p.c), Y(p.q) + 3 * cv.dpr);
-      });
-      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(L.xAxis, W / 2, H - 12 * cv.dpr);
-      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(L.yAxis, 0, 0); ctx.restore();
-      read.textContent = L.costWeight + '=' + cw.toFixed(2) + ' · ' + L.latencyWeight + '=' + lw.toFixed(2) + ' · ' + L.chosen + ': ' + pts[best].n;
-      cv.c.setAttribute('aria-label', read.textContent);
-    }
-    host.appendChild(slider(L.costWeight, 0, 0.8, 0.01, cw, function (v) { cw = v; draw(); }).wrap);
-    host.appendChild(slider(L.latencyWeight, 0, 0.8, 0.01, lw, function (v) { lw = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
 
 
   function init(host) {
