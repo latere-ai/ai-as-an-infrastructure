@@ -54,4 +54,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "task-vector-merge": () => import("./task-vector-merge.ts"),
   "build-or-buy": () => import("./build-or-buy.ts"),
   "reward-overoptimization": () => import("./reward-overoptimization.ts"),
+  "ppo-clip": () => import("./ppo-clip.ts"),
 };
