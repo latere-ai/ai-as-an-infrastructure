@@ -100,6 +100,7 @@ const PIPELINES: Record<"dclm" | "refinedweb" | "fineweb", Pipeline> = {
       { name: T("Repetition removal", "重复内容移除"), rule: T("excessive line, paragraph or n-gram repetition", "行、段落或 n-gram 重复过多"), kind: "heuristic", kept: 35.97, rate: 24.28, unit: "tokens" },
       { name: T("Document-wise filtering", "文档级过滤"), rule: T("length, symbol-to-word ratio and other outliers", "长度、符号词比等离群值"), kind: "heuristic", kept: 30.15, rate: 16.19, unit: "tokens" },
       { name: T("Line-wise corrections", "行级修正"), rule: T("drop a document if corrections remove more than 5%", "修正删掉 5% 以上时丢弃整篇"), kind: "heuristic", kept: 23.34, rate: 22.59, unit: "tokens", checkpoint: T("RW-Filtered", "RW-Filtered") },
+      // 450 bands of 20 rows: RefinedWeb's §3.3 prose inverts the two counts; see lsh-banding.ts.
       { name: T("Fuzzy deduplication", "模糊去重"), rule: T("MinHash, 450 bands of 20 rows", "MinHash，450 个分带，每带 20 行"), kind: "dedup", kept: 14.5, rate: 37.88, unit: "tokens" },
       { name: T("Exact deduplication", "精确去重"), rule: T("suffix array, matches of 50 or more tokens", "后缀数组，50 个及以上词元的匹配"), kind: "dedup", kept: 11.67, rate: 18.47, unit: "tokens" },
     ].map((s) => ({ ...s, kind: s.kind as Kind, unit: s.unit as Unit })),
