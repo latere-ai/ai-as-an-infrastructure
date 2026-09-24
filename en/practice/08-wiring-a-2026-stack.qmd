@@ -1,33 +1,476 @@
 # Wiring the Stack {#sec-wiring-stack}
 
-Compatible products form a system when every boundary has a contract, every
-component that affects behavior has an identity, and a failed release has a
-tested way back. The deliverable of this chapter is therefore an **integration
-release**: a versioned statement of what is connected, what each connection
-means, who owns it, and what evidence makes the assembled behavior safe to
-release.
+A production LLM application in 2026 is assembled from parts that most teams
+now recognize: clients and an agent runtime, a retrieval service, tools reached
+through the Model Context Protocol, a sandbox for code the model writes, a model
+gateway in front of hosted and self-hosted models, GPU compute, and
+observability with evaluation. The earlier practical chapters treated these one
+at a time: models (@sec-choosing-model), serving and compute
+(@sec-serving-stack), training (@sec-training-practice), agents and sandboxes
+(@sec-agents-practice), retrieval (@sec-retrieval-practice), and evaluation
+(@sec-eval-practice). This chapter assembles them into one system in two halves.
+The first half shows the assembled stack: a reference architecture with example
+projects and products, the wire formats the components share, the model gateway
+that most calls pass through, three archetype stacks, and the code at the seams.
+The second half states the contracts that make the assembly releasable: a frozen
+system identity, explicit compatibility, a state machine for each model
+operation, bounded retries, separate credentials and effects, telemetry treated
+as evidence, and a tested cutover.
 
-The integration starts from the release decision rather than from a product
-inventory. The decision names the capability being released, its users and
-tenants, its permitted data classes and effects, its quality and operational
-thresholds, and its rollback trigger. The release then freezes a **system
-fingerprint** containing the model revision, prompt revision, retrieval
-snapshot, tool schema, policy revision, router configuration, telemetry schema,
-and executable artifact digests. A model name alone cannot identify the system
-that produced an answer.
-
-This contract-first view comes from earlier systems work. Fielding described
+The contract-first half comes from earlier systems work. Fielding described
 networked systems in terms of constrained interfaces rather than particular
 products [@fielding2000rest]. Sculley and colleagues later showed how glue code,
 configuration, and undeclared consumers accumulate technical debt around
 machine-learning systems [@sculley2015debt]. Breck and colleagues turned that
-lesson into production-readiness tests [@breck2017mltest]. The earlier practical
-chapters in this part supplied the components, and @sec-eval-practice bound
-evaluation evidence to the exact system that was released. This chapter makes
-the composition of those components testable, assembling in practice the
+lesson into production-readiness tests [@breck2017mltest]. @sec-eval-practice
+bound evaluation evidence to the exact system that was released. This chapter
+makes the composition of the components testable, assembling in practice the
 end-to-end stack that @sec-whole-stack traced.
 
+## A reference architecture
+
+@fig-reference-arch draws the stack by layer. Read from top to bottom, it is the
+path of a request. A client calls the runtime; the runtime retrieves evidence,
+calls tools through an MCP gateway, runs code in a sandbox, and calls models
+through the model @gls-gateway, which forwards each call to a hosted API or to
+self-hosted serving on the team's own GPUs. The observability and evaluation
+layer at the bottom receives spans from every component and sends its own judge
+calls back through the gateway. The color of each arrow is the credential that
+the call carries.
+
+```{figure}
+//| figure: reference-stack
+//| label: fig-reference-arch
+//| fig-cap: "A reference stack for an LLM application, by layer, with example projects and products as of September 2026. Arrows are calls, and each arrow's color is the credential the call carries; the dashed bus carries OpenTelemetry GenAI spans, which grant no authority. Selecting a component shows what it does, example choices, and the contract in this chapter that governs it; with nothing selected, the readout groups the calls by credential. The named projects are examples, not recommendations."
+```
+
+Two gateways carry most of the traffic: the model gateway for model calls and
+the MCP gateway for tool calls. The sandbox is the compute seam for code the
+model writes, the counterpart of the model gateway's seam for model calls. Read
+abstractly, every path in the figure has the same shape: a caller, an admission
+decision, an adapter that turns the caller's contract into the provider's, and a
+provider. Tool effects take a separately authorized path to an executor that
+records each effect, retrieval returns identified evidence, and telemetry
+observes every decision without granting any permission. The contracts in the
+second half of the chapter are stated in these abstract terms, and selecting a
+component in the figure names the contract that governs it.
+
+No single product sits at the center of this architecture. The figure names
+examples, and some products fill more than one box: agentgateway and Agent
+Router each carry both model traffic and MCP traffic, and a hosted sandbox can
+bundle its own egress control. Any box can be filled by a different product
+that meets the same contract, so the durable part of the figure is the set of
+boxes and the credentials on the arrows.
+
+The credentials follow one rule: no application, agent, evaluation harness, or
+sandbox holds a raw provider credential. Each holds a virtual key, a credential
+that the gateway issues in place of the provider secret and scopes to a model
+allowlist, a budget, and a rate limit. Rotating a provider secret or capping a
+runaway agent then becomes a change at the gateway, with no client redeploy.
+The same rule extends to the sandbox. Secrets stay outside it, and code inside
+receives either a short-lived scoped token or a placeholder that the egress
+proxy replaces with the real secret on the way to an allowlisted host
+(@sec-security-authorization). In the figure, the provider-secret color appears
+only on the gateway's calls to providers and on the egress proxy's calls out.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+E2B runs each sandbox in its own Firecracker microVM [@e2b2026runtime], as does
+Vercel Sandbox [@vercel2026sandbox], while Modal virtualizes its compute jobs
+with gVisor [@modal2026security]. The latest releases of the two open serving
+engines named in the figure are vLLM v0.30.0 and SGLang v0.5.20
+[@vllm2026repo; @sglang2026serving44]. Two evaluation and observability tools
+changed owners this year: ClickHouse acquired Langfuse [@clickhouse2026langfuse],
+and Promptfoo announced that it is joining OpenAI through an acquisition
+[@promptfoo2026openai].
+:::
+
+## The wire formats the components share
+
+The components compose because they agree on a few wire formats, not because
+they agree on features. Each format is a narrow interface that lets the
+implementation behind it change without rewriting the callers in front of it.
+
+Model calls travel in a small set of HTTP dialects. Three carry most traffic:
+OpenAI Chat Completions (`/v1/chat/completions`), which open-weight servers such
+as vLLM and SGLang expose; OpenAI Responses (`/v1/responses`); and Anthropic
+Messages (`/v1/messages`). Coding harnesses are bound to a home dialect: Codex
+speaks Responses and Claude Code speaks Messages. A gateway that accepts one
+dialect and forwards another translates between them, and translation is where
+meaning can be lost, in a tool-call convention, a thinking configuration, a
+cache hint, or a field length. A gateway that reports what a translation dropped
+lets the caller decide what to do; one that approximates silently changes the
+system without leaving a record. The translating seam is also what lets a
+self-hosted model and a hosted one sit behind a single model name.
+
+Tool traffic converged further than model traffic did. The @gls-mcp lets one
+tool server be reused by every agent host (@sec-agents-practice), and an MCP
+gateway in front of the tool servers owns their credentials, the tool
+allowlist, and the audit trail, as the model gateway does for model traffic.
+
+Telemetry converged on the OpenTelemetry GenAI semantic conventions, a
+vendor-neutral set of `gen_ai.*` span attributes for model calls, retrieval, and
+agent steps (@sec-eval-practice). A component instrumented once can send the
+same spans to Langfuse, Phoenix, or a general tracing backend without new
+instrumentation.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Codex accepts `responses` as the only wire protocol for a model provider
+[@openai2026codexconfig]. Claude Code works through a gateway that exposes the
+Anthropic Messages format, Bedrock InvokeModel, or Vertex rawPredict and
+forwards the `anthropic-version` and `anthropic-beta` headers unchanged
+[@anthropic2026gatewayprotocol], and Anthropic does not support routing Claude
+Code to non-Claude models through a gateway [@anthropic2026claudecodegateway].
+vLLM serves the Anthropic Messages API alongside its OpenAI-compatible API
+[@vllm2026repo]. The current MCP revision, 2026-07-28, makes the protocol
+stateless: it removes the initialization handshake and protocol-level sessions,
+and every request carries its own protocol version and client capabilities
+[@mcp2026release]. The GenAI conventions now live in their own repository and
+are still marked as in development, with no tagged release, so an integration
+pins the convention version it emits [@otel2026genaisemconv].
+:::
+
+## Three paths through the stack
+
+The book built the stack along three paths, and the reference architecture is
+where they meet. Walking each one through @fig-reference-arch shows how the
+layers depend on one another.
+
+### From chatbot to agent
+
+A chatbot is one model call: a prompt in, a completion out. An agent wraps that
+call in a loop. The model proposes a tool call, the runtime executes it and
+returns the result, and the model chooses the next step, possibly for many
+turns (@sec-agent-architectures, @sec-the-harness). Three additions turn the
+first into the second, and each is a box in the figure.
+
+- **Grounding through retrieval.** The agent retrieves current, private, or
+  authoritative context instead of relying on what its weights hold
+  (@sec-rag-retrieval, @sec-retrieval-practice). The common pipeline is
+  @gls-hybrid-search: lexical BM25 scores and dense-vector similarity are
+  merged by reciprocal rank fusion, which scores each document by adding
+  $1/(k + \text{rank})$ over the ranked lists, with $k$ a small smoothing
+  constant; a reranker, a model that rescores a short candidate list
+  against the query, orders the result. The embedding and rerank models are
+  called through the gateway, so they are keyed and budgeted like any other
+  model call. Retrieval is usually cheaper and more faithful than filling a
+  long context window, because every token of a long prompt is billed on every
+  call (@sec-economics).
+- **Actions through MCP and a sandbox.** Reading a result is the easy half.
+  Once the agent runs code, calls an API, or writes a file, safety depends on
+  the runtime more than on the model (@sec-agents-practice): a jailbreak filter
+  at the gateway does nothing about a destructive shell command that the model
+  was induced to emit. The @gls-sandbox bounds what such a command can reach,
+  with default-deny egress, hard time limits, and human approval for
+  irreversible actions (@sec-security-authorization).
+- **Durable state through a checkpointer.** A long-running agent must survive a
+  restart, so its state lives in a checkpointed store rather than in process
+  memory (@sec-memory-systems). LangGraph saves graph state as checkpoints,
+  with a Postgres implementation for production [@langgraph2026persistence],
+  and Pydantic AI delegates durable execution to workflow engines such as
+  Temporal, DBOS, Prefect, and Restate [@pydantic2026durable]. The checkpoint
+  is what lets a person pause, inspect, and resume a task.
+
+An agent cannot be more reliable than the gateway, serving, and sandbox layers
+beneath it. Durable execution and checkpointing became standard framework
+features for that reason: they are how a framework survives the failures of the
+layers below it.
+
+### From hosted models to owned ones
+
+Most of a stack is inference: a fixed model served behind the gateway. The
+gateway address that fronts a hosted model can also front a model the team
+serves itself, and one it fine-tuned or post-trained (@sec-serving-stack,
+@sec-training-practice). Moving along this path moves from renting capability
+to owning it, and the gateway keeps the two interchangeable for every caller.
+
+With a hosted API, the provider runs the inference server: batching, the
+@gls-kv-cache, speculative decoding, and the accelerators
+(@sec-serving-problem). The team sees them only as price terms, such as
+cached-input pricing and priority tiers. When volume and control justify it,
+the team serves open weights itself, commonly with vLLM, or with SGLang for
+traffic that shares long prompt prefixes, and the per-token cost moves from an
+invoice to a GPU bill that it schedules. Fine-tuning (@sec-sft-peft) adds a
+training run on the compute layer, placed by a gang scheduler that starts all
+of a job's workers together or none of them (@sec-orchestration-data-infra,
+@sec-accelerators-networking). The variable that decides where a workload sits
+is sustained utilization. Capacity paid by use costs nothing while idle, and
+reserved capacity is cheaper only above a break-even share of the month, which
+the accounting section below computes from two current quotes.
+
+### From usage to evaluation
+
+Every model and tool call the application makes is usage, and every unit of
+usage can be observed and scored (@sec-eval-practice). A model that leads a
+public leaderboard can still misbehave in a product, because the benchmark
+measured a generic capability (@sec-benchmarks) while the product runs a
+specific prompt over its own retrieval context inside an agent loop.
+
+The loop has two halves that meet at the telemetry format. Observability
+records the trace of a request: each model call, retrieval, and tool call, with
+its inputs, outputs, timing, tokens, and cost. Evaluation scores those traces
+with deterministic assertions, reference-based metrics, and a
+@gls-llm-as-judge, a second model that grades the first against a calibrated
+rubric (@sec-judging-holistic). A production trace that fails an online check
+is promoted into the offline regression set, which gates the next release
+(@sec-evaluating-agents). Because the application, the evaluation harness, and
+the judge all call the gateway, an A/B comparison between two models is a
+routing rule, and the judge runs on its own budget-capped key. The loop also
+feeds the other two paths: evaluation data becomes training data, and failing
+agent traces become the fixtures that harden the agent.
+
+## The model gateway
+
+A model gateway, also called an LLM gateway or AI gateway, is the control point
+between application code and the model providers it calls. Its thinnest form is
+a reverse proxy that accepts one API and forwards to many. Its job is to hold
+five concerns in one place instead of scattering them through application code:
+a unified API, custody of provider keys, cost tracking, routing and fallback,
+and budgets and policy. Several gateways now also carry tool traffic over MCP
+and agent-to-agent traffic over A2A, which makes them one policy point for most
+of the stack's traffic.
+
+| Name | What it is | Deployment and license | Fits |
+| --- | --- | --- | --- |
+| **LiteLLM** | Python SDK and proxy that exposes more than 100 providers in the OpenAI format; virtual keys, budgets, spend tracking, load balancing, admin UI | Self-hosted; MIT outside an enterprise directory, plus a paid enterprise tier | The broadest provider coverage behind one self-hosted proxy |
+| **OpenRouter** | Hosted aggregator: one endpoint, prepaid credits, bring-your-own-key | Managed service with a fee on credit purchases | Access to a large model catalog with nothing to operate |
+| **Portkey** | Gateway with guardrails, retries and fallbacks, virtual keys, and caching | Open source (MIT), also offered as a hosted service | Guardrails and routing rules kept in the gateway |
+| **agentgateway** | Rust proxy that acts as an LLM gateway, an MCP gateway, and an A2A gateway | Self-hosted; Apache 2.0; a Linux Foundation project | One policy point for model, tool, and agent-to-agent traffic |
+| **Agent Router** (formerly Envoy AI Gateway) | Gateway on Envoy and Envoy Gateway: model routing, token-based rate limits and quotas, InferencePool support, MCP | Self-hosted on Kubernetes; Apache 2.0; an Agentic AI Foundation project | Platform teams that already run Envoy or the Kubernetes Gateway API |
+| **Cloudflare AI Gateway** | Hosted gateway: analytics, logging, caching, rate limiting, retries and fallbacks, unified billing | Managed; core features free | Teams on Cloudflare that want no gateway to operate |
+| **Bifrost** (Maxim AI) | Go gateway with one OpenAI-compatible API over more than 20 providers, fallbacks, load balancing, semantic caching | Self-hosted; Apache 2.0, with enterprise features | A self-hosted gateway built with low per-request overhead as a stated goal |
+| **Lux** (latere.ai) | Go gateway: one address for the OpenAI, Anthropic, and Gemini dialects; sealed provider credentials; keys with model selectors, limits, and budgets; OIDC identity; an authorization webhook | Self-hosted; Apache 2.0; pre-release | The author's own gateway, listed with that disclosure and not as a neutral recommendation |
+
+::: {.callout-note .dated}
+## As of September 2026
+
+LiteLLM's latest release is v1.102.1 [@litellm2026gateway]. OpenRouter charges
+a 5.5 percent fee on credit purchases on its Standard plan and lists more than
+500 models from more than 80 providers [@openrouter2026pricing]. Portkey's open
+gateway is at v1.15.2 [@portkey2026gateway], and agentgateway at v1.5.0
+[@agentgateway2026github44]. Envoy AI Gateway was renamed Agent Router in
+September 2026, with the same code, maintainers, and license; its latest release
+is v1.1.0 [@agentrouter2026]. Cloudflare's core AI Gateway features are free,
+and Unified Billing adds a 5 percent fee on credits [@cloudflare2026aigatewaypricing].
+Bifrost's README reports 11 µs of added overhead per request at 5,000 requests
+per second, a measurement by its vendor [@bifrost2026maxim44]. Lux is
+pre-release; v0.7.2 shipped on 24 September 2026 [@lux2026gateway44].
+:::
+
+Two distinctions matter more than feature lists: managed or self-hosted, and
+model traffic only or model, tool, and agent traffic together.
+
+- A **managed** gateway (OpenRouter, Cloudflare AI Gateway, Portkey's hosted
+  service) needs no infrastructure and reaches a broad catalog quickly. It
+  fits prototypes and small teams that accept provider keys and request
+  metadata passing through a third party.
+- A **self-hosted** gateway (LiteLLM, agentgateway, Agent Router, Bifrost)
+  keeps provider secrets inside the team's environment and keeps request logs,
+  data residency, and audit under the team's control. It fits regulated
+  workloads and platform teams.
+- A gateway that also carries **tool and agent traffic** (agentgateway, Agent
+  Router) puts MCP calls and agent-to-agent calls under the same policy point
+  as model calls, instead of adding tool governance to a model-only proxy
+  later.
+
+Gateway vendors publish latency and throughput figures measured under their own
+conditions. For most workloads, provider and model latency exceed gateway
+overhead by orders of magnitude, so per-request overhead rarely decides a
+choice. What can decide it under agent load is the request rate at which the
+gateway saturates, which depends on the implementation and on the work the
+gateway does per request. A pass-through benchmark measures only the forwarding
+path. A production gateway also authenticates, meters, applies policy, and
+writes spend records, so the measurement that counts is the team's own
+configuration at its own peak concurrency.
+
+For a team that wants to hold its own keys and costs, the usual starting point
+is a self-hosted gateway paired with an observability backend. Among
+self-hosted gateways the distinctions above decide more than any benchmark:
+LiteLLM for the widest provider coverage, agentgateway or Agent Router where
+tool and agent traffic should pass the same policy point, and a managed gateway
+where operating one is not worth the control. The contracts in the second half
+of the chapter hold for whichever product fills the box. Lux appears in the
+table because the author builds it.
+
+::: {.callout-tip}
+## Constraint arrow
+The gateway is where a lower layer's economics reach the whole application.
+Because every model call passes through one address, the per-token price of a
+hosted frontier model (@sec-economics) and the per-token cost of self-hosted
+serving (@sec-serving-problem) become routing rules instead of code changes.
+Sending a hard step to an expensive model, or falling back to a cheaper one
+under load, is decided once at the gateway, and every caller above it inherits
+the decision.
+:::
+
+## Pick a reference stack
+
+No single stack fits every team, but three archetypes cover most of them. The
+rows are the layers of @fig-reference-arch; a team picks the column that
+matches its constraints and reads down it. The entries are examples as of
+September 2026 and starting points to adapt, not rankings.
+
+| Layer | Lean, managed | Regulated, self-hosted | Cloud-native Kubernetes |
+| --- | --- | --- | --- |
+| **Model** | Hosted frontier APIs (Anthropic, OpenAI, Google) with pinned model IDs | Hosted models for hard steps, self-hosted open weights for bulk traffic | The same, with open-weight models served in the cluster |
+| **Gateway** | OpenRouter or Cloudflare AI Gateway | LiteLLM, agentgateway, or Bifrost, self-hosted, with virtual keys and budgets | Agent Router or agentgateway in the cluster |
+| **Serving** | None operated; the API is the server | vLLM behind an OpenAI-compatible endpoint, with FP8 weights and prefix caching | vLLM or SGLang, with llm-d or NVIDIA Dynamo for cache-aware routing at scale |
+| **Agent runtime** | OpenAI Agents SDK or Claude Agent SDK | LangGraph with a checkpointer, or Pydantic AI with durable execution | LangGraph with a Postgres checkpointer |
+| **Sandbox** | E2B or Vercel Sandbox, hosted microVMs | Self-hosted Firecracker or gVisor with default-deny egress | Sandboxes in the same cluster under gVisor, with scoped tokens |
+| **Retrieval** | A managed search service (turbopuffer, Pinecone) with Cohere Embed and Rerank | Postgres with pgvector and pgvectorscale, open embeddings such as BGE-M3 | Qdrant with hybrid queries and an open reranker |
+| **Evaluation and observability** | LangSmith or Braintrust, hosted | Self-hosted Langfuse, with Promptfoo or DeepEval in CI | Phoenix or another OpenTelemetry backend, with DeepEval in CI |
+| **Compute** | GPUs billed by use (Modal, Baseten, Fireworks, Together) | Committed capacity from a neocloud (CoreWeave, Lambda), with Slurm and Kubernetes | Kubernetes with Kueue quotas and Volcano or KAI Scheduler gang scheduling |
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Cohere's current retrieval models are `embed-v4.0` and the `rerank-v4.0-pro`
+and `rerank-v4.0-fast` rerankers [@cohere2026models]. Qdrant fuses dense and
+sparse results in a single hybrid query and describes reciprocal rank fusion as
+the safe default [@qdrant2026hybrid]. Modal bills GPUs per second of use,
+listing an NVIDIA H100 at 0.001097 dollars per second [@modal2026pricing44].
+:::
+
+The advice under the table outlasts its entries. Keep the number of new moving
+parts small. Spend the quality budget where it pays: retrieval and reranking
+before a more elaborate vector database, calibrated judges before more
+benchmarks. Keep every layer reachable through the shared wire formats so that
+each one can be swapped, and hard-code no single vendor. The archetype a team
+starts in is rarely the one it ends in, and the wire formats and contracts are
+what keep the migration cheap.
+
+## Wiring the seams in code
+
+The glue that matters is the code at the seams, the few lines that make the
+layers interchangeable. Two snippets show the pattern: a gateway configuration
+that puts a hosted and a self-hosted model behind one name with a fallback, and
+an agent that reaches that name with a virtual key.
+
+The gateway configuration exposes one alias, `smart`, that fails over from
+hosted models to a self-hosted one, so the application never learns which
+model served a request. The shape is illustrative rather than any one product's
+schema: LiteLLM writes it as a YAML model list, while other gateways bind the
+routing strategy to a virtual key through an admin API or a dashboard. The
+seam the application sees is the same either way.
+
+```yaml
+# Illustrative gateway configuration: one alias, two hosted targets, and a
+# self-hosted fallback. Each gateway has its own schema; this is the shape.
+models:
+  - alias: smart                     # the name the application requests
+    target: anthropic/claude-opus-5-5
+    api_key: ${ANTHROPIC_API_KEY}    # the provider secret stays in the gateway
+  - alias: smart                     # same alias, second provider
+    target: openai/gpt-6-sol
+    api_key: ${OPENAI_API_KEY}
+    upstream_api: responses          # tool calls with reasoning need Responses
+  - alias: local                     # self-hosted, behind the same address
+    target: vllm/open-weight-model
+    base_url: http://vllm.inference.svc:8000/v1
+
+routing:
+  smart:
+    strategy: fallback               # targets prequalified for one capability profile
+    fallback: [local]
+    retries: 2                       # the gateway is the single retry owner
+# Virtual keys, budgets, and spend caps are issued through the admin API,
+# not in this file.
+```
+
+The agent holds a gateway virtual key, not a provider secret. It retrieves
+context through a tool and never learns which model answered. The tool here is
+an in-process MCP server for brevity; in production it sits behind the MCP
+gateway over HTTP and the agent code barely changes, because MCP is a wire
+protocol rather than a library interface. The sketch uses the Claude Agent SDK
+[@anthropic2026claudeagentsdk44], whose custom tools are named
+`mcp__<server>__<tool>` and run without a permission prompt when listed in
+`allowed_tools` [@anthropic2026agentsdktools].
+
+```python
+from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, query, tool
+
+@tool("search_docs", "Retrieve grounding context for a query", {"q": str})
+async def search_docs(args):
+    # hybrid retrieval and rerank; the embedding and rerank calls use the gateway too
+    hits = await retriever.hybrid_search(args["q"], top_k=8)
+    return {"content": [{"type": "text", "text": "\n\n".join(h.text for h in hits)}]}
+
+rag = create_sdk_mcp_server(name="rag", version="1.0.0", tools=[search_docs])
+
+options = ClaudeAgentOptions(
+    mcp_servers={"rag": rag},
+    allowed_tools=["mcp__rag__search_docs"],  # pre-approved; other tools still ask
+    env={
+        "ANTHROPIC_BASE_URL": "https://llm-gateway.internal",  # the one model address
+        "ANTHROPIC_AUTH_TOKEN": virtual_key,  # scoped gateway key, not a provider secret
+        "CLAUDE_CODE_MAX_RETRIES": "0",       # retries belong to the gateway
+    },
+)
+
+async for message in query(prompt="Summarize our refund policy and cite the source.",
+                           options=options):
+    print(message)
+```
+
+The evaluation harness follows the same discipline. A Promptfoo configuration
+points its provider's `apiBaseUrl` at the gateway and names the harness's own
+key with `apiKeyEnvar` [@promptfoo2026openaiprovider], and the judge is a model
+from a different family on a separately budgeted key (@sec-eval-practice).
+Model calls, tool calls, retrieval, and judging all meet at two addresses, the
+model gateway and the MCP gateway, and all emit the same span format. That is
+what makes the assembly one system rather than several tools placed side by
+side.
+
+Integrations tend to break at the translation in a seam, and on small
+wire-level constraints rather than on large incompatibilities: a field-length
+limit, a request shape one model generation accepts and the next rejects, or a
+parameter whose meaning changed. The check that catches these is cheap. Each new
+pairing of model and harness is smoke-tested with one tool-bearing request
+before anything relies on it, which is the smallest form of the conformance
+fixtures described later in this chapter.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+OpenAI's Responses API limits `safety_identifier`, which replaces the
+deprecated `user` field, to 64 characters, so a gateway that receives longer
+session identifiers from a harness has to hash or shorten them
+[@openai2026responsescreate]. Starting with GPT-5.4, Chat Completions does not
+support tool calls combined with a reasoning effort other than `none`, so a
+gateway that forwards an agent's tool-bearing Chat Completions traffic to a
+current reasoning model has to switch it to Responses
+[@openai2026migrateresponses]. Anthropic replaced the fixed thinking budget
+with adaptive thinking steered by an effort level: Claude 4.7 and later models
+reject the budget form with a 400 error, while Claude 4.5 models, including
+Haiku 4.5, accept only the budget form [@anthropic2026thinkingtroubleshooting].
+A gateway serving both generations therefore needs a capability profile per
+model rather than one translation rule. The effort level is guidance, not a
+quota: at every level the model decides per request whether to think, and a
+request that only processes tool results can skip thinking even at the highest
+levels [@anthropic2026steeringthinking].
+:::
+
+The architecture so far says what connects to what. Connected products become
+one releasable system when every boundary has a contract, every component that
+affects behavior has an identity, and a failed release has a tested way back.
+The rest of the chapter states those contracts, and each box in
+@fig-reference-arch names the one that governs it.
+
 ## Freeze the integration release
+
+The deliverable of the second half is an **integration release**: a versioned
+statement of what is connected, what each connection means, who owns it, and
+what evidence makes the assembled behavior safe to release. It starts from the
+release decision rather than from a product inventory. The decision names the
+capability being released, its users and tenants, its permitted data classes
+and effects, its quality and operational thresholds, and its rollback trigger.
+The release then freezes a **system fingerprint** containing the model
+revision, prompt revision, retrieval snapshot, tool schema, policy revision,
+router configuration, telemetry schema, and executable artifact digests. A
+model name alone cannot identify the system that produced an answer.
 
 An integration release owns two records. The **system manifest** identifies the
 assembled system. The **boundary contract** defines each edge between a producer
@@ -102,45 +545,6 @@ availability, or cost. Every accepted operation resolves to an immutable
 provider, model revision, adapter revision, capability-profile revision, and
 route-policy revision. Experiments and canaries use sticky assignment, so
 repeated work stays on one system.
-
-## A reference architecture
-
-@fig-reference-arch shows the smallest useful architecture. The application is
-the caller. Policy admits work. An adapter converts the caller contract into a
-provider contract. Tool effects take a separate path through authorization and
-an executor. Retrieval returns identified evidence. Telemetry observes every
-decision but grants no permission.
-
-```{dot}
-//| label: fig-reference-arch
-//| fig-cap: "A vendor-neutral integration architecture. Model calls pass from Caller through Policy and Adapter to Provider. Tool proposals take a separately authorized path to an executor and effect ledger. Retrieval and telemetry remain distinct services."
-digraph {
-  bgcolor="transparent"; rankdir=TB; nodesep=0.16; ranksep=0.25;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=9,
-        color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1"];
-  edge [fontname="Helvetica", fontsize=9, color="#6b7280", arrowsize=0.65];
-  caller [label="Caller"];
-  policy [label="Policy"];
-  adapter [label="Adapter"];
-  provider [label="Provider"];
-  retrieval [label="Retrieval"];
-  executor [label="Tool executor"];
-  ledger [label="Effect ledger"];
-  telemetry [label="Telemetry"];
-  caller -> policy -> adapter -> provider;
-  policy -> retrieval [label="evidence"];
-  policy -> executor [label="authorized"];
-  executor -> ledger;
-  policy -> telemetry [style=dashed];
-  adapter -> telemetry [style=dashed];
-  executor -> telemetry [style=dashed];
-}
-```
-
-No single product sits at the center of the figure. The model boundary, the
-tool boundary, the retrieval boundary, and the telemetry that records evidence
-solve different problems, covered in @sec-serving-stack, @sec-agents-practice,
-@sec-retrieval-practice, and @sec-eval-practice.
 
 ## Define the model-operation state machine
 
@@ -250,9 +654,9 @@ mechanisms. Each token is bound to an audience, scope, verified tenant, subject
 or actor, and time to live. Every resource server validates its own audience,
 and a token issued for one resource is never passed through to another.
 
-A **virtual key** is a credential the gateway issues in place of the provider
-secret. It implements model-budget and routing policy; tool calls are authorized
-separately, at the tool boundary. Where a provider supports only a static
+The **virtual key** introduced with the reference architecture implements
+model-budget and routing policy; tool calls are authorized separately, at the
+tool boundary. Where a provider supports only a static
 secret, a broker holds that secret and substitutes it only at an allowed egress
 boundary. The application and sandbox should not receive the raw provider
 secret. Zero-trust guidance similarly treats network location as insufficient
@@ -287,7 +691,7 @@ that has already happened in place. Parallel calls require independent call IDs
 and receipts. A tool result must retain its originating call ID so the runtime
 cannot attach it to the wrong proposal.
 
-An @gls-sandbox reduces blast radius, the damage an inappropriate action can
+A @gls-sandbox reduces blast radius, the damage an inappropriate action can
 do; deciding whether an action is appropriate remains the job of authorization.
 Its threat model should bound filesystem access, syscalls, processes, CPU,
 memory, disk, wall-clock time, workspace lifetime, and network access. The
@@ -469,10 +873,14 @@ is the one that has to make it visible.
 ::: {.callout-important}
 ## What's contested
 Some teams expose one provider-shaped API everywhere; others keep provider-native
-clients behind a narrower domain interface. Some centralize admission in a
-gateway; others distribute it among services. Either can work, and each topology
-has to meet the same requirements: explicit semantic loss, least authority,
-bounded failure, immutable identity, end-to-end evidence, and tested rollback.
+clients behind a narrower domain interface. Some centralize admission in one
+gateway that also carries tool and agent-to-agent traffic; others keep model,
+tool, and agent traffic on separate proxies, so that a fault or a compromise in
+one does not reach the others. Either can work, and each topology has to meet
+the same requirements: explicit semantic loss, least authority, bounded
+failure, immutable identity, end-to-end evidence, and tested rollback. The
+reference stack in this chapter is a snapshot of named products; the contracts
+are the part expected to outlast it.
 :::
 
 ## Further reading
