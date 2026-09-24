@@ -121,6 +121,8 @@ type L = typeof labels.en;
 
 const num = (v: number) => sig(v, 3);
 const u2 = (v: number) => fixed(v, 2);
+// A share that is small but not zero keeps one decimal, so it never reads as 0%.
+const share = (v: number) => (v > 0 && v < 0.01 ? pct(v, 1) : pct(v));
 
 // Kalai et al.'s confidence targets, when the utilities match one exactly.
 function kalaiTarget(p: P): { t: number; k: number } | null {
@@ -136,7 +138,7 @@ function describe(st: State<P>, lang: Lang): string {
   const o = outcome(p, tau), o0 = outcome(p, 0);
   return tpl(L.describe, {
     w: num(p.wrong), a: num(p.abstain), t: u2(tau), ev: L[p.evidence],
-    c: pct(o.coverage), acc: pct(o.accuracy), e: fixed(o.errors * 100, 1), u: u2(o.utility), e0: fixed(o0.errors * 100, 1), u0: u2(o0.utility),
+    c: share(o.coverage), acc: pct(o.accuracy), e: fixed(o.errors * 100, 1), u: u2(o.utility), e0: fixed(o0.errors * 100, 1), u0: u2(o0.utility),
   });
 }
 
@@ -247,8 +249,8 @@ function readout(p: P, x0: number, y0: number, w: number, L: L, fs: number): { s
   parts.push(text(xb, y, L.colBinary, { "font-size": fs, "text-anchor": "end", class: "fig-t-muted fig-t-num" }));
   y += 6;
   const rows: Array<[string, string, string]> = [
-    [L.rCoverage, pct(o.coverage), pct(o0.coverage)],
-    [L.rAccuracy, pct(o.accuracy), pct(o0.accuracy)],
+    [L.rCoverage, share(o.coverage), share(o0.coverage)],
+    [L.rAccuracy, o.coverage > 0 ? pct(o.accuracy) : "–", pct(o0.accuracy)],
     [L.rErrors, fixed(o.errors * 100, 1), fixed(o0.errors * 100, 1)],
     [L.rUtility, u2(o.utility).replace("-", "−"), u2(o0.utility).replace("-", "−")],
   ];

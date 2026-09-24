@@ -165,6 +165,12 @@ function mainPlot(p: P, x0: number, y0: number, w: number, L: L, fs: number, uid
   const bounds = { x0: left + 2, y0: top + 2, x1: right - 2, y1: top + plotH - 2 };
   obstacles.push(...lineObstacles([[left, y(RAW.median)], [right, y(RAW.median)]]));
   const placed = placeLabels(reqs, bounds, obstacles);
+  // A stock label crowded out at the right end moves to the left end of its line.
+  const lost = placed.dropped.find((q) => q.text === tpl(L.stock, { s: tok(p.stock) }));
+  if (lost) {
+    const retry = placeLabels([{ ...lost, x: left + 4, sides: ["below-right", "above-right"] }], bounds, [...obstacles, ...placed.placed.map((q) => q.box)]);
+    placed.placed.push(...retry.placed);
+  }
   parts.push(drawLabels(placed.placed));
   // The band's name goes in the first corner of the band that the lines and
   // the labels above leave clear.
