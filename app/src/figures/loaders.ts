@@ -106,4 +106,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "effect-crash-recovery": () => import("./effect-crash-recovery.ts"),
   "release-contract": () => import("./release-contract.ts"),
   "hosting-clauses": () => import("./hosting-clauses.ts"),
+  "artifact-lineage": () => import("./artifact-lineage.ts"),
 };
