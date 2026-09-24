@@ -411,6 +411,7 @@ export default defineFigure({
   },
   timeline: {
     rate: 3,
+    discrete: false, // continuous time in seconds
     duration: (p) => model(p).end,
     keyframes,
     // The decisive moment: A's write after its pause.
