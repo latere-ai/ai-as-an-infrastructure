@@ -38,6 +38,15 @@ test("anchors are native and land below the sticky header", () => {
   expect(tsx).not.toMatch(/scrollMarginTop/);
 });
 
+// With the document as the scroller, anything wider than the viewport pans the
+// whole page sideways. KaTeX keeps an absolutely positioned MathML copy next to
+// each formula; inside a table that scrolls sideways, it escapes the scroller
+// unless the scroller is positioned, and widened phone pages by ~30 px.
+test("sideways scrollers contain absolutely positioned descendants", () => {
+  expect(css).toMatch(/\n\.table-scroll \{ position: relative; overflow-x: auto;/);
+  expect(css).toMatch(/\.katex-display \{ position: relative; overflow-x: auto;/);
+});
+
 test("reading progress and the active heading follow the window's scroll", () => {
   expect(reader).toMatch(/window\.addEventListener\("scroll", onScroll/);
   expect(reader).toMatch(/document\.scrollingElement/);
