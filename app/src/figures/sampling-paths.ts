@@ -337,8 +337,8 @@ const labels = {
     unit: "1 unit",
     chart: "Mean gap to the exact endpoint after N steps",
     chartX: "Euler steps N (network evaluations)",
-    kfStart: "reference noise at t = {t}",
-    kfStep: "t = {t}, mean gap {g}",
+    kfStart: "start from reference noise",
+    kfStep: "mean gap to the exact paths {g}",
     kfEnd: "samples after {n:step/steps}, mean gap {g}",
     describe: "{name}, data {target}, {n:Euler step/Euler steps}. At t = {t} the samples sit a mean {g} from their exact ODE paths, and {e} after the last step (diffusion ODE {gd}, flow matching {gf}, after reflow 0). The exact paths are {b} longer than their straight chords.",
     two: "two modes", ring: "eight modes on a ring", moons: "two moons",
@@ -372,8 +372,8 @@ const labels = {
     unit: "1 个单位",
     chart: "N 步之后与精确终点的平均偏差",
     chartX: "Euler 步数 N（网络评估次数）",
-    kfStart: "参考噪声，t = {t}",
-    kfStep: "t = {t}，平均偏差 {g}",
+    kfStart: "从参考噪声出发",
+    kfStep: "与精确路径的平均偏差 {g}",
     kfEnd: "{n} 步之后的样本，平均偏差 {g}",
     describe: "{name}，数据为{target}，{n} 个 Euler 步。t = {t} 时，样本与各自精确 ODE 路径的平均偏差为 {g}，最后一步之后为 {e}（扩散 ODE {gd}，流匹配 {gf}，重流之后为 0）。精确路径的总长度比起点到终点的直线弦多出 {b}。",
     two: "两个模式", ring: "环上八个模式", moons: "双月形",
@@ -415,6 +415,11 @@ function arrow(x1: number, y1: number, x2: number, y2: number, color: string, wi
 }
 
 const DOMAIN = 3.8;
+
+// The step whose decomposition is drawn at the tracked particle: the step just
+// taken at an integer position (the arrow ends at the particle), the step in
+// progress between two, and the first step at the start.
+const trackedStep = (tau: number, n: number) => Math.min(n - 1, Math.max(0, Math.ceil(tau * n - 1e-9) - 1));
 
 function renderPlane(p: P, tau: number, b: Base, size: number, x0: number, y0: number, uid: string, Lx: L): string {
   const X = linear([-DOMAIN, DOMAIN], [x0, x0 + size]);
@@ -492,7 +497,7 @@ function renderPlane(p: P, tau: number, b: Base, size: number, x0: number, y0: n
   inner.push(el("path", { d: linePath(pts(exact, REF, track, 1, 1)), fill: "none", stroke: C.ink, "stroke-width": 1.3 }));
   inner.push(el("path", { d: linePath(pts(path, n, track, tau)), fill: "none", stroke: col, "stroke-width": 2.4, "stroke-linejoin": "round" }));
   for (let j = 1; j <= doneSteps; j++) inner.push(el("circle", { cx: X(path[(track * (n + 1) + j) * 2]), cy: Y(path[(track * (n + 1) + j) * 2 + 1]), r: 2.6, fill: col }));
-  const j = Math.min(n - 1, doneSteps);
+  const j = trackedStep(tau, n);
   const sx = path[(track * (n + 1) + j) * 2], sy = path[(track * (n + 1) + j) * 2 + 1];
   const nx = path[(track * (n + 1) + j + 1) * 2], ny = path[(track * (n + 1) + j + 1) * 2 + 1];
   if (p.sampler !== "reflow") {
@@ -545,7 +550,7 @@ function renderReadout(p: P, tau: number, b: Base, x0: number, y0: number, w: nu
   parts.push(el("line", { x1: x0, x2: x0 + w, y1: y, y2: y, stroke: C.grid, "stroke-width": 1 }));
   // The tracked particle's step.
   const n = p.steps;
-  const j = Math.min(n - 1, Math.floor(tau * n + 1e-9));
+  const j = trackedStep(tau, n);
   y += 20;
   parts.push(text(x0, y, tpl(Lx.tracked, { j: j + 1, n }), { "font-size": TYPE.body, class: "fig-t-strong" }));
   const note: string[] = [];
@@ -668,11 +673,11 @@ export default defineFigure({
     keyframes: (p, lang) => {
       const Lx = labels[lang];
       const b = base(p.target, p.seed);
-      const out = [{ t: 0, label: tpl(Lx.kfStart, { t: p.sampler === "diffusion" ? "1" : "0" }) }];
+      const out = [{ t: 0, label: Lx.kfStart }];
       for (let k = 1; k <= p.steps; k++) {
         const tau = k / p.steps;
         const gp = g2(gaps(p, p.sampler, b, tau).now);
-        out.push({ t: k, label: k === p.steps ? tpl(Lx.kfEnd, { n: p.steps, g: gp }) : tpl(Lx.kfStep, { t: fixed(ownT(p.sampler, tau), 2), g: gp }) });
+        out.push({ t: k, label: k === p.steps ? tpl(Lx.kfEnd, { n: p.steps, g: gp }) : tpl(Lx.kfStep, { g: gp }) });
       }
       return out;
     },
