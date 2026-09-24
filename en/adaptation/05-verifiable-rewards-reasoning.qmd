@@ -69,6 +69,86 @@ cases, passing the check does not establish the intended property. Sandboxing pr
 checker from the candidate. Hidden tests, fuzzing, metamorphic tests, and manual review
 increase coverage. None of them turns an incomplete specification into ground truth.
 
+The runnable cell below trains a policy against two implementations of one
+intended check. Each task has a numeric answer. The policy chooses how many
+numbers $m$ to state, its best guess first and then nearby hedges, and the first
+guess is right with probability `p_right = 0.6`. The lenient checker accepts a
+response if the answer appears anywhere in it, so it is unsound; the strict
+checker requires exactly one stated number equal to the answer, which here is
+the intended $q$. The cell first checks the lenient pass rate for each $m$
+against its closed form $p+(1-p)(m-1)/4$, then runs group-relative policy
+gradient against each checker. Trained on the lenient checker, the reward rises
+from 0.66 to 0.99 while intended correctness falls from 0.29 to 0: the policy
+learns to state five numbers. The same code trained on the strict checker moves
+toward the intended ceiling of 0.6. The reward curve alone cannot tell the two
+runs apart; only the independent check can. Set `p_right = 0.9`: hedging now
+adds at most 0.1 of reward, the drift is slower, and intended correctness still
+falls from 0.53 to 0.15 in the same 120 steps.
+
+:::: {.runnable}
+```python
+import re
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+p_right = 0.6                            # chance the first stated number is the answer
+
+def respond(ans, m):                     # state the best guess, then m - 1 nearby hedges
+    guess = ans if rng.random() < p_right else ans + rng.choice([-2, -1, 1, 2])
+    return "answer: " + ", ".join(str(guess + d) for d in (0, 1, -1, 2, -2)[:m])
+
+def lenient(ans, y):                     # passes if the answer appears anywhere: unsound
+    return re.search(rf"\b{ans}\b", y) is not None
+
+def strict(ans, y):                      # exactly one stated number, equal to the answer
+    return re.findall(r"-?\d+", y) == [str(ans)]
+
+def train(checker, steps=120, B=16, G=4, lr=2.0):
+    theta = np.log([0.6, 0.2, 0.1, 0.05, 0.05])   # policy over m = 1..5 stated numbers
+    log = []
+    for _ in range(steps):
+        pi = np.exp(theta) / np.exp(theta).sum()
+        m = rng.choice(5, size=(B, G), p=pi) + 1
+        ans = rng.integers(10, 90, size=B)
+        ys = [[respond(a, k) for k in row] for a, row in zip(ans, m)]
+        r = np.array([[checker(a, y) for y in row] for a, row in zip(ans, ys)], float)
+        q = np.array([[strict(a, y) for y in row] for a, row in zip(ans, ys)], float)
+        adv = r - r.mean(1, keepdims=True)                 # group-relative advantage
+        theta += lr * (adv[..., None] * (np.eye(5)[m - 1] - pi)).mean((0, 1))
+        log.append((r.mean(), q.mean(), *pi))
+    return np.array(log)
+
+# The lenient checker's pass rate for m numbers is p + (1 - p)(m - 1)/4.
+for m in range(1, 6):
+    est = np.mean([lenient(50, respond(50, m)) for _ in range(2000)])
+    assert abs(est - (p_right + (1 - p_right) * (m - 1) / 4)) < 0.04
+runs = {"lenient": train(lenient), "strict": train(strict)}
+first, last = {k: v[:10].mean(0) for k, v in runs.items()}, {k: v[-10:].mean(0) for k, v in runs.items()}
+assert last["lenient"][0] > first["lenient"][0] and last["lenient"][1] < first["lenient"][1] - 0.1
+assert last["strict"][1] > first["strict"][1]     # the same code, trained on the intended check
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.0), sharex=True)
+t = np.arange(7, 120)
+sm = lambda v: np.convolve(v, np.ones(8) / 8, "valid")   # mean of the last 8 steps
+ax1.plot(t, sm(runs["lenient"][:, 0]), label="lenient checker's reward, trained on it")
+ax1.plot(t, sm(runs["lenient"][:, 1]), label="intended correctness, same run")
+ax1.plot(t, sm(runs["strict"][:, 1]), label="intended correctness, trained on strict")
+ax1.set(ylabel="rate (8-step mean)", ylim=(0, 1.05))
+ax1.set_title("Reward rises while the answers stop being answers", fontsize=11)
+ax1.legend(fontsize=8.5, loc="center right", bbox_to_anchor=(1, 0.32))
+ax2.stackplot(range(120), runs["lenient"][:, 2:].T, alpha=0.85)
+for x, y, k in ((3, 0.25, 1), (3, 0.68, 2), (75, 0.5, 5)):
+    ax2.text(x, y, f"m = {k}", fontsize=9)
+ax2.set(xlabel="policy-gradient step", ylabel="π(m), lenient run", ylim=(0, 1))
+ax2.set_title("Share of each count m of stated numbers, 1 at the bottom", fontsize=11)
+fig.tight_layout()
+print(f"lenient run: reward {first['lenient'][0]:.2f} -> {last['lenient'][0]:.2f}, intended correctness "
+      f"{first['lenient'][1]:.2f} -> {last['lenient'][1]:.2f}; strict run: {first['strict'][1]:.2f} -> {last['strict'][1]:.2f}")
+print("a response the lenient checker accepts:", respond(42, 5))
+```
+::::
+
 | Check | What it can establish | Typical gap |
 |---|---|---|
 | Normalized answer match | The extracted answer has an accepted equivalent form | A right final answer can follow a wrong argument |

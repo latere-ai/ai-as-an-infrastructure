@@ -223,29 +223,62 @@ Gao 等人采用受控替代方案，更系统地研究了这条曲线，以免�
 //| fig-cap: "在 Gao 等人的合成实验中，策略从初始策略出发不断被优化，图中是代理奖励模型与金标准奖励模型给出的分数。实验用一个固定的 6B 金标准奖励模型代替人工标注者，1.2B 策略针对规模更小的代理奖励模型进行优化 [@gao2022scaling]。虚线与实线是一次实测运行，按论文图表描点得到。点线是论文为金标准分数拟合的规律，按奖励模型规模取论文系数：强化学习为 $R(d)=d(a-b\ln d)$，best-of-$n$ 为 $R(d)=d(a-bd)$，其中 $d$ 为 KL 的平方根，$a$ 与 $b$ 即论文中的 $\alpha$ 与 $\beta$；强化学习的 $a$ 在各规模间取同一常数，由论文曲线反推得到。下方面板是该次运行的 KL 随 PPO 步数或随 $n$ 的变化。KL 系数 $\beta>0$ 的运行只在 1.2B 奖励模型上做过，它会减缓策略的偏移：$\beta=0.01$ 的运行结束时 KL 仍在上升，更大的系数则把策略限制在某个距离附近。这些运行中，金标准分数随 KL 的变化沿同一条曲线，论文也指出这一结果可能对超参数敏感。金标准分数是模型的判断，不是人类评价的质量。"
 ```
 
-下面的小程序画出了这两条曲线。其中的二次金标准曲线只是示意，并未复现 Gao 等人的拟合系数。修改 `curvature` 会移动金标准曲线的峰值，由此可以看出停止点没有普适位置。
+下面的可运行单元格把这个设置缩到玩具规模重做一遍。一个提示有 4,000 个候选回答，每个回答有质量和长度两个属性。金标准奖励在 $L=4$ 之前奖励长度，超过之后惩罚长度；参考策略偏好短回答。单元格从参考策略采样 1,000 对回答，用金标准奖励按 Bradley-Terry 模型标注，再拟合一个对质量和长度呈线性的代理 $r_\phi$。随后它对 60 个 $\beta$ 值精确求出带 KL 惩罚目标的最优解 $\pi_\beta\propto\pi_{\mathrm{ref}}\exp(r_\phi/\beta)$，并对 $n$ 从 1 到 4,096 算出 best-of-$n$ 的精确选中分布。单元格断言三件事：代理分随 KL 单调上升；金标准分先升后降；每个 best-of-$n$ 策略都满足已知上界 $\mathrm{KL}\le\ln n-(n-1)/n$。在参考分布上，长度确实有益，所以代理模型学到了正的长度权重。优化后的策略跟着它走：金标准分在 $\sqrt{\mathrm{KL}}\approx1.8$ 处见顶，此时平均长度为 4.4；之后平均长度逼近 10，金标准分随之下滑。在这个设置里，best-of-$n$ 每单位 KL 换来的金标准增益更多，拐头也更晚。把 `n_pairs` 设为 20000，峰值几乎不动，因为同一分布上的更多标签揭示不了长度惩罚。在特征里加上 `L ** 2`，先升后降的断言会失败：能够表示这项惩罚的奖励模型，在这个范围内会让金标准分一直上升。
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 
-policy_shift = np.linspace(0, 10, 200)
-proxy_score = 0.35 + 0.12 * policy_shift
-curvature = 0.016  # 示意值，并非 Gao 等人的估计结果
-gold_score = 0.45 + 0.16 * policy_shift - curvature * policy_shift**2
-best = int(np.argmax(gold_score))
+rng = np.random.default_rng(0)
+N, n_pairs = 4000, 1000                  # 同一提示的候选回答数、标注的回答对数
+q, L = rng.normal(size=N), rng.gamma(2.0, 1.5, size=N)  # 每个回答的质量与长度
+gold = q + 0.8 * L - 0.1 * L ** 2        # 金标准奖励：长度在 L = 4 之前有益，之后有害
+log_ref = -0.5 * L - np.log(np.exp(-0.5 * L).sum())    # 参考策略偏好短回答
+sig = lambda z: 1 / (1 + np.exp(-z))
 
-plt.plot(policy_shift, proxy_score, label="优化后的代理分数")
-plt.plot(policy_shift, gold_score, label="独立金标准模型分数")
-plt.axvline(policy_shift[best], ls="--", color="gray")
-plt.xlabel("策略相对参考模型的偏移")
-plt.ylabel("分数（示意单位）")
-plt.title("外部检查变差后，代理仍可能继续改善")
-plt.legend()
-plt.show()
+# 代理奖励模型：在参考策略采样、金标准奖励标注的回答对上拟合 Bradley-Terry。
+a, b = rng.choice(N, size=(2, n_pairs), p=np.exp(log_ref))
+won = rng.random(n_pairs) < sig(gold[a] - gold[b])
+feats = np.stack([q, L], 1)              # 线性奖励模型；试试 np.stack([q, L, L ** 2], 1)
+d, w = feats[a] - feats[b], np.zeros(feats.shape[1])
+for _ in range(2000):
+    w += 0.1 * d.T @ (won - sig(d @ w)) / n_pairs
+proxy = feats @ w
 
-print(f"金标准模型分数在偏移约 {policy_shift[best]:.1f} 时达到峰值")
+def score(logp):                         # 到参考策略的 KL、代理分、金标准分、平均长度
+    p = np.exp(logp)
+    return p @ (logp - log_ref), p @ proxy, p @ gold, p @ L
+
+# 带 KL 惩罚的 RL 有闭式最优解：pi_beta ∝ pi_ref exp(proxy / beta)。
+rl = []
+for beta in np.geomspace(20, 0.1, 60):
+    z = log_ref + proxy / beta
+    rl.append(score(z - z.max() - np.log(np.exp(z - z.max()).sum())))
+kl, pr, gd, ln = np.array(rl).T
+# 按代理分做 best-of-n：由参考分布的累积分布函数算出精确的选中概率。
+F = np.cumsum(np.exp(log_ref[np.argsort(proxy)]))
+bon = []
+for n in 2 ** np.arange(0, 13):
+    p = np.empty(N); p[np.argsort(proxy)] = F ** n - np.concatenate([[0], F[:-1]]) ** n
+    bon.append(score(np.log(np.maximum(p, 1e-300))))
+    assert bon[-1][0] <= np.log(n) - (n - 1) / n + 1e-6   # best-of-n 已知的 KL 上界
+bkl, bpr, bgd, _ = np.array(bon).T
+
+assert np.all(np.diff(pr) > 0)           # 代理分只升不降
+peak = np.argmax(gd)
+assert 0 < peak < len(gd) - 1 and gd[-1] < gd[peak] - 1   # 金标准分先升后降
+g0 = score(log_ref)[2]
+fig, ax = plt.subplots(figsize=(6.2, 4.4))
+ax.plot(np.sqrt(kl), pr - pr[0], ls="--", label="代理分，KL 正则化 RL")
+ax.plot(np.sqrt(kl), gd - g0, c="#ff7a66", label="金标准分，KL 正则化 RL")
+ax.plot(np.sqrt(bkl), bgd - g0, "o", ms=4, c="#3dbd8a", label="金标准分，best-of-n（n = 1 到 4096）")
+ax.axvline(np.sqrt(kl[peak]), c="grey", lw=1, ls=":")
+ax.set(xlabel="√KL(π ‖ π_ref)，单位 nats^½", ylabel="相对参考策略的奖励增益")
+ax.set_title(f"金标准分在 √KL = {np.sqrt(kl[peak]):.1f} 处见顶，代理分仍在上升", fontsize=11)
+ax.legend(fontsize=9)
+print(f"代理模型对（质量，长度）的权重：{np.round(w, 2)}；平均长度在参考策略处为 {ln[0]:.1f}，"
+      f"金标准峰值处为 {ln[peak]:.1f}，最后一个 beta 处为 {ln[-1]:.1f}")
 ```
 ::::
 

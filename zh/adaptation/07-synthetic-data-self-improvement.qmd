@@ -66,28 +66,6 @@ $$
 
 这里，$x$ 是提示，$y$ 是候选回答，$\theta$ 表示生成器参数，$q_\theta$ 是回答分布，$z$ 是独立的可接受性检验，$p_x$ 是单次成功概率，$n$ 是采样次数，$C_n(x)$ 是最终覆盖率。这个公式描述的是独立采样假设下出现可接受回答的机会。它并不表示实际选择器一定能找到它，也不表示实际样本相互独立，更不表示增加采样必然带来很多新的多样性。
 
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
-
-counts = np.arange(1, 21)
-for p in (0.1, 0.3, 0.5):
-    coverage = 1 - (1 - p) ** counts
-    plt.plot(counts, coverage, marker="o", markersize=3, label=f"p={p}")
-
-plt.xlabel("独立候选数 n")
-plt.ylabel("候选覆盖率 C_n")
-plt.title("独立采样下的理想覆盖率")
-plt.ylim(0, 1.02)
-plt.legend()
-plt.show()
-
-print("当 p=0.10、n=20 时，候选覆盖率为",
-      round(1 - (1 - 0.10) ** 20, 2))
-```
-::::
-
 现在把理想评判者换成实际过滤器 $\hat z$。令 $\alpha_x$ 表示它在提示 $x$ 上的真阳性率，$\beta_x$ 表示假阳性率。它的**选择精确率**为
 
 $$
@@ -107,6 +85,53 @@ Z_\theta(x)=\mathbb{E}_{y\sim q_\theta(\cdot\mid x)}[a(x,y)].
 $$
 
 其中，$a$ 汇总了全部接纳阶段，$Z_\theta(x)$ 是提示 $x$ 的总体接纳概率，$\widetilde q_\theta$ 是归一化后的保留回答分布。只有当生成器偶尔能产生有用回答，而且接纳流水线能够可靠地区分它们时，增加采样才有帮助。
+
+下面的可运行单元格在 600 个提示上把这条流水线跑一轮。各提示的成功率 $p_x$ 的对数几率服从正态分布，中位数约为 0.18。每个提示抽取 $n=16$ 个候选，先由理想评判者标注，再交给一个过滤器，其 $\alpha=0.9$，假阳性率 `fpr`（即上文的 $\beta_x$）为 0.05。单元格断言：模拟得到的覆盖率与 $C_n(x)$ 的平均值一致；六个难度区间各自的精确率，与精确率公式在该区间提示上的平均值一致。上图显示，当 $p_x<\beta/(\alpha+\beta)\approx0.05$ 时，精确率跌破一半。下图显示保留下来的集合：在 2,517 条接纳记录中，最容易的区间贡献了 953 条，而最难区间的 111 条记录里有 70% 是错的。把 `fpr` 设为 0.01，最难区间只剩 43 条记录，其中 23% 错误：更严格的过滤器在难题上换来精确率，代价是保留得更少。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+P, n = 600, 16                           # 提示数、每个提示的候选数
+alpha, fpr = 0.9, 0.05                   # 过滤器的真阳性率和假阳性率；试试 fpr = 0.01
+p = 1 / (1 + np.exp(-rng.normal(-1.5, 1.5, P)))   # 每个提示的单次成功率 p_x
+z = rng.random((P, n)) < p[:, None]      # 每个候选的理想评判标签
+zhat = np.where(z, rng.random((P, n)) < alpha, rng.random((P, n)) < fpr)  # 过滤器的判定
+c = np.mean(1 - (1 - p) ** n)            # 对提示取平均的覆盖率 C_n
+assert abs(z.any(1).mean() - c) < 4 * np.sqrt(c * (1 - c) / P)
+
+edges = np.quantile(p, np.linspace(0, 1, 7))      # 六个难度区间，每个 100 个提示
+band = np.clip(np.searchsorted(edges, p, side="right") - 1, 0, 5)
+kept = np.bincount(band, zhat.sum(1), 6)
+good = np.bincount(band, (z & zhat).sum(1), 6)
+expect = np.bincount(band, alpha * p, 6) / np.bincount(band, alpha * p + fpr * (1 - p), 6)
+assert np.all(np.abs(good / kept - expect) < 4 * np.sqrt(expect * (1 - expect) / kept))
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2))
+grid = np.geomspace(p.min(), p.max(), 200)
+ax1.semilogx(grid, alpha * grid / (alpha * grid + fpr * (1 - grid)), c="grey", lw=1.2,
+             label="α p / (α p + β (1 − p))")
+mid = np.bincount(band, p, 6) / np.bincount(band, minlength=6)
+ax1.semilogx(mid, expect, "o", mfc="none", ms=10, c="grey", label="闭式解，区间平均")
+ax1.semilogx(mid, good / kept, "o", label="模拟结果，按区间")
+ax1.axvline(fpr / (alpha + fpr), c="grey", ls=":", lw=1)
+ax1.set(xlabel="单次成功率 p_x", ylabel="接纳集合的精确率", ylim=(0, 1))
+ax1.set_title("p 低于 β / (α + β) 时，接纳的记录多半是错的", fontsize=11)
+ax1.legend(fontsize=9, loc="lower right")
+x = np.arange(6)
+ax2.bar(x, good, label="接纳且正确")
+ax2.bar(x, kept - good, bottom=good, label="接纳但错误")
+ax2.set_xticks(x, [f"{edges[k]:.2f}-{edges[k + 1]:.2f}" for k in x], fontsize=8.5)
+ax2.set(xlabel="p_x 所在区间（每个 100 个提示）", ylabel="接纳的记录数")
+ax2.set_title("接纳集合主要来自简单提示", fontsize=11)
+ax2.legend(fontsize=9)
+fig.tight_layout()
+print(f"接纳的记录：{kept.sum():.0f} 条（{1 - good.sum() / kept.sum():.0%} 错误）；最难区间："
+      f"{kept[0]:.0f} 条，{1 - good[0] / kept[0]:.0%} 错误；最易区间：{kept[5]:.0f} 条")
+```
+::::
 
 ## 五种生成数据的用法并不相同
 

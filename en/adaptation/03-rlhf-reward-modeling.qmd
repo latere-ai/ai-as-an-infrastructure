@@ -409,32 +409,80 @@ universal curve of true human quality.
 //| fig-cap: "Proxy and gold reward-model scores as a policy is optimized away from its initial policy, in Gao et al.'s synthetic setup, where a fixed 6B gold reward model stands in for human labelers and a 1.2B policy is optimized against a smaller proxy [@gao2022scaling]. The dashed and solid curves are one measured run, traced from the paper's figures. The dotted curve is the paper's fitted law for the gold score with its coefficients for each reward-model size: $R(d)=d(a-b\ln d)$ for RL and $R(d)=d(a-bd)$ for best-of-$n$, where $d$ is the square root of the KL and $a$, $b$ are the paper's $\alpha$, $\beta$; the RL $a$, one constant across sizes, is recovered from the paper's curves. The lower panel is the run's KL against PPO steps or against $n$. A KL coefficient $\beta>0$, run only with the 1.2B reward model, slows the drift: $\beta=0.01$ is still rising when its run ends, and larger values hold the policy near a fixed distance. In those runs the gold score followed the same curve against KL, a result the paper notes may be sensitive to hyperparameters. Gold scores are a model's judgment, not human quality."
 ```
 
-The small program below plots both curves. Its quadratic gold curve is a
-schematic and does not reproduce Gao et al.'s fitted coefficients. Changing
-`curvature` moves the peak of the gold curve, which shows why there is no
-universal stopping point.
+The runnable cell below rebuilds that setup at toy scale. One prompt has 4,000
+candidate responses, each with a quality and a length. The gold reward favors
+length up to $L=4$ and penalizes it beyond, and the reference policy favors
+short responses. The cell samples 1,000 pairs from the reference, labels them
+with the gold reward through Bradley-Terry, and fits a proxy $r_\phi$ that is
+linear in quality and length. It then computes the optimum of the KL-penalized
+objective exactly, $\pi_\beta\propto\pi_{\mathrm{ref}}\exp(r_\phi/\beta)$, for
+60 values of $\beta$, and the exact best-of-$n$ selection distribution for $n$
+from 1 to 4,096. It asserts that the proxy rises monotonically with KL, that
+the gold score turns over, and that every best-of-$n$ policy respects the known
+bound $\mathrm{KL}\le\ln n-(n-1)/n$. Length helps on the reference
+distribution, so the proxy learns a positive length weight. The optimized
+policy follows it: gold peaks at $\sqrt{\mathrm{KL}}\approx1.8$, where the mean
+length is 4.4, and falls as the mean length approaches 10. Best-of-$n$ gains
+more gold per unit of KL here and turns over later. Set `n_pairs = 20000` and
+the peak barely moves, because more labels from the same distribution do not
+reveal the penalty. Add `L ** 2` to the features and the turnover assertion
+fails: a reward model that can represent the penalty keeps gold rising over
+this range.
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
 
-policy_shift = np.linspace(0, 10, 200)
-proxy_score = 0.35 + 0.12 * policy_shift
-curvature = 0.016  # illustrative, not an estimate from Gao et al.
-gold_score = 0.45 + 0.16 * policy_shift - curvature * policy_shift**2
-best = int(np.argmax(gold_score))
+rng = np.random.default_rng(0)
+N, n_pairs = 4000, 1000                  # candidate responses to one prompt, labeled pairs
+q, L = rng.normal(size=N), rng.gamma(2.0, 1.5, size=N)  # quality and length of each response
+gold = q + 0.8 * L - 0.1 * L ** 2        # gold reward: length helps up to L = 4, then hurts
+log_ref = -0.5 * L - np.log(np.exp(-0.5 * L).sum())    # the reference policy favors short answers
+sig = lambda z: 1 / (1 + np.exp(-z))
 
-plt.plot(policy_shift, proxy_score, label="optimized proxy score")
-plt.plot(policy_shift, gold_score, label="independent gold-model score")
-plt.axvline(policy_shift[best], ls="--", color="gray")
-plt.xlabel("policy shift from reference")
-plt.ylabel("score (illustrative units)")
-plt.title("A proxy can improve after its independent check worsens")
-plt.legend()
-plt.show()
+# Proxy reward model: Bradley-Terry fit on pairs the reference samples and the gold reward labels.
+a, b = rng.choice(N, size=(2, n_pairs), p=np.exp(log_ref))
+won = rng.random(n_pairs) < sig(gold[a] - gold[b])
+feats = np.stack([q, L], 1)              # a linear reward model; try np.stack([q, L, L ** 2], 1)
+d, w = feats[a] - feats[b], np.zeros(feats.shape[1])
+for _ in range(2000):
+    w += 0.1 * d.T @ (won - sig(d @ w)) / n_pairs
+proxy = feats @ w
 
-print(f"gold-model score peaks near shift={policy_shift[best]:.1f}")
+def score(logp):                         # KL to the reference, proxy, gold, mean length
+    p = np.exp(logp)
+    return p @ (logp - log_ref), p @ proxy, p @ gold, p @ L
+
+# RL with a KL penalty has a closed-form optimum: pi_beta ∝ pi_ref exp(proxy / beta).
+rl = []
+for beta in np.geomspace(20, 0.1, 60):
+    z = log_ref + proxy / beta
+    rl.append(score(z - z.max() - np.log(np.exp(z - z.max()).sum())))
+kl, pr, gd, ln = np.array(rl).T
+# Best-of-n under the proxy: exact selection probabilities from the reference CDF.
+F = np.cumsum(np.exp(log_ref[np.argsort(proxy)]))
+bon = []
+for n in 2 ** np.arange(0, 13):
+    p = np.empty(N); p[np.argsort(proxy)] = F ** n - np.concatenate([[0], F[:-1]]) ** n
+    bon.append(score(np.log(np.maximum(p, 1e-300))))
+    assert bon[-1][0] <= np.log(n) - (n - 1) / n + 1e-6   # the known KL bound for best-of-n
+bkl, bpr, bgd, _ = np.array(bon).T
+
+assert np.all(np.diff(pr) > 0)           # the proxy only goes up
+peak = np.argmax(gd)
+assert 0 < peak < len(gd) - 1 and gd[-1] < gd[peak] - 1   # the gold score turns over
+g0 = score(log_ref)[2]
+fig, ax = plt.subplots(figsize=(6.2, 4.4))
+ax.plot(np.sqrt(kl), pr - pr[0], ls="--", label="proxy, KL-regularized RL")
+ax.plot(np.sqrt(kl), gd - g0, c="#ff7a66", label="gold, KL-regularized RL")
+ax.plot(np.sqrt(bkl), bgd - g0, "o", ms=4, c="#3dbd8a", label="gold, best-of-n (n = 1 to 4096)")
+ax.axvline(np.sqrt(kl[peak]), c="grey", lw=1, ls=":")
+ax.set(xlabel="√KL(π ‖ π_ref), nats^½", ylabel="reward gain over the reference")
+ax.set_title(f"Gold peaks at √KL = {np.sqrt(kl[peak]):.1f} while the proxy keeps rising", fontsize=11)
+ax.legend(fontsize=9)
+print(f"proxy weights on (quality, length): {np.round(w, 2)}; mean length {ln[0]:.1f} at the "
+      f"reference, {ln[peak]:.1f} at the gold peak, {ln[-1]:.1f} at the last beta")
 ```
 ::::
 

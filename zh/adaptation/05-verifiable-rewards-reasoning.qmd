@@ -34,6 +34,72 @@ $$
 
 检查器就是优化器实际看到的任务规格。如果生成的程序能够读取隐藏答案、修改测试框架、利用未定义行为，或把可见测试用例写死，那么通过检查并不能证明它满足了原本的任务。沙箱用于隔离候选程序，保护检查器不受它影响。隐藏测试、模糊测试、蜕变测试和人工审计都可以扩大覆盖范围，却都不能把不完整的规格变成真值。
 
+下面的可运行单元格用同一项本意检查的两种实现来训练策略。每道题都有一个数值答案。策略决定给出几个数字 $m$：先给最佳猜测，再给邻近的备选；第一个猜测正确的概率为 `p_right = 0.6`。宽松检查器只要答案出现在回答中的任何位置就判定通过，因而是不可靠的；严格检查器要求回答恰好给出一个数字且等于答案，在这里它就是本意上的 $q$。单元格先对每个 $m$ 核对宽松检查器的通过率与闭式解 $p+(1-p)(m-1)/4$ 一致，再分别针对两个检查器运行组内相对的策略梯度。在宽松检查器上训练时，奖励从 0.66 升到 0.99，本意上的正确率却从 0.29 跌到 0：策略学会了一口气给出五个数字。同一段代码在严格检查器上训练，则朝本意上限 0.6 靠拢。单看奖励曲线，分不出这两次运行；只有独立的检查才能区分。把 `p_right` 设为 0.9，撒网式回答最多只多拿 0.1 的奖励，漂移变慢，但在同样的 120 步里，本意正确率仍从 0.53 跌到 0.15。
+
+:::: {.runnable}
+```python
+import re
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+p_right = 0.6                            # 第一个给出的数字就是答案的概率
+
+def respond(ans, m):                     # 先给出最佳猜测，再给出 m - 1 个邻近的备选
+    guess = ans if rng.random() < p_right else ans + rng.choice([-2, -1, 1, 2])
+    return "answer: " + ", ".join(str(guess + d) for d in (0, 1, -1, 2, -2)[:m])
+
+def lenient(ans, y):                     # 答案出现在任何位置就通过：不可靠
+    return re.search(rf"\b{ans}\b", y) is not None
+
+def strict(ans, y):                      # 恰好给出一个数字，且等于答案
+    return re.findall(r"-?\d+", y) == [str(ans)]
+
+def train(checker, steps=120, B=16, G=4, lr=2.0):
+    theta = np.log([0.6, 0.2, 0.1, 0.05, 0.05])   # 在给出 m = 1..5 个数字上的策略
+    log = []
+    for _ in range(steps):
+        pi = np.exp(theta) / np.exp(theta).sum()
+        m = rng.choice(5, size=(B, G), p=pi) + 1
+        ans = rng.integers(10, 90, size=B)
+        ys = [[respond(a, k) for k in row] for a, row in zip(ans, m)]
+        r = np.array([[checker(a, y) for y in row] for a, row in zip(ans, ys)], float)
+        q = np.array([[strict(a, y) for y in row] for a, row in zip(ans, ys)], float)
+        adv = r - r.mean(1, keepdims=True)                 # 组内相对优势
+        theta += lr * (adv[..., None] * (np.eye(5)[m - 1] - pi)).mean((0, 1))
+        log.append((r.mean(), q.mean(), *pi))
+    return np.array(log)
+
+# 宽松检查器对 m 个数字的通过率为 p + (1 - p)(m - 1)/4。
+for m in range(1, 6):
+    est = np.mean([lenient(50, respond(50, m)) for _ in range(2000)])
+    assert abs(est - (p_right + (1 - p_right) * (m - 1) / 4)) < 0.04
+runs = {"lenient": train(lenient), "strict": train(strict)}
+first, last = {k: v[:10].mean(0) for k, v in runs.items()}, {k: v[-10:].mean(0) for k, v in runs.items()}
+assert last["lenient"][0] > first["lenient"][0] and last["lenient"][1] < first["lenient"][1] - 0.1
+assert last["strict"][1] > first["strict"][1]     # 同一段代码，在本意的检查上训练
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.0), sharex=True)
+t = np.arange(7, 120)
+sm = lambda v: np.convolve(v, np.ones(8) / 8, "valid")   # 最近 8 步的平均
+ax1.plot(t, sm(runs["lenient"][:, 0]), label="宽松检查器的奖励（在它上面训练）")
+ax1.plot(t, sm(runs["lenient"][:, 1]), label="本意上的正确率，同一次运行")
+ax1.plot(t, sm(runs["strict"][:, 1]), label="本意上的正确率，在严格检查器上训练")
+ax1.set(ylabel="比率（8 步平均）", ylim=(0, 1.05))
+ax1.set_title("奖励一路上升，回答却不再是回答", fontsize=11)
+ax1.legend(fontsize=8.5, loc="center right", bbox_to_anchor=(1, 0.32))
+ax2.stackplot(range(120), runs["lenient"][:, 2:].T, alpha=0.85)
+for x, y, k in ((3, 0.25, 1), (3, 0.68, 2), (75, 0.5, 5)):
+    ax2.text(x, y, f"m = {k}", fontsize=9)
+ax2.set(xlabel="策略梯度步", ylabel="π(m)，宽松检查器运行", ylim=(0, 1))
+ax2.set_title("给出 m 个数字的概率，m = 1 在最下方", fontsize=11)
+fig.tight_layout()
+print(f"宽松检查器运行：奖励 {first['lenient'][0]:.2f} -> {last['lenient'][0]:.2f}，本意正确率 "
+      f"{first['lenient'][1]:.2f} -> {last['lenient'][1]:.2f}；严格检查器运行：{first['strict'][1]:.2f} -> {last['strict'][1]:.2f}")
+print("宽松检查器接受的一个回答：", respond(42, 5))
+```
+::::
+
 | 检查方式 | 能够证明什么 | 常见缺口 |
 |---|---|---|
 | 规范化答案匹配 | 提取出的答案采用了可接受的等价形式 | 最终答案正确，论证过程仍可能错误 |

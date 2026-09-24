@@ -269,44 +269,87 @@ still needs paired responses and a frozen reference. Its source paper demonstrat
 mainly in illustrative bandit problems, so the derivation should not be read as evidence that
 IPO wins broadly on language-model tasks.
 
-The runnable below isolates this difference. It optimizes one scalar gap rather than a language
-model, so it demonstrates loss geometry, not expected model quality.
+The runnable cell below trains a softmax policy over six responses to one prompt and compares
+both routes and both losses. It draws 50 Bradley-Terry labels per pair from a hidden reward, takes
+the reward-model route in closed form (a Bradley-Terry maximum-likelihood fit, then
+$\pi^*\propto\pi_{\mathrm{ref}}\exp(r/\beta)$), and runs DPO by gradient descent on the same
+labels. It asserts that DPO lands on that $\pi^*$ to machine precision: in this tabular,
+well-specified case the equivalence of the derivation holds exactly. The same code on
+deterministic labels, where the better response of every pair always wins, has no finite
+optimum. The animation shows DPO's gap $A_\theta$ between the two best responses (the $h_\theta$
+above) still climbing after 3,000 steps while the policy collapses onto response 0, and IPO on
+the same labels stopping at a finite gap. Set `beta = 2`: $\pi^*$ stays closer to the reference,
+and deterministic-label DPO still collapses, only more slowly.
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
-def sigmoid(z):
-    return 1.0 / (1.0 + np.exp(-z))
+rng = np.random.default_rng(0)
+K, m, beta = 6, 50, 0.5                  # responses, labels per pair, KL strength; try beta = 2
+log_ref = np.log(rng.dirichlet(np.ones(K) * 3))
+r_true = np.sort(rng.normal(size=K))[::-1]   # response 0 is the best
+sig = lambda z: 1 / (1 + np.exp(-z))
+i, j = np.triu_indices(K, 1)
+w_ij = rng.binomial(m, sig(r_true[i] - r_true[j]))  # how often y_i beat y_j
+data = {"soft": np.r_[w_ij, m - w_ij], "hard": np.r_[np.full(len(i), m), np.zeros(len(i))]}
+win, lose = np.r_[i, j], np.r_[j, i]     # ordered pairs (y_w, y_l) with the counts above
 
-beta = 0.2
-learning_rate = 0.1
-steps = 100
-ipo_target = 1.0 / (2.0 * beta)
+# Reward-model route: Bradley-Terry MLE (MM iteration), then pi* ∝ pi_ref exp(r / beta).
+Wn = np.zeros((K, K)); np.add.at(Wn, (win, lose), data["soft"])
+g = np.ones(K)
+for _ in range(2000):
+    g = Wn.sum(1) / ((Wn + Wn.T) / (g[:, None] + g)).sum(1)
+pi_star = np.exp(log_ref + np.log(g) / beta); pi_star /= pi_star.sum()
 
-dpo_gap = [0.0]
-ipo_gap = [0.0]
-for _ in range(steps):
-    # d[-log sigmoid(beta*h)]/dh = -beta*sigmoid(-beta*h)
-    dpo_gradient = -beta * sigmoid(-beta * dpo_gap[-1])
-    dpo_gap.append(dpo_gap[-1] - learning_rate * dpo_gradient)
+# Direct route: gradient descent on the logits of three runs at once.
+runs = [("DPO, sampled labels", "soft", "dpo"), ("DPO, deterministic labels", "hard", "dpo"), ("IPO, deterministic labels", "hard", "ipo")]
+theta, snaps, h01 = np.tile(log_ref, (3, 1)), [], []
+keep = set(np.unique(np.geomspace(1, 3000, 45).astype(int)))
+for step in range(1, 3001):
+    for k, (_, labels, loss) in enumerate(runs):
+        c = data[labels] / data[labels].sum()
+        h = theta[k, win] - theta[k, lose] - log_ref[win] + log_ref[lose]  # A_theta for each pair
+        if loss == "dpo":                # -dL/dA = beta * sigma(-beta * A)
+            gr, lr = c * beta * sig(-beta * h), 3
+        else:                            # -dL/dA = -2 (A - 1 / (2 beta))
+            gr, lr = -2 * c * (h - 1 / (2 * beta)), 0.1
+        theta[k] += lr * (np.bincount(win, gr, K) - np.bincount(lose, gr, K))
+    if step in keep:
+        pis = np.exp(theta - theta.max(1, keepdims=True)); snaps.append((step, pis / pis.sum(1, keepdims=True)))
+        h01.append(theta[:, 0] - theta[:, 1] - log_ref[0] + log_ref[1])
+h01 = np.array(h01)
+assert np.abs(snaps[-1][1][0] - pi_star).max() < 1e-3   # DPO lands on the reward-model route's pi*
+assert h01[-1, 1] > h01[len(h01) // 2, 1] + 0.5          # deterministic labels: DPO's gap keeps growing
+assert abs(h01[-1, 2] - h01[-2, 2]) < 1e-6               # IPO settles
 
-    # d[(h - 1/(2*beta))**2]/dh = 2*(h - target)
-    ipo_gradient = 2.0 * (ipo_gap[-1] - ipo_target)
-    ipo_gap.append(ipo_gap[-1] - learning_rate * ipo_gradient)
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.0), height_ratios=(1, 1))
+ax1.bar(range(K), pi_star, color="none", edgecolor="grey", lw=1.2, label="π* from BT fit, closed form")
+bars = ax1.bar(range(K), snaps[0][1][0], alpha=0.8, label=runs[0][0])
+dots, = ax1.plot(range(K), snaps[0][1][1], "o", c="#ff7a66", label=runs[1][0])
+ax1.set(xlabel="response (0 is best)", ylabel="π_θ(y)", ylim=(0, 1))
+ax1.legend(fontsize=8.5, loc="upper right")
+steps = [s for s, _ in snaps]
+lines = [ax2.plot([], [], label=name)[0] for name, _, _ in runs]
+ax2.axhline((np.log(g[0]) - np.log(g[1])) / beta, c="grey", ls=":", lw=1)
+ax2.set(xscale="log", xlim=(1, 3000), ylim=(-0.5, h01.max() + 0.5), xlabel="gradient step",
+        ylabel="gap A_θ between responses 0 and 1")
+ax2.legend(fontsize=8.5, loc="upper left")
+fig.tight_layout()
 
-print(f"IPO target: {ipo_target:.2f}")
-print(f"DPO gap after {steps} steps: {dpo_gap[-1]:.2f}")
-print(f"IPO gap after {steps} steps: {ipo_gap[-1]:.2f}")
+def update(t):
+    for bar, v in zip(bars, snaps[t][1][0]):
+        bar.set_height(v)
+    dots.set_ydata(snaps[t][1][1])
+    for k, line in enumerate(lines):
+        line.set_data(steps[: t + 1], h01[: t + 1, k])
+    ax1.set_title(f"step {steps[t]}: sampled labels settle on π*, deterministic ones do not", fontsize=10)
 
-plt.plot(dpo_gap, label="DPO gap")
-plt.plot(ipo_gap, label="IPO gap")
-plt.axhline(ipo_target, color="gray", linestyle="--", label="IPO target")
-plt.xlabel("gradient step")
-plt.ylabel("policy/reference log-ratio gap")
-plt.legend()
-plt.show()
+anim = FuncAnimation(fig, update, frames=len(snaps), interval=120)
+print(f"max |π_DPO − π*| = {np.abs(snaps[-1][1][0] - pi_star).max():.1e}; deterministic-label DPO puts "
+      f"{snaps[-1][1][1][0]:.2f} on response 0, IPO's gap stops at {h01[-1, 2]:.2f}")
 ```
 ::::
 

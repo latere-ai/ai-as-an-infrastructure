@@ -241,20 +241,71 @@ this matrix and $\rho$ is their fraction of the base-matrix parameter count.
 The total for a model is the sum over every targeted matrix, plus any biases,
 embeddings, or output heads deliberately left trainable.
 
-The runnable performs this accounting exactly for one matrix.
+The runnable cell trains adapters instead of only counting them. It builds a
+synthetic $16\times24$ update $\Delta W$ whose singular values shrink by the
+factor `decay` from one index to the next, regresses whitened inputs onto
+$\Delta W x$, and trains $B$ and $A$ by gradient descent from the usual LoRA
+start $B=0$ at ranks 1, 2, 4, and 8, next to a full-matrix update. The legend
+applies $N_{\mathrm{LoRA}}$ to each run. The cell asserts that every rank
+finishes on the smallest error any rank-$r$ matrix can reach,
+$\sum_{i>r}\sigma_i^2$ (the Eckart-Young theorem), and that the trained rank-4
+product equals the truncated singular value decomposition that
+@fig-sft-peft-lora-lowrank draws: descent finds the top directions without being
+given them. Full fine-tuning reaches zero error with 384 parameters, while rank 8
+already costs 320. Set `decay = 0.95` for a flatter spectrum: rank 8 then covers
+69% of $\|\Delta W\|_F^2$ instead of 97%, the case in which a low-rank adapter
+learns less of the update than full fine-tuning.
 
 :::: {.runnable}
 ```python
-d_in = 4096
-d_out = 4096
-ranks = [4, 8, 16, 32, 64]
+import numpy as np
+import matplotlib.pyplot as plt
 
-full = d_in * d_out
-print(f"base matrix parameters: {full:,}")
-for rank in ranks:
-    adapter = rank * (d_in + d_out)
-    fraction = 100 * adapter / full
-    print(f"rank {rank:>2}: {adapter:>7,} parameters ({fraction:>6.3f}%)")
+rng = np.random.default_rng(0)
+d_in, d_out, n = 24, 16, 48
+decay = 0.8                      # how fast the update's spectrum falls; try 0.95
+X = np.linalg.qr(rng.normal(size=(n, d_in)))[0] * np.sqrt(n)  # whitened: X.T @ X / n = I
+U, _, Vt = np.linalg.svd(rng.normal(size=(d_out, d_in)), full_matrices=False)
+sv = 2.0 * decay ** np.arange(d_out)
+dW = U @ np.diag(sv) @ Vt        # the update full fine-tuning learns
+Y = X @ dW.T                     # regression targets on top of the frozen W_0 x
+
+def fit(r, steps=300, lr=0.25):  # r=None trains every entry of the update
+    A = rng.normal(size=(r or 1, d_in)) / np.sqrt(d_in)
+    B, W, loss = np.zeros((d_out, r or 1)), np.zeros((d_out, d_in)), []
+    for _ in range(steps):
+        E = X @ W.T - Y
+        loss.append((E ** 2).sum() / n)       # equals ||W - dW||_F^2 for whitened X
+        G = E.T @ X / n                       # gradient with respect to W
+        if r:                                 # LoRA: B starts at 0, so W starts at 0
+            B, A = B - lr * G @ A.T, A - lr * B.T @ G
+            W = B @ A
+        else:
+            W = W - lr * G
+    return np.array(loss), W
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.6), height_ratios=(3, 2))
+for r in (1, 2, 4, 8, None):
+    loss, W = fit(r)
+    bound = (sv[r:] ** 2).sum() if r else 0.0  # Eckart-Young: best possible rank-r error
+    assert bound - 1e-9 <= loss[-1] <= 1.05 * bound + 1e-6
+    ax1.semilogy(loss, label=f"r={r}, {r * (d_in + d_out)} params" if r else f"full, {d_in * d_out} params, to 0")
+    if r:
+        ax1.axhline(bound, ls=(0, (1, 2)), c="grey", lw=1.2, zorder=3)
+    if r == 4:                                 # the trained adapter is the truncated SVD
+        best = U[:, :4] * sv[:4] @ Vt[:4]
+        assert np.linalg.norm(W - best) < 0.01 * np.linalg.norm(best)
+        ax2.bar(range(1, d_out + 1), sv, color="none", edgecolor="grey", label="ΔW")
+        ax2.plot(range(1, d_out + 1), np.linalg.svd(W, compute_uv=False), "o", label="trained BA, r=4")
+ax1.set(xlabel="gradient step", ylabel="squared error ||W − ΔW||²", ylim=(1e-2, 20))
+ax1.set_title("Each rank stops on its Eckart-Young bound (dotted)", fontsize=11)
+ax1.legend(fontsize=8.5, loc="lower right")
+ax2.set(xlabel="singular value index", ylabel="singular value")
+ax2.set_title("Descent finds the top-4 directions", fontsize=11)
+ax2.legend(fontsize=8.5)
+fig.tight_layout()
+print("share of ΔW's energy in the top r directions:",
+      ", ".join(f"r={r}: {(sv[:r] ** 2).sum() / (sv ** 2).sum():.0%}" for r in (1, 2, 4, 8)))
 ```
 ::::
 

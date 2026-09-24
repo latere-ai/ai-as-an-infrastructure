@@ -201,43 +201,77 @@ $$
 
 这里用 $\beta$ 表示原论文中记作 $\tau$ 的正 KL 正则化参数。因此，目标由理论固定为 $1/(2\beta)$，并不是独立选择的超参数。IPO 仍然需要成对回答与冻结参考模型。原论文主要用示意性的多臂老虎机问题展示这种行为，不能据此断言 IPO 在语言模型任务上普遍更好。
 
-下面的可运行示例只优化一个标量间隔，而不是语言模型。它展示的是损失几何形状，并不能预测模型质量。
+下面的可运行单元格在同一个提示的六个回答上训练一个 softmax 策略，对比两条路线和两种损失。它从一个隐藏的奖励出发，为每对回答抽取 50 个 Bradley-Terry 标签；奖励模型路线用闭式计算（先做 Bradley-Terry 最大似然拟合，再取 $\pi^*\propto\pi_{\mathrm{ref}}\exp(r/\beta)$），DPO 则在同一批标签上做梯度下降。单元格断言 DPO 落在这个 $\pi^*$ 上，误差在机器精度以内：在这种表格化且模型设定正确的情形中，推导里的等价关系严格成立。同一段代码换成确定性标签，也就是每对回答中较好的一方总是胜出，就不存在有限的最优解。动画显示，DPO 在最好的两个回答之间的间隔 $A_\theta$（即上文的 $h_\theta$）过了 3,000 步仍在攀升，策略坍缩到回答 0 上；IPO 在同样的标签上则停在一个有限的间隔。把 `beta` 设为 2，$\pi^*$ 离参考策略更近，确定性标签下的 DPO 仍会坍缩，只是慢一些。
 
 :::: {.runnable}
 ```python
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
-def sigmoid(z):
-    return 1.0 / (1.0 + np.exp(-z))
+rng = np.random.default_rng(0)
+K, m, beta = 6, 50, 0.5                  # 回答数、每对标签数、KL 强度；试试 beta = 2
+log_ref = np.log(rng.dirichlet(np.ones(K) * 3))
+r_true = np.sort(rng.normal(size=K))[::-1]   # 回答 0 最好
+sig = lambda z: 1 / (1 + np.exp(-z))
+i, j = np.triu_indices(K, 1)
+w_ij = rng.binomial(m, sig(r_true[i] - r_true[j]))  # y_i 胜过 y_j 的次数
+data = {"soft": np.r_[w_ij, m - w_ij], "hard": np.r_[np.full(len(i), m), np.zeros(len(i))]}
+win, lose = np.r_[i, j], np.r_[j, i]     # 有序回答对 (y_w, y_l)，计数如上
 
-beta = 0.2
-learning_rate = 0.1
-steps = 100
-ipo_target = 1.0 / (2.0 * beta)
+# 奖励模型路线：Bradley-Terry 最大似然（MM 迭代），再取 pi* ∝ pi_ref exp(r / beta)。
+Wn = np.zeros((K, K)); np.add.at(Wn, (win, lose), data["soft"])
+g = np.ones(K)
+for _ in range(2000):
+    g = Wn.sum(1) / ((Wn + Wn.T) / (g[:, None] + g)).sum(1)
+pi_star = np.exp(log_ref + np.log(g) / beta); pi_star /= pi_star.sum()
 
-dpo_gap = [0.0]
-ipo_gap = [0.0]
-for _ in range(steps):
-    # d[-log sigmoid(beta*h)]/dh = -beta*sigmoid(-beta*h)
-    dpo_gradient = -beta * sigmoid(-beta * dpo_gap[-1])
-    dpo_gap.append(dpo_gap[-1] - learning_rate * dpo_gradient)
+# 直接路线：对三组运行的 logit 同时做梯度下降。
+runs = [("DPO，抽样标签", "soft", "dpo"), ("DPO，确定性标签", "hard", "dpo"), ("IPO，确定性标签", "hard", "ipo")]
+theta, snaps, h01 = np.tile(log_ref, (3, 1)), [], []
+keep = set(np.unique(np.geomspace(1, 3000, 45).astype(int)))
+for step in range(1, 3001):
+    for k, (_, labels, loss) in enumerate(runs):
+        c = data[labels] / data[labels].sum()
+        h = theta[k, win] - theta[k, lose] - log_ref[win] + log_ref[lose]  # 每对回答的 A_theta
+        if loss == "dpo":                # -dL/dA = beta * sigma(-beta * A)
+            gr, lr = c * beta * sig(-beta * h), 3
+        else:                            # -dL/dA = -2 (A - 1 / (2 beta))
+            gr, lr = -2 * c * (h - 1 / (2 * beta)), 0.1
+        theta[k] += lr * (np.bincount(win, gr, K) - np.bincount(lose, gr, K))
+    if step in keep:
+        pis = np.exp(theta - theta.max(1, keepdims=True)); snaps.append((step, pis / pis.sum(1, keepdims=True)))
+        h01.append(theta[:, 0] - theta[:, 1] - log_ref[0] + log_ref[1])
+h01 = np.array(h01)
+assert np.abs(snaps[-1][1][0] - pi_star).max() < 1e-3   # DPO 落在奖励模型路线的 pi* 上
+assert h01[-1, 1] > h01[len(h01) // 2, 1] + 0.5          # 确定性标签：DPO 的间隔一直增大
+assert abs(h01[-1, 2] - h01[-2, 2]) < 1e-6               # IPO 收敛
 
-    # d[(h - 1/(2*beta))**2]/dh = 2*(h - target)
-    ipo_gradient = 2.0 * (ipo_gap[-1] - ipo_target)
-    ipo_gap.append(ipo_gap[-1] - learning_rate * ipo_gradient)
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.0), height_ratios=(1, 1))
+ax1.bar(range(K), pi_star, color="none", edgecolor="grey", lw=1.2, label="由 BT 拟合得到的闭式 π*")
+bars = ax1.bar(range(K), snaps[0][1][0], alpha=0.8, label=runs[0][0])
+dots, = ax1.plot(range(K), snaps[0][1][1], "o", c="#ff7a66", label=runs[1][0])
+ax1.set(xlabel="回答（0 最好）", ylabel="π_θ(y)", ylim=(0, 1))
+ax1.legend(fontsize=8.5, loc="upper right")
+steps = [s for s, _ in snaps]
+lines = [ax2.plot([], [], label=name)[0] for name, _, _ in runs]
+ax2.axhline((np.log(g[0]) - np.log(g[1])) / beta, c="grey", ls=":", lw=1)
+ax2.set(xscale="log", xlim=(1, 3000), ylim=(-0.5, h01.max() + 0.5), xlabel="梯度步",
+        ylabel="回答 0 与 1 之间的间隔 A_θ")
+ax2.legend(fontsize=8.5, loc="upper left")
+fig.tight_layout()
 
-print(f"IPO 目标：{ipo_target:.2f}")
-print(f"DPO 间隔（100 步后）：{dpo_gap[-1]:.2f}")
-print(f"IPO 间隔（100 步后）：{ipo_gap[-1]:.2f}")
+def update(t):
+    for bar, v in zip(bars, snaps[t][1][0]):
+        bar.set_height(v)
+    dots.set_ydata(snaps[t][1][1])
+    for k, line in enumerate(lines):
+        line.set_data(steps[: t + 1], h01[: t + 1, k])
+    ax1.set_title(f"第 {steps[t]} 步：抽样标签收敛到 π*，确定性标签不会", fontsize=10)
 
-plt.plot(dpo_gap, label="DPO 间隔")
-plt.plot(ipo_gap, label="IPO 间隔")
-plt.axhline(ipo_target, color="gray", linestyle="--", label="IPO 目标")
-plt.xlabel("梯度步")
-plt.ylabel("策略/参考模型对数比间隔")
-plt.legend()
-plt.show()
+anim = FuncAnimation(fig, update, frames=len(snaps), interval=120)
+print(f"max |π_DPO − π*| = {np.abs(snaps[-1][1][0] - pi_star).max():.1e}；确定性标签下的 DPO 在回答 0 上放了 "
+      f"{snaps[-1][1][1][0]:.2f} 的概率，IPO 的间隔停在 {h01[-1, 2]:.2f}")
 ```
 ::::
 
