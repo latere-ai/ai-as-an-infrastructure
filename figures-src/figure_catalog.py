@@ -226,18 +226,6 @@ SPECS = {
         "xint": True,
         "ylim": (0, 3200),
     },
-    "sft-peft-1": {
-        "type": "line",
-        "x": [4, 8, 16, 32, 64],
-        "series": [
-            {"label": "4096-square matrix", "y": [0.1953125, 0.390625, 0.78125, 1.5625, 3.125], "color": DATA, "marker": "o"},
-        ],
-        "xlabel": "LoRA rank r",
-        "ylabel": "LoRA parameters (% of matrix)",
-        "xint": True,
-        "ylim": (0, 3.4),
-        "grid": True,
-    },
     "synthetic-data-self-improvement-1": {
         "type": "line",
         "x": [0, 1, 2, 3, 4, 5, 6],
