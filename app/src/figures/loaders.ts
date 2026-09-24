@@ -104,4 +104,6 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "rl-rollout-schedule": () => import("./rl-rollout-schedule.ts"),
   "agent-turn-loop": () => import("./agent-turn-loop.ts"),
   "effect-crash-recovery": () => import("./effect-crash-recovery.ts"),
+  "release-contract": () => import("./release-contract.ts"),
+  "hosting-clauses": () => import("./hosting-clauses.ts"),
 };
