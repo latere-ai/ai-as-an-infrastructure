@@ -80,4 +80,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "token-premium": () => import("./token-premium.ts"),
   "unigram-lattice": () => import("./unigram-lattice.ts"),
   "boundary-transfer": () => import("./boundary-transfer.ts"),
+  "reverse-accumulation": () => import("./reverse-accumulation.ts"),
 };
