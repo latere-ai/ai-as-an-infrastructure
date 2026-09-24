@@ -145,17 +145,6 @@ def _funnel(name, spec):
 
 
 SPECS = {
-    "whole-stack-1": {
-        "type": "stacked",
-        "categories": ["data", "train", "adapt", "serve", "agent"],
-        "segments": [
-            {"label": "capability", "values": [0.35, 0.75, 0.45, 0.25, 0.40], "color": DATA},
-            {"label": "efficiency", "values": [0.20, 0.30, 0.25, 0.70, 0.45], "color": ACCENT},
-            {"label": "trust", "values": [0.25, 0.15, 0.35, 0.40, 0.65], "color": WARN},
-        ],
-        "ylabel": "constraint pressure",
-        "ylim": (0, 1.75),
-    },
     "field-map-1": {
         "type": "scatter",
         "points": [

@@ -52,12 +52,6 @@ function textPosition(svg: string, label: string): { x: number; y: number } {
 }
 
 test("generated zh SVG figures use localized visible labels", () => {
-  const wholeStack = read("zh/figures/whole-stack-1.svg");
-  expect(wholeStack).toContain(">数据</text>");
-  expect(wholeStack).toContain(">约束压力</text>");
-  expect(wholeStack).not.toContain(">data</text>");
-  expect(wholeStack).not.toContain("constraint pressure");
-
   const benchmarks = read("zh/figures/benchmarks-1.svg");
   expect(benchmarks).toContain(">天花板</text>");
   expect(benchmarks).toContain(">原始基准</text>");

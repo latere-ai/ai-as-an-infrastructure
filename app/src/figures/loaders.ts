@@ -61,4 +61,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "sdc-rollback": () => import("./sdc-rollback.ts"),
   "pd-placement": () => import("./pd-placement.ts"),
   "process-timescales": () => import("./process-timescales.ts"),
+  "layer-pressure": () => import("./layer-pressure.ts"),
 };
