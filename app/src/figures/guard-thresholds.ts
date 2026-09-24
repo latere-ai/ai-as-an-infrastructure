@@ -388,7 +388,7 @@ export default defineFigure({
   labels,
   params: {
     base: {
-      kind: "range", scale: "log", label: { en: "Violation base rate π", zh: "违规基准率 π" }, unit: { en: "of items", zh: "的内容" },
+      kind: "range", scale: "log", label: { en: "Violation base rate π", zh: "违规基准率 π" },
       min: 0.001, max: 0.5, default: 0.01,
       marks: [{ value: 0.5, label: { en: "balanced benchmark", zh: "平衡基准" } }],
     },

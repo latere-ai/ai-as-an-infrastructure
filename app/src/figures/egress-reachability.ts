@@ -24,7 +24,7 @@ import { defineFigure, type Lang, type State } from "./types.ts";
 import { svg, el, text, g } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
 import { legend } from "./lib/legend.ts";
-import { textWidth, wrap } from "./lib/labels.ts";
+import { wrap } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { tpl } from "./lib/format.ts";
 
@@ -173,14 +173,14 @@ function cross(x: number, y: number): string {
 // x where the segment (x1, y1)–(x2, y2) crosses the horizontal line y.
 const atY = (x1: number, y1: number, x2: number, y2: number, y: number) => x1 + ((x2 - x1) * (y - y1)) / (y2 - y1);
 
-function boxLabel(b: Box, main: string, sub: string | null, size: number, lang: Lang, strong = true): string {
+function boxLabel(b: Box, main: string, sub: string | null, size: number, subSize: number, lang: Lang, strong = true): string {
   const parts: string[] = [];
   const mainLines = lines(main, size, b.w - 8, lang);
-  const subLines = sub ? lines(sub, size - 1, b.w - 8, lang) : [];
-  const total = mainLines.length * (size + 3) + subLines.length * (size + 2);
+  const subLines = sub ? lines(sub, subSize, b.w - 8, lang) : [];
+  const total = mainLines.length * (size + 3) + subLines.length * (subSize + 3);
   let y = b.y + b.h / 2 - total / 2 + size - 1;
   for (const ln of mainLines) { parts.push(text(cx(b), y, ln, { "font-size": size, "text-anchor": "middle", class: strong ? "fig-t-strong" : undefined })); y += size + 3; }
-  for (const ln of subLines) { parts.push(text(cx(b), y, ln, { "font-size": size - 1, "text-anchor": "middle", class: "fig-t-muted" })); y += size + 2; }
+  for (const ln of subLines) { parts.push(text(cx(b), y, ln, { "font-size": subSize, "text-anchor": "middle", class: "fig-t-muted" })); y += subSize + 3; }
   return parts.join("");
 }
 
@@ -201,9 +201,9 @@ function render(st: State<P>, lang: Lang): string {
   const approved: Box = { x: Math.ceil(w * 0.54), y: 0, w: w - Math.ceil(w * 0.54), h: outH };
   const internetShared = m.surfaces.includes("internet");
   parts.push(el("rect", { x: anyHost.x + 0.5, y: 0.5, width: anyHost.w - 1, height: outH - 1, rx: 8, fill: internetShared ? C.warn : C.panel, "fill-opacity": internetShared ? 0.22 : undefined, stroke: m.routes ? C.bad : C.rule, "stroke-width": m.routes ? 1.8 : 1 }));
-  parts.push(boxLabel(anyHost, L.anyHost, null, size, lang));
+  parts.push(boxLabel(anyHost, L.anyHost, null, size, small, lang));
   parts.push(el("rect", { x: approved.x + 0.5, y: 0.5, width: approved.w - 1, height: outH - 1, rx: 8, fill: C.panel, stroke: C.rule, "stroke-width": 1 }));
-  parts.push(boxLabel(approved, L.approved, null, size, lang));
+  parts.push(boxLabel(approved, L.approved, null, size, small, lang));
 
   // ---- cluster boundary
   // The policy's name sits above its line, clear of the direct route at the
@@ -264,7 +264,7 @@ function render(st: State<P>, lang: Lang): string {
     parts.push(el("rect", { x: b.x + 1, y: b.y + 1, width: b.w - 2, height: b.h - 2, rx: 10, fill: C.paper, stroke: holds ? C.ink2 : C.bad, "stroke-width": holds ? 2 : 1.6, "stroke-dasharray": holds ? undefined : "5 5" }));
     // Run A's label keeps clear of the direct route along its left edge.
     const inner: Box = b === runA ? { x: b.x + 22, y: b.y + 8, w: b.w - 28, h: b.h - 34 } : { x: b.x + 5, y: b.y + 8, w: b.w - 10, h: b.h - 34 };
-    parts.push(boxLabel(inner, name, sub, size, lang));
+    parts.push(boxLabel(inner, name, sub, size, small, lang));
     const sl = lines(holds ? L.sandbox : L.sandboxFails, small, b.w - 12, lang);
     let ly = b.y + b.h - 8 - (sl.length - 1) * (small + 2);
     for (const ln of sl) { parts.push(text(cx(b), ly, ln, { "font-size": small, "text-anchor": "middle", class: "fig-t-muted" })); ly += small + 2; }
@@ -276,7 +276,7 @@ function render(st: State<P>, lang: Lang): string {
     // One instance per run reads as a stack of cards: a second outline behind.
     if (!sharedOn) parts.push(el("rect", { x: b.x + 4.5, y: b.y - 3.5, width: b.w - 1, height: b.h - 1, rx: 6, fill: C.paper, stroke: C.rule, "stroke-width": 1 }));
     parts.push(el("rect", { x: b.x + 0.5, y: b.y + 0.5, width: b.w - 1, height: b.h - 1, rx: 6, fill: on ? C.warn : C.panel, "fill-opacity": on ? 0.22 : undefined, stroke: C.rule, "stroke-width": 1 }));
-    parts.push(boxLabel(b, name, sharedOn ? L.shared : L.perRun, size, lang));
+    parts.push(boxLabel(b, name, sharedOn ? L.shared : L.perRun, size, small, lang));
   }
   parts.push(...clText, ...marks);
 
