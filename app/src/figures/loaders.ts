@@ -39,4 +39,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "kv-block-lifecycle": () => import("./kv-block-lifecycle.ts"),
   "trusted-monitoring": () => import("./trusted-monitoring.ts"),
   "oversight-evidence": () => import("./oversight-evidence.ts"),
+  "load-latency-knee": () => import("./load-latency-knee.ts"),
 };
