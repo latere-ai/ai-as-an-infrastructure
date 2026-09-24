@@ -108,7 +108,7 @@ function sub(x: number, y: number, s: string, size: number, cls: string, anchor 
   const parts = s.split("p_x");
   let inner = "";
   parts.forEach((piece, i) => {
-    if (i > 0) inner += `p<tspan dy="${Math.round(size * 0.3)}" font-size="${Math.round(size * 0.75)}">x</tspan><tspan dy="${-Math.round(size * 0.3)}">${piece.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</tspan>`;
+    if (i > 0) inner += `p<tspan dy="${Math.round(size * 0.3)}" font-size="${Math.round(size * 0.85)}">x</tspan><tspan dy="${-Math.round(size * 0.3)}">${piece.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</tspan>`;
     else inner += piece.replace(/&/g, "&amp;").replace(/</g, "&lt;");
   });
   return el("text", { x, y, "font-size": size, class: cls, "text-anchor": anchor }, inner);

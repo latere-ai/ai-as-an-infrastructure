@@ -222,7 +222,7 @@ const pos = (v: number) => fixed(v, 1);
 function mtext(x: number, y: number, s: string, a: Attrs): string {
   const size = Number(a["font-size"] ?? TYPE.body);
   const shift = rd(size * 0.3);
-  const small = rd(size * 0.75);
+  const small = rd(size * 0.85);
   const pieces = s.split(/_([A-Za-z]+)/);
   let inner = "";
   let down = false;
