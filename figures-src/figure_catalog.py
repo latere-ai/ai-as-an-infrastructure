@@ -179,17 +179,6 @@ SPECS = {
         "rotation": 12,
         "ha": "right",
     },
-    "diffusion-flow-matching-1": {
-        "type": "line",
-        "x": [0, 1, 2, 3, 4, 5],
-        "series": [
-            {"label": "curved probability-flow path", "y": [1.0, 0.76, 0.55, 0.35, 0.17, 0.0], "color": DATA},
-            {"label": "linear conditional path", "y": [1.0, 0.80, 0.60, 0.40, 0.20, 0.0], "color": ACCENT, "style": "--"},
-        ],
-        "xlabel": "path time t",
-        "ylabel": "normalized path coordinate",
-        "ylim": (0, 1.05),
-    },
     "nar-diffusion-lms-1": {
         "type": "line",
         "x": [8, 16, 32, 64, 128, 256],
