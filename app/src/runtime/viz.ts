@@ -660,52 +660,6 @@
     watchTheme(host, draw);
   };
 
-  // Three process cadences shown as concentric rings. The geometry compares
-  // their rates; it does not claim that training is nested inside runtime.
-  // Training sweeps before release, decoding advances per generated token, and
-  // an agent task advances through model and tool steps.
-  R['nested-loops'] = function (host) {
-    var zh = document.documentElement.lang.indexOf('zh') === 0;
-    host.setAttribute('role', 'img');
-    host.setAttribute('aria-label', zh
-      ? '三个过程的节奏：训练发生在发布前，解码按词元推进，智能体循环按任务步骤推进。'
-      : 'Three process cadences: training before release, decoding per token, and the agent loop per task step.');
-    var cv = canvas(host, 340);
-    var t0 = 0, sweep = 0, timer = null;
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
-      var cx = W / 2, cy = H / 2 + 8 * cv.dpr, R = Math.min(W * 0.5, H * 0.43);
-      ctx.clearRect(0, 0, W, H);
-      var rings = [
-        { r: 0.96, speed: 0.5, accent: false, label: zh ? '智能体循环 · 每个任务步骤' : 'agent loop · per task step' },
-        { r: 0.62, speed: 2.3, accent: false, label: zh ? '解码 · 每个词元' : 'decoding · per token' },
-        { r: 0.28, speed: 0, accent: true, label: zh ? '训练 · 发布前' : 'training · before release' }
-      ];
-      rings.forEach(function (ring) {
-        var rr = R * ring.r;
-        ctx.strokeStyle = t.grid; ctx.lineWidth = 1.3 * cv.dpr;
-        ctx.beginPath(); ctx.arc(cx, cy, rr, 0, 7); ctx.stroke();
-        var ang = ring.speed === 0 ? (-Math.PI / 2 + Math.min(sweep, 1) * 2 * Math.PI) : (-Math.PI / 2 + t0 * ring.speed);
-        var col = ring.accent ? t.accent2 : t.accent;
-        var dx = cx + Math.cos(ang) * rr, dy = cy + Math.sin(ang) * rr;
-        if (ring.speed === 0 && sweep < 1) { // draw the partial sweep as a thick arc
-          ctx.strokeStyle = t.accent2; ctx.lineWidth = 3 * cv.dpr;
-          ctx.beginPath(); ctx.arc(cx, cy, rr, -Math.PI / 2, -Math.PI / 2 + sweep * 2 * Math.PI); ctx.stroke();
-        }
-        ctx.fillStyle = col; ctx.beginPath(); ctx.arc(dx, dy, 6 * cv.dpr, 0, 7); ctx.fill();
-        ctx.fillStyle = ring.accent ? t.accent2 : t.accent; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-        ctx.fillText(ring.label, cx, cy - rr - 8 * cv.dpr);
-      });
-    }
-    function loop() { timer = requestAnimationFrame(loop); t0 += 0.016; if (sweep < 1.2) sweep += 0.004; draw(); }
-    // No hover-pause: this is an ambient illustration with no controls to
-    // inspect, so freezing it on hover only reads as the animation breaking.
-    // Training sweeps and rests to represent an upstream released artifact;
-    // decoding and agent execution continue at runtime.
-    watchTheme(host, draw);
-    loop();
-  };
-
   // Three data-movement boundaries. Animation speeds preserve the qualitative
   // locality hierarchy without claiming fixed ratios; sustained rates depend
   // on the deployed device, domain, topology, direction, and traffic pattern.

@@ -60,4 +60,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "checkpoint-budget": () => import("./checkpoint-budget.ts"),
   "sdc-rollback": () => import("./sdc-rollback.ts"),
   "pd-placement": () => import("./pd-placement.ts"),
+  "process-timescales": () => import("./process-timescales.ts"),
 };

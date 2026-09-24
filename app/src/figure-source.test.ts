@@ -84,17 +84,6 @@ test("English figure 2.1 distinguishes dependencies from reading order", () => {
   expect(figure).not.toContain("The substantive parts read as a stack");
 });
 
-test("figure 1.3 return arcs do not carry overlap-prone labels", () => {
-  for (const lang of ["en", "zh"]) {
-    const qmd = readFileSync(join(repoRoot, lang, "orientation", "01-whole-stack.qmd"), "utf8");
-    const block = qmd.match(/```\{dot\}\n\/\/\| label: fig-whole-stack-loops[\s\S]*?\n```/)?.[0] ?? "";
-    expect(block).toContain("tok -> prompt;");
-    expect(block).toContain("tool -> prompt;");
-    expect(block).not.toMatch(/tok -> prompt\s*\[label=/);
-    expect(block).not.toMatch(/tool -> prompt\s*\[label=/);
-  }
-});
-
 test("English figure 1.2 separates model development from request execution", () => {
   const qmd = readFileSync(join(repoRoot, "en", "orientation", "01-whole-stack.qmd"), "utf8");
   const block = qmd.match(/```\{dot\}\n\/\/\| label: fig-whole-stack-pipeline[\s\S]*?\n```/)?.[0] ?? "";
