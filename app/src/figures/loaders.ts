@@ -83,4 +83,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "reverse-accumulation": () => import("./reverse-accumulation.ts"),
   "finite-difference-step": () => import("./finite-difference-step.ts"),
   "resume-cursor": () => import("./resume-cursor.ts"),
+  "run-lifecycle": () => import("./run-lifecycle.ts"),
 };
