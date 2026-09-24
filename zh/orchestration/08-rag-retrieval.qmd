@@ -149,19 +149,60 @@ $$
 
 融合依赖稳定的文档身份。系统要对不同通道返回的同一分块去重，保留每一条参与融合的排名，并规定稳定的平局处理规则。如果所有截断输入列表都漏掉了某项内容，RRF 也无法让它出现。RRF 还忽略分数校准和通道质量；如果带标签的线上数据表明某个检索器持续更强，学习式融合或加权融合可能更合适。
 
+@fig-rag-hybrid-retrieval 追踪了一个查询经过这些阶段的全过程。下面的单元测量单个查询看不出的东西：在一个合成语料上统计 400 个查询的召回率。语料有 1,500 个分块，每块讲 150 个概念中的两个，并各带一个独一无二的标识符词元。单元按上文公式实现 BM25，并实现一个对词向量取平均的稠密检索器；在它的词向量里，同义词彼此接近，标识符则不携带任何语义。一半查询点名某个分块的标识符，只有 BM25 能匹配；另一半用分块里没有出现的同义词改写它的内容，只有稠密检索器能匹配。单元断言：把稠密分数乘以 100，RRF 的结果不变，原始分数相加的结果却会改变；融合可以胜过两个通道。在这个工作负载上，每个查询都有一个决定性的通道，所以较小的 $k_0$ 更好，因为它让某个列表里的第一名压过两个列表里的中游名次；取 $k_0=60$ 时，融合反而不如单用稠密检索器。改变查询构成或 `vec` 中的噪声，最佳 $k_0$ 就会移动，这正是这个常数必须在目标工作负载上验证的原因。
+
 :::: {.runnable}
 ```python
-# RRF 使用排名位置，而不是无法直接比较的原始分数。
-def rrf(rankings, k0=60):
-    scores = {}
-    for ranking in rankings:
-        for rank, document_id in enumerate(ranking, start=1):
-            scores[document_id] = scores.get(document_id, 0.0) + 1 / (k0 + rank)
-    return sorted(scores, key=lambda d: (-scores[d], d))
+import numpy as np
+import matplotlib.pyplot as plt
 
-dense = ["A", "B", "C", "D"]
-sparse = ["E", "C", "F", "G"]
-print(rrf([dense, sparse]))
+rng = np.random.default_rng(0)
+C, S, n, L, k = 150, 4, 1500, 12, 10  # 概念数、每个概念的同义词数、分块数、每块词数、截断位置
+V = C * S + n  # 概念词（词 w 表示概念 w // S），再加上每个分块一个标识符词元
+topics = rng.integers(0, C, (n, 2))  # 每个分块讲两个概念
+words = topics[np.arange(n)[:, None], rng.integers(0, 2, (n, L))] * S + rng.integers(0, S, (n, L))
+tf = np.zeros((n, V)); np.add.at(tf, (np.arange(n)[:, None], words), 1); tf[np.arange(n), C * S + np.arange(n)] = 1
+
+k1, b = 1.2, 0.75  # 按本章公式计算 BM25
+df, dl = (tf > 0).sum(0), tf.sum(1)
+idf = np.log((n - df + 0.5) / (df + 0.5) + 1)
+bm25_w = idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * dl / dl.mean())[:, None])
+vec = np.repeat(rng.normal(size=(C, 32)), S, 0) + 0.3 * rng.normal(size=(C * S, 32))  # 同义词的向量彼此接近
+vec = np.vstack([vec, rng.normal(size=(n, 32))])  # 标识符的向量不携带任何语义
+embed = lambda counts: (counts @ vec) / np.linalg.norm(counts @ vec, axis=1, keepdims=True)
+E = embed(tf)
+
+target = rng.integers(0, n, 400)
+q = np.zeros((400, V))
+for i, t in enumerate(target):
+    if i < 200:  # 标识符查询：分块的标识符，加上一个同主题的词
+        q[i, [C * S + t, topics[t, 0] * S + rng.integers(S)]] = 1
+    else:  # 改写查询：用分块本身没有用到的同义词表达它的两个概念
+        for c in topics[t]:
+            unused = [w for w in range(c * S, c * S + S) if tf[t, w] == 0] or [c * S]
+            q[i, rng.choice(unused)] = 1
+bm25, dense = (q > 0) @ bm25_w.T, embed(q) @ E.T
+rank = lambda s: np.argsort(np.argsort(-s, 1, kind="stable"), 1) + 1  # 每个分块从 1 开始的排名
+rb, rd = rank(bm25), rank(dense)
+rrf = lambda k0, *ranks: sum(1 / (k0 + r) for r in ranks)  # 本章的倒数排名融合
+hits = lambda s: (s >= s[np.arange(len(s)), target][:, None]).sum(1) <= k  # 相关分块是否在前 k 名内（并列者排在它前面）
+k0s = np.geomspace(0.5, 500, 13)
+fused = np.array([hits(rrf(k0, rb, rd)) for k0 in k0s])
+assert np.array_equal(rrf(60, rb, rd), rrf(60, rb, rank(100 * dense)))  # 排名与通道的分数尺度无关
+assert hits(bm25 + dense).mean() != hits(bm25 + 100 * dense).mean()  # 原始分数直接相加则不然
+assert fused.mean(1).max() > max(hits(bm25).mean(), hits(dense).mean())  # 融合可以胜过两个通道
+
+fig, ax = plt.subplots(figsize=(6.4, 4))
+ax.plot(k0s, fused.mean(1), "o-", color="#5b8def", ms=4, label="RRF，全部 400 个查询")
+ax.plot(k0s, fused[:, :200].mean(1), color="#5b8def", lw=1, ls="--", label="RRF，标识符查询")
+ax.plot(k0s, fused[:, 200:].mean(1), color="#5b8def", lw=1, ls=":", label="RRF，改写查询")
+for s, name, c in [(bm25, "只用 BM25", "#e8b13c"), (dense, "只用稠密检索", "#3dbd8a"),
+                   (bm25 + dense, "原始分数相加", "#ff7a66"), (bm25 + 100 * dense, "原始分数相加，稠密分数 ×100", "#b07ae0")]:
+    ax.axhline(hits(s).mean(), color=c, lw=1.2, label=f"{name}：{hits(s).mean():.2f}")
+ax.axvline(60, color="0.55", lw=1, ls=":"); ax.text(60, 0.45, " k0 = 60", fontsize=8)
+ax.set_xscale("log"); ax.set_ylim(0, 1.05); ax.set_xlabel("RRF 常数 k0"); ax.set_ylabel(f"recall@{k}（{n} 个分块中只有一个相关）")
+ax.set_title("每个查询都有一个决定性通道：k0 小，它才能胜出", fontsize=10)
+ax.legend(fontsize=7.5, loc="lower left", ncol=2); plt.show()
 ```
 ::::
 

@@ -142,6 +142,59 @@ $$
 
 常见的 $p^N$ 只是齐次且独立的特殊情况，也就是每个条件概率都等于 $p$，而且任何失败都无法恢复。图形界面错误彼此相关：选错一个窗口可能污染后续多个动作；页面缓慢会引发一连串陈旧点击；恢复动作会同时改变剩余步骤和未来概率。对于交互式策略，有用的指标，是它能否在资源上限之前抵达经过验证的目标状态，其中也要计算恢复行为。
 
+下面的单元针对一种简单的恢复策略精确计算这个概率，并用模拟核对。每次尝试以 $q=0.9$ 的概率达成该步的后置条件。验证器能发现 90% 的失败尝试；被发现的失败会重试，未被发现的失败则污染这次运行的其余部分。一次失败被发现之后，下一次尝试可能从过时状态开始，成功率更低，这就是上文所说的相关错误。按剩余尝试次数做反向递推，就得到在时限 $H$ 之内到达经验证目标的精确概率。单元断言：没有验证时，递推退化为 $q^N$；时限宽松时，它趋近 $\left(q/(1-(1-q)c)\right)^N$，即每一步都在漏检发生之前最终成功的概率，其中 $c$ 是验证器的发现率；两万次模拟运行与递推结果一致。验证对指数的改变远大于 $q$ 任何可信的提升；过时状态和紧张的时限又会吃掉一部分收益，虚线呈阶梯状，是因为预算按整数次尝试计算。修改 `c` 或某条曲线的时限余量，看哪条曲线随之移动。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+q, c = 0.9, 0.9  # 一次尝试达成该步后置条件的概率；验证器发现失败尝试的概率
+Nmax = 40  # 必需的步数
+
+def dp(q_after, c, slack):
+    """对 N = 0..Nmax，按剩余尝试次数归纳，精确计算 P[在 H = ceil(slack * N) 次尝试内到达经验证的目标]。"""
+    f, d = np.r_[1.0, np.zeros(Nmax)], np.r_[1.0, np.zeros(Nmax)]  # 下标为剩余步数；f 为正常状态，d 为刚发现一次失败之后
+    H = np.ceil(slack * np.arange(Nmax + 1)).astype(int)
+    out = np.where(H == 0, 1.0, 0.0)
+    for h in range(1, H.max() + 1):
+        f, d = (np.r_[1.0, q * f[:-1] + (1 - q) * c * d[1:]],
+                np.r_[1.0, q_after * f[:-1] + (1 - q_after) * c * d[1:]])
+        out[H == h] = f[H == h]
+    return out
+
+def simulate(N, q_after, c, slack, runs=20000, seed=0):
+    rng = np.random.default_rng(seed)
+    left, fresh, alive = np.full(runs, N), np.ones(runs, bool), np.ones(runs, bool)
+    for _ in range(int(np.ceil(slack * N))):
+        go = alive & (left > 0)
+        ok = rng.random(runs) < np.where(fresh, q, q_after)
+        caught = rng.random(runs) < c
+        left -= go & ok
+        alive &= ~(go & ~ok & ~caught)  # 未被发现的失败会污染这次运行的其余部分
+        fresh = np.where(go, ok, fresh)  # 被发现的失败会给下一次尝试留下过时状态
+    return np.mean(alive & (left == 0))
+
+Ns = np.arange(Nmax + 1)
+assert np.allclose(dp(q, 0.0, 1), q ** Ns)  # 没有恢复时，链式法则退化为 q^N
+assert np.isclose(dp(q, c, 2)[Nmax], (q / (1 - (1 - q) * c)) ** Nmax, atol=0.01)  # 时限宽松时：一直重试，直到该步成功或有一次失败漏检
+cases = {"不验证：q^N": (q, 0.0, 1, "0.55", "-"), "验证并重试，H = 2N": (q, c, 2, "#5b8def", "-"),
+         "失败后状态过时（q = 0.6）": (0.6, c, 2, "#ff7a66", "-"),
+         "同上，H = 1.2N": (0.6, c, 1.2, "#ff7a66", "--")}
+fig, ax = plt.subplots(figsize=(6.4, 4))
+for name, (qa, cc, slack, col, ls) in cases.items():
+    exact = dp(qa, cc, slack)
+    ax.plot(Ns, exact, color=col, ls=ls, label=name)
+    for N in (10, 25, 40):
+        sim = simulate(N, qa, cc, slack)
+        assert abs(sim - exact[N]) < 0.012  # 蒙特卡洛结果与精确递推一致
+        ax.plot(N, sim, "o", color=col, ms=4)
+ax.set_xlabel("必需步数 N"); ax.set_ylabel("P[H 次尝试内到达经验证的目标状态]"); ax.set_ylim(0, 1.02)
+ax.set_title(f"每步成功率 {q}，验证器发现 {c:.0%} 的失败", fontsize=10)
+ax.legend(fontsize=8, loc="lower left"); plt.show()
+```
+::::
+
 OSWorld-Human 把完成率之外的效率问题显现出来。在它评估的系统中，模型调用占据了大部分延迟，后期步骤可能远慢于早期步骤，表现最好的智能体也使用了人工参考轨迹所需步骤的 2.7 至 4.3 倍 [@abhyankar2025osworldhuman]。人工参考轨迹是人完成每项任务所走的步骤序列。这些数字出自论文第二版（arXiv 2506.16042v2，2026 年 5 月），与 MLSys 2026 会议论文集版本一致；2025 年 6 月的第一版报告的是 1.4 至 2.7 倍。这些测量结果只适用于所评估的智能体和任务。它们说明，任务成功率本身会掩盖运营质量。
 
 动作能否安全重试，取决于它的外部影响。读取、放大或重新截图通常可以安全重试；发送、购买、删除、修改权限或提交表单则未必如此。如果远程操作已经生效，下一次观察前却发生超时，盲目重放可能造成重复操作。只有操作本身幂等，或权威当前状态证明它尚未发生，变更才可以安全重试。否则，应通过回执、应用历史或远程状态查询并核对。如果结果仍然不明确，就进入 `needs_reconciliation`，不能再次点击。

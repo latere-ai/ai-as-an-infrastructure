@@ -261,19 +261,74 @@ tie break. RRF cannot surface an item omitted by every truncated input list. It
 also ignores score calibration and channel quality; learned or weighted fusion
 may be better when labeled traffic shows one retriever is consistently stronger.
 
+@fig-rag-hybrid-retrieval traces one query through these stages. The cell below
+measures what one query cannot show: recall over 400 queries on a synthetic
+corpus of 1,500 chunks, each about two of 150 concepts and each carrying one
+unique identifier token. It implements BM25 from the formula above and a dense
+retriever that averages word vectors in which synonyms lie close together and
+identifiers carry no meaning. Half of the queries name a chunk's identifier,
+which only BM25 can match; the other half paraphrase the chunk with synonyms it
+does not contain, which only the dense retriever can match. The cell asserts
+that RRF is unchanged when the dense scores are multiplied by 100 while a raw
+score sum is not, and that fusion can beat both channels. On this workload each
+query has one decisive channel, so a small $k_0$, which lets a first place in
+one list outweigh middling places in both, wins; at $k_0=60$ fusion falls below
+the dense retriever alone. Change the query mix or the noise in `vec` and the
+best $k_0$ moves, which is why the constant has to be validated on the target
+workload.
+
 :::: {.runnable}
 ```python
-# RRF uses rank positions, not incomparable raw scores.
-def rrf(rankings, k0=60):
-    scores = {}
-    for ranking in rankings:
-        for rank, document_id in enumerate(ranking, start=1):
-            scores[document_id] = scores.get(document_id, 0.0) + 1 / (k0 + rank)
-    return sorted(scores, key=lambda d: (-scores[d], d))
+import numpy as np
+import matplotlib.pyplot as plt
 
-dense = ["A", "B", "C", "D"]
-sparse = ["E", "C", "F", "G"]
-print(rrf([dense, sparse]))
+rng = np.random.default_rng(0)
+C, S, n, L, k = 150, 4, 1500, 12, 10  # concepts, synonyms per concept, chunks, words per chunk, cutoff
+V = C * S + n  # concept words (word w means concept w // S), then one identifier token per chunk
+topics = rng.integers(0, C, (n, 2))  # each chunk is about two concepts
+words = topics[np.arange(n)[:, None], rng.integers(0, 2, (n, L))] * S + rng.integers(0, S, (n, L))
+tf = np.zeros((n, V)); np.add.at(tf, (np.arange(n)[:, None], words), 1); tf[np.arange(n), C * S + np.arange(n)] = 1
+
+k1, b = 1.2, 0.75  # BM25 as in the chapter's formula
+df, dl = (tf > 0).sum(0), tf.sum(1)
+idf = np.log((n - df + 0.5) / (df + 0.5) + 1)
+bm25_w = idf * tf * (k1 + 1) / (tf + k1 * (1 - b + b * dl / dl.mean())[:, None])
+vec = np.repeat(rng.normal(size=(C, 32)), S, 0) + 0.3 * rng.normal(size=(C * S, 32))  # synonyms land close together
+vec = np.vstack([vec, rng.normal(size=(n, 32))])  # identifiers get vectors that carry no meaning
+embed = lambda counts: (counts @ vec) / np.linalg.norm(counts @ vec, axis=1, keepdims=True)
+E = embed(tf)
+
+target = rng.integers(0, n, 400)
+q = np.zeros((400, V))
+for i, t in enumerate(target):
+    if i < 200:  # identifier queries: the chunk's identifier plus one word on its topic
+        q[i, [C * S + t, topics[t, 0] * S + rng.integers(S)]] = 1
+    else:  # paraphrase queries: synonyms of the chunk's two concepts that the chunk itself does not use
+        for c in topics[t]:
+            unused = [w for w in range(c * S, c * S + S) if tf[t, w] == 0] or [c * S]
+            q[i, rng.choice(unused)] = 1
+bm25, dense = (q > 0) @ bm25_w.T, embed(q) @ E.T
+rank = lambda s: np.argsort(np.argsort(-s, 1, kind="stable"), 1) + 1  # one-based rank of every chunk
+rb, rd = rank(bm25), rank(dense)
+rrf = lambda k0, *ranks: sum(1 / (k0 + r) for r in ranks)  # the chapter's reciprocal rank fusion
+hits = lambda s: (s >= s[np.arange(len(s)), target][:, None]).sum(1) <= k  # in the top k, ties ranked above it?
+k0s = np.geomspace(0.5, 500, 13)
+fused = np.array([hits(rrf(k0, rb, rd)) for k0 in k0s])
+assert np.array_equal(rrf(60, rb, rd), rrf(60, rb, rank(100 * dense)))  # ranks ignore a channel's score scale
+assert hits(bm25 + dense).mean() != hits(bm25 + 100 * dense).mean()  # a raw score sum does not
+assert fused.mean(1).max() > max(hits(bm25).mean(), hits(dense).mean())  # fusion can beat both channels
+
+fig, ax = plt.subplots(figsize=(6.4, 4))
+ax.plot(k0s, fused.mean(1), "o-", color="#5b8def", ms=4, label="RRF, all 400 queries")
+ax.plot(k0s, fused[:, :200].mean(1), color="#5b8def", lw=1, ls="--", label="RRF, identifier queries")
+ax.plot(k0s, fused[:, 200:].mean(1), color="#5b8def", lw=1, ls=":", label="RRF, paraphrase queries")
+for s, name, c in [(bm25, "BM25 alone", "#e8b13c"), (dense, "dense alone", "#3dbd8a"),
+                   (bm25 + dense, "raw sum", "#ff7a66"), (bm25 + 100 * dense, "raw sum, dense x 100", "#b07ae0")]:
+    ax.axhline(hits(s).mean(), color=c, lw=1.2, label=f"{name}: {hits(s).mean():.2f}")
+ax.axvline(60, color="0.55", lw=1, ls=":"); ax.text(60, 0.45, " k0 = 60", fontsize=8)
+ax.set_xscale("log"); ax.set_ylim(0, 1.05); ax.set_xlabel("RRF constant k0"); ax.set_ylabel(f"recall@{k}, one relevant chunk of {n}")
+ax.set_title("Each query has one decisive channel: small k0 lets it win", fontsize=10)
+ax.legend(fontsize=7.5, loc="lower left", ncol=2); plt.show()
 ```
 ::::
 

@@ -51,6 +51,55 @@ $$
 
 不要把溢出行为交给没有文档说明的后端默认值。有些接口会拒绝超长请求，有些则截断或限制其中某个字段。组装器应统计最终载荷；超出限制时，按照明确的策略重新构建；如果必选内容仍然放不下，就要明确失败。静默裁剪会破坏可复现性，因为日志中的源项目将不再等同于模型实际收到的内容。还应把预检结果与供应商返回的用量核对，让分词器或模板的漂移可以被发现。
 
+下面的单元在这些约束下装填可选条目。四十个检索到的分块长度呈重尾分布，每个都带有一个含有所需证据的校准概率；在序列化请求里，每个分块的代价是它的长度再加 12 个模板词元。对每一个预算，单元比较三种选择：按检索分数贪心、按每词元价值贪心，以及 0/1 背包的精确最优解。它断言最优解同时不劣于两种贪心，按每词元价值贪心不低于最优解的一半（经典的二倍界），并且按分数排序时，预算变大反而可能损失价值，因为一个新近放得下的长分块会挤掉好几个短分块。单元还按源文本长度对同一选择计数：这样的组装器会收入过多分块，没计入的模板词元让 $T(X)+R$ 超过 $W_{\mathrm{total}}$。修改 `h` 或长度分布，看按源文本长度的计数与实际执行的请求相差多远。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+W, R, F, h = 8192, 1024, 900, 12  # 窗口、输出预留、必选内容的词元数、每个条目外围的模板词元数
+n_items = 40
+length = np.minimum(rng.lognormal(np.log(250), 0.9, n_items), 3000).astype(int)  # 检索到的分块长度（词元）
+value = rng.beta(0.6, 1.8, n_items)  # 每个分块含有所需证据的校准概率
+cost = length + h  # 一个条目给序列化请求 T(X) 增加的词元数
+
+def greedy(order, budget):  # 按给定顺序取条目，跳过已经放不下的
+    used, got = 0, 0.0
+    for i in order:
+        if used + cost[i] <= budget:
+            used, got = used + cost[i], got + value[i]
+    return got
+
+best = np.zeros(W + 1)  # 0/1 背包：一次算出每个预算下的最佳总价值
+for i in range(n_items):
+    best[cost[i]:] = np.maximum(best[cost[i]:], best[:-cost[i]] + value[i])
+budgets = np.arange(200, W - R - F + 1, 100)
+by_score = np.array([greedy(np.argsort(-value), B) for B in budgets])
+by_density = np.array([greedy(np.argsort(-value / cost), B) for B in budgets])
+assert np.all(best[budgets] >= by_score - 1e-9) and np.all(best[budgets] >= by_density - 1e-9)
+single = np.array([value[cost <= B].max(initial=0) for B in budgets])
+assert np.all(np.maximum(by_density, single) >= best[budgets] / 2)  # 经典的贪心界
+assert np.any(np.diff(by_score) < 0)  # 按分数排序时，空间更大反而可能换来更少的证据
+
+B = W - R - F  # 这次请求留给可选条目的预算
+naive = np.cumsum(length[np.argsort(-value / cost)]) <= B  # 只数源文本词元，不数序列化后的请求
+over = F + cost[np.argsort(-value / cost)][naive].sum() + R - W
+assert over > 0  # 没计入的模板词元让 T(X) + R 超过 W
+print(f"按源文本长度计数会收入 {naive.sum()} 个分块，超出窗口 {over} 个词元")
+
+fig, ax = plt.subplots(figsize=(6.4, 4))
+ax.plot(budgets, best[budgets], color="0.55", lw=3, label="最优解（背包）")
+ax.plot(budgets, by_density, color="#5b8def", label="按每词元价值贪心")
+ax.plot(budgets, by_score, color="#ff7a66", label="按检索分数贪心")
+ax.axvline(B, color="0.55", ls=":", lw=1); ax.text(B, 0.3, "W - R - F ", ha="right", fontsize=8)
+ax.set_xlabel("可选条目可用的词元数"); ax.set_ylabel("期望含证据的分块数")
+ax.set_title(f"{n_items} 个候选分块，每个带 {h} 个模板词元", fontsize=10); ax.legend(fontsize=8)
+plt.show()
+```
+::::
+
 ## 选择与摆放策略要靠实测
 
 更多上下文有时会有帮助，因为模型可以利用权重中没有的任务信息；它也可能造成伤害，因为不同项目争夺有限空间，还会彼此影响。上下文示范就是一个简单例子。GPT-3 的实验表明，零样本、单样本和少样本提示（分别带有零个、一个或少量示范）都可能在不更新梯度的情况下产生有用行为，但效果会随任务和模型规模显著变化 [@brown2020language]。后来的受控实验发现，仅仅改变相同四个示范的顺序，就可能让被测 GPT 系列模型的分类准确率大幅波动 [@lu2022ordered]。因此，示范的内容、顺序、格式和标签平衡都是评估的输入，属于被测方法的一部分。
