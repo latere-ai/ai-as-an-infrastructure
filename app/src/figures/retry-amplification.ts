@@ -100,6 +100,7 @@ const labels = {
     describe: "{L:layer retries/layers retry} up to {r:time/times} each, {mode}: at most {amax} physical attempts per logical operation. With each attempt failing with probability {p}, a logical operation sends {e} attempts on average ({e2} with the other design) and still fails with probability {f}.",
     modeNested: "every layer retrying",
     modeSingle: "with one retry owner",
+    legendItem: "{name}, A_max = {v}",
   },
   zh: {
     title: "嵌套重试层造成的重试放大",
@@ -123,6 +124,7 @@ const labels = {
     describe: "{L} 层各自最多重试 {r} 次，{mode}：每项逻辑操作最多产生 {amax} 次实际尝试。单次尝试失败概率为 {p} 时，一项逻辑操作平均发出 {e} 次尝试（另一种设计为 {e2} 次），最终失败的概率为 {f}。",
     modeNested: "每一层都重试",
     modeSingle: "只有一个重试负责人",
+    legendItem: "{name}，A_max = {v}",
   },
 };
 type L = typeof labels.en;
@@ -213,8 +215,8 @@ function renderChart(p: P, w: number, y0: number, Lx: L, lang: Lang, fs: number)
   parts.push(drawLabels(placed.placed));
   y = bottom + axisHeight(true, fs) + 6;
   const lg = legend([
-    { label: `${Lx.nested}, A_max = ${aN}`, swatch: { kind: "line", stroke: C.c2 } },
-    { label: `${Lx.single}, A_max = ${aS}`, swatch: { kind: "line", stroke: C.c1 } },
+    { label: tpl(Lx.legendItem, { name: Lx.nested, v: aN }), swatch: { kind: "line", stroke: C.c2 } },
+    { label: tpl(Lx.legendItem, { name: Lx.single, v: aS }), swatch: { kind: "line", stroke: C.c1 } },
   ], 0, y, w, TYPE.body);
   parts.push(lg.svg);
   y += lg.height;
