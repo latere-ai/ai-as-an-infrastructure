@@ -109,4 +109,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "artifact-lineage": () => import("./artifact-lineage.ts"),
   "tree-search": () => import("./tree-search.ts"),
   "search-budget": () => import("./search-budget.ts"),
+  "process-supervision": () => import("./process-supervision.ts"),
 };
