@@ -150,4 +150,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "judge-qualification": () => import("./judge-qualification.ts"),
   "trace-sampling": () => import("./trace-sampling.ts"),
   "reserved-breakeven": () => import("./reserved-breakeven.ts"),
+  "retry-amplification": () => import("./retry-amplification.ts"),
 };
