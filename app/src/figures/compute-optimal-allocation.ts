@@ -23,7 +23,8 @@ import { axis, axisHeight } from "./lib/axis.ts";
 import { legend } from "./lib/legend.ts";
 import { placeLabels, drawLabels, lineObstacles, textWidth, type Box, type LabelRequest, type Side } from "./lib/labels.ts";
 import { fixed, sig, tpl } from "./lib/format.ts";
-import { PUBLISHED, KAPPA, GOPHER_BUDGET, MODELS, loss, terms, optimum, kaplan, count, sci, pow10, wrapCJK, type FitKey, type LossFit } from "./data/scaling-laws.ts";
+import { count, sci, pow10, wrapCJK } from "./lib/notation.ts";
+import { PUBLISHED, KAPPA, GOPHER_BUDGET, MODELS, loss, terms, optimum, kaplan, type FitKey, type LossFit } from "./data/scaling-laws.ts";
 import { BUDGETS, RUNS } from "./data/chinchilla-runs.ts";
 
 const labels = {
@@ -105,7 +106,7 @@ const labels = {
     lgKaplan: "Kaplan 等人 2020",
     chinchilla: "Chinchilla",
     gopher: "Gopher",
-    describe: "{fit}：C = {c} FLOP 时，预测损失在 N* = {n} 个参数、D* = {d} 个训练词元处最低（每个参数 {r} 个词元），L = {l}。同一预算下，{m} 参数的模型只能训练 {dm} 个词元，损失为 {lm}。",
+    describe: "{fit}：C = {c} FLOP 时，预测损失在 N* = {n} 个参数、D* = {d} 个训练词元处最低（每个参数 {r} 个词元），L = {l}。同一预算下，{m} 参数的模型训练 {dm} 个词元，损失为 {lm}。",
   },
 };
 

@@ -21,7 +21,8 @@ import { axis, axisHeight } from "./lib/axis.ts";
 import { legend } from "./lib/legend.ts";
 import { placeLabels, drawLabels, lineObstacles, type Box, type LabelRequest } from "./lib/labels.ts";
 import { fixed, sig, tpl } from "./lib/format.ts";
-import { GOPHER_BUDGET, MODELS, optimum, count, sci, pow10, wrapCJK } from "./data/scaling-laws.ts";
+import { count, sci, pow10, wrapCJK } from "./lib/notation.ts";
+import { GOPHER_BUDGET, MODELS, optimum } from "./data/scaling-laws.ts";
 import { BUDGETS, GRID, RUNS, FITS, type CutoffFit } from "./data/chinchilla-runs.ts";
 
 const labels = {
