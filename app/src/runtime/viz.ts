@@ -5,7 +5,7 @@
 // framework-free JS; it can be incrementally typed later.
 // Interactive visualizations, client-side. A chapter embeds one with:
 //   ```{=html}
-//   <div class="viz" data-viz="kv-cache"></div>
+//   <div class="viz" data-viz="curve" data-family="powerlaw"></div>
 //   ```
 // Components init lazily when scrolled into view. Colors are read from the
 // page so they follow the light/dark theme.
@@ -100,8 +100,8 @@
   var R = {};
 
   // Generic single-parameter curve with a slider. Pick a family and labels
-  // via data attributes; no arbitrary code. Families cover the book's common
-  // shapes (power law, decay, roofline, diminishing returns, logistic).
+  // via data attributes; no arbitrary code. A family is registered only while
+  // a chapter embeds it.
   R['curve'] = function (host) {
     var fam = host.getAttribute('data-family') || 'powerlaw';
     var xlabel = host.getAttribute('data-xlabel') || 'x';
@@ -113,15 +113,7 @@
     var logx = host.getAttribute('data-logx') === 'true';
     var logy = host.getAttribute('data-logy') === 'true';
     var fns = {
-      powerlaw: function (x, p) { return Math.pow(x, -p); },
-      'power-grow': function (x, p) { return Math.pow(x, p); },
-      'exp-decay': function (x, p) { return Math.exp(-p * x / 20); },
-      sqrt: function (x, p) { return Math.sqrt(p * x); },
-      roofline: function (x, p) { return Math.min(p, x / 10); },
-      logistic: function (x, p) { return 1 / (1 + Math.exp(-p * (x - 50) / 8)); },
-      diminishing: function (x, p) { return 1 - Math.exp(-x / (p * 20)); },
-      // U over position: high recall at the ends, low in the middle (lost-in-the-middle).
-      'u-shape': function (x, p) { var d = (x - 51) / 50; return 0.25 + 0.75 * Math.pow(Math.abs(d), Math.max(0.2, p)); }
+      powerlaw: function (x, p) { return Math.pow(x, -p); }
     };
     var f = fns[fam] || fns.powerlaw;
     var cv = canvas(host, 260);
