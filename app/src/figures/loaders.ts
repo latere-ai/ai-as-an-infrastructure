@@ -66,4 +66,6 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "data-crossing": () => import("./data-crossing.ts"),
   "selective-answering": () => import("./selective-answering.ts"),
   "mutable-state": () => import("./mutable-state.ts"),
+  "supply-ledger": () => import("./supply-ledger.ts"),
+  "yield-cascade": () => import("./yield-cascade.ts"),
 };
