@@ -28,7 +28,8 @@ import { svg, el, text, g, hatch } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
 import { linear } from "./lib/scale.ts";
 import { axis, axisHeight } from "./lib/axis.ts";
-import { textWidth, wrap } from "./lib/labels.ts";
+import { textWidth } from "./lib/labels.ts";
+import { wrapCjk as wrap } from "./lib/kinsoku.ts";
 import { fixed, tpl } from "./lib/format.ts";
 
 const HB = 2; // renewal interval while the holder runs, s
