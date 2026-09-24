@@ -22,4 +22,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "coverage-selection": () => import("./coverage-selection.ts"),
   "difficulty-budget": () => import("./difficulty-budget.ts"),
   "sampling-paths": () => import("./sampling-paths.ts"),
+  "flash-attention": () => import("./flash-attention.ts"),
 };
