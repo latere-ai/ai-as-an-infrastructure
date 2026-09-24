@@ -650,12 +650,11 @@ export default defineFigure({
   // A named format sets the element, group size, and scale; changing any of
   // those selects the named format they match, or "another combination".
   update(p, key) {
-    if (key === "format") {
-      if (p.format === "custom") return p;
+    if (key === "format" && p.format !== "custom") {
       const pr = PRESETS[p.format as Exclude<Preset, "custom">];
       return { ...p, elem: pr.elem, group: pr.group, scale: pr.scale };
     }
-    if (key === "elem" || key === "group" || key === "scale") {
+    if (key === "format" || key === "elem" || key === "group" || key === "scale") {
       const hit = PRESET_KEYS.find((k) => PRESETS[k].elem === p.elem && PRESETS[k].group === p.group && PRESETS[k].scale === p.scale);
       return { ...p, format: hit ?? "custom" };
     }
