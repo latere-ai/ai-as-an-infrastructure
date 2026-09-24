@@ -63,4 +63,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "process-timescales": () => import("./process-timescales.ts"),
   "layer-pressure": () => import("./layer-pressure.ts"),
   "synthetic-generations": () => import("./synthetic-generations.ts"),
+  "data-crossing": () => import("./data-crossing.ts"),
 };
