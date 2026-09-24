@@ -1,7 +1,8 @@
 #!/bin/sh
 # Lint book sources for three recurring mistakes:
 #   1. em dashes (house style bans them)
-#   2. plain ```mermaid fences (the reader expects ```{mermaid})
+#   2. mermaid fences, ```mermaid or ```{mermaid} (the reader does not render
+#      mermaid; the fence would ship as a code listing)
 #   3. `---` inside a prose line (the reader renders it as an em dash)
 set -eu
 cd "$(dirname "$0")/.."
@@ -12,8 +13,8 @@ if grep -rln '—' en zh --include='*.qmd' 2>/dev/null; then
   fail=1
 fi
 
-if grep -rln '^```mermaid[ ]*$' en zh --include='*.qmd' 2>/dev/null; then
-  echo 'FAIL: plain ```mermaid fence in the files above (use ```{mermaid})'
+if grep -rnE '^[[:space:]]*(```|~~~)[[:space:]]*\{?\.?mermaid' en zh --include='*.qmd' 2>/dev/null; then
+  echo 'FAIL: mermaid fence in the files above (mermaid is not rendered; use a ```{figure} module or a ```{dot} block)'
   fail=1
 fi
 
