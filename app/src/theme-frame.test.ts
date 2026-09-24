@@ -41,3 +41,10 @@ test("layout regions carry no radius; controls stay at 4 to 6 px", () => {
   }
   expect(tsx).not.toMatch(/borderRadius: (999|1[0-9]|2[0-9])\b/);
 });
+
+// A solid button's label takes the surface color: the ink palette's dark
+// accent is near-white, so a fixed white label vanished on the comment button.
+test("solid accent buttons label in the surface color, not fixed white", () => {
+  expect(tsx).not.toMatch(/background: primary \? "var\(--accent\)"[^}]*color: primary \? "#fff"/);
+  expect(tsx).toMatch(/background: primary \? "var\(--accent\)" : "transparent",\s*color: primary \? "var\(--bg-surface\)"/);
+});

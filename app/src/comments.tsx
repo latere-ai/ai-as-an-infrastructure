@@ -251,7 +251,7 @@ function btn(primary: boolean): React.CSSProperties {
     padding: "6px 14px", borderRadius: "var(--radius-sm)", cursor: "pointer", font: "inherit", fontSize: 13,
     border: primary ? "1px solid var(--accent)" : "1px solid var(--border)",
     background: primary ? "var(--accent)" : "transparent",
-    color: primary ? "#fff" : "var(--fg-2)",
+    color: primary ? "var(--bg-surface)" : "var(--fg-2)",
   };
 }
 
