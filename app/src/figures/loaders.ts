@@ -145,4 +145,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "progressive-rollout": () => import("./progressive-rollout.ts"),
   "step-compounding": () => import("./step-compounding.ts"),
   "inclusion-weighting": () => import("./inclusion-weighting.ts"),
+  "burn-rate-alerts": () => import("./burn-rate-alerts.ts"),
 };
