@@ -1319,58 +1319,6 @@
     draw(); watchTheme(host, draw);
   };
 
-  // Reciprocal rank fusion: a document's fused score sums 1/(k+rank) across the
-  // dense and sparse lists, so a chunk ranked decently by both can beat one
-  // ranked first by only one. Shuffle the sparse list or change k and watch the
-  // fused order recompute; the winner is often high in neither list alone.
-  R['rrf-fusion'] = function (host) {
-    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
-    var L = zh ? {
-      shuffle: '打乱稀疏排名', top: '融合首位：文档 ', dense: '稠密', sparse: '稀疏', fused: '融合',
-      document: '文档 ', slider: 'RRF 常数 k', description: '稠密排名、稀疏排名与倒数排名融合结果'
-    } : {
-      shuffle: 'shuffle sparse list', top: 'fused top: doc ', dense: 'dense', sparse: 'sparse', fused: 'fused',
-      document: 'doc ', slider: 'RRF constant k', description: 'Dense, sparse, and reciprocal-rank-fused rankings'
-    };
-    var k = 2, names = ['A', 'B', 'C', 'D', 'E'];
-    var dense = [0, 1, 2, 3, 4], rot = 0;
-    var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
-    bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 250);
-    function rankOf(order, d) { return order.indexOf(d) + 1; }
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 22 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      // dense = ABCDE, base sparse = DBCAE: doc A is rank 1 in dense but 4 in
-      // sparse (spiky), doc B is rank 2 in both (balanced). At small k the spike
-      // wins; as k grows the balanced doc overtakes it, so the fused top flips
-      // A -> B inside the slider's range.
-      var SB = [3, 1, 2, 0, 4]; var sp = SB.map(function (_, i) { return SB[(i + rot) % 5]; });
-      var score = names.map(function (_, d) { return 1 / (k + rankOf(dense, d)) + 1 / (k + rankOf(sp, d)); });
-      var fused = names.map(function (_, d) { return d; }).sort(function (a, b) { return score[b] - score[a]; });
-      var cols = [[L.dense, dense], [L.sparse, sp], [L.fused, fused]];
-      var cw = (W - 2 * pd) / 3, rh = (H - 2 * pd - 14 * cv.dpr) / names.length;
-      cols.forEach(function (c, ci) {
-        var x = pd + ci * cw;
-        ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText(c[0], x + cw / 2, pd - 2 * cv.dpr);
-        c[1].forEach(function (d, r) {
-          var y = pd + 12 * cv.dpr + r * rh;
-          ctx.fillStyle = (ci === 2 && r === 0) ? t.accent : 'rgba(128,128,128,0.13)';
-          ctx.fillRect(x + 8 * cv.dpr, y, cw - 16 * cv.dpr, rh - 5 * cv.dpr);
-          ctx.fillStyle = (ci === 2 && r === 0) ? '#fff' : t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-          ctx.fillText(L.document + names[d], x + cw / 2, y + rh / 2 + 2 * cv.dpr);
-        });
-      });
-      read.textContent = 'k=' + k + ' · ' + L.top + names[fused[0]];
-      cv.c.setAttribute('aria-label', L.description + (zh ? '。' : '. ') + read.textContent);
-    }
-    btn.addEventListener('click', function () { rot = (rot + 1) % 5; draw(); });
-    btn.textContent = L.shuffle;
-    host.appendChild(slider(L.slider, 1, 100, 1, k, function (v) { k = Math.round(v); draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Decision tree: a product-neutral walk through the model-selection gates
   // (the selection-contract tree), in English or Chinese.
   R['decision-tree'] = function (host) {
