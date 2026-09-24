@@ -146,4 +146,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "step-compounding": () => import("./step-compounding.ts"),
   "inclusion-weighting": () => import("./inclusion-weighting.ts"),
   "burn-rate-alerts": () => import("./burn-rate-alerts.ts"),
+  "chunk-overlap": () => import("./chunk-overlap.ts"),
 };
