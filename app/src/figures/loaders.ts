@@ -143,4 +143,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "attestation-chain": () => import("./attestation-chain.ts"),
   "incident-clocks": () => import("./incident-clocks.ts"),
   "progressive-rollout": () => import("./progressive-rollout.ts"),
+  "step-compounding": () => import("./step-compounding.ts"),
 };

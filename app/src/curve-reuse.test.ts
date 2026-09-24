@@ -7,20 +7,8 @@ import { readFileSync } from "node:fs";
 const rt = readFileSync(new URL("./runtime/viz.ts", import.meta.url), "utf8");
 function src(p: string) { return readFileSync(new URL("../../" + p, import.meta.url), "utf8"); }
 
-test("the curve runtime registers the pow-base and u-shape families", () => {
-  expect(rt).toContain("'pow-base'");
+test("the curve runtime registers the u-shape family", () => {
   expect(rt).toContain("'u-shape'");
-});
-
-const homes: [string, string][] = [
-  ["en/practice/10-reliability-nondeterministic.qmd", "pow-base"],
-];
-
-test("each curve-reuse home uses its family in both languages", () => {
-  for (const [en, fam] of homes) {
-    const zh = en.replace(/^en\//, "zh/");
-    for (const p of [en, zh]) expect(src(p)).toContain(`data-family="${fam}"`);
-  }
 });
 
 test("zh viz blocks localize visible data-*label attributes", () => {

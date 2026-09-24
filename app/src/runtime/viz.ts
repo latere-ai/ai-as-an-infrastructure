@@ -120,8 +120,6 @@
       roofline: function (x, p) { return Math.min(p, x / 10); },
       logistic: function (x, p) { return 1 / (1 + Math.exp(-p * (x - 50) / 8)); },
       diminishing: function (x, p) { return 1 - Math.exp(-x / (p * 20)); },
-      // p^x: x is the step count n, p is the per-step reliability (reliability pⁿ).
-      'pow-base': function (x, p) { return Math.pow(p, x); },
       // U over position: high recall at the ends, low in the middle (lost-in-the-middle).
       'u-shape': function (x, p) { var d = (x - 51) / 50; return 0.25 + 0.75 * Math.pow(Math.abs(d), Math.max(0.2, p)); }
     };
