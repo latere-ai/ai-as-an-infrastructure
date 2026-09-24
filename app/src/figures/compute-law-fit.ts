@@ -47,7 +47,7 @@ const labels = {
     coefFloor: "L∞ = {Li}, A = {A}, α = {a}",
     atPure: "at {c} FLOP: L = A C^−α = {v}",
     atFloor: "at {c} FLOP: L = L∞ + A C^−α = {Li} + {r} = {v}",
-    held: "80% band {lo} to {hi}; median error on the held-out budgets {e}",
+    held: "80% band {lo} to {hi}; median error on the {n:held-out budget/held-out budgets} {e}",
     heldNone: "80% band {lo} to {hi}; no held-out budgets to check",
     gap: "The two fits differ by at most {a} over the fitted budgets and by {b} at {c} FLOP.",
     source: "Points: the lowest loss of a parabola through the runs at each IsoFLOP budget, from Hoffmann et al. (2022) Figure 4 as reconstructed by Besiroglu et al. (2024), loss read to about 0.01. Bands: 10th to 90th percentile over 1,000 bootstrap resamples of the runs.",
@@ -74,7 +74,7 @@ const labels = {
     coefFloor: "L∞ = {Li}，A = {A}，α = {a}",
     atPure: "{c} FLOP 处：L = A C^−α = {v}",
     atFloor: "{c} FLOP 处：L = L∞ + A C^−α = {Li} + {r} = {v}",
-    held: "80% 区间 {lo} 至 {hi}；留出预算上的中位误差 {e}",
+    held: "80% 区间 {lo} 至 {hi}；{n} 个留出预算上的中位误差 {e}",
     heldNone: "80% 区间 {lo} 至 {hi}；没有留出预算可供检验",
     gap: "在参与拟合的预算上，两种拟合最多相差 {a}；在 {c} FLOP 处相差 {b}。",
     source: "数据点：每个等算力预算下，用抛物线拟合该预算的各次训练，取其最低损失；训练数据来自 Hoffmann 等人（2022）图 4，由 Besiroglu 等人（2024）重建，损失精度约为 0.01。区间：对训练结果做 1,000 次自助法重采样，取第 10 至第 90 百分位。",
@@ -274,7 +274,7 @@ function render(st: State<P>, lang: Lang): string {
       : tpl(L.atFloor, { c: sci(c), Li: fixed(f.Linf, 3), r: fixed(v.red, 3), v: fixed(v.v, 3) });
     line(at, "fig-t-num", TYPE.body, ind);
     const bandVars = { lo: fixed(v.lo, 3), hi: fixed(v.hi, 3) };
-    line(f.errHeld == null ? tpl(L.heldNone, bandVars) : tpl(L.held, { ...bandVars, e: fixed(f.errHeld, 3) }), "fig-t-muted fig-t-num", fs, ind, 10);
+    line(f.errHeld == null ? tpl(L.heldNone, bandVars) : tpl(L.held, { ...bandVars, n: held, e: fixed(f.errHeld, 3) }), "fig-t-muted fig-t-num", fs, ind, 10);
   }
   line(tpl(L.gap, { a: fixed(gapInside(fit), 3), b: fixed(Math.abs(fc.floor.v - fc.pure.v), 2), c: sci(c) }), "", TYPE.body, 0, 8);
   line(L.source, "fig-t-muted", fs, 0);
