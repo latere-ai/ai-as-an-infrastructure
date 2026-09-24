@@ -72,4 +72,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "delivery-critical-path": () => import("./delivery-critical-path.ts"),
   "curtailment-response": () => import("./curtailment-response.ts"),
   "package-cross-section": () => import("./package-cross-section.ts"),
+  "review-backlog": () => import("./review-backlog.ts"),
 };
