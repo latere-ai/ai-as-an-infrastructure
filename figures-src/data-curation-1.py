@@ -38,7 +38,7 @@ degenerate = lsh + in_bucket * (in_bucket - 1) / 2.0
 fig, ax = plt.subplots(figsize=(5, 3.1))
 
 ax.loglog(n, all_pairs, color=GRAY, linewidth=1.8, linestyle="--",
-          label="All pairs, n(n − 1)/2")
+          label="All pairs O(n²)")
 ax.loglog(n, degenerate, color=TEAL, linewidth=2.0, linestyle=":",
           label="8 per document + one 1% bucket")
 ax.loglog(n, lsh, color=BLUE, linewidth=2.0,
@@ -76,7 +76,7 @@ from common import ZH_TEXT, save_bilingual
 
 # Labels this figure adds beyond the shared table.
 ZH_TEXT.update({
-    "All pairs, n(n − 1)/2": "全配对比较，n(n − 1)/2",
+    "All pairs O(n²)": "全量两两比较 O(n²)",
     "8 per document + one 1% bucket": "每篇 8 个 + 一个 1% 的桶",
     "8 candidates per document": "每篇文档 8 个候选",
 })
