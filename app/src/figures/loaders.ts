@@ -48,6 +48,7 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "horizon-threshold": () => import("./horizon-threshold.ts"),
   "benchmark-headroom": () => import("./benchmark-headroom.ts"),
   "paired-comparison": () => import("./paired-comparison.ts"),
+  "benchmark-snr": () => import("./benchmark-snr.ts"),
   "binomial-interval": () => import("./binomial-interval.ts"),
   "sft-loss-mask": () => import("./sft-loss-mask.ts"),
   "lora-low-rank": () => import("./lora-low-rank.ts"),
