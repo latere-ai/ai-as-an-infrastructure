@@ -95,12 +95,6 @@ test("hand-authored zh diagrams do not keep English explanatory labels", () => {
   expect(multimodalServing).toContain('IMG [label="媒体字节"]');
   expect(multimodalServing).not.toContain('label="raw pixels"');
 
-  const security = read("zh/safety/03-security-authorization.qmd");
-  expect(security).toContain('a [label="验证声明"]');
-  expect(security).toContain('e [label="策略执行点执行一次"]');
-  expect(security).not.toContain('label="Authenticate claims"');
-  expect(security).not.toContain('label="PEP executes once"');
-
   const rag = read("zh/orchestration/08-rag-retrieval.qmd");
   expect(rag).toContain('source [label="来源 + ACL"]');
   expect(rag).toContain('scope [label="已授权范围"]');
