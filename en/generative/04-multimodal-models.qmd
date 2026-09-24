@@ -208,6 +208,75 @@ scale is not a confidence score. Guidance also commonly requires conditional and
 unconditional model evaluations, even if an implementation batches them
 together.
 
+The runnable below applies that equation with exact noise predictions, so the
+effect of $s$ is separated from any model error. Its data have three
+two-dimensional Gaussian components: a large and a small one under the
+condition $c=0$, and one under $c=1$ beside the small one. Because the data are
+known, $\epsilon(z_t,c)$ and $\epsilon(z_t,\varnothing)$ are the exact
+posterior means of the noise, and 100 deterministic DDIM steps carry the same
+1,000 noise samples to $t=0$ at guidance scales 0, 1, 3, and 7. The cell asserts
+the two scales with a known target: $s=0$ reproduces the unconditional
+component shares and $s=1$ the conditional ones with the correct spread. Past
+1, the samples are not drawn from any conditional of the data. They leave the
+small component, which sits nearer the other condition, and pile up on the far
+side of the large one, which is the loss of diversity described above. Set the
+second row of `mu` to `[-2.0, 3.0]`, away from $c=1$: guidance then moves
+samples into the small component instead, because what the scale amplifies is
+how well a point predicts its condition, not how common its component is.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+mu = np.array([[-2.0, 0.0], [0.5, 1.5], [2.0, -1.0]])   # components of the 2-D data
+cls = np.array([0, 0, 1])                                # condition c of each component
+pi = np.array([0.35, 0.15, 0.5])                         # p(c) p(component | c)
+s2 = 0.25                                                # variance of every component
+abar = np.cumprod(1 - np.linspace(1e-4, 0.02, 1000))[::-10]
+abar = np.append(abar, 1.0)                              # 100 deterministic steps to t = 0
+
+def eps(x, ab, keep):
+    """Exact noise prediction E[eps | x_t] for the components in keep."""
+    var = ab * s2 + 1 - ab
+    d = x[:, None, :] - np.sqrt(ab) * mu[keep]
+    logr = np.log(pi[keep]) - (d ** 2).sum(-1) / (2 * var)
+    r = np.exp(logr - logr.max(1, keepdims=True))
+    r /= r.sum(1, keepdims=True)
+    return np.sqrt(1 - ab) * (r[..., None] * d).sum(1) / var
+
+def sample(s, c=0, n=1000):
+    x = np.random.default_rng(0).normal(size=(n, 2))    # the same noise for every scale
+    for ab, nxt in zip(abar[:-1], abar[1:]):
+        e_u, e_c = eps(x, ab, cls >= 0), eps(x, ab, cls == c)
+        e = e_u + s * (e_c - e_u)                        # classifier-free guidance
+        x0 = (x - np.sqrt(1 - ab) * e) / np.sqrt(ab)
+        x = np.sqrt(nxt) * x0 + np.sqrt(1 - nxt) * e     # DDIM update, no noise
+    return x
+
+scales = [0, 1, 3, 7]
+small = []
+fig, axes = plt.subplots(2, 2, figsize=(5.6, 5.6), sharex=True, sharey=True)
+for ax, s in zip(axes.ravel(), scales):
+    x = sample(s)
+    k = ((x[:, None] - mu) ** 2).sum(-1).argmin(1)
+    share = np.bincount(k, minlength=3) / len(x)
+    small.append(f"s = {s}: {share[1]:.0%}")
+    if s in (0, 1):                                      # exact targets: p(x) and p(x | c)
+        target = pi if s == 0 else pi * (cls == 0) / pi[cls == 0].sum()
+        assert abs(share - target).max() < 0.04
+    if s == 1:
+        assert abs(x[k == 0].var(0).mean() / s2 - 1) < 0.15
+    ax.scatter(*mu.T, s=500 * pi, facecolors="none", edgecolors="gray", lw=1)
+    ax.scatter(*x.T, s=3, alpha=0.5, color="C0")
+    ax.set_title(f"s = {s}: {share[1]:.0%} in the small mode", fontsize=10)
+    ax.set(xlim=(-4.5, 4.5), ylim=(-4, 4), aspect="equal")
+fig.suptitle("Samples guided toward c = 0; circles mark the components")
+fig.tight_layout()
+print("samples in the small component of c = 0:", ", ".join(small))
+```
+::::
+
 ## Choose an image representation and objective
 
 Image generators differ first in the space they model:
@@ -302,35 +371,11 @@ measured in latent cells. Channels affect the width of each position and leave
 this sequence count unchanged. The formula counts cost in positions; quality has
 to be measured separately.
 
-The runnable reconstructs Movie Gen's published maximum video context: 16 seconds
-at 16 frames per second and 768-pixel square frames. Its temporal autoencoder
-compresses each axis by eight, and its transformer groups two-by-two spatial
-latent cells into one position.
-
-:::: {.runnable}
-```python
-frames, height, width = 16 * 16, 768, 768
-compression = (8, 8, 8)
-patch = (1, 2, 2)
-
-latent = tuple(
-    size // stride
-    for size, stride in zip((frames, height, width), compression)
-)
-tokens = (
-    latent[0] // patch[0]
-    * latent[1] // patch[1]
-    * latent[2] // patch[2]
-)
-raw_positions = frames * height * width
-latent_positions = latent[0] * latent[1] * latent[2]
-
-print(f"raw spacetime positions: {raw_positions:,}")
-print(f"latent positions:        {latent_positions:,}")
-print(f"transformer tokens:      {tokens:,}")
-print(f"position reduction:      {raw_positions // tokens:,}x")
-```
-::::
+For Movie Gen's published maximum video context, 16 seconds at 16 frames per
+second in 768-pixel square frames, a temporal autoencoder that compresses each
+axis by eight, and a transformer that groups two-by-two spatial latent cells
+into one position, the count is $32\times48\times48=73{,}728$ positions, 2,048
+times fewer than the roughly 151 million raw spacetime positions.
 
 An early video-diffusion design extended image models with
 space-time-factorized 3D UNets

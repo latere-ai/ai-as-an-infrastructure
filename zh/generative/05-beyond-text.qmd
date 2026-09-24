@@ -175,29 +175,66 @@ N_{\mathrm{model}}
 N_{\mathrm{pred}}=K N_{\mathrm{model}}.
 $$
 
-其中，$N_{\mathrm{model}}$ 是大模型调用次数，$R\ge1$ 是以控制步计量的重规划间隔，$N_{\mathrm{pred}}$ 是预测出的全部动作位置数，其中包括相互重叠、可能在执行前被替换的位置。下面的可运行示例用一个假设的 10 秒控制器说明这一区别。
+其中，$N_{\mathrm{model}}$ 是大模型调用次数，$R\ge1$ 是以控制步计量的重规划间隔，$N_{\mathrm{pred}}$ 是预测出的全部动作位置数，其中包括相互重叠、可能在执行前被替换的位置。下面的可运行示例以 50 赫兹运行一个假设的 10 秒回合来实际执行这个循环。被控对象是一个质点，起点离目标一个单位；策略代替大模型：每隔 $R$ 个控制步，它用被控对象的模型在该模型的线性二次型调节器下向前推演，返回一个含 $K=16$ 个动作的动作块，控制器在不重新感知的情况下执行其中前 $R$ 个。代码对每个间隔断言 $N_{\mathrm{model}}=\lceil N_{\mathrm{ctrl}}/R\rceil$，并断言在模型精确且无扰动时，每个间隔得到的轨迹都相同，因为此时动作块恰好就是重规划会选出的动作。当执行器比模型假设的弱 30%，且被控对象受到随机外力时，初始偏差衰减之后的误差随 $R$ 增大：开环执行 16 个控制步几乎让误差翻倍。把 `gain` 降到 0.4，让模型与被控对象差得更远：每个间隔的表现都会变差，而动作块最长的那些损失最大。
 
 :::: {.runnable}
 ```python
 from math import ceil
+import numpy as np
+import matplotlib.pyplot as plt
 
-duration_s = 10
-control_hz = 50
-replan_every = 4
-prediction_horizon = 16
+duration_s, control_hz, horizon = 10, 50, 16   # 回合时长、控制频率、每次模型调用预测的动作数
+dt = 1 / control_hz
+A, B = np.array([[1, dt], [0, 1]]), np.array([0, dt])   # 模型：单位质点
+Qc, Rc = np.diag([1.0, 0.1]), 0.01
+P = Qc.copy()
+for _ in range(3000):                          # 迭代 Riccati 方程，得到模型的 LQR 增益
+    Kx = (B @ P @ A) / (Rc + B @ P @ B)
+    P = Qc + A.T @ P @ (A - np.outer(B, Kx))
 
-control_ticks = ceil(duration_s * control_hz)
-model_calls = ceil(control_ticks / replan_every)
-predicted_positions = model_calls * prediction_horizon
+def episode(R, gain, sigma, seed=0):
+    """每 R 个控制步重规划一次：用模型推演 horizon 个动作，执行其中 R 个。"""
+    rng = np.random.default_rng(seed)
+    ticks = ceil(duration_s * control_hz)
+    x, pos, calls = np.array([1.0, 0.0]), [], 0
+    for t in range(ticks):
+        if t % R == 0:
+            calls += 1
+            z, chunk = x.copy(), []
+            for _ in range(horizon):           # 模型从当前状态预测的动作块
+                chunk.append(-Kx @ z)
+                z = A @ z + B * chunk[-1]
+        x = A @ x + gain * B * chunk[t % R]    # 真实对象：执行器增益与扰动
+        x[1] += sigma * np.sqrt(dt) * rng.normal()
+        pos.append(x[0])
+    assert calls == ceil(ticks / R)            # N_model = ceil(N_ctrl / R)
+    return np.array(pos)
 
-print(f"实际执行的控制步数：{control_ticks:,}")
-print(f"大模型调用次数：{model_calls:,}")
-print(f"预测动作位置数：{predicted_positions:,}")
-print(f"模型调用缩减倍数：{control_ticks / model_calls:.1f}")
+intervals = [1, 2, 4, 8, 16]
+exact = [episode(R, gain=1.0, sigma=0.0) for R in intervals]
+assert all(np.allclose(p, exact[0]) for p in exact)   # 模型精确且无扰动时，R 取多少都一样
+gain, sigma = 0.7, 0.4                         # 真实对象与模型不同
+runs = {R: episode(R, gain, sigma) for R in intervals}
+rms = [np.sqrt(np.mean(runs[R][2 * control_hz:] ** 2)) for R in intervals]   # 2 秒之后
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 5.8), height_ratios=(3, 2))
+t = np.arange(1, len(runs[1]) + 1) * dt
+for k, R in enumerate([1, 16]):
+    ax.plot(t, runs[R], lw=1.2, color=f"C{k}", label=f"每 {R} 个控制步重规划")
+ax.plot(t, exact[0], lw=1, ls="--", color="gray", label="任意 R，模型精确且无扰动")
+ax.axvline(2, color="gray", ls=":", lw=1)
+ax.set(xlabel="时间（秒）", ylabel="位置误差", title="同一控制器，每 1 步或每 16 步重规划")
+ax.legend(fontsize=9)
+bx.plot(intervals, rms, "o-", color="C2")
+bx.set(xscale="log", xticks=intervals, xticklabels=[f"{R}\n{control_hz / R:g} 次/秒" for R in intervals],
+       xlabel="重规划间隔 R（控制步）与每秒模型调用次数", ylabel="2 秒后的均方根误差")
+fig.tight_layout()
+print(f"{ceil(duration_s * control_hz)} 个控制步；模型调用次数："
+      + "，".join(f"R={R}：{ceil(duration_s * control_hz / R)}" for R in intervals))
 ```
 ::::
 
-这项核算并不承诺延迟会降低四倍。低层控制器仍需发出 500 条命令，相互重叠的预测也会增加计算，感知和执行还有各自的截止时间。它说明了机器人系统为何常把速度较慢的语义策略与更快的控制器分开，而不是强迫一个模型负责所有时间尺度。
+这项核算也不承诺延迟会降低四倍。低层控制器仍需发出 500 条命令，相互重叠的预测也会增加计算，感知和执行还有各自的截止时间。它说明了机器人系统为何常把速度较慢的语义策略与更快的控制器分开，而不是强迫一个模型负责所有时间尺度。
 
 ## 先看数据差异，再谈数据稀缺
 

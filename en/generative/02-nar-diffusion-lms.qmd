@@ -323,55 +323,91 @@ blocks.
 ```{figure}
 //| figure: block-diffusion-decode
 //| label: fig-nar-spectrum
-//| fig-cap: "Three decoders on one round clock, for the 128-position output of the runnable below. Each cell is one output position: blue cells are revealed, orange cells were revealed in the current round, gray cells are masks, and empty outlines are positions not yet appended. The black outline marks the positions the model scores in the current round, and the bar under the cells marks the prefix whose keys and values it reads from the cache instead of recomputing. Autoregression scores one position per round over a cached prefix and needs 128 rounds. Block diffusion appends a block of $B$ masks, scores the whole block in each of its $K$ rounds, and caches it once committed, so it needs $K\lceil L/B\rceil$ rounds. Full masked diffusion scores the whole canvas in each of $K$ rounds and caches nothing. A block size of 1 is autoregression and a block size of 128 is the full canvas; rounds per block are capped at the block size because each round reveals at least one position. Which positions a round reveals follows a seeded illustrative order; the round and position counts are exact under the runnable's assumption that each evaluation scores every position of its block."
+//| fig-cap: "Three decoders on one round clock, for a 128-position output. Each cell is one output position: blue cells are revealed, orange cells were revealed in the current round, gray cells are masks, and empty outlines are positions not yet appended. The black outline marks the positions the model scores in the current round, and the bar under the cells marks the prefix whose keys and values it reads from the cache instead of recomputing. Autoregression scores one position per round over a cached prefix and needs 128 rounds. Block diffusion appends a block of $B$ masks, scores the whole block in each of its $K$ rounds, and caches it once committed, so it needs $K\lceil L/B\rceil$ rounds. Full masked diffusion scores the whole canvas in each of $K$ rounds and caches nothing. A block size of 1 is autoregression and a block size of 128 is the full canvas; rounds per block are capped at the block size because each round reveals at least one position. Which positions a round reveals follows a seeded illustrative order; the round and position counts are exact under the assumption that each evaluation scores every position of its block."
 block: 16
 rounds: 8
 ```
 
-The following runnable makes only this dependency accounting concrete. It
-assumes that a masked pass predicts every position in its current block, ignores
-prompt prefill, and counts position predictions without assigning them a
-hardware cost.
-
-:::: {.runnable}
-```python
-from math import ceil
-
-length = 128
-rounds = 8
-block_size = 16
-
-autoregressive = {
-    "dependent_evaluations": length,
-    "position_predictions": length,
-}
-full_masked = {
-    "dependent_evaluations": rounds,
-    "position_predictions": length * rounds,
-}
-block_diffusion = {
-    "dependent_evaluations": ceil(length / block_size) * rounds,
-    "position_predictions": length * rounds,
-}
-
-for name, cost in [
-    ("autoregressive", autoregressive),
-    ("full masked", full_masked),
-    ("block diffusion", block_diffusion),
-]:
-    print(
-        f"{name:16} dependent={cost['dependent_evaluations']:3d}, "
-        f"positions={cost['position_predictions']:4d}"
-    )
-```
-::::
-
-With these assumptions, full masked diffusion has the shortest dependency chain
+Under these assumptions, full masked diffusion has the shortest dependency chain
 but predicts eight times as many token positions as cached autoregression. Block
 diffusion lies between them in dependency depth while doing the same illustrative
 number of within-block position predictions as full masked diffusion. Actual
 latency depends on attention shape, kernels, batch, memory traffic, and how much
 parallel hardware each evaluation can use.
+
+Fewer rounds are cheaper only if the parallel reveals stay coherent. The
+runnable below measures that on the translation example from
+earlier in this chapter, reduced to six positions: the clean
+distribution $p_0$ puts weight on three valid translations, "i do not know the
+answer", "i don't know the answer .", and "i have no idea at all", each with 2
+percent noise per position. Because $p_0$ is known, the denoiser is exact: each
+round computes $p_0(X_i=y\mid X_U=x_U)$ from the posterior over the three
+translations given the visible tokens, then samples every position it reveals
+independently from that conditional, as a masked-diffusion round does. The
+cell decodes 4,000 outputs for every round count $K$ from 1 to 6, revealing
+positions in random order or most-confident first, and counts the outputs that
+are exactly one translation. It asserts the two closed forms at the ends: with
+one position per round the output follows $p_0$ by the chain rule, and with a
+single round it follows the product of the token marginals, which almost never
+forms a translation. Revealing the most confident positions first commits to
+one translation early and reaches the one-per-round rate at three rounds;
+random order needs five. The printed mixtures show the repetition and omission
+symptoms described above. Change `w` to make one translation dominant, and
+the single-round output forms a translation far more often.
+
+:::: {.runnable}
+```python
+from collections import Counter
+import numpy as np
+import matplotlib.pyplot as plt
+
+modes = ["i do not know the answer", "i don't know the answer .", "i have no idea at all"]
+w = np.array([0.45, 0.35, 0.2])                # three valid translations of one source
+eps = 0.02                                     # per-position noise around each translation
+T = np.array([s.split() for s in modes])
+vocab = sorted(set(T.ravel()))
+T = np.searchsorted(vocab, T)                  # (modes, L) token ids
+M, L, V = len(w), T.shape[1], len(vocab)
+theta = np.full((M, L, V), eps / V)
+theta[np.arange(M)[:, None], np.arange(L), T] += 1 - eps   # p_0 = sum_m w_m prod_i theta
+
+def decode(K, order, S=4000, seed=0):
+    """K rounds; each reveals its positions in parallel from p_0(X_i | X_U = x_U)."""
+    rng = np.random.default_rng(seed)
+    x = np.full((S, L), -1)
+    for n in np.diff(np.linspace(0, L, K + 1).round().astype(int)):
+        seen = np.log(theta)[:, np.arange(L), np.maximum(x, 0)] * (x >= 0)   # (M, S, L)
+        post = np.log(w)[:, None] + seen.sum(-1)
+        post = np.exp(post - post.max(0)); post /= post.sum(0)            # p(mode | visible)
+        cond = np.einsum("ms,mlv->slv", post, theta)                      # clean conditionals
+        score = cond.max(-1) if order == "confidence" else rng.random((S, L))
+        pick = np.argsort(-np.where(x < 0, score, -np.inf), axis=1)[:, :n]
+        cdf = np.take_along_axis(cond, pick[..., None], 1).cumsum(-1)
+        np.put_along_axis(x, pick, (rng.random((S, n, 1)) > cdf).sum(-1), 1)
+    return x
+
+valid = lambda x: (x[:, None, :] == T).all(-1).any(-1)
+p_valid = sum(w @ np.prod(theta[:, np.arange(L), t], 1) for t in T)       # one per round: p_0
+marg = w @ theta.reshape(M, -1)
+q_valid = sum(np.prod(marg.reshape(L, V)[np.arange(L), t]) for t in T)   # all at once
+rounds = np.arange(1, L + 1)
+names = {"random": "random reveal order", "confidence": "confidence reveal order"}
+plt.figure(figsize=(5.6, 3.9))
+for k, order in enumerate(["random", "confidence"]):
+    rate = [valid(decode(K, order)).mean() for K in rounds]
+    for K, target in ((1, q_valid), (L, p_valid)):
+        assert abs(rate[K - 1] - target) < 4 * np.sqrt(target * (1 - target) / 4000)
+    plt.plot(rounds, rate, "o-", ms=4, color=f"C{k}", label=names[order])
+plt.axhline(p_valid, color="gray", ls="--", lw=1, label="p_0(valid), one token per round")
+plt.plot(1, q_valid, "*", color="C2", ms=11, label="product of marginals")
+plt.xlabel(f"rounds K for L = {L} positions")
+plt.ylabel("share of outputs that are a translation")
+plt.title("Parallel reveals mix translations")
+plt.legend(fontsize=9, loc="lower right")
+mixed = Counter(" ".join(vocab[i] for i in row) for row in decode(1, "random") if not valid(row[None])[0])
+print("most frequent mixed outputs at K = 1:", *[f"  {s!r}" for s, _ in mixed.most_common(3)], sep="\n")
+```
+::::
 
 ## Read scale demonstrations as scoped evidence
 
@@ -425,7 +461,7 @@ weights it loads to every position of a block, which raises the arithmetic
 done per byte read and turns that idle capacity into more tokens for the same
 request. At high concurrency, batching many autoregressive requests already
 keeps the arithmetic units busy, and the extra positions a diffusion round
-scores, which the runnable above counts, become paid work. The per-user gain
+scores, which @fig-nar-spectrum counts, become paid work. The per-user gain
 can then shrink, and the cost per generated token can exceed autoregression's.
 
 ::: {.callout-note .dated}

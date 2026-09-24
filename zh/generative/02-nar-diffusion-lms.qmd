@@ -165,47 +165,68 @@ RADD 还把吸收态扩散连接到任意顺序的自回归分解。概率模型
 ```{figure}
 //| figure: block-diffusion-decode
 //| label: fig-nar-spectrum
-//| fig-cap: "同一轮次时钟下的三种解码器，输出长度取下方可运行示例中的 128 个位置。每个格子是一个输出位置：蓝色表示已确定，橙色表示本轮刚确定，灰色是掩码，空心框是尚未追加的位置。黑框圈出本轮模型要打分的位置，格子下方的横条标出从缓存读取键和值、无须重算的前缀。自回归每轮在缓存前缀上为一个位置打分，共需 128 轮。块扩散每次追加 $B$ 个掩码，在该块的 $K$ 轮中每轮为整块打分，提交后再缓存，因此需要 $K\lceil L/B\rceil$ 轮。完整掩码扩散在 $K$ 轮中每轮为整张画布打分，不缓存任何内容。块大小为 1 即自回归，为 128 即完整画布；每块轮数不超过块大小，因为每轮至少确定一个位置。各轮确定哪些位置按带种子的示意顺序；轮数和打分位置数则是精确值，沿用可运行示例的假设：每次评估为所在块的每个位置打分。"
+//| fig-cap: "同一轮次时钟下的三种解码器，输出长度为 128 个位置。每个格子是一个输出位置：蓝色表示已确定，橙色表示本轮刚确定，灰色是掩码，空心框是尚未追加的位置。黑框圈出本轮模型要打分的位置，格子下方的横条标出从缓存读取键和值、无须重算的前缀。自回归每轮在缓存前缀上为一个位置打分，共需 128 轮。块扩散每次追加 $B$ 个掩码，在该块的 $K$ 轮中每轮为整块打分，提交后再缓存，因此需要 $K\lceil L/B\rceil$ 轮。完整掩码扩散在 $K$ 轮中每轮为整张画布打分，不缓存任何内容。块大小为 1 即自回归，为 128 即完整画布；每块轮数不超过块大小，因为每轮至少确定一个位置。各轮确定哪些位置按带种子的示意顺序；轮数和打分位置数则是精确值，所依据的假设是：每次评估为所在块的每个位置打分。"
 block: 16
 rounds: 8
 ```
 
-下面的可运行示例只把依赖核算具体化。它假设每次掩码评估都会预测当前块中的所有位置，忽略提示词预填充，并且只统计位置预测次数，不为它们分配硬件成本。
+在这些假设下，完整掩码扩散的依赖链最短，却要预测相当于缓存自回归八倍的词元位置。块扩散的依赖深度位于两者之间，而示例中的块内位置预测总数与完整掩码扩散相同。真实延迟还取决于注意力形状、内核、批大小、内存流量，以及每次评估能够利用多少并行硬件。
+
+轮数更少只有在并行揭示仍然连贯时才划算。下面的可运行示例用本章前面的翻译例子来测量这一点，并把它缩减到六个位置：干净数据分布 $p_0$ 把权重放在三种有效译文上，即“i do not know the answer”“i don't know the answer .”和“i have no idea at all”，每个位置带 2% 的噪声。由于 $p_0$ 已知，去噪器是精确的：每一轮先根据可见词元算出三种译文的后验，由此得到 $p_0(X_i=y\mid X_U=x_U)$，再像掩码扩散的一轮那样，从这个条件分布中独立采样本轮要揭示的每个位置。代码对 1 到 6 的每个轮数 $K$ 各解码 4,000 个输出，揭示顺序分为随机和置信度优先两种，并统计恰好等于某一种译文的输出所占比例。它断言两端的闭式结果：每轮只揭示一个位置时，按链式法则，输出服从 $p_0$；只用一轮时，输出服从各词元边缘分布之积，几乎从不构成完整译文。按置信度优先揭示会较早锁定一种译文，三轮就达到每轮一个位置时的比例，随机顺序则要五轮。打印出的混合输出正是前文所说的重复和遗漏。修改 `w`，让某一种译文占主导，只用一轮时输出构成完整译文的比例会高得多。
 
 :::: {.runnable}
 ```python
-from math import ceil
+from collections import Counter
+import numpy as np
+import matplotlib.pyplot as plt
 
-length = 128
-rounds = 8
-block_size = 16
+modes = ["i do not know the answer", "i don't know the answer .", "i have no idea at all"]
+w = np.array([0.45, 0.35, 0.2])                # 同一句原文的三种有效译文
+eps = 0.02                                     # 每种译文在各位置上的噪声
+T = np.array([s.split() for s in modes])
+vocab = sorted(set(T.ravel()))
+T = np.searchsorted(vocab, T)                  # (模式数, L) 的词元编号
+M, L, V = len(w), T.shape[1], len(vocab)
+theta = np.full((M, L, V), eps / V)
+theta[np.arange(M)[:, None], np.arange(L), T] += 1 - eps   # p_0 = 对 m 求和 w_m 乘以各位置 theta 的连乘
 
-autoregressive = {
-    "dependent_evaluations": length,
-    "position_predictions": length,
-}
-full_masked = {
-    "dependent_evaluations": rounds,
-    "position_predictions": length * rounds,
-}
-block_diffusion = {
-    "dependent_evaluations": ceil(length / block_size) * rounds,
-    "position_predictions": length * rounds,
-}
+def decode(K, order, S=4000, seed=0):
+    """K 轮；每轮按 p_0(X_i | X_U = x_U) 并行确定本轮的位置。"""
+    rng = np.random.default_rng(seed)
+    x = np.full((S, L), -1)
+    for n in np.diff(np.linspace(0, L, K + 1).round().astype(int)):
+        seen = np.log(theta)[:, np.arange(L), np.maximum(x, 0)] * (x >= 0)   # (M, S, L)
+        post = np.log(w)[:, None] + seen.sum(-1)
+        post = np.exp(post - post.max(0)); post /= post.sum(0)            # p(模式 | 可见词元)
+        cond = np.einsum("ms,mlv->slv", post, theta)                      # 干净数据的条件分布
+        score = cond.max(-1) if order == "confidence" else rng.random((S, L))
+        pick = np.argsort(-np.where(x < 0, score, -np.inf), axis=1)[:, :n]
+        cdf = np.take_along_axis(cond, pick[..., None], 1).cumsum(-1)
+        np.put_along_axis(x, pick, (rng.random((S, n, 1)) > cdf).sum(-1), 1)
+    return x
 
-for name, cost in [
-    ("自回归", autoregressive),
-    ("完整掩码", full_masked),
-    ("块扩散", block_diffusion),
-]:
-    print(
-        f"{name}：依赖评估={cost['dependent_evaluations']}，"
-        f"位置预测={cost['position_predictions']}"
-    )
+valid = lambda x: (x[:, None, :] == T).all(-1).any(-1)
+p_valid = sum(w @ np.prod(theta[:, np.arange(L), t], 1) for t in T)       # 每轮一个位置：p_0
+marg = w @ theta.reshape(M, -1)
+q_valid = sum(np.prod(marg.reshape(L, V)[np.arange(L), t]) for t in T)   # 一次全部确定
+rounds = np.arange(1, L + 1)
+names = {"random": "随机揭示顺序", "confidence": "按置信度揭示"}
+plt.figure(figsize=(5.6, 3.9))
+for k, order in enumerate(["random", "confidence"]):
+    rate = [valid(decode(K, order)).mean() for K in rounds]
+    for K, target in ((1, q_valid), (L, p_valid)):
+        assert abs(rate[K - 1] - target) < 4 * np.sqrt(target * (1 - target) / 4000)
+    plt.plot(rounds, rate, "o-", ms=4, color=f"C{k}", label=names[order])
+plt.axhline(p_valid, color="gray", ls="--", lw=1, label="p_0(有效)，每轮一个词元")
+plt.plot(1, q_valid, "*", color="C2", ms=11, label="边缘分布之积")
+plt.xlabel(f"L = {L} 个位置时的轮数 K")
+plt.ylabel("输出恰为某种译文的比例")
+plt.title("并行揭示会混合不同译文")
+plt.legend(fontsize=9, loc="lower right")
+mixed = Counter(" ".join(vocab[i] for i in row) for row in decode(1, "random") if not valid(row[None])[0])
+print("K = 1 时最常见的混合输出：", *[f"  {s!r}" for s, _ in mixed.most_common(3)], sep="\n")
 ```
 ::::
-
-在这些假设下，完整掩码扩散的依赖链最短，却要预测相当于缓存自回归八倍的词元位置。块扩散的依赖深度位于两者之间，而示例中的块内位置预测总数与完整掩码扩散相同。真实延迟还取决于注意力形状、内核、批大小、内存流量，以及每次评估能够利用多少并行硬件。
 
 ## 限定规模化结果的证据范围
 
@@ -224,7 +245,7 @@ Mercury 与 Seed Diffusion 也报告了较高的代码生成吞吐量 [@khanna20
 
 同一家族的扩散模型与自回归模型成对发布，可以一次消除上述好几项差异。如果一个实验室在自家自回归模型的架构和参数规模上构建扩散模型，并在同一套评测上同时报告两者，模型规模、激活计算量和基准测试就都一致。这仍不是严格意义上的受控比较。扩散模型可能增加独立编码器或新的输出头之类的组件，采用自己的采样器；实验室也可能不说明训练是否从自回归权重开始，或两个模型各训练了多少。这样的对照能说明两件事：规模匹配时，扩散设计在各项任务上付出多少质量代价；以及它的速度结论在哪种服务条件下成立。
 
-单用户速度指单个请求每秒得到的词元数，它和高并发下的成本是两项不同的测量。批很小时，自回归解码每一步都要读取激活权重，却只为每个请求生成一个词元，因此受内存带宽限制，加速器的大部分算力闲置（@sec-serving-problem）。扩散模型的一轮去噪会把读入的权重作用于块内每个位置，每读取一个字节完成的运算更多，闲置的算力由此变成同一请求得到的更多词元。并发很高时，自回归服务把大量请求合批就能让运算单元保持忙碌，扩散每轮额外打分的那些位置（即前面可运行示例统计的位置预测）就成了要付费的实际工作。这时单用户速度的优势可能缩小，每个生成词元的成本也可能高于自回归。
+单用户速度指单个请求每秒得到的词元数，它和高并发下的成本是两项不同的测量。批很小时，自回归解码每一步都要读取激活权重，却只为每个请求生成一个词元，因此受内存带宽限制，加速器的大部分算力闲置（@sec-serving-problem）。扩散模型的一轮去噪会把读入的权重作用于块内每个位置，每读取一个字节完成的运算更多，闲置的算力由此变成同一请求得到的更多词元。并发很高时，自回归服务把大量请求合批就能让运算单元保持忙碌，扩散每轮额外打分的那些位置（即 @fig-nar-spectrum 统计的位置预测）就成了要付费的实际工作。这时单用户速度的优势可能缩小，每个生成词元的成本也可能高于自回归。
 
 ::: {.callout-note .dated}
 ## 截至 2026 年 9 月

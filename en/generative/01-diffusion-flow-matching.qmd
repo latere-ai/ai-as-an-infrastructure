@@ -134,48 +134,85 @@ training steps, and $\epsilon$ is standard Gaussian noise. Minimizing this loss
 fits the mean needed for the reverse transition; the reverse variance remains a
 separate design choice.
 
-The runnable example removes the neural approximation so the reversal itself
-can be checked. For one-dimensional Gaussian data, every forward marginal and
-reverse conditional is analytic. Starting from the exact terminal marginal and
-applying those reverse conditionals recovers the original distribution.
+The runnable below removes the neural approximation so the reversal itself can
+be checked. Its data are a two-dimensional mixture of three Gaussian
+components, for which the minimizer of the loss above,
+$\mathbb E[\epsilon\mid x_t]$, has a closed form at every step, so the
+network's best possible answer stands in for $\epsilon_\theta$. From the same
+standard-normal noise it runs the 1,000 reverse steps of the linear schedule
+twice: once adding noise with the posterior variance
+$\tilde\beta_t=\beta_t(1-\bar\alpha_{t-1})/(1-\bar\alpha_t)$, and once with the
+same means and no noise. The animation shows 250 of the 1,500 samples in 30
+frames, spaced more densely near $t=0$, where the samples take their shape. The cell asserts that the noisy chain recovers the component weights
+and the within-component variance, and that the mean-only chain puts every
+sample on one point. The reverse mean alone is not a sampler: the
+deterministic samplers of @fig-diffusion-sampling-paths follow the
+probability-flow ODE introduced below, whose drift carries half the score
+term. Change the weights `w` or the variance `s2`, and the noisy chain follows
+the new data.
 
 :::: {.runnable}
 ```python
 import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
-rng = np.random.default_rng(0)
-data_mean, data_variance = 3.0, 1.0
-steps = 1000
-beta = np.linspace(1e-4, 0.02, steps)
-alpha = 1.0 - beta
-alpha_bar = np.cumprod(alpha)
+mu = np.array([[-2.0, 0.0], [2.0, 1.0], [0.0, -2.5]])   # data: a 2-D Gaussian mixture
+w, s2 = np.array([0.5, 0.3, 0.2]), 0.3 ** 2               # component weights, variance
+T = 1000
+beta = np.linspace(1e-4, 0.02, T)
+alpha, abar = 1 - beta, np.cumprod(1 - beta)
 
+def eps_star(x, ab):
+    """E[eps | x_t], the minimizer of the training loss, exact for this data."""
+    var = ab * s2 + 1 - ab                                 # each component's variance at t
+    d = x[:, None, :] - np.sqrt(ab) * mu
+    logr = np.log(w) - (d ** 2).sum(-1) / (2 * var)
+    r = np.exp(logr - logr.max(1, keepdims=True))
+    r /= r.sum(1, keepdims=True)                           # posterior over components
+    return np.sqrt(1 - ab) * (r[..., None] * d / var).sum(1)
 
-def marginal(alpha_bar_t):
-    """Mean and variance of q(x_t) for Gaussian data."""
-    mean = np.sqrt(alpha_bar_t) * data_mean
-    variance = alpha_bar_t * data_variance + (1.0 - alpha_bar_t)
-    return mean, variance
+shown = set((np.linspace(1, 0, 30) ** 2 * (T - 1)).astype(int))   # denser near t = 0
 
+def sample(n, noise, seed=0):
+    rng = np.random.default_rng(seed)
+    x, frames = rng.normal(size=(n, 2)), []
+    for t in range(T - 1, -1, -1):                         # reverse steps T-1 ... 0
+        x = (x - beta[t] / np.sqrt(1 - abar[t]) * eps_star(x, abar[t])) / np.sqrt(alpha[t])
+        if t > 0:                                          # posterior variance beta tilde
+            x += noise * np.sqrt(beta[t] * (1 - abar[t - 1]) / (1 - abar[t])) * rng.normal(size=x.shape)
+        if t in shown:
+            frames.append((t, x.copy()))
+    return x, frames
 
-# Start from q(x_T), which is nearly N(0, 1) for this schedule.
-terminal_mean, terminal_variance = marginal(alpha_bar[-1])
-x = rng.normal(terminal_mean, np.sqrt(terminal_variance), size=10_000)
+x, frames = sample(1500, noise=1.0)
+x0, frames0 = sample(1500, noise=0.0)                      # the same steps without the noise term
+k = ((x[:, None] - mu) ** 2).sum(-1).argmin(1)             # nearest component
+share = np.bincount(k, minlength=3) / len(x)
+spread = np.mean([x[k == j].var(0).mean() for j in range(3)])
+collapse = np.linalg.norm(x0 - x0.mean(0), axis=1).max()
+assert abs(share - w).max() < 0.04 and abs(spread / s2 - 1) < 0.15
+assert collapse < 0.05                                     # every mean-only sample lands on one point
+print(f"component shares {np.round(share, 3)}, target {w}")
+print(f"variance within a component {spread:.3f}, target {s2:.3f}")
+print(f"mean only: all samples within {collapse:.3f} of one point")
 
-for t in range(steps - 1, -1, -1):
-    previous_alpha_bar = alpha_bar[t - 1] if t > 0 else 1.0
-    previous_mean, previous_variance = marginal(previous_alpha_bar)
-    current_mean, current_variance = marginal(alpha_bar[t])
+fig, axes = plt.subplots(1, 2, figsize=(5.8, 3.4), sharey=True)
+dots = []
+for ax, name, fr in zip(axes, ("with reverse noise", "mean only"), (frames, frames0)):
+    ax.scatter(*mu.T, s=600 * w, facecolors="none", edgecolors="gray", lw=1)
+    dots.append(ax.scatter(*fr[0][1][:250].T, s=4, color="C0", alpha=0.7))
+    ax.set(xlim=(-4.5, 4.5), ylim=(-4.5, 4.5), aspect="equal", xlabel="x1", title=name)
+axes[0].set_ylabel("x2")
+clock = fig.suptitle(f"reverse step t = {T - 1:4d}")
 
-    # Exact Gaussian conditional q(x_{t-1} | x_t).
-    gain = np.sqrt(alpha[t]) * previous_variance / current_variance
-    reverse_mean = previous_mean + gain * (x - current_mean)
-    reverse_variance = previous_variance - gain**2 * current_variance
-    x = reverse_mean + np.sqrt(max(reverse_variance, 0.0)) * rng.normal(size=x.shape)
+def show(i):
+    for d, fr in zip(dots, (frames, frames0)):
+        d.set_offsets(fr[i][1][:250])
+    clock.set_text(f"reverse step t = {frames[i][0]:4d}")
+    return dots + [clock]
 
-print(f"terminal signal fraction: {alpha_bar[-1]:.6f}")
-print(f"target mean={data_mean:.2f}, variance={data_variance:.2f}")
-print(f"recovered mean={x.mean():.2f}, variance={x.var():.2f}")
+anim = FuncAnimation(fig, show, frames=len(frames), interval=120)
 ```
 ::::
 

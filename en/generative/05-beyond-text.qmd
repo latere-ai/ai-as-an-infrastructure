@@ -315,31 +315,80 @@ $$
 Here, $N_{\mathrm{model}}$ counts large-model calls, $R\ge1$ is the replanning
 interval in control ticks, and $N_{\mathrm{pred}}$ counts all action positions
 predicted, including overlapping positions that may be replaced before
-execution. The runnable makes that distinction explicit for a hypothetical
-10-second controller.
+execution. The runnable below runs that loop for a hypothetical 10-second
+episode at 50 hertz. The plant is a point mass that starts one unit from its
+target, and the policy stands in for the large model: every $R$ ticks it rolls
+a model of the plant forward under that model's linear-quadratic regulator,
+returns a chunk of $K=16$ actions, and the controller executes the first $R$
+of them without new sensing. The cell asserts
+$N_{\mathrm{model}}=\lceil N_{\mathrm{ctrl}}/R\rceil$ for every interval, and
+that with an exact model and no disturbance every interval produces the same
+trajectory, because the chunk is then exactly what replanning would have
+chosen. With the actuator 30 percent weaker than the model assumes and a random
+force on the plant, the error after the initial offset decays grows with $R$:
+executing 16 ticks open loop almost doubles it. Lower `gain` to 0.4, a model
+further from the plant, and every interval does worse while the longest chunks
+lose the most.
 
 :::: {.runnable}
 ```python
 from math import ceil
+import numpy as np
+import matplotlib.pyplot as plt
 
-duration_s = 10
-control_hz = 50
-replan_every = 4
-prediction_horizon = 16
+duration_s, control_hz, horizon = 10, 50, 16   # episode, control rate, actions per model call
+dt = 1 / control_hz
+A, B = np.array([[1, dt], [0, 1]]), np.array([0, dt])   # the model: a unit point mass
+Qc, Rc = np.diag([1.0, 0.1]), 0.01
+P = Qc.copy()
+for _ in range(3000):                          # Riccati iteration to the LQR gain of the model
+    Kx = (B @ P @ A) / (Rc + B @ P @ B)
+    P = Qc + A.T @ P @ (A - np.outer(B, Kx))
 
-control_ticks = ceil(duration_s * control_hz)
-model_calls = ceil(control_ticks / replan_every)
-predicted_positions = model_calls * prediction_horizon
+def episode(R, gain, sigma, seed=0):
+    """Replan every R ticks: roll the model out for `horizon` actions, execute R of them."""
+    rng = np.random.default_rng(seed)
+    ticks = ceil(duration_s * control_hz)
+    x, pos, calls = np.array([1.0, 0.0]), [], 0
+    for t in range(ticks):
+        if t % R == 0:
+            calls += 1
+            z, chunk = x.copy(), []
+            for _ in range(horizon):           # the chunk the model predicts from here
+                chunk.append(-Kx @ z)
+                z = A @ z + B * chunk[-1]
+        x = A @ x + gain * B * chunk[t % R]    # the real plant: actuator gain, disturbance
+        x[1] += sigma * np.sqrt(dt) * rng.normal()
+        pos.append(x[0])
+    assert calls == ceil(ticks / R)            # N_model = ceil(N_ctrl / R)
+    return np.array(pos)
 
-print(f"executed control ticks: {control_ticks}")
-print(f"large-model calls:      {model_calls}")
-print(f"predicted positions:    {predicted_positions}")
-print(f"model-call reduction:   {control_ticks / model_calls:.1f}x")
+intervals = [1, 2, 4, 8, 16]
+exact = [episode(R, gain=1.0, sigma=0.0) for R in intervals]
+assert all(np.allclose(p, exact[0]) for p in exact)   # exact model, no disturbance: R is free
+gain, sigma = 0.7, 0.4                         # the plant differs from the model
+runs = {R: episode(R, gain, sigma) for R in intervals}
+rms = [np.sqrt(np.mean(runs[R][2 * control_hz:] ** 2)) for R in intervals]   # after 2 s
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 5.8), height_ratios=(3, 2))
+t = np.arange(1, len(runs[1]) + 1) * dt
+for k, R in enumerate([1, 16]):
+    ax.plot(t, runs[R], lw=1.2, color=f"C{k}", label=f"replan every {R} ticks")
+ax.plot(t, exact[0], lw=1, ls="--", color="gray", label="any R, exact model, no disturbance")
+ax.axvline(2, color="gray", ls=":", lw=1)
+ax.set(xlabel="time (s)", ylabel="position error", title="Same controller, replanned every 1 or 16 ticks")
+ax.legend(fontsize=9)
+bx.plot(intervals, rms, "o-", color="C2")
+bx.set(xscale="log", xticks=intervals, xticklabels=[f"{R}\n{control_hz / R:g}/s" for R in intervals],
+       xlabel="replanning interval R (ticks) and model calls per second", ylabel="RMS error after 2 s")
+fig.tight_layout()
+print(f"{ceil(duration_s * control_hz)} control ticks; model calls: "
+      + ", ".join(f"R={R}: {ceil(duration_s * control_hz / R)}" for R in intervals))
 ```
 ::::
 
-This accounting does not promise a fourfold latency improvement. A low-level
-controller must still issue 500 commands, overlapping predictions add work, and
+The accounting does not promise a fourfold latency improvement either. A
+low-level controller must still issue 500 commands, overlapping predictions add work, and
 sensing plus actuation have their own deadlines. It shows why robotics systems
 often separate a slower semantic policy from a faster controller rather than
 forcing one model to own every timescale.

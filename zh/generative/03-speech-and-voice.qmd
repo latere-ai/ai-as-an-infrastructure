@@ -106,36 +106,59 @@ $$
 ```{figure}
 //| figure: residual-vq
 //| label: fig-speech-and-voice-1
-//| fig-cap: "单个二维帧的残差向量量化，码本和帧率沿用下方可运行示例：三个各含四个条目的码本，每秒 50 帧。每个面板对应一个码本，在残差坐标中按各自的比例绘制：叉号是这一级要解释的残差，空心圆是码本条目及其索引，实心圆是最近的条目，这一级发送的就是它的索引；穿过它的虚线圆表明其余条目都更远；从该条目指向叉号的箭头是传给下一个码本的新残差。超出当前深度 $Q$ 的面板以淡色显示，读数给出 $\widehat z$ 以及 $R_{\mathrm{idx}}=fQ$ 和 $R_{\mathrm{bit}}=f\sum_{j}\lceil\log_2K_j\rceil$ 两个速率。第一个帧取自可运行示例，误差与其输出一致；其余几个帧中，有的被后续码本精修得较慢，有的几乎超出小码本的覆盖范围，某一级只能发送零向量条目，误差分毫未减。这些码本是可运行示例中手工设定的数值，并非训练得到的编解码器。"
+//| fig-cap: "单个二维帧的残差向量量化，使用三个手工设定、各含四个条目的码本，每秒 50 帧。每个面板对应一个码本，在残差坐标中按各自的比例绘制：叉号是这一级要解释的残差，空心圆是码本条目及其索引，实心圆是最近的条目，这一级发送的就是它的索引；穿过它的虚线圆表明其余条目都更远；从该条目指向叉号的箭头是传给下一个码本的新残差。超出当前深度 $Q$ 的面板以淡色显示，读数给出 $\widehat z$ 以及 $R_{\mathrm{idx}}=fQ$ 和 $R_{\mathrm{bit}}=f\sum_{j}\lceil\log_2K_j\rceil$ 两个速率。这几个帧中，有的被后续码本精修得较慢，有的几乎超出小码本的覆盖范围，某一级只能发送零向量条目，误差分毫未减。这些码本是手工设定的数值，并非训练得到的编解码器；下方的可运行示例会训练码本。"
 depth: 2
 frame: a
 ```
 
-下面的确定性示例压缩一个二维帧。每个码本含四个条目，因此每个选中索引占两比特。
+下面的可运行示例不再手工设定码本，而是训练它们。代码在 4,000 个二维单位高斯帧上，用 k-means 拟合八级残差码本，每级四个条目，每一级都在前面各级留下的残差上训练；然后在 4,000 个留出帧上测量误差，并与每帧比特数 $\sum_j\lceil\log_2K_j\rceil$ 对照。作为比较，它用同样方法训练一个在相同 $b$ 比特下含 $2^b$ 个条目的单一码本，并画出单位高斯信源的失真率函数 $D(R)=2^{-2R/d}$，即每个 $d$ 维帧用 $R$ 比特时任何编码所能达到的最低误差。代码断言：每增加一级误差都会下降，没有任何编码低于这个下界，并且在 6 比特以内，单一码本至少与多级残差码本一样准确。图中标注的是存储的条目数：残差多级量化的条目数线性增长，16 比特时只有 32 个，而单一码本需要 65,536 个，这正是编解码器叠加小码本的原因。代价是与下界的差距随深度扩大。把 `K` 设为 16、`Q` 设为 4：同样是每帧 16 比特，改用更少但更大的码本，误差约降为原来的三分之一。
 
 :::: {.runnable}
 ```python
-from math import dist, log2
+import numpy as np
+import matplotlib.pyplot as plt
 
-target = (1.0, -0.5)
-codebooks = [
-    [(0.0, 0.0), (0.75, -0.25), (-0.75, 0.25), (1.0, 0.0)],
-    [(0.0, 0.0), (0.25, -0.125), (-0.25, 0.125), (0.0, 0.25)],
-    [(0.0, 0.0), (0.0, -0.125), (0.0, 0.125), (0.125, 0.0)],
-]
-frame_hz = 50
-residual = target
+rng = np.random.default_rng(0)
+d, K, Q, frame_hz = 2, 4, 8, 50              # 帧维度、每个码本的条目数、深度、帧率
+train, test = rng.normal(size=(4000, d)), rng.normal(size=(4000, d))   # 单位方差的帧
 
-for depth, codebook in enumerate(codebooks, start=1):
-    index = min(range(len(codebook)), key=lambda i: dist(residual, codebook[i]))
-    chosen = codebook[index]
-    residual = tuple(x - q for x, q in zip(residual, chosen))
-    indices_per_second = frame_hz * depth
-    bits_per_second = indices_per_second * int(log2(len(codebook)))
-    print(
-        f"深度={depth} 误差={dist(residual, (0.0, 0.0)):.3f} "
-        f"索引/秒={indices_per_second} 比特/秒={bits_per_second}"
-    )
+def kmeans(x, k, iters=30):
+    c = x[rng.choice(len(x), k, replace=False)]
+    for _ in range(iters):
+        a = ((x[:, None] - c) ** 2).sum(-1).argmin(1)
+        n = np.bincount(a, minlength=k)
+        s = np.zeros_like(c); np.add.at(s, a, x)
+        c = np.where(n[:, None] > 0, s / np.maximum(n, 1)[:, None], c)
+    return c
+
+def quantize(x, c):
+    return c[((x[:, None] - c) ** 2).sum(-1).argmin(1)]
+
+rvq, r_train, r_test = [], train.copy(), test.copy()
+for q in range(Q):                           # 每一级学习前面各级留下的残差
+    c = kmeans(r_train, K)
+    r_train -= quantize(r_train, c)
+    r_test -= quantize(r_test, c)
+    rvq.append((r_test ** 2).mean())         # 留出集上每维的平方误差
+bits = np.arange(1, Q + 1) * np.ceil(np.log2(K))   # 每帧比特数，即 ceil(log2 K_j) 之和
+flat = [((test - quantize(test, kmeans(train, 2 ** int(b)))) ** 2).mean() for b in bits[bits <= 6]]
+bound = 2.0 ** (-2 * bits / d)               # 单位高斯信源的失真率函数
+assert np.all(np.diff(rvq) < 0) and np.all(np.array(rvq) > bound)
+assert np.all(np.array(flat) <= np.array(rvq[:len(flat)]) * 1.02)   # 单个大码本更好
+
+plt.figure(figsize=(5.6, 4.0))
+plt.semilogy(bits, rvq, "o-", ms=4, label=f"残差 VQ，每级 {K} 个条目")
+plt.semilogy(bits[:len(flat)], flat, "s", ms=5, label="单个码本，2^比特数 个条目")
+plt.semilogy(bits, bound, "--", color="gray", lw=1, label="D(R)，高斯信源下界")
+for b, e, q in zip(bits[1::2], rvq[1::2], range(2, Q + 1, 2)):   # 存储的码本条目数
+    plt.annotate(f"{K * q} 对 {2 ** int(b):,}" + " 个条目" * (q == 2), (b, e),
+                 textcoords="offset points", xytext=(4, 6), fontsize=8)
+plt.xlabel(f"每帧比特数（比特/秒 = {frame_hz} x 比特数）")
+plt.ylabel("每维平方误差")
+plt.title("残差多级量化：条目少，但与下界的差距越来越大")
+plt.legend(fontsize=9, loc="lower left")
+print(f"深度 {Q}：每帧 {bits[-1]:.0f} 比特 = {bits[-1] * frame_hz:.0f} 比特/秒，"
+      f"误差 {rvq[-1]:.2e}，是下界的 {rvq[-1] / bound[-1]:.1f} 倍")
 ```
 ::::
 

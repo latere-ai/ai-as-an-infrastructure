@@ -1,14 +1,13 @@
 // Residual vector quantization of one two-dimensional frame, with the three
-// four-entry codebooks of the speech chapter's runnable (frame rate 50 per
-// second). At depth j the quantizer picks the entry of codebook j nearest the
+// hand-set four-entry codebooks (frame rate 50 per second). At depth j the quantizer picks the entry of codebook j nearest the
 // residual and passes on what it did not explain:
 //
 //   k^(j) = argmin_k ‖r^(j−1) − e_k^(j)‖²,   r^(j) = r^(j−1) − e_{k^(j)}^(j),
 //   ẑ = Σ_{j ≤ Q} e_{k^(j)}^(j),   r^(0) = z,
 //
 // and the codec sends R_idx = f·Q indices and R_bit = f·Σ⌈log₂K_j⌉ bits per
-// second. The first frame is the runnable's (1.0, −0.5), so the readout repeats
-// its printed errors 0.354, 0.125, 0.000. Each stage is drawn in its own
+// second. The first frame is (1.0, −0.5), whose residual errors are 0.354,
+// 0.125, 0.000. Each stage is drawn in its own
 // residual coordinates, at the scale of its codebook, so the finer later
 // codebooks stay visible. Everything is exact arithmetic; nothing is learned.
 
@@ -22,7 +21,7 @@ import { fixed, int, tpl } from "./lib/format.ts";
 
 type V = [number, number];
 
-// The runnable's codebooks, entry order as printed there (index k = position).
+// The hand-set codebooks (index k = position).
 const CODEBOOKS: V[][] = [
   [[0, 0], [0.75, -0.25], [-0.75, 0.25], [1, 0]],
   [[0, 0], [0.25, -0.125], [-0.25, 0.125], [0, 0.25]],
@@ -46,7 +45,7 @@ const add = (a: V, b: V): V => [a[0] + b[0], a[1] + b[1]];
 interface Stage { k: number; entry: V; recon: V; residual: V; error: number }
 
 // Greedy RVQ of z through the first `depth` codebooks. Ties go to the lower
-// index, as Python's min() does in the runnable.
+// index, as Python's min() does.
 export function quantize(z: V, depth: number): Stage[] {
   const out: Stage[] = [];
   let r = z;
@@ -300,7 +299,7 @@ export default defineFigure({
     frame: {
       kind: "choice", control: "buttons", label: { en: "Frame z", zh: "帧 z" }, default: "a",
       options: [
-        { value: "a", label: { en: "(1, −0.5), the runnable's", zh: "(1, −0.5)，即可运行示例" } },
+        { value: "a", label: { en: "(1, −0.5)", zh: "(1, −0.5)" } },
         { value: "b", label: { en: "(0.3, 0.2)", zh: "(0.3, 0.2)" } },
         { value: "c", label: { en: "(0.5, 0.9)", zh: "(0.5, 0.9)" } },
         { value: "d", label: { en: "(−0.4, −0.6)", zh: "(−0.4, −0.6)" } },

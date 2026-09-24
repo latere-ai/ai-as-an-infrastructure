@@ -111,6 +111,61 @@ $$
 
 较大的 $s$ 常会改善提示遵循度，或提高筛选后样本的观感质量，但也会减少多样性，有时还会放大伪影。引导尺度不是置信度。引导通常还需要分别计算有条件与无条件预测，即使实现把两者放在同一批次中。
 
+下面的可运行示例用精确的噪声预测代入这个式子，从而把 $s$ 的效果与模型误差分开。数据由三个二维高斯分量组成：条件 $c=0$ 下有一大一小两个分量，条件 $c=1$ 下的分量紧挨着那个小分量。由于数据已知，$\epsilon(z_t,c)$ 与 $\epsilon(z_t,\varnothing)$ 都是噪声的精确后验均值；代码用 100 个确定性 DDIM 步，在引导尺度 0、1、3、7 下把同样的 1,000 个噪声样本推到 $t=0$。代码对目标已知的两个尺度做断言：$s=0$ 复现无条件的分量占比，$s=1$ 复现有条件的分量占比，且分布宽度正确。尺度大于 1 以后，样本不再来自数据的任何条件分布：它们离开靠近另一条件的小分量，堆积到大分量远离另一条件的一侧，这就是前面所说的多样性下降。把 `mu` 的第二行设为 `[-2.0, 3.0]`，让小分量远离 $c=1$：引导反而会把样本推向这个小分量，因为引导尺度放大的是一个点对其条件的预测程度，而不是其所在分量的常见程度。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+mu = np.array([[-2.0, 0.0], [0.5, 1.5], [2.0, -1.0]])   # 二维数据的各个分量
+cls = np.array([0, 0, 1])                                # 每个分量所属的条件 c
+pi = np.array([0.35, 0.15, 0.5])                         # p(c) p(分量 | c)
+s2 = 0.25                                                # 每个分量的方差
+abar = np.cumprod(1 - np.linspace(1e-4, 0.02, 1000))[::-10]
+abar = np.append(abar, 1.0)                              # 100 个确定性步，直到 t = 0
+
+def eps(x, ab, keep):
+    """只用 keep 中的分量时，精确的噪声预测 E[eps | x_t]。"""
+    var = ab * s2 + 1 - ab
+    d = x[:, None, :] - np.sqrt(ab) * mu[keep]
+    logr = np.log(pi[keep]) - (d ** 2).sum(-1) / (2 * var)
+    r = np.exp(logr - logr.max(1, keepdims=True))
+    r /= r.sum(1, keepdims=True)
+    return np.sqrt(1 - ab) * (r[..., None] * d).sum(1) / var
+
+def sample(s, c=0, n=1000):
+    x = np.random.default_rng(0).normal(size=(n, 2))    # 每个尺度都用同一组噪声
+    for ab, nxt in zip(abar[:-1], abar[1:]):
+        e_u, e_c = eps(x, ab, cls >= 0), eps(x, ab, cls == c)
+        e = e_u + s * (e_c - e_u)                        # 无分类器引导
+        x0 = (x - np.sqrt(1 - ab) * e) / np.sqrt(ab)
+        x = np.sqrt(nxt) * x0 + np.sqrt(1 - nxt) * e     # DDIM 更新，不加噪声
+    return x
+
+scales = [0, 1, 3, 7]
+small = []
+fig, axes = plt.subplots(2, 2, figsize=(5.6, 5.6), sharex=True, sharey=True)
+for ax, s in zip(axes.ravel(), scales):
+    x = sample(s)
+    k = ((x[:, None] - mu) ** 2).sum(-1).argmin(1)
+    share = np.bincount(k, minlength=3) / len(x)
+    small.append(f"s = {s}：{share[1]:.0%}")
+    if s in (0, 1):                                      # 精确目标：p(x) 与 p(x | c)
+        target = pi if s == 0 else pi * (cls == 0) / pi[cls == 0].sum()
+        assert abs(share - target).max() < 0.04
+    if s == 1:
+        assert abs(x[k == 0].var(0).mean() / s2 - 1) < 0.15
+    ax.scatter(*mu.T, s=500 * pi, facecolors="none", edgecolors="gray", lw=1)
+    ax.scatter(*x.T, s=3, alpha=0.5, color="C0")
+    ax.set_title(f"s = {s}：小分量占 {share[1]:.0%}", fontsize=10)
+    ax.set(xlim=(-4.5, 4.5), ylim=(-4, 4), aspect="equal")
+fig.suptitle("朝 c = 0 引导的样本；圆圈标出各分量")
+fig.tight_layout()
+print("落在 c = 0 小分量中的样本：", "，".join(small))
+```
+::::
+
 ## 选择图像表示与训练目标
 
 图像生成器首先要选择在哪个空间建模：
@@ -158,32 +213,7 @@ $$
 
 其中，$N_{\mathrm{video}}$ 是 Transformer 位置数；$d_t,d_h,d_w$ 是自编码器压缩因子；$p_t,p_h,p_w$ 是以潜网格单元计量的 Transformer 块尺寸。通道数只影响每个位置的宽度，这个序列数保持不变。这个公式按位置数核算成本，质量需要另外测量。
 
-下面的可运行示例复现 Movie Gen 公布的最大视频上下文：16 秒、每秒 16 帧、每帧 768×768 像素。时空自编码器在每条轴上压缩八倍，Transformer 再把每个 2×2 空间潜单元组合成一个位置。
-
-:::: {.runnable}
-```python
-frames, height, width = 16 * 16, 768, 768
-compression = (8, 8, 8)
-patch = (1, 2, 2)
-
-latent = tuple(
-    size // stride
-    for size, stride in zip((frames, height, width), compression)
-)
-tokens = (
-    latent[0] // patch[0]
-    * latent[1] // patch[1]
-    * latent[2] // patch[2]
-)
-raw_positions = frames * height * width
-latent_positions = latent[0] * latent[1] * latent[2]
-
-print(f"原始时空位置：{raw_positions:,}")
-print(f"潜空间位置：{latent_positions:,}")
-print(f"Transformer 词元：{tokens:,}")
-print(f"位置数缩减：{raw_positions // tokens:,} 倍")
-```
-::::
+以 Movie Gen 公布的最大视频上下文为例：16 秒、每秒 16 帧、每帧 768×768 像素；其时空自编码器在每条轴上压缩八倍，Transformer 再把每个 2×2 空间潜单元组合成一个位置。序列长度因此为 $32\times48\times48=73{,}728$ 个位置，比约 1.51 亿个原始时空位置少 2,048 倍。
 
 早期视频扩散设计用时空分解的 3D UNet 扩展图像模型 [@ho2022videodiffusion]。扩散 Transformer，也就是 @gls-dit，则把 Transformer 块作用于潜块；原始 DiT 研究在 ImageNet 实验中显示，模型计算量增加时质量也随之改善 [@peebles2022dit]。Sora 的 2024 年技术报告介绍了作用于时空潜块且支持可变视频形状的扩散 Transformer，但公开信息不足以复现该系统 [@brooks2024sora]。
 

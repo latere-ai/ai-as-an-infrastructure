@@ -1,5 +1,5 @@
 // Three decoders on one round clock, for the non-autoregressive chapter's
-// dependency table and its runnable (L = 128, K = 8, B = 16):
+// dependency table (L = 128, K = 8, B = 16):
 //
 // - Autoregression reveals one position per round and reads every earlier
 //   position from the causal KV cache: L dependent rounds, L positions scored.
