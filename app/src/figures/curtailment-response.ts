@@ -39,7 +39,8 @@ const labels = {
     x: "minutes from the start of the curtailment window",
     lgRequest: "requested reduction",
     lgDelivered: "delivered",
-    lgStorage: "storage",
+    lgStorage: "storage discharge",
+    lgRecharge: "storage recharge",
     lgRebound: "rebound above baseline",
     lgGrid: "draw from the grid",
     lgLoad: "site load",
@@ -64,7 +65,8 @@ const labels = {
     x: "距限电窗口开始的分钟数",
     lgRequest: "要求削减的部分",
     lgDelivered: "实际兑现",
-    lgStorage: "储能",
+    lgStorage: "储能放电",
+    lgRecharge: "储能充电",
     lgRebound: "高于基线的反弹",
     lgGrid: "电网取电",
     lgLoad: "厂址负荷",
@@ -179,9 +181,13 @@ function render(st: State<P>, lang: Lang): string {
   const items = [
     { label: L.lgRequest, swatch: { kind: "rect" as const, fill: "none", stroke: C.ink2, dash: "3 2" } },
     { label: L.lgDelivered, swatch: { kind: "rect" as const, fill: C.c1, opacity: 0.45 } },
-    ...(p.storage > 0 ? [{ label: L.lgStorage, swatch: { kind: "rect" as const, fill: C.c3, opacity: 0.6 } }] : []),
-    { label: L.lgRebound, swatch: { kind: "rect" as const, fill: C.c2, opacity: 0.45 } },
+    ...(p.storage > 0 ? [
+      { label: L.lgStorage, swatch: { kind: "rect" as const, fill: C.c3, opacity: 0.6 } },
+      { label: L.lgRecharge, swatch: { kind: "rect" as const, fill: C.c3, pattern: hatchId } },
+    ] : []),
+    ...(m.reboundPeak > 0 ? [{ label: L.lgRebound, swatch: { kind: "rect" as const, fill: C.c2, opacity: 0.45 } }] : []),
     { label: L.lgGrid, swatch: { kind: "line" as const, stroke: C.ink } },
+    { label: tpl(L.base, { p: p.base }), swatch: { kind: "line" as const, stroke: C.ink3, dash: "5 3" } },
     ...(p.storage > 0 ? [{ label: L.lgLoad, swatch: { kind: "line" as const, stroke: C.ink2, dash: "4 3" } }] : []),
   ];
   const lg = legend(items, 0, 0, w, fs);
@@ -250,13 +256,11 @@ function render(st: State<P>, lang: Lang): string {
   parts.push(el("line", { x1: left, x2: w - right, y1: y(p.base), y2: y(p.base), stroke: C.ink3, "stroke-width": 1, "stroke-dasharray": "5 3" }));
   for (const q of placed.slice(1)) {
     const ly = top - 8 - q.row * rowStep;
-    parts.push(el("line", { x1: q.xx, x2: q.xx, y1: ly + 3, y2: bottom, stroke: C.ink3, "stroke-width": 1 }));
+    parts.push(el("line", { x1: q.xx, x2: q.xx, y1: q.row === 0 ? ly + 3 : top, y2: bottom, stroke: C.ink3, "stroke-width": 1 }));
     parts.push(text(q.x0, ly, q.name, { "font-size": fs, class: "fig-t-halo fig-t-soft" }));
   }
   if (p.storage > 0) parts.push(el("path", { d: linePath(all.map((i) => [x(m.t[i]), y(m.load[i])])), fill: "none", stroke: C.ink2, "stroke-width": 1.2, "stroke-dasharray": "4 3" }));
   parts.push(el("path", { d: linePath(all.map((i) => [x(m.t[i]), y(m.grid[i])])), fill: "none", stroke: C.ink, "stroke-width": 2, "stroke-linejoin": "round" }));
-  const bl = tpl(L.base, { p: p.base });
-  parts.push(text(w - right - 2, y(p.base) + fs + 5, bl, { "font-size": fs, "text-anchor": "end", class: "fig-t-halo fig-t-soft fig-t-num" }));
 
   // Readout.
   let yy = bottom + axisHeight(true, fs) + 18;
