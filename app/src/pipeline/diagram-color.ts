@@ -75,13 +75,16 @@ const SLOT_HUES = CATEGORICAL_HEX.map((hex) => hsl(parse(hex)!).h);
 // Warm off-whites such as the book's #f1ece1 box fill sit just under this
 // chroma and read as neutral; the palest tints in use (#cfe8cf) sit above it.
 const NEUTRAL_CHROMA = 0.095;
+// Dark slate grays such as #374151 carry a little more chroma but still read
+// as gray ink, not as a hue; every dark hue in use sits well above this.
+const DARK_NEUTRAL_CHROMA = 0.14;
 
 // The role a color plays, or null for none, transparent, and paint servers.
 export function colorRole(value: string, use: Use): string | null {
   const rgb = parse(value);
   if (!rgb) return null;
   const { h, l, chroma } = hsl(rgb);
-  if (chroma < NEUTRAL_CHROMA) {
+  if (chroma < NEUTRAL_CHROMA || (l < 0.5 && chroma < DARK_NEUTRAL_CHROMA)) {
     if (use === "text") return l < 0.22 ? "ink" : l < 0.52 ? "ink2" : l < 0.8 ? "ink3" : "paper";
     if (l >= 0.955) return "paper";
     if (l >= 0.8) return "panel";

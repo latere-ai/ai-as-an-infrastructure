@@ -118,6 +118,8 @@ test("colors map to theme roles by job, for any color", () => {
   expect(colorRole("white", "fill")).toBe("paper");
   expect(colorRole("#6b7280", "stroke")).toBe("ink3");
   expect(colorRole("#6b7280", "text")).toBe("ink2");
+  expect(colorRole("#374151", "text")).toBe("ink2");
+  expect(colorRole("#374151", "stroke")).toBe("ink2");
   expect(colorRole("black", "text")).toBe("ink");
   expect(colorRole("#3b82f6", "stroke")).toBe("c1");
   expect(colorRole("#dbeafe", "fill")).toBe("c1t");
