@@ -48,4 +48,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "horizon-threshold": () => import("./horizon-threshold.ts"),
   "benchmark-headroom": () => import("./benchmark-headroom.ts"),
   "paired-comparison": () => import("./paired-comparison.ts"),
+  "binomial-interval": () => import("./binomial-interval.ts"),
 };
