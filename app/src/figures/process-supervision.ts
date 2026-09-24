@@ -31,7 +31,7 @@ import { normalQuantile } from "./lib/stats.ts";
 import { svg, el, text, g } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
 import { textWidth } from "./lib/labels.ts";
-import { subText, subWidth } from "./lib/subscript.ts";
+import { mathText, mathWidth } from "./lib/math-text.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { fixed, tpl } from "./lib/format.ts";
 
@@ -286,10 +286,10 @@ function render(st: State<P>, lang: Lang): string {
   const xAgg = xCheck + checkW + gap;
   // Header.
   const hy = y + size;
-  for (let t = 0; t < T; t++) parts.push(subText(xStep(t) + cellW / 2, hy, tpl(L.step, { t: t + 1 }), { "font-size": size, "text-anchor": "middle", class: "fig-t-muted" }));
+  for (let t = 0; t < T; t++) parts.push(mathText(xStep(t) + cellW / 2, hy, tpl(L.step, { t: t + 1 }), { "font-size": size, "text-anchor": "middle", class: "fig-t-muted" }));
   parts.push(text(xY + yW / 2, hy, L.y, { "font-size": size, "text-anchor": "middle", class: "fig-t-muted" }));
   parts.push(text(xCheck + checkW / 2, hy, L.check, { "font-size": size, "text-anchor": "middle", class: "fig-t-muted" }));
-  parts.push(subText(narrow ? xAgg + aggW : xAgg, hy, narrow ? ruleName(p.agg, L) : tpl(L.agg, { rule: ruleName(p.agg, L) }), { "font-size": size, "text-anchor": narrow ? "end" : "start", class: "fig-t-muted" }));
+  parts.push(mathText(narrow ? xAgg + aggW : xAgg, hy, narrow ? ruleName(p.agg, L) : tpl(L.agg, { rule: ruleName(p.agg, L) }), { "font-size": size, "text-anchor": narrow ? "end" : "start", class: "fig-t-muted" }));
   y = hy + 8;
   const aggMax = Math.max(...m.agg, 1e-9);
   for (let i = 0; i < N; i++) {
@@ -336,9 +336,9 @@ function render(st: State<P>, lang: Lang): string {
   ];
   let lx = 0, ly = y + size;
   for (const [lab, sw] of items) {
-    const iw = 22 + subWidth(lab, size);
+    const iw = 22 + mathWidth(lab, size);
     if (lx > 0 && lx + iw > w) { lx = 0; ly += size + 8; }
-    parts.push(sw(lx, ly), subText(lx + 22, ly, lab, { "font-size": size, fill: C.ink2 }));
+    parts.push(sw(lx, ly), mathText(lx + 22, ly, lab, { "font-size": size, fill: C.ink2 }));
     lx += iw + 16;
   }
   y = ly + 18;
@@ -346,7 +346,7 @@ function render(st: State<P>, lang: Lang): string {
   // ---- the focused solution, step by step
   const c = m.cands[m.focus];
   const r = m.scores[m.focus];
-  for (const ln of wrapText(tpl(L.detail, { i: m.focus + 1, y: c.y, r: c.pass ? 1 : 0 }), TYPE.label, w)) { y += TYPE.label + 4; parts.push(subText(0, y, ln, { "font-size": TYPE.label, class: "fig-t-strong" })); }
+  for (const ln of wrapText(tpl(L.detail, { i: m.focus + 1, y: c.y, r: c.pass ? 1 : 0 }), TYPE.label, w)) { y += TYPE.label + 4; parts.push(mathText(0, y, ln, { "font-size": TYPE.label, class: "fig-t-strong" })); }
   y += 6;
   const eqW = narrow ? 104 : 118;
   const scoreW = narrow ? 88 : 150;
@@ -355,7 +355,7 @@ function render(st: State<P>, lang: Lang): string {
     const { op, k } = OPS[t];
     const lineY = y + size + 4;
     const eq = `${s.input} ${op} ${k} = ${s.claimed}`;
-    parts.push(subText(0, lineY, tpl(L.stepName, { t: t + 1 }), { "font-size": size, class: "fig-t-muted" }));
+    parts.push(mathText(0, lineY, tpl(L.stepName, { t: t + 1 }), { "font-size": size, class: "fig-t-muted" }));
     parts.push(text(26, lineY, eq, { "font-size": size, class: s.valid ? "fig-t-num" : "fig-t-num fig-t-strong" }));
     if (!s.valid) parts.push(el("rect", { x: 22, y: lineY - size, width: textWidth(eq, size) + 14, height: size + 6, rx: 3, fill: "none", stroke: C.bad, "stroke-width": 1.5 }));
     const note = s.valid ? L.valid : tpl(L.wrong, { a: s.input, op, k, v: apply(s.input, t) });
@@ -367,7 +367,7 @@ function render(st: State<P>, lang: Lang): string {
     parts.push(el("rect", { x: bx, y: lineY - 10, width: bw, height: 11, rx: 2, fill: C.panel }));
     parts.push(el("rect", { x: bx, y: lineY - 10, width: Math.max(1, r[t] * bw), height: 11, rx: 2, fill: C.c1 }));
     parts.push(el("line", { x1: bx + bw / 2, x2: bx + bw / 2, y1: lineY - 13, y2: lineY + 4, stroke: C.ink2, "stroke-width": 1, "stroke-dasharray": "2 2" }));
-    parts.push(subText(w, lineY, `r_${t + 1} ${fixed(r[t], 2)}`, { "font-size": size, "text-anchor": "end", class: "fig-t-num" }));
+    parts.push(mathText(w, lineY, `r_${t + 1} ${fixed(r[t], 2)}`, { "font-size": size, "text-anchor": "end", class: "fig-t-num" }));
     y = lineY + 8;
   }
   y += 4;
@@ -376,7 +376,7 @@ function render(st: State<P>, lang: Lang): string {
     [c.firstError >= 0 ? tpl(L.firstTrue, { t: c.firstError + 1, f: lo >= 0 ? `z_${lo + 1}` : L.none }) : tpl(L.firstNone, { f: lo >= 0 ? `z_${lo + 1}` : L.none }), ""],
     [tpl(L.aggRow, { a: fixed(aggregate(r, "min"), 2), b: fixed(aggregate(r, "product"), 2), c: fixed(aggregate(r, "last"), 2) }), "fig-t-num fig-t-muted"],
   ] as const;
-  for (const [s, cls] of tail) for (const ln of wrapText(s, size, w)) { y += size + 5; parts.push(subText(0, y, ln, { "font-size": size, class: cls || undefined })); }
+  for (const [s, cls] of tail) for (const ln of wrapText(s, size, w)) { y += size + 5; parts.push(mathText(0, y, ln, { "font-size": size, class: cls || undefined })); }
   y += 14;
 
   // ---- what each supervision signal sees across the eight solutions
@@ -386,7 +386,7 @@ function render(st: State<P>, lang: Lang): string {
     tpl(L.rates, { r: fixed(p.verr, 2), ...confusion(m) }),
   ];
   sum.forEach((s, k) => {
-    for (const ln of wrapText(s, size, w)) { y += size + 5; parts.push(subText(0, y, ln, { "font-size": size, class: k < 2 ? "fig-t-strong" : "fig-t-muted" })); }
+    for (const ln of wrapText(s, size, w)) { y += size + 5; parts.push(mathText(0, y, ln, { "font-size": size, class: k < 2 ? "fig-t-strong" : "fig-t-muted" })); }
   });
   return svg(w, y + 6, describe(st, lang), g({}, ...parts));
 }

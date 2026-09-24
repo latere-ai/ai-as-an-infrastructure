@@ -22,7 +22,7 @@ import { legend } from "./lib/legend.ts";
 import { placeLabels, drawLabels, lineObstacles, textWidth, type Box } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { compact, int, tpl } from "./lib/format.ts";
-import { subText } from "./lib/subscript.ts";
+import { mathText } from "./lib/math-text.ts";
 
 const D_MAX = 10;
 const Y_MAX = 1e8;
@@ -181,7 +181,7 @@ function render(st: State<P>, lang: Lang): string {
   const rb = m.db >= m.D ? tpl(L.reachBeamAll, { D: m.D, n: int(m.nb) }) : m.db < 0 ? "" : tpl(L.reachBeam, { d: m.db, D: m.D, n: int(beamCount(m.b, m.w, m.db)) });
   for (const [s, cls] of [[full, "fig-t-num"], [beam, "fig-t-num"], [rf, "fig-t-strong"], [rb, "fig-t-strong"]] as const) {
     if (!s) continue;
-    for (const ln of lines(s, size, w)) { y += size + 5; parts.push(subText(0, y, ln, { "font-size": size, class: cls })); }
+    for (const ln of lines(s, size, w)) { y += size + 5; parts.push(mathText(0, y, ln, { "font-size": size, class: cls })); }
   }
   y += 18;
 

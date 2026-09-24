@@ -41,6 +41,7 @@ import { axis, axisHeight } from "./lib/axis.ts";
 import { legend } from "./lib/legend.ts";
 import { textWidth } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
+import { mathText } from "./lib/math-text.ts";
 import { fixed, pct, tpl } from "./lib/format.ts";
 
 // ---------------------------------------------------------------- tree
@@ -478,7 +479,7 @@ function dotLegend(items: Array<{ label: string; hollow: boolean; fill: string }
     parts.push(it.hollow
       ? el("circle", { cx: x + 4.5, cy, r: 4, fill: C.paper, stroke: it.fill, "stroke-width": 1.3 })
       : el("circle", { cx: x + 4.5, cy, r: 4.5, fill: it.fill }));
-    parts.push(text(x + 14, y0 + row * rowH + size, it.label, { "font-size": size, fill: C.ink2 }));
+    parts.push(mathText(x + 14, y0 + row * rowH + size, it.label, { "font-size": size, fill: C.ink2 }));
     x += iw + 16;
   }
   return { svg: g({ class: "fig-legend" }, ...parts), height: (row + 1) * rowH };
@@ -571,7 +572,7 @@ function renderDecision(p: P, run: Run, tr: Tree, t: number, x0: number, y0: num
   else if (!dec.ranked.length) title = L.decisionEmpty;
   else if (p.choice === "check") title = tpl(L.decisionCheck, { k: dec.ranked.filter((l) => tr.ok[l]).length, m: dec.ranked.length });
   else title = tpl(L.decisionFinal, { m: dec.ranked.length });
-  for (const line of wrapText(title, TYPE.label, w, lang)) { y += TYPE.label + 3; parts.push(text(x0, y, line, { "font-size": TYPE.label, class: "fig-t-strong" })); }
+  for (const line of wrapText(title, TYPE.label, w, lang)) { y += TYPE.label + 3; parts.push(mathText(x0, y, line, { "font-size": TYPE.label, class: "fig-t-strong" })); }
   y += 6;
   const lg = dotLegend([
     { label: L.trueValue, hollow: true, fill: C.ink2 },
@@ -629,7 +630,7 @@ function renderDecision(p: P, run: Run, tr: Tree, t: number, x0: number, y0: num
   const rows: Array<[string, number]> = [[L.eqTop, ranked[0]]];
   if (holdsIdx > 0) rows.push([tpl(L.eqBest, { r: holdsIdx + 1 }), ranked[holdsIdx]]);
   y += size + 6;
-  parts.push(text(cH, y, "v̂", { "font-size": size, "text-anchor": "end", class: "fig-t-muted" }));
+  parts.push(mathText(cH, y, "v̂", { "font-size": size, "text-anchor": "end", class: "fig-t-muted" }));
   parts.push(text(cH + 6, y, "=", { "font-size": size, class: "fig-t-muted" }));
   parts.push(text(cS, y, "v*", { "font-size": size, "text-anchor": "end", class: "fig-t-muted" }));
   parts.push(text(cS + 6, y, "+", { "font-size": size, class: "fig-t-muted" }));
@@ -757,7 +758,7 @@ export default defineFigure({
     },
     noise: {
       kind: "range", label: { en: "Evaluator error σ", zh: "评估器误差 σ" }, min: 0, max: 0.6, step: 0.05, default: 0.4,
-      marks: [{ value: 0, label: { en: "exact, v̂ = v*", zh: "精确，v̂ = v*" } }],
+      marks: [{ value: 0, label: { en: "exact value", zh: "精确价值" } }],
     },
     choice: {
       kind: "choice", label: { en: "Final choice", zh: "最终选择" }, default: "score",
