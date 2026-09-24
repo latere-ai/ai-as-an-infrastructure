@@ -10,6 +10,21 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- The Codex and Manuscript layouts rendered the same 640 px column at the
+  default text size, because both widths fell below the column's minimum.
+  Codex, the default, is now 756 px in English and 720 px in Chinese, and
+  Manuscript 666 px and 648 px.
+- The sidebar, breadcrumb and section labels use the body typeface instead
+  of monospace, and part headings are the same size as the chapter titles
+  under them, set in bold.
+
+### Changed
+
+- Search opens with the pages read most recently, or starting pages on a
+  first visit, and a row of suggested topics.
+
 ## v0.8.0 - 2026-09-24
 
 ### Changed
