@@ -246,7 +246,7 @@ function operating(p: P, lang: Lang, x0: number, y0: number, pw: number): Block 
   for (const ln of lines(L.curveTitle, TYPE.label, pw, lang)) { y += 16; parts.push(text(x0, y, ln, { "font-size": TYPE.label, class: "fig-t-strong" })); }
   const left = 40, right = 8;
   const top = y + 30;
-  const side = Math.min(pw - left - right, 240);
+  const side = Math.min(pw - left - 22, 240); // room for the last tick label
   const x = linear([0, 1], [x0 + left, x0 + left + side]);
   const ys = linear([0, 1], [top + side, top]);
   const tk = [0, 0.2, 0.4, 0.6, 0.8, 1];
