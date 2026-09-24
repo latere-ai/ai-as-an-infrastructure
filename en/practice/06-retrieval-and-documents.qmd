@@ -169,6 +169,66 @@ precision/recall, and provenance-locator accuracy are measured separately.
 Low-confidence, high-impact cases go to human review, and the review rate is
 recorded as its own figure rather than hidden in a single score.
 
+### Parsers by architecture
+
+The candidates for that evaluation fall into three architectures. A classic
+pipeline chains layout detection, OCR, table reconstruction, and reading-order
+assembly as separate stages; it is deterministic and debuggable, and brittle on
+unusual layouts. An end-to-end document VLM, usually a small model of one or
+two billion parameters or fewer, emits the whole page as Markdown, HTML tables,
+or LaTeX in one pass; it runs on the same serving fleet as other models
+(@sec-serving-stack) and is harder to debug when it drops a column. A hosted
+document platform wraps OCR, a VLM, a correction loop, and structured
+extraction behind an API with a service agreement, trading self-hosting for
+accuracy on hard documents and for compliance terms.
+
+| Tool | Architecture | License and deployment | Fits |
+|---|---|---|---|
+| Docling (IBM) | Pipeline toolkit with swappable OCR and layout models | MIT; self-hosted | A permissive open pipeline with retrieval-ready output |
+| Granite-Docling-258M | End-to-end document VLM, usable inside Docling | Apache 2.0 weights; self-hosted | Low-cost self-hosted conversion |
+| PaddleOCR-VL (Baidu) | End-to-end document VLM | Apache 2.0 weights; self-hosted, served by vLLM | Full-page parsing on GPUs the team operates |
+| DeepSeek-OCR 2, GLM-OCR | End-to-end document VLMs | Apache 2.0 and MIT weights; self-hosted, served by vLLM | Self-hosted layout-aware parsing |
+| MinerU | Pipeline with small models plus a document VLM | Apache 2.0 with added terms that require a commercial license above 100 million monthly active users or USD 20 million monthly revenue | Self-hosted conversion of papers and reports |
+| Marker and Surya (Datalab) | Pipeline | Apache 2.0 code; weights under a modified OpenRAIL-M license that is free for research, personal use, and organizations under USD 5 million in funding or revenue | Research and small teams; larger commercial use needs a weight license |
+| unstructured | Pipeline across many source formats | Apache 2.0 library, plus a hosted platform | Format sprawl across many source types, more than the single hardest PDF |
+| Mistral OCR | Hosted OCR model | Commercial API, priced per page | A hosted API with a flat per-page price |
+| LlamaParse (LlamaIndex) | Hosted platform with parse tiers from cost-effective to agentic | Hosted, credit-based | Teams on LlamaIndex that want tiered parsing and schema extraction |
+| Reducto | Hosted platform with parse, extract, split, and edit endpoints | Hosted; zero data retention, a business associate agreement, and EU or Australian residency on higher plans | Hard enterprise documents under compliance constraints |
+| Azure AI Document Intelligence, Amazon Textract, Google Document AI | Managed OCR with prebuilt extractors | Managed, priced per page | Teams already in that cloud that need a prebuilt invoice, receipt, or identity extractor |
+
+The table follows each project's repository, model card, or product page
+[@docling2026repo; @granitedocling2026card; @paddleocrvl2026card;
+@deepseekocr2026card; @glmocr2026card; @mineru2026license; @marker2026repo;
+@unstructured2026repo; @mistral2026ocr; @llamaindex2026pricing;
+@reducto2026pricing]. One candidate is missing from it on purpose: a general
+frontier VLM can parse a page with no pipeline at all, and most comparisons
+include one as the baseline. It costs more per page than a small document VLM
+and can drop content on dense tables, so it enters the same per-stratum
+evaluation as the specialists rather than serving as a default.
+
+The choice turns on four axes: how hard the documents are, whether data may
+leave the team's environment, volume and per-page cost, and compliance terms. A
+two-tier arrangement covers most corpora. The default tier is a self-hosted
+pipeline with a small document VLM on the team's own serving stack, which keeps
+data in place and has no per-page bill. An escalation tier sends the pages that
+the evaluation flags as low-confidence, such as dense tables, handwriting, and
+poor scans, to a hosted platform. A team without GPUs makes a hosted OCR API the
+default tier and escalates in the same way.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Docling's latest release is 2.130.0, MinerU's is 4.0.7, Marker's is 2.0.0,
+and unstructured's is 0.27.8 [@docling2026repo; @mineru2026license;
+@marker2026repo; @unstructured2026repo]. PaddleOCR-VL has reached version 1.6
+[@paddleocrvl2026card]. vLLM serves PaddleOCR-VL, DeepSeek-OCR and DeepSeek-OCR
+2, GLM-OCR, and dots.ocr [@vllm2026supportedmodels]. Mistral's current OCR
+model, OCR 4.1, costs $4 per 1,000 pages and $5 per 1,000 annotated pages
+[@mistral2026ocr]. LlamaParse bills in credits at $1.25 per 1,000 credits, with
+Cost Effective, Agentic, and Agentic Plus parse tiers and an automatic mode that
+routes each page to a tier [@llamaindex2026pricing].
+:::
+
 ### Structured extraction has two kinds of validity
 
 JSON Schema can prove that output has the permitted shape and types, but it
@@ -178,6 +238,47 @@ wrong total. Each field therefore keeps an evidence selector and an explicit
 missing or ambiguous. Domain postconditions such as subtotal arithmetic, date
 ranges, identifier checksums, and cross-field consistency check the extracted
 values. Automatic retries must not turn uncertainty into fabricated certainty.
+
+Shape validity can come from the decoder or from a parser after it, and the
+choice depends on whether the team controls the decoder.
+
+| Library | Mechanism | Fits |
+|---|---|---|
+| XGrammar, Outlines, llguidance | Constrained decoding: the server masks tokens that would break the schema, so every output parses | Self-hosted models on vLLM or SGLang, where the schema is enforced during generation |
+| Instructor | Pydantic validation and automatic retry around a provider SDK | Hosted models, where validation happens after generation |
+| BAML | A schema language whose generated client parses near-JSON output and repairs broken JSON | Models that return malformed but recoverable JSON |
+
+The mechanisms follow each project's documentation [@xgrammar2026repo;
+@outlines2026repo; @instructor2026repo; @baml2026docs].
+
+On a self-hosted server, parsing a page image and extracting a schema-valid
+object can be one request. vLLM accepts the OpenAI `response_format` field with
+a JSON Schema and enforces it with one of its structured-output backends:
+
+```python
+# Page image in, schema-valid invoice out, from a document VLM served by vLLM.
+resp = client.chat.completions.create(
+    model="PaddlePaddle/PaddleOCR-VL",
+    messages=[{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": page_png_data_uri}},
+        {"type": "text", "text": "Extract the invoice fields as JSON."}]}],
+    response_format={"type": "json_schema", "json_schema": {
+        "name": "invoice", "schema": Invoice.model_json_schema()}},
+)
+invoice = Invoice.model_validate_json(resp.choices[0].message.content)
+# Shape is now guaranteed; the postconditions above still check the values.
+```
+
+::: {.callout-note .dated}
+## As of September 2026
+
+vLLM's structured outputs use XGrammar, llguidance, Outlines, or
+lm-format-enforcer as backends, and the older `guided_json` family of request
+fields was removed in vLLM 0.12.0 in favor of `response_format` or a
+`structured_outputs` field [@vllm2026structuredoutputs]. The latest releases are
+XGrammar 0.2.8, Outlines 1.3.3, and Instructor 1.17.0 [@xgrammar2026repo;
+@outlines2026repo; @instructor2026repo].
+:::
 
 ### Visual retrieval is an evaluated alternative
 
@@ -247,6 +348,51 @@ decision for subject $s$ at time $t$. Retrieval returns top-k only from $U$.
 Missing or invalid policy metadata fails closed. The wrong tenant must never
 appear in candidates, reranker input, debug output, traces, or caches; this is
 the retrieval analog of @sec-security-authorization.
+
+The cell below compares the two orders on random unit vectors, with exact
+search so that only the filter order differs. A caller may read a share `share`
+of the corpus. Post-filtering takes the global top `depth` and then drops what
+the caller may not read; pre-filtering ranks only inside $U$. The hits that
+survive the post-filter are correct, the true best authorized documents, but
+about $\mathrm{depth}\cdot\mathrm{share}$ of them survive, so at a 2 percent
+share the caller receives about a fifth of the $k$ results it asked for, while
+nearly every candidate that was scored belonged to someone else. Raising
+`depth` until $\mathrm{depth}\cdot\mathrm{share}\ge k$ fills the result, at the
+cost of scoring still more foreign documents. With an approximate index, the
+surviving hits are also no longer guaranteed to be the best authorized ones,
+which is why the index section below measures an approximate index's recall
+against the exact eligible top-k at each filter selectivity.
+
+:::: {.runnable}
+```python
+import numpy as np
+
+rng = np.random.default_rng(0)
+n, dim, k, depth = 20_000, 32, 10, 100
+share = 0.02            # fraction of the corpus this caller may read
+
+docs = rng.normal(size=(n, dim))
+docs /= np.linalg.norm(docs, axis=1, keepdims=True)
+allowed = rng.random(n) < share
+queries = rng.normal(size=(100, dim))
+sims = queries @ docs.T
+
+# Post-filter: take the global top `depth`, then drop what the caller may not read.
+top = np.argsort(-sims, axis=1)[:, :depth]
+post = [row[allowed[row]][:k] for row in top]
+# Pre-filter: rank only inside the authorized universe U.
+ids = np.flatnonzero(allowed)
+pre = ids[np.argsort(-sims[:, ids], axis=1)[:, :k]]
+
+fill = np.mean([len(p) for p in post]) / k
+touched = np.mean([np.sum(~allowed[row]) for row in top])
+print(f"post-filter fill {fill:.0%} of k={k} (depth*share/k = {depth * share / k:.0%})")
+print(f"pre-filter fill  {np.mean([len(q) for q in pre]) / k:.0%}")
+print(f"other-tenant candidates scored per query: {touched:.0f} of {depth}")
+assert all(set(p) <= set(q) for p, q in zip(post, pre))  # correct, only too few
+assert all(len(q) == k for q in pre)
+```
+::::
 
 ```{dot}
 //| label: fig-retrieval-query
@@ -319,6 +465,42 @@ model names do not establish compatibility. Query encoding and index selection
 switch together in one atomic routing change, even when models are served
 through the gateway described in @sec-serving-stack.
 
+### Embedding and reranking models
+
+The index returns what the embedding model encoded, and the reranker decides
+the final order, so improving these two models often does more for retrieval
+than changing the vector store. The current candidates divide into hosted APIs
+and open weights.
+
+| Model | Provider | Access | Relevant properties |
+|---|---|---|---|
+| text-embedding-3-large, text-embedding-3-small | OpenAI | API | 3,072 and 1,536 dimensions, shortened with a `dimensions` parameter; 8,192-token input |
+| embed-v4.0 | Cohere | API | Text, images, and mixed documents such as PDFs; 128K context; 256 to 1,536 dimensions |
+| voyage-4-large, voyage-4, voyage-4-lite, voyage-4-nano | Voyage AI (MongoDB) | API; voyage-4-nano also as Apache 2.0 weights | 32K context; every model in the series shares one embedding space; a code variant, voyage-code-4 |
+| gemini-embedding-2 | Google | API | Text, images, video, audio, and PDF pages in one embedding space; 3,072 dimensions, truncatable |
+| Qwen3-Embedding (0.6B to 8B) | Alibaba | Apache 2.0 weights | More than 100 languages; 32K context; matching Qwen3 rerankers |
+| BGE-M3 | BAAI | MIT weights | Dense, sparse, and multi-vector retrieval from one model; up to 8,192 tokens |
+| rerank-v4.0-pro, rerank-v4.0-fast | Cohere | API | Multilingual rerankers over text and JSON; 32K context |
+| rerank-2.5, rerank-3 | Voyage AI | API | 32K context; rerank-3 in preview |
+| mxbai-rerank-large-v2 | Mixedbread | Apache 2.0 weights | Multilingual cross-encoder reranker for self-hosting |
+
+The entries follow each provider's model documentation [@openai2026embeddings;
+@cohere2026models; @voyage2026embeddings; @voyage2026rerankers;
+@google2026geminiembedding; @qwen2026embedding; @bge2024m3;
+@mixedbread2026rerank]. A shared embedding space across a model series, as in
+Voyage 4, lets a team embed documents with a large model and queries with a
+small one; outside such a declared family, the compatibility contract above
+still applies. Hosted and open models are interchangeable at the gateway only
+in the sense that the call routes the same way. Swapping a hosted embedding
+model for an open one is still a new embedding space and therefore a new index
+generation.
+
+A common progression starts with a hosted embedding model and a hosted reranker,
+because the reranker is usually the largest single quality gain for its cost,
+and moves to open weights when data residency, self-hosting, or a language the
+hosted models serve poorly requires it. Leaderboards shortlist candidates; the
+ablations above decide.
+
 ### Fuse ranked lists by position
 
 Sparse, dense, and visual scores are usually not calibrated to one another.
@@ -359,6 +541,44 @@ def reciprocal_rank_fusion(ranked_lists, k0, weights=None):
     return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
 ```
 
+Cormack and colleagues fixed $k_0=60$ [@cormack2009rrf], and that value remains
+the usual starting point before tuning. A small $k_0$ lets the top of each list
+dominate; a large one flattens the weights so that agreement across lists
+counts for more. Common starting depths are 50 to 100 fused candidates into the
+reranker and 5 to 10 reranked results into the context, subject to the same
+validation.
+
+In Postgres with pgvector, a hybrid query with fusion is a single statement.
+The sparse side here uses Postgres full-text ranking, which is a lexical score
+but not BM25; a BM25 extension or a search engine would replace that subquery.
+
+```sql
+-- chunks(id, content, embedding vector(1024), tsv tsvector): a view that
+-- row-level security already restricts to the caller's authorized universe U
+WITH dense AS (                      -- 100 nearest by cosine distance (<=>)
+  SELECT id, ROW_NUMBER() OVER (ORDER BY dist) AS r
+  FROM (SELECT id, embedding <=> :query_vec AS dist
+        FROM chunks ORDER BY embedding <=> :query_vec LIMIT 100) d
+),
+sparse AS (                          -- 100 best by full-text rank
+  SELECT id, ROW_NUMBER() OVER (ORDER BY score DESC) AS r
+  FROM (SELECT id, ts_rank_cd(tsv, q) AS score
+        FROM chunks, plainto_tsquery('english', :q) AS q
+        WHERE tsv @@ q ORDER BY score DESC LIMIT 100) s
+)
+SELECT c.id, c.content,              -- reciprocal rank fusion, k0 = 60
+       COALESCE(1.0 / (60 + d.r), 0) + COALESCE(1.0 / (60 + s.r), 0) AS rrf
+FROM dense d
+FULL OUTER JOIN sparse s ON s.id = d.id
+JOIN chunks c ON c.id = COALESCE(d.id, s.id)
+ORDER BY rrf DESC, c.id
+LIMIT 50;                            -- to the reranker
+```
+
+Qdrant and Weaviate perform the same fusion inside the engine, and Qdrant's
+documentation describes RRF as the safe default for combining dense and sparse
+results [@qdrant2026hybrid; @weaviate2026repo].
+
 Reranking and context selection remain separate decisions. Candidate depth,
 rerank depth, final top-k, and the context budget are each measured
 independently, and the reranker runs within its own latency budget and input
@@ -390,6 +610,60 @@ local workload. The comparison covers exact scan, HNSW, DiskANN, inverted-file
 (IVF) indexes, or compression variants under realistic filters, updates,
 concurrency, cache state, and tenant skew, and it reports ANN recall against
 the exact eligible top-k at each important filter selectivity.
+
+### Stores by resource model
+
+Approximate search itself is now available in nearly every store, so the
+stores differ mainly in where the working set lives, what else the system does,
+and who operates it.
+
+| Store | What it is | License | Fits |
+|---|---|---|---|
+| pgvector, with pgvectorscale | Postgres extension with HNSW and IVFFlat indexes; pgvectorscale adds a disk-resident StreamingDiskANN index and label-based filtering | PostgreSQL license | Teams that already run Postgres, up to tens of millions of vectors; transactions, joins, and row-level security come with it |
+| Qdrant | Vector-native engine in Rust with payload filtering, quantization, and hybrid queries | Apache 2.0, plus a managed cloud | A self-hosted vector engine with heavy metadata filtering |
+| Weaviate | Vector-native engine with hybrid search and built-in vectorizer modules | BSD-3-Clause or the Weaviate License, file by file, plus a managed cloud | Hybrid search and embedding generation inside the store |
+| Milvus, Zilliz Cloud | Distributed engine with separate storage and compute for very large collections | Apache 2.0, plus the managed Zilliz Cloud | Hundreds of millions to billions of vectors, with the operations capacity to run it |
+| Pinecone | Managed serverless vector database, with dedicated read nodes and a bring-your-own-cloud option | Proprietary service | Fully managed operation with no infrastructure to run |
+| turbopuffer | Managed search engine that keeps all state in object storage and caches it on NVMe and in memory | Proprietary service, multi-tenant or bring-your-own-cloud | Large, mostly cold corpora or many tenants, where storage cost dominates |
+| LanceDB | Embedded store on the Lance columnar format, for vectors and multimodal data | Apache 2.0, plus a managed cloud | Notebooks, desktop and edge applications, and multimodal pipelines without a server |
+| Chroma | Lightweight open-source store | Apache 2.0, plus a managed cloud | Prototypes and small corpora |
+| Vespa, OpenSearch, Elasticsearch | Search engines with vector search alongside lexical ranking | Apache 2.0 for Vespa and OpenSearch; Elasticsearch under AGPL-3.0, SSPL, or the Elastic License | Retrieval that is really search, or an engine the team already operates |
+
+The table follows each project's repository or documentation
+[@pgvector2025vector; @pgvectorscale2026repo; @qdrant2026repo;
+@weaviate2026repo; @milvus2026repo; @pinecone2026docs; @turbopuffer2026docs;
+@lancedb2026repo; @chroma2026repo; @vespa2026repo; @opensearch2026repo;
+@elasticsearch2026license]. Four trade-offs underlie it and outlast the
+products. Keeping vectors in the existing database removes a system to operate,
+back up, and keep consistent, at some cost in peak search throughput, and for
+most teams that is the right trade. A store that keeps its working set in RAM
+is fast and expensive, while one built on disk-resident graphs or object
+storage accepts slower writes and occasional cold queries for a much lower cost
+on large or cold corpora. A managed store removes operations; a self-hosted one
+gives cost control, data residency, and no per-query markup. When most queries
+filter by tenant, date, or permission, filtered recall and filtered latency
+matter more than raw search speed, which makes the filter strategy the first
+thing to measure.
+
+The default that follows is pgvector in the Postgres the team already runs,
+with pgvectorscale when the corpus grows into tens of millions of vectors. A
+team not on Postgres starts with a self-hosted vector engine, and a team that
+will run no infrastructure starts with a managed service, choosing object
+storage when cost at scale or tenant count dominates. Changing the store later
+is a new index generation under the release process above, so the choice is
+reversible as long as the manifest records it.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+The latest releases are pgvector 0.8.6, pgvectorscale 0.9.1, Qdrant 1.19.1,
+Weaviate 1.39.6, Milvus 3.0.2, LanceDB 0.39.0, Chroma 1.5.9, OpenSearch 3.8.0,
+and Elasticsearch 9.5.4 [@pgvector2025vector; @pgvectorscale2026repo;
+@qdrant2026repo; @weaviate2026repo; @milvus2026repo; @lancedb2026repo;
+@chroma2026repo; @opensearch2026repo; @elasticsearch2026license].
+turbopuffer reports a p90 write latency of 248 ms for 512 KB upserts, the cost
+of writing directly to object storage [@turbopuffer2026docs].
+:::
 
 A release manifest can be small and still prevent accidental mixing:
 
@@ -488,6 +762,27 @@ used to grade answers, are calibrated against a stable human-reviewed sample.
 Frameworks such as RAGAs can help automate measurement; the product threshold
 comes from the release contract [@es2024ragas].
 
+Most teams assemble the pipeline itself from a framework, and the common
+division follows the work. LlamaIndex covers ingestion, parsing connectors,
+indexing, and retrieval. Haystack builds explicit pipelines of typed
+components that can be tested one stage at a time. DSPy treats retrieval and
+prompting as a program whose prompts and few-shot examples are optimized
+against a metric, in place of hand tuning. When retrieval is one tool of an
+agent, the agent framework from @sec-agents-practice owns the loop and calls
+retrieval through a tool. RAGAs, or a tracing and evaluation service such as
+LangSmith [@langsmith2026], is wired in from the first release, because the
+layer metrics above are the only evidence that a framework change helped.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+The latest releases are LlamaIndex 0.14.25, Haystack 3.2.0, DSPy 3.3.1, and
+RAGAs 0.4.3; the RAGAs repository now lives under the vibrantlabsai
+organization [@llamaindex2026repo; @haystack2026repo; @dspy2026repo;
+@ragas2026repo]. All four are open source: LlamaIndex and DSPy under MIT,
+Haystack and RAGAs under Apache 2.0.
+:::
+
 The acceptance suite needs negative cases: wrong tenant, deleted document,
 stale revision, poisoned chunk, malformed table, empty retrieval, duplicate
 chunk, selective-filter underfill, reranker timeout, index failure, and
@@ -545,6 +840,16 @@ product is measured against them. A store, parser, embedding model, or
 reranker is acceptable only when its complete release record meets the local
 contract. There is no defensible universal chunk size, candidate depth, fusion
 constant, vector count threshold, or product default.
+
+The public benchmarks that rank these products are weak evidence for a local
+decision. OmniDocBench, the main document-parsing benchmark, is described as
+saturated in a 2026 LlamaIndex analysis [@liu2026omnidocbench], and public
+parsing leaderboards say little about financial, legal, or insurance documents.
+MTEB scores are not comparable across its English, multilingual, and legacy
+boards, which use different task sets [@mteb2026leaderboard]. Most published
+vector-store latency, throughput, and cost figures are measured by the vendor
+under its own conditions. A leaderboard position therefore shortlists
+candidates, and the local labeled set decides among them.
 :::
 
 ## Further reading
