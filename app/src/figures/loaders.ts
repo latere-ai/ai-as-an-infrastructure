@@ -93,4 +93,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "curation-retention": () => import("./curation-retention.ts"),
   "mixture-ramp": () => import("./mixture-ramp.ts"),
   "phase-record": () => import("./phase-record.ts"),
+  "request-binding": () => import("./request-binding.ts"),
 };
