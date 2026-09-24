@@ -355,50 +355,22 @@ function render(st: State<P>, lang: Lang): string {
   // Curves over p: 1 − (1 − p)^k, the vote, the verifier.
   const pGrid: number[] = [];
   for (let i = 0; i <= 90; i++) pGrid.push(xb.invert(left + ((w - right - left) * i) / 90));
-  const obstaclesB: Box[] = [];
   const curvesB = series.map((s) => {
     const f = s.id === "oracle" ? (q: number) => coverage(q, k)
       : s.id === "vote" ? (q: number) => voteAccuracy(q, p.share, k)
         : (q: number) => verifierAccuracy(q, p.fp, p.noise, k);
     const pts = pGrid.map((q) => [xb(q), yb(f(q))] as [number, number]);
-    obstaclesB.push(...lineObstacles(pts, 5, 3));
     return { s, pts };
   });
   // Rug of the benchmark's problems along the baseline.
   // Problems beyond the axis range sit at its edge.
   for (const q of c.ps) parts.push(el("line", { x1: xb(xb.clamp(q)), x2: xb(xb.clamp(q)), y1: topB + plotHB, y2: topB + plotHB - 7, stroke: C.ink2, "stroke-width": 1 }));
-  obstaclesB.push({ x0: left, y0: topB + plotHB - 9, x1: w - right, y1: topB + plotHB });
   // Where voting flips: the correct answer is as common as the distractor.
   if (p.showVote && p.share > 0) {
     const pStar = p.share / (1 + p.share);
     if (pStar > 0.0005 && pStar < 0.9995) {
       const xs = xb(pStar);
       parts.push(el("line", { x1: xs, x2: xs, y1: topB, y2: topB + plotHB, stroke: C.c2, "stroke-width": 1, "stroke-dasharray": "4 3" }));
-      const bounds = { x0: left + 2, y0: topB + 2, x1: w - right - 2, y1: topB + plotHB - 2 };
-      let spot: { x: number; y: number; a: "start" | "end" } | null = null;
-      for (const fy of [0.06, 0.2, 0.35, 0.5, 0.65, 0.8]) {
-        for (const a of ["start", "end"] as const) {
-          const tx = a === "start" ? xs + 10 : xs - 10, ty = topB + fs + fy * (plotHB - fs - 12);
-          const b = textBox(tx, ty, L.threshold, fs, a);
-          const inside = b.x0 >= bounds.x0 && b.x1 <= bounds.x1 && b.y0 >= bounds.y0 && b.y1 <= bounds.y1;
-          if (inside && !obstaclesB.some((o) => overlaps(o, b))) { spot = { x: tx, y: ty, a }; break; }
-        }
-        if (spot) break;
-      }
-      // No free spot inside: label the line above the plot, clear of the axis title.
-      if (!spot) {
-        const yTitle = textBox(left, topB - 10, L.yB, fs);
-        for (const a of ["start", "end"] as const) {
-          const tx = a === "start" ? xs + 4 : xs - 4;
-          const b = textBox(tx, topB - 10, L.threshold, fs, a);
-          if (b.x0 >= 0 && b.x1 <= w && !overlaps(b, yTitle, 6)) {
-            spot = { x: tx, y: topB - 10, a };
-            parts.push(el("line", { x1: xs, x2: xs, y1: topB - 20, y2: topB, stroke: C.c2, "stroke-width": 1, "stroke-dasharray": "4 3" }));
-            break;
-          }
-        }
-      }
-      if (spot) parts.push(text(spot.x, spot.y, L.threshold, { "font-size": fs, "text-anchor": spot.a, class: "fig-t-halo fig-t-muted" }));
     }
   }
   for (const { s, pts } of curvesB) {
@@ -406,6 +378,11 @@ function render(st: State<P>, lang: Lang): string {
   }
   yy = topB + plotHB + axisHeight(true, fs) + 14;
   parts.push(text(0, yy, p.spread > 0 ? tpl(L.rug, { n: PROBLEMS }) : L.rugOne, { "font-size": fs, class: "fig-t-muted" }));
+  if (p.showVote && p.share > 0) {
+    const th = legend([{ label: L.threshold, swatch: { kind: "line", stroke: C.c2, dash: "4 3" } }], 0, yy + 6, w, fs);
+    parts.push(th.svg);
+    yy += th.height + 2;
+  }
 
   // ---- readout: the value of each selector at k, on a fixed 0 to 1 bar
   yy += 26;
