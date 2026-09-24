@@ -5,7 +5,7 @@
 // framework-free JS; it can be incrementally typed later.
 // Interactive visualizations, client-side. A chapter embeds one with:
 //   ```{=html}
-//   <div class="viz" data-viz="curve" data-family="powerlaw"></div>
+//   <div class="viz" data-viz="outlier-quant"></div>
 //   ```
 // Components init lazily when scrolled into view. Colors are read from the
 // page so they follow the light/dark theme.
@@ -98,95 +98,6 @@
   }
 
   var R = {};
-
-  // Generic single-parameter curve with a slider. Pick a family and labels
-  // via data attributes; no arbitrary code. A family is registered only while
-  // a chapter embeds it.
-  R['curve'] = function (host) {
-    var fam = host.getAttribute('data-family') || 'powerlaw';
-    var xlabel = host.getAttribute('data-xlabel') || 'x';
-    var ylabel = host.getAttribute('data-ylabel') || 'y';
-    var plabel = host.getAttribute('data-plabel') || 'parameter';
-    var pmin = +(host.getAttribute('data-pmin') || 0.1);
-    var pmax = +(host.getAttribute('data-pmax') || 2);
-    var p = +(host.getAttribute('data-p') || 0.5);
-    var logx = host.getAttribute('data-logx') === 'true';
-    var logy = host.getAttribute('data-logy') === 'true';
-    var fns = {
-      powerlaw: function (x, p) { return Math.pow(x, -p); }
-    };
-    var f = fns[fam] || fns.powerlaw;
-    var cv = canvas(host, 260);
-    // Fix the axes across the slider's whole range, then redraw only the curve.
-    // Re-ranging Y to the current curve's own min/max (the old behavior) made
-    // every parameter look identical: the line always filled the box corner to
-    // corner, so the slider appeared to do nothing.
-    var XS = [], i;
-    for (i = 0; i <= 200; i++) XS.push(1 + i * 0.5);
-    var xmin = XS[0], xmax = XS[XS.length - 1];
-    var ymin = Infinity, ymax = -Infinity;
-    for (var k = 0; k <= 20; k++) {
-      var pv = pmin + (pmax - pmin) * k / 20;
-      for (i = 0; i < XS.length; i++) { var yv = f(XS[i], pv); if (yv < ymin) ymin = yv; if (yv > ymax) ymax = yv; }
-    }
-    if (!(ymax > ymin)) ymax = ymin + 1;
-    function formatTick(v) {
-      var a = Math.abs(v);
-      if (a >= 10000 || (a > 0 && a < 0.01)) return v.toExponential(0).replace('+', '');
-      if (a >= 100) return String(Math.round(v));
-      if (a >= 10) return (Math.round(v * 10) / 10).toString();
-      if (a >= 1) return (Math.round(v * 100) / 100).toString();
-      return (Math.round(v * 1000) / 1000).toString();
-    }
-    function linearTicks(min, max) {
-      var out = [];
-      for (var j = 0; j <= 4; j++) out.push(min + (max - min) * j / 4);
-      return out;
-    }
-    function logTicks(min, max) {
-      var lo = Math.max(min, 1e-9), hi = Math.max(max, lo * 1.001), out = [];
-      var start = Math.floor(Math.log(lo) / Math.LN10), end = Math.ceil(Math.log(hi) / Math.LN10);
-      for (var e = start; e <= end; e++) {
-        var v = Math.pow(10, e);
-        if (v >= lo * 0.999 && v <= hi * 1.001) out.push(v);
-      }
-      if (out.length >= 3) return out;
-      out = [];
-      for (var j = 0; j <= 4; j++) out.push(Math.exp(Math.log(lo) + (Math.log(hi) - Math.log(lo)) * j / 4));
-      return out;
-    }
-    function axisScaleLabel(label, isLog) {
-      if (!isLog || /log|对数/i.test(label)) return label;
-      if (/[\u3400-\u9fff]/.test(label)) return /）$/.test(label) ? label.replace(/）$/, '，对数）') : label + '（对数）';
-      return /\)$/.test(label) ? label.replace(/\)$/, ', log scale)') : label + ' (log scale)';
-    }
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
-      var left = 60 * cv.dpr, right = 28 * cv.dpr, top = 22 * cv.dpr, bottom = 52 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      function X(x) { var u = logx ? (Math.log(x) - Math.log(xmin)) / (Math.log(xmax) - Math.log(xmin)) : (x - xmin) / (xmax - xmin); return left + u * (W - left - right); }
-      function Y(y) { var yc = Math.min(ymax, Math.max(ymin, y)); var u = logy ? (Math.log(Math.max(yc, 1e-9)) - Math.log(Math.max(ymin, 1e-9))) / (Math.log(Math.max(ymax, 1e-9)) - Math.log(Math.max(ymin, 1e-9))) : (yc - ymin) / (ymax - ymin); return H - bottom - u * (H - top - bottom); }
-      var xTicks = logx ? logTicks(xmin, xmax) : linearTicks(xmin, xmax);
-      var yTicks = logy ? logTicks(ymin, ymax) : linearTicks(ymin, ymax);
-      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr; ctx.beginPath();
-      xTicks.forEach(function (v) { var x = X(v); ctx.moveTo(x, top); ctx.lineTo(x, H - bottom + 4 * cv.dpr); });
-      yTicks.forEach(function (v) { var y = Y(v); ctx.moveTo(left - 4 * cv.dpr, y); ctx.lineTo(W - right, y); });
-      ctx.stroke();
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(left, H - bottom); ctx.lineTo(W - right, H - bottom); ctx.moveTo(left, top); ctx.lineTo(left, H - bottom); ctx.stroke();
-      ctx.strokeStyle = t.accent; ctx.lineWidth = 2 * cv.dpr; ctx.beginPath();
-      XS.forEach(function (xx, i) { var px = X(xx), py = Y(f(xx, p)); if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); }); ctx.stroke();
-      ctx.fillStyle = t.ink; ctx.font = (10 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-      xTicks.forEach(function (v) { ctx.fillText(formatTick(v), X(v), H - bottom + 7 * cv.dpr); });
-      ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-      yTicks.forEach(function (v) { ctx.fillText(formatTick(v), left - 8 * cv.dpr, Y(v)); });
-      ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-      ctx.fillText(axisScaleLabel(xlabel, logx), W / 2, H - bottom + 36 * cv.dpr);
-      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(axisScaleLabel(ylabel, logy), 0, 0); ctx.restore();
-    }
-    host.appendChild(slider(plabel, pmin, pmax, (pmax - pmin) / 100, p, function (v) { p = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
 
   // A signed INT4 group quantizer with one adjustable outlier. Shared mode
   // uses one scale for all values; separate mode assigns one scale to the bulk
