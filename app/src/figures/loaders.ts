@@ -65,4 +65,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "synthetic-generations": () => import("./synthetic-generations.ts"),
   "data-crossing": () => import("./data-crossing.ts"),
   "selective-answering": () => import("./selective-answering.ts"),
+  "mutable-state": () => import("./mutable-state.ts"),
 };
