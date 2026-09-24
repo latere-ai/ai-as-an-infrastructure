@@ -29,13 +29,12 @@ export function page(opts: {
   bodyHtml: string;
   css: string;
   clientHref: string; // relative path to the hydration bundle
-  afterBody?: string; // raw runtime <script> blocks
   // English share-card text (title + description) and image, used verbatim for
   // the Open Graph / Twitter tags so a shared link unfurls an English card even
   // on zh pages. Omitted by the dev server, which falls back to the page itself.
   share?: { title: string; description: string; imageUrl: string };
 }): string {
-  const { chapter, bodyHtml, css, clientHref, afterBody = "" } = opts;
+  const { chapter, bodyHtml, css, clientHref } = opts;
   const isHome = chapter.path === "";
   const title = isHome ? SITE_NAME : `${chapter.title} · ${SITE_NAME}`;
   const data = JSON.stringify(chapter).replace(/</g, "\\u003c");
@@ -98,7 +97,6 @@ ${FONT_LINKS}
 <div id="root">${bodyHtml}</div>
 <script>window.__CHAPTER__ = ${data};</script>
 <script type="module" src="${clientHref}"></script>
-${afterBody}
 </body>
 </html>`;
 }

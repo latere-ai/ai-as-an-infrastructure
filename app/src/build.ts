@@ -1,7 +1,7 @@
 // Static site generator: compile every chapter of both languages to static HTML
 // under _book/{en,zh}, matching the canonical clean chapter paths. Copies figures, emits the
-// hydration bundle, wires the runtime scripts (Pyodide runnable, viz, mermaid),
-// and writes a search index.
+// hydration bundle (which carries the Pyodide runnable, viz, and figure
+// runtimes), and writes a search index.
 
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
@@ -14,7 +14,6 @@ import { loadGlossary } from "./pipeline/glossary.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDocs } from "./pipeline/search.ts";
-import { afterBody } from "./runtime.ts";
 import { BASE, ogImageUrl } from "./site.ts";
 import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -87,7 +86,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const en = enShare[ch.href] ?? { title: data.title, description: data.description };
     const share = { title: en.title, description: en.description, imageUrl: ogImageUrl(ch.href) };
     if (!existsSync(join(outRoot, "og", ch.href + ".png"))) missingCards.push(ch.href);
-    const html = page({ chapter: data, bodyHtml, css, clientHref, afterBody, share });
+    const html = page({ chapter: data, bodyHtml, css, clientHref, share });
     // hrefs are extensionless; the file on disk keeps .html (nginx try_files
     // serves the clean URL from it).
     const outPath = join(langOut, ch.href + ".html");

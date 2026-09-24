@@ -221,9 +221,9 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     };
   }, [chapter.path]);
 
-  // Initialize the article runtimes (mermaid, interactive viz/3d, runnable
-  // Python, table wrapping) AFTER React has hydrated the article — they operate
-  // on dangerouslySetInnerHTML nodes that React owns, so booting them on
+  // Initialize the article runtimes (interactive viz/3d, figure modules,
+  // runnable Python, table wrapping) AFTER React has hydrated the article. They
+  // operate on dangerouslySetInnerHTML nodes that React owns, so booting them on
   // DOMContentLoaded (the old static-renderer path) races hydration and leaves them dead.
   useEffect(() => {
     let cancelled = false;
@@ -234,12 +234,9 @@ export default function Reader({ chapter, initial }: ReaderProps) {
       w.__rdrFigures?.();
       w.__rdrLive?.();
       w.__rdrTables?.();
-      w.__rdrMermaid?.();
     };
-    // mermaid loads as an async CDN module; let it re-run once ready.
-    w.__rdrRuntimesReady = () => { if (!cancelled) w.__rdrMermaid?.(); };
     const raf = requestAnimationFrame(() => requestAnimationFrame(boot));
-    return () => { cancelled = true; cancelAnimationFrame(raf); delete w.__rdrRuntimesReady; };
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
   }, [chapter.contentHtml]);
 
   // Drag-to-resize the sidebar / mini-TOC (design: nav 200-460, toc 170-360).
@@ -264,8 +261,9 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
   // Memoize the article body so scroll/settings re-renders keep the SAME element
   // reference. React then bails out of reconciling this subtree, so it never
-  // re-sets innerHTML over the SVG that mermaid mutated into the .mermaid nodes
-  // (the boot effect only runs once per chapter, so a reset would never recover).
+  // re-sets innerHTML over the nodes the runtimes mutated (live figures, viz
+  // canvases, runnable editors); the boot effect only runs once per chapter, so
+  // a reset would never recover.
   const articleBody = useMemo(
     () => <div className="rdr-article" dangerouslySetInnerHTML={{ __html: chapter.contentHtml }} />,
     [chapter.contentHtml],

@@ -16,7 +16,6 @@ import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
 import { resolveDevRoute } from "./dev-router.ts";
-import { afterBody } from "./runtime.ts";
 import type { Lang } from "./types.ts";
 import { join } from "node:path";
 
@@ -66,7 +65,7 @@ function renderPage(lang: Lang, href: string): Response {
   const data = compilePage(book, href, ctxFor(lang));
   if (!data) return new Response(`not found: ${lang}/${href}`, { status: 404 });
   const bodyHtml = renderToString(createElement(Reader, { chapter: data }));
-  const html = page({ chapter: data, bodyHtml, css, clientHref: "/client.js", afterBody });
+  const html = page({ chapter: data, bodyHtml, css, clientHref: "/client.js" });
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });
 }
 

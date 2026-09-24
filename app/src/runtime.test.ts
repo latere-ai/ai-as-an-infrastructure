@@ -1,17 +1,7 @@
 import { expect, test } from "bun:test";
-import { afterBody } from "./runtime.ts";
 import { readFileSync } from "node:fs";
 
 const live = readFileSync(new URL("./runtime/live.ts", import.meta.url), "utf8");
-
-// Only mermaid remains an injected after-body script (it pulls an ESM module
-// from a CDN). The runnable-cell, table, and viz runtimes ship in the client
-// bundle instead, so they must NOT also be injected here.
-test("afterBody injects only the mermaid runtime", () => {
-  expect(afterBody).toContain("__rdrMermaid");
-  expect(afterBody).not.toContain("__rdrLive");
-  expect(afterBody).not.toContain("__rdrViz");
-});
 
 // Regression: the runnable-cell, table, and viz runtimes were relocated from
 // root HTML files into src/runtime/ and registered by hydrate.tsx. Build the
