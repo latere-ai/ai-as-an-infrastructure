@@ -80,39 +80,12 @@ $$
 
 $\tau/(2M)$ 这一项假设每次中断平均会损失半个检查点间隔。整个表达式是一种小损耗近似，它还假设中断服从平稳泊松过程、系统使用阻塞式周期检查点，而且恢复期间不会再发生故障。它没有描述异步快照、相关故障、检查点自身失败，或很久以后才被发现的静默损坏。这个模型的用处是把这些假设摆到明面上。生产系统仍应在明确的观测窗口内直接测量 ETTR。ETTR 即有效训练时间比，是实测的、用于推进训练的挂钟时间占比；$E_{\mathrm{approx}}$ 是模型对同一个量的估计。
 
-:::: {.runnable}
-```python
-from math import sqrt
-
-hours_observed = 54 * 24
-unexpected_interruptions = 419
-mean_minutes = hours_observed * 60 / unexpected_interruptions
-
-checkpoint_minutes = 1.0
-detection_minutes = 1.0
-recovery_minutes = 1.0
-young_minutes = sqrt(2 * checkpoint_minutes * mean_minutes)
-waste = (
-    checkpoint_minutes / young_minutes
-    + young_minutes / (2 * mean_minutes)
-    + (detection_minutes + recovery_minutes) / mean_minutes
-)
-
-conditional_100k = mean_minutes * 16_384 / 100_000
-
-print(f"Observed interruption interval: {mean_minutes / 60:.2f} hours")
-print(f"Young interval: {young_minutes:.1f} minutes")
-print(f"Approximate useful fraction: {1 - waste:.1%}")
-print(f"Conditional 100k interval: {conditional_100k:.1f} minutes")
-```
-::::
-
-这里把检查点、检测和恢复时间都设为一分钟，仅用于说明；Llama 3 论文并未报告这些数值。这个可运行示例把观测输入与假设的运行成本分开。
+图中检查点默认耗时一分钟、检测与恢复默认共两分钟，都只是示例值；Llama 3 论文并未报告这些数值。
 
 ```{figure}
 //| figure: checkpoint-budget
 //| label: fig-machine-budget
-//| fig-cap: "本章的一阶预算 $W(\tau)$，应用于 $N$ 块 GPU 的同步训练作业，各项分别画出：写检查点 $C/\tau$ 随间隔增大而下降，丢失的计算 $\tau/(2M)$ 随间隔增大而上升，检测与恢复 $(D+R)/M$ 是一条底线，任何间隔都去不掉。按正文的独立危险率模型，作业中断间隔 $M=M_{\mathrm{GPU}}/N$：GPU 越多，$M$ 越往左移，最优间隔 $\tau^*=\sqrt{2CM}$ 只移动一半的距离，在对数轴上恰好位于 $2C$ 与 $M$ 的中点。单块 GPU 5.78 年的默认间隔不是论文报告的数值，而是把 Llama 3 平均 3.1 小时的意外中断间隔乘以 16,384 得到的，只在正文所说的线性外推条件下成立。$C$ 默认为一分钟，$D+R$ 默认为两分钟，取自可运行示例中的假设值。虚线是 Daly 的完整重启模型；圆点和下方色带来自同一过程的一次固定种子模拟，共 400 个平均间隔，色带画出其开头一段。两条曲线分开的地方，损耗已经不小，一阶各项不再成立。"
+//| fig-cap: "本章的一阶预算 $W(\tau)$，应用于 $N$ 块 GPU 的同步训练作业，各项分别画出：写检查点 $C/\tau$ 随间隔增大而下降，丢失的计算 $\tau/(2M)$ 随间隔增大而上升，检测与恢复 $(D+R)/M$ 是一条底线，任何间隔都去不掉。按正文的独立危险率模型，作业中断间隔 $M=M_{\mathrm{GPU}}/N$：GPU 越多，$M$ 越往左移，最优间隔 $\tau^*=\sqrt{2CM}$ 只移动一半的距离，在对数轴上恰好位于 $2C$ 与 $M$ 的中点。单块 GPU 5.78 年的默认间隔不是论文报告的数值，而是把 Llama 3 平均 3.1 小时的意外中断间隔乘以 16,384 得到的，只在正文所说的线性外推条件下成立。$C$ 默认为一分钟，$D+R$ 默认为两分钟，两者都是示例值。虚线是 Daly 的完整重启模型；圆点和下方色带来自同一过程的一次固定种子模拟，共 400 个平均间隔，色带画出其开头一段。两条曲线分开的地方，损耗已经不小，一阶各项不再成立。"
 ```
 
 ::: {.callout-tip}
@@ -166,6 +139,47 @@ Ma 等人把十五个异常节点与十五个健康节点配对；前一组由�
 ## 局部性决定同步边界
 
 同步会放大故障。在批量同步训练中，一个掉队或失效的参与者，就可能在下一次集合通信处拖住所有进程。具体代价取决于消息大小、集合通信算法、放置方式、拥塞和拓扑，而不只是物理距离。@sec-accelerators-networking 介绍了这些网络域，@sec-compute-frontier 则说明了它们与并行放置的关系。
+
+下面的单元测量这种放大效应。每个 rank 的一步耗时等于理想时间加上平均 2% 的指数抖动；此外，每一千步里某个 rank 会卡顿一次，这一步慢 1.5 倍。同步的一步要持续到最慢的 rank 完成为止。单元根据单个 rank 步长的分布 $F$ 计算期望步长 $E[\max]=1+\int(1-F^N)$，在 4,096 个 rank 以内用暴力模拟核对，并把只有抖动的情形与闭式解 $1+\mu H_N$ 核对，其中 $\mu$ 是平均抖动，$H_N$ 是第 $N$ 个调和数。只有抖动时，步长随 $N$ 只按对数增长。卡顿对单个 rank 来说很少见，但 $N$ 一旦超过 $\ln 2/q$（这里约 700 个 rank），对整一步来说就几乎必然发生；到 16,384 块 GPU 时，几乎每一步都按卡顿时的速度运行。修改 `q` 或 `s`：无论减速多少，拐点始终在 $\ln 2/q$ 附近。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+mu, q, s = 0.02, 1e-3, 1.5  # 平均抖动（占一步的比例）、某个 rank 在一步中卡顿的概率、卡顿时的减速倍数
+rng = np.random.default_rng(0)
+
+def rank_times(N, steps, q):  # 每个 rank 每一步的耗时，以理想步长为单位
+    slow = np.where(rng.random((steps, N)) < q, s, 1.0)
+    return slow * (1 + rng.exponential(mu, (steps, N)))
+
+t = np.linspace(1, 2 * s, 40001)
+def F(t, q):  # 单个 rank 步长的分布函数：正常步与卡顿步的混合
+    cdf = lambda x: np.clip(1 - np.exp(-np.maximum(x - 1, 0) / mu), 0, 1)
+    return (1 - q) * cdf(t) + q * cdf(t / s)
+
+def expected_step(N, q):  # 同步的一步要等最慢的 rank：E[max] = 1 + (1 - F^N) 的积分
+    return 1 + np.trapezoid(1 - np.exp(N * np.log(np.maximum(F(t, q), 1e-300))), t)
+
+Ns = np.unique(np.geomspace(1, 1e6, 60).astype(int))
+H = np.cumsum(1 / np.arange(1, Ns[-1] + 1))  # 调和数
+assert np.allclose([expected_step(N, 0) for N in Ns], 1 + mu * H[Ns - 1], atol=1e-4)  # 指数抖动：1 + mu H_N
+fig, ax = plt.subplots(figsize=(6.4, 4))
+for qq, c, name in [(0, "#5b8def", "只有抖动"), (q, "#ff7a66", f"加上 1/{1 / q:.0f} 概率的 ×{s} 卡顿")]:
+    ax.plot(Ns, [expected_step(N, qq) for N in Ns], color=c, label=name)
+    for N in (1, 16, 256, 4096):
+        sim = rank_times(N, 400, qq).max(axis=1).mean()
+        assert abs(sim / expected_step(N, qq) - 1) < 0.03  # 暴力模拟与积分结果一致
+        ax.plot(N, sim, "o", color=c, ms=5)
+ax.axvline(np.log(2) / q, color="0.5", ls=":", lw=1)
+ax.text(np.log(2) / q * 1.15, 1.02, f"一半的步遇到卡顿：\nN = {np.log(2) / q:.0f}", fontsize=8)
+ax.axvline(16384, color="0.5", lw=1); ax.text(16384 * 1.15, 1.35, "16,384 块 GPU", fontsize=8)
+ax.set_xscale("log"); ax.set_xlabel("同步推进的 rank 数 N"); ax.set_ylabel("期望步长 / 理想步长")
+ax.set_title("单个 rank 的罕见延迟，变成每一步的延迟", fontsize=10); ax.legend(fontsize=8, loc="upper left")
+plt.show()
+```
+::::
 
 NCCLX 给出了一组具体的层级数据。在 Meta 连接超过十万块 GPU 的拓扑中，相对同机架通信，跨机架但位于同一 AI Zone、跨 AI Zone，以及跨数据中心建筑的时延分别约为 7 倍、15 倍和 30 倍 [@meta2025ncclx]。这些比例是该 RoCE 网络拓扑所特有的，换一种拓扑就需要重新测量。据此，应把暴露在关键路径上、对时延敏感的通信放在尽可能小的域内，同时实测更大范围的集合通信能否与其他工作重叠。
 

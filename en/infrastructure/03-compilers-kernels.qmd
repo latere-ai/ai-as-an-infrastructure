@@ -105,30 +105,77 @@ parts of BERT runtime; removing data movement accelerated the measured workload,
 but the result did not imply that every transformer or every operator was
 bandwidth-bound [@ivanov2021data].
 
-The runnable counts one deliberately simple case. Here it evaluates
-$y=\max(ax+b,0)$ over an FP32 vector. The unfused version writes two full
-intermediates; the fused version keeps the scalar intermediates inside one
-kernel. The calculation assumes scalar $a$ and $b$, a full HBM read and write
-for every materialized vector, and no useful cross-kernel cache retention. It
-counts minimum algorithmic traffic, not measured device traffic or time.
+The cell below measures both ceilings on the machine that runs it instead of
+copying them from a data sheet. It times a copy, an add, the unfused chain
+$y=\max(ax+b,0)$ over an FP32 vector, and square FP32 matrix multiplies from
+$n=8$ to 256, and counts the minimum traffic of each, with every operand crossing
+memory once. The unfused chain writes two full intermediates and reads them back,
+six vector transfers where a fused kernel needs two. The fastest arithmetic rate
+and the fastest streaming rate become $P_{\max}$ and $B_{\max}$. The cell asserts
+that every measured time respects $T\geq\max(F/P_{\max},Q/B_{\max})$ and prints
+how close each kernel comes to its bound. Small matrix multiplies sit far below
+both roofs because the fixed cost of a call, which the model does not contain,
+dominates their time. The hollow marker is the fused chain's bound: the same
+arithmetic over a third of the traffic. It caps what fusion can gain on this
+machine and does not predict it. In the browser numpy runs as WebAssembly, where
+arithmetic is far slower than in a native build but a plain copy is not, so the
+ridge sits far to the left of where a native run of the same cell puts it.
+Change the matrix sizes or the dtype and watch the ridge move.
 
 :::: {.runnable}
 ```python
-elements = 16 * 1024 * 1024
-bytes_per_element = 4  # FP32
-operations_per_element = 3  # multiply, add, maximum
+import time
+import numpy as np
+import matplotlib.pyplot as plt
 
-operations = elements * operations_per_element
-unfused_bytes = 3 * 2 * elements * bytes_per_element
-fused_bytes = 2 * elements * bytes_per_element
+def best(f, reps=3):  # seconds per call: repeat until a batch outlasts a coarse browser timer,
+    ts, n = [], 1        # and keep the fastest batch, since timer noise only ever adds time
+    while len(ts) < reps:
+        t0 = time.perf_counter()
+        for _ in range(n):
+            f()
+        dt = time.perf_counter() - t0
+        if dt < 0.005:
+            n *= 4
+        else:
+            ts.append(dt / n)
+    return min(ts)
 
-for name, traffic in [("unfused", unfused_bytes), ("fused", fused_bytes)]:
-    intensity = operations / traffic
-    print(f"{name:7s}: {traffic / 1e6:5.1f} MB minimum traffic, "
-          f"{intensity:.3f} operations/byte")
+rng = np.random.default_rng(0)
+x = rng.random(2**22, dtype=np.float32)  # 16 MB
+a, b, E = np.float32(1.5), np.float32(-0.5), x.nbytes
+ops = {  # name: (F operations, Q bytes counted once per operand, measured seconds)
+    "copy": (0, 2 * E, best(x.copy)),
+    "x + x": (x.size, 2 * E, best(lambda: x + x)),
+    "max(ax+b, 0)": (3 * x.size, 6 * E, best(lambda: np.maximum(a * x + b, 0))),  # 3 kernels, 2 intermediates
+}
+for n in (8, 16, 32, 64, 128, 256):
+    A, B = rng.random((n, n), dtype=np.float32), rng.random((n, n), dtype=np.float32)
+    ops[f"matmul {n}"] = (2 * n**3, 3 * n * n * 4, best(lambda: A @ B))
 
-print(f"same arithmetic: {operations} operations")
-print(f"traffic reduction: {unfused_bytes / fused_bytes:.1f}x")
+P = max(F / t for F, Q, t in ops.values())  # measured compute ceiling, FLOP/s
+Bw = max(Q / t for F, Q, t in ops.values() if F <= Q)  # measured bandwidth from the streaming ops, B/s
+for k, (F, Q, t) in ops.items():
+    assert t >= 0.9 * max(F / P, Q / Bw), k  # T >= max(F/P, Q/B) holds for every measured kernel
+
+fig, ax = plt.subplots(figsize=(6.4, 4))
+I = np.logspace(-2, 2, 200)
+ax.loglog(I, np.minimum(P, Bw * I) / 1e9, color="0.55", lw=1.5)
+ax.set_ylim(P / 1e9 / 100, P / 1e9 * 2)  # at least two decades, whatever this machine measures
+for k, (F, Q, t) in ops.items():
+    if F:
+        ax.plot(F / Q, F / t / 1e9, "o", color="#5b8def")
+        ax.annotate(k, (F / Q, F / t / 1e9), fontsize=7, xytext=(5, -8), textcoords="offset points")
+F, Q, t = ops["max(ax+b, 0)"]
+ax.plot(3 * F / Q, min(P, Bw * 3 * F / Q) / 1e9, "o", mfc="none", color="#ff7a66")
+ax.annotate("fused bound", (3 * F / Q, min(P, Bw * 3 * F / Q) / 1e9), fontsize=7, color="#ff7a66",
+            xytext=(5, 4), textcoords="offset points")
+ax.set_xlabel("arithmetic intensity I (FLOP/byte)"); ax.set_ylabel("attained GFLOP/s")
+ax.set_title(f"Measured here: {Bw / 1e9:.1f} GB/s, {P / 1e9:.1f} GFLOP/s, ridge at I = {P / Bw:.2f}", fontsize=10)
+plt.show()
+print("kernel        % of bound")
+for k, (F, Q, t) in ops.items():
+    print(f"{k:13s}{100 * max(F / P, Q / Bw) / t:5.0f}")
 ```
 ::::
 

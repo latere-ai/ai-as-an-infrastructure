@@ -199,6 +199,87 @@ small messages [@patarasuk2009allreduce]. A tree changes the latency term and
 traffic pattern. Real results also include protocol choice, chunking, reduction
 work, routing, congestion, and unequal links.
 
+The cell below runs two all-reduce schedules on 64 simulated ranks and counts
+what each rank sends. The ring takes $2(p-1)$ steps and sends $2(p-1)n/p$
+elements per rank; recursive doubling, which adds a partner's whole buffer at
+distances 1, 2, 4, and so on, takes $\log_2 p$ steps and sends $n\log_2 p$. Both
+results are checked against the sum over ranks, and the ring's count against the
+bandwidth term above. The plot turns the counted steps and bytes into time with
+$\alpha=5\,\mu\text{s}$ and a 50 GB/s link and marks the message size where the
+ring becomes faster. The animation replays a six-rank ring: after $p-1$
+reduce-scatter steps each rank holds one fully reduced chunk, and $p-1$
+all-gather steps copy it around. Change `alpha`, `beta`, or `p`: the crossover
+scales with $\alpha/\beta$ and grows with the number of ranks.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+def ring_allreduce(x):
+    """Reduce-scatter, then all-gather: at each step rank r sends chunk (r - step) mod p to rank r + 1."""
+    p, n = x.shape
+    buf, parts, sent = x.copy(), np.array_split(np.arange(n), p), np.zeros(p)
+    held = np.ones((p, p), dtype=int)  # held[r, c]: how many ranks' values rank r's chunk c includes
+    frames = [(held.copy(), [])]
+    for step in range(2 * (p - 1)):
+        c = (np.arange(p) - step) % p
+        msgs = [(buf[r, parts[c[r]]].copy(), held[r, c[r]]) for r in range(p)]  # all sends, then all receives
+        for r, (data, h) in enumerate(msgs):
+            d, add = (r + 1) % p, step < p - 1  # the first p - 1 steps add, the rest overwrite
+            buf[d, parts[c[r]]] = buf[d, parts[c[r]]] + data if add else data
+            held[d, c[r]] = held[d, c[r]] + h if add else h
+            sent[r] += data.size
+        frames.append((held.copy(), [(c[r], (r + 1) % p) for r in range(p)]))
+    return buf, sent, 2 * (p - 1), frames
+
+def doubling_allreduce(x):
+    """Recursive doubling: log2(p) steps, each adding the whole buffer of rank r XOR k."""
+    p, n = x.shape
+    buf, sent, k = x.copy(), np.zeros(p), 1
+    while k < p:
+        buf, sent, k = buf + buf[np.arange(p) ^ k], sent + n, 2 * k
+    return buf, sent, int(np.log2(p))
+
+p, n = 64, 64 * 16  # ranks, elements per rank
+x = np.random.default_rng(0).normal(size=(p, n))
+algos = {"ring": ring_allreduce(x)[:3], "recursive doubling": doubling_allreduce(x)}
+for buf, sent, steps in algos.values():
+    assert np.allclose(buf, x.sum(0))  # every rank ends with the sum over all ranks
+assert np.allclose(algos["ring"][1], 2 * (p - 1) / p * n)  # the chapter's 2(p-1)/p bandwidth term
+
+alpha, beta = 5e-6, 1 / 50e9  # per-message latency in s, s per byte on one link
+m = np.logspace(3, 9, 200)  # message size in bytes
+T = {k: steps * alpha + sent[0] / n * m * beta for k, (buf, sent, steps) in algos.items()}
+cross = m[np.argmax(T["ring"] < T["recursive doubling"])]
+fig1, ax = plt.subplots(figsize=(6.2, 3.6))
+for k, t in T.items():
+    ax.loglog(m, t * 1e3, label=f"{k}: {algos[k][2]} steps, sends {algos[k][1][0] / n:.2f}n per rank")
+ax.axvline(cross, color="0.5", ls=":", lw=1); ax.legend(fontsize=8)
+ax.set_xlabel("message size n (bytes)"); ax.set_ylabel("all-reduce time (ms)")
+ax.set_title(f"p = {p}: the ring is faster above {cross / 1e6:.1f} MB")
+
+q = 6  # a small ring to watch
+frames = ring_allreduce(np.ones((q, q)))[3]
+fig2, ax2 = plt.subplots(figsize=(4.4, 4.2))
+im = ax2.imshow(frames[0][0], vmin=1, vmax=q, cmap="Blues"); ax2.grid(False)
+nums = [[ax2.text(j, i, "", ha="center", va="center", fontsize=9) for j in range(q)] for i in range(q)]
+got = ax2.scatter([], [], s=520, marker="s", facecolors="none", edgecolors="#ff7a66", linewidths=2)
+ax2.set_xticks(range(q)); ax2.set_yticks(range(q)); ax2.set_xlabel("chunk"); ax2.set_ylabel("rank")
+def show(k):
+    held, recv = frames[k]
+    im.set_data(held); got.set_offsets(np.array(recv).reshape(-1, 2))
+    for i in range(q):
+        for j in range(q):
+            nums[i][j].set_text(held[i, j]); nums[i][j].set_color("white" if held[i, j] > q / 2 else "black")
+    phase = "start" if k == 0 else ("reduce-scatter" if k < q else "all-gather")
+    ax2.set_title(f"step {k} of {2 * (q - 1)}, {phase}\nranks summed into each chunk (box: just received)", fontsize=9)
+anim = FuncAnimation(fig2, show, frames=len(frames), interval=700)
+plt.show()
+```
+::::
+
 Communication overlaps compute only when the dependency graph exposes
 independent work and the runtime schedules both successfully. Bucket size (how
 much gradient data one collective carries), kernel duration, stream priority,

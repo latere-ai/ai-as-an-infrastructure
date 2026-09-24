@@ -95,29 +95,8 @@ supply.
 ```{figure}
 //| figure: supply-ledger
 //| label: fig-making-silicon-ledger
-//| fig-cap: "The chapter's illustrative ledger in package-equivalents. Each bar is one term of the bound on $N_{\text{ship}}$, the shortest bar binds, and the vertical line is the bound. The faded part of every other bar is inventory or capacity that the bound cannot use until the binding input grows. Change the bill of materials, or scale one input as in a lower HBM yield, a delayed substrate delivery, or final-test saturation; the dashed outline keeps the ledger value. The values are the illustrative ledger of the code block below, not a forecast."
+//| fig-cap: "The chapter's illustrative ledger in package-equivalents. Each bar is one term of the bound on $N_{\text{ship}}$, the shortest bar binds, and the vertical line is the bound. The faded part of every other bar is inventory or capacity that the bound cannot use until the binding input grows. Change the bill of materials, or scale one input as in a lower HBM yield, a delayed substrate delivery, or final-test saturation; the dashed outline keeps the ledger value. The values are illustrative, not a forecast."
 ```
-
-The following illustrative ledger uses no vendor forecast. It only shows the
-unit conversion. Change an inventory or bill-of-materials count to see the
-binding stage move.
-
-:::: {.runnable}
-```python
-package_equivalents = {
-    "known-good logic dies": 7_200 // 2,
-    "qualified HBM stacks": 12_500 // 4,
-    "good interposers": 4_100 // 1,
-    "qualified substrates": 3_800 // 1,
-    "assembly capacity": 3_500,
-    "final-test capacity": 3_400,
-}
-
-binding_stage = min(package_equivalents, key=package_equivalents.get)
-print(f"Binding stage: {binding_stage}")
-print(f"Optimistic shipment bound: {package_equivalents[binding_stage]:,}")
-```
-::::
 
 ## From wafer start to known-good die
 
@@ -169,6 +148,79 @@ interposers larger than two reticle fields [@tsmc2026cowos]. Its 2026 roadmap
 described 5.5-reticle CoWoS in production and a 14-reticle version planned for
 2028 [@tsmc2026symposium]. “In production” and “planned” are different evidence
 states.
+
+The cell below makes the die-yield side of that trade concrete. It scatters
+defects over simulated 300 mm wafers at a mean density of 0.1 per square
+centimeter, either uniformly or with the density itself varying from wafer to
+wafer (clustering), and counts the dies that no defect touches. The same
+800 mm² of logic is built as one reticle-sized die or split into 2 to 32
+chiplets. The cell asserts that the simulated counts match the Poisson die
+yield $e^{-AD_0}$ for uniform defects and the negative binomial
+$(1+AD_0/\alpha)^{-\alpha}$ for clustered ones, where $A$ is die area and $D_0$
+the mean defect density. It then charges each package a 99 percent assembly
+yield per attached die, assuming wafer probe screens every chiplet perfectly.
+Splitting about doubles the good packages per wafer before the assembly losses
+of many small dies take the gain back. Clustering favors the large die, because
+defects that crowd onto a few dies leave more of the others intact. Change `D0`
+to a mature process's lower density, or `bond`, and the best split moves.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.collections import PatchCollection
+
+R, edge, D0 = 150.0, 3.0, 0.001  # wafer radius and edge exclusion (mm), mean defects per mm² (0.1 per cm²)
+A, bond = 800.0, 0.99  # logic area per package (mm²), assembly yield per attached die
+rng = np.random.default_rng(0)
+
+def wafers(w, h, alpha, n=200):
+    """Good w × h mm dies on each of n wafers; alpha sets clustering (None: random defects)."""
+    i, j = np.meshgrid(np.arange(np.ceil(2 * R / w)), np.arange(np.ceil(2 * R / h)), indexing="ij")
+    x0, y0 = i * w - R, j * h - R  # die corners on a grid over the wafer
+    fits = np.hypot(np.maximum(abs(x0), abs(x0 + w)), np.maximum(abs(y0), abs(y0 + h))) <= R - edge
+    good = []
+    for _ in range(n):
+        D = D0 if alpha is None else rng.gamma(alpha, D0 / alpha)  # this wafer's defect density
+        r = R * np.sqrt(rng.random(rng.poisson(D * np.pi * R * R)))  # defects uniform over the disk
+        th = 2 * np.pi * rng.random(r.size)
+        bad = np.zeros_like(fits)
+        bad[((r * np.cos(th) + R) // w).astype(int), ((r * np.sin(th) + R) // h).astype(int)] = True
+        good.append((fits & ~bad).sum())
+    return fits.sum(), np.array(good), (fits, bad, r * np.cos(th), r * np.sin(th))
+
+def shape(k):  # halve a reticle-sized 26 mm × A/26 die along its longer side, log2(k) times
+    w, h = 26.0, A / 26
+    for _ in range(int(np.log2(k))):
+        w, h = (w / 2, h) if w > h else (w, h / 2)
+    return w, h
+
+ks = [1, 2, 4, 8, 16, 32]
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 8.4), height_ratios=[1.25, 1])
+for alpha, label, c in [(None, "random defects", "#5b8def"), (2.0, "clustered defects (α = 2)", "#ff7a66")]:
+    sim, model = [], []
+    for k in ks:
+        w, h = shape(k)
+        n_dies, good, last = wafers(w, h, alpha)
+        Y = np.exp(-D0 * w * h) if alpha is None else (1 + D0 * w * h / alpha) ** -alpha  # Poisson, negative binomial
+        assert abs(good.mean() / (n_dies * Y) - 1) < 0.04  # the simulation reproduces the yield model
+        sim.append(good.mean() / k * bond**k); model.append(n_dies * Y / k * bond**k)
+        if k == 1 and alpha is None:
+            fits, bad, dx, dy = last
+    ax2.plot(ks, sim, "o", color=c); ax2.plot(ks, model, color=c, lw=1.5, label=f"{label}: best {ks[int(np.argmax(sim))]}")
+w, h = shape(1)
+ii, jj = np.nonzero(fits)
+dies = [plt.Rectangle((-R + a * w + 0.4, -R + c * h + 0.4), w - 0.8, h - 0.8) for a, c in zip(ii, jj)]
+ax1.add_collection(PatchCollection(dies, facecolor=np.where(bad[ii, jj], "#ff7a66", "#5b8def")))  # orange: defective
+ax1.add_patch(plt.Circle((0, 0), R, fill=False, color="0.55")); ax1.plot(dx, dy, ".", ms=2.5, color="0.45")
+ax1.set_xlim(-R, R); ax1.set_ylim(-R, R); ax1.set_aspect("equal"); ax1.axis("off")
+ax1.set_title(f"One wafer, {A:.0f} mm² dies: {(fits & ~bad).sum()} of {fits.sum()} good", fontsize=10)
+ax2.set_xscale("log", base=2); ax2.set_xticks(ks, ks); ax2.set_ylim(0)
+ax2.set_xlabel("chiplets per package"); ax2.set_ylabel("good packages per wafer")
+ax2.set_title(f"Die yield gains against {bond:.0%} assembly yield per die", fontsize=10); ax2.legend(fontsize=8)
+fig.tight_layout(); plt.show()
+```
+::::
 
 ## HBM and advanced packaging are coupled through one product schedule
 

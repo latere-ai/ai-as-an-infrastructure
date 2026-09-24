@@ -60,25 +60,62 @@ $$
 
 在一次 Transformer 性能剖析中，屋脊两侧的算子可能同时存在。Ivanov 等人发现，张量收缩与内存受限算子都在 BERT 运行时间中占有显著份额；减少数据移动加速了他们测量的工作负载，但这并不意味着每个 Transformer 或每个算子都受带宽限制 [@ivanov2021data]。
 
-下面的可运行示例只计算一个刻意简化的案例。它在 FP32 向量上计算 $y=\max(ax+b,0)$，其中 $x$ 是输入向量，$a$ 和 $b$ 都是标量。未融合版本会写出两个完整中间结果；融合版本则把两个标量中间值保留在同一个内核里。计算还假定每个实体化向量都完整读写 HBM，而且没有可利用的跨内核缓存保留。它统计的是最小算法流量，不是实测设备流量或时间。
+下面的单元不照抄数据手册，而是在运行它的机器上实测这两个上限。它为一次复制、一次加法、在 FP32 向量上未融合地计算 $y=\max(ax+b,0)$，以及 $n=8$ 到 256 的 FP32 方阵乘法分别计时，并按每个操作数只跨越一次内存来统计各自的最小流量。未融合的链会写出两个完整的中间结果再读回来，共六次向量传输，而融合内核只需两次。最快的算术速率和最快的流式传输速率分别作为 $P_{\max}$ 和 $B_{\max}$。单元断言每个实测时间都满足 $T\geq\max(F/P_{\max},Q/B_{\max})$，并打印每个内核离自己的界限有多近。小矩阵乘法远在两条屋顶线之下，因为一次调用的固定开销主导了它们的时间，而模型里没有这一项。空心标记是融合后这条链的界限：算术不变，流量只剩三分之一。它给出融合在这台机器上最多能换来多少，而不是预测实际收益。在浏览器里，numpy 以 WebAssembly 运行，算术远慢于本地构建，单纯的复制却不慢，所以屋脊强度远在本地运行同一单元时所处位置的左侧。修改矩阵尺寸或数据类型，看屋脊强度如何移动。
 
 :::: {.runnable}
 ```python
-elements = 16 * 1024 * 1024
-bytes_per_element = 4  # FP32
-operations_per_element = 3  # multiply, add, maximum
+import time
+import numpy as np
+import matplotlib.pyplot as plt
 
-operations = elements * operations_per_element
-unfused_bytes = 3 * 2 * elements * bytes_per_element
-fused_bytes = 2 * elements * bytes_per_element
+def best(f, reps=3):  # 每次调用的秒数：反复运行，直到一批调用的耗时超过浏览器计时器的粒度，
+    ts, n = [], 1        # 再取最快的一批，因为计时噪声只会让时间变长
+    while len(ts) < reps:
+        t0 = time.perf_counter()
+        for _ in range(n):
+            f()
+        dt = time.perf_counter() - t0
+        if dt < 0.005:
+            n *= 4
+        else:
+            ts.append(dt / n)
+    return min(ts)
 
-for name, traffic in [("unfused", unfused_bytes), ("fused", fused_bytes)]:
-    intensity = operations / traffic
-    print(f"{name:7s}: {traffic / 1e6:5.1f} MB minimum traffic, "
-          f"{intensity:.3f} operations/byte")
+rng = np.random.default_rng(0)
+x = rng.random(2**22, dtype=np.float32)  # 16 MB
+a, b, E = np.float32(1.5), np.float32(-0.5), x.nbytes
+ops = {  # 名称：(F 运算次数, 每个操作数只计一次的 Q 字节数, 实测秒数)
+    "复制": (0, 2 * E, best(x.copy)),
+    "x + x": (x.size, 2 * E, best(lambda: x + x)),
+    "max(ax+b, 0)": (3 * x.size, 6 * E, best(lambda: np.maximum(a * x + b, 0))),  # 3 个内核，2 个中间结果
+}
+for n in (8, 16, 32, 64, 128, 256):
+    A, B = rng.random((n, n), dtype=np.float32), rng.random((n, n), dtype=np.float32)
+    ops[f"矩阵乘 {n}"] = (2 * n**3, 3 * n * n * 4, best(lambda: A @ B))
 
-print(f"same arithmetic: {operations} operations")
-print(f"traffic reduction: {unfused_bytes / fused_bytes:.1f}x")
+P = max(F / t for F, Q, t in ops.values())  # 实测计算上限，FLOP/s
+Bw = max(Q / t for F, Q, t in ops.values() if F <= Q)  # 由流式运算测得的带宽，B/s
+for k, (F, Q, t) in ops.items():
+    assert t >= 0.9 * max(F / P, Q / Bw), k  # 每个实测内核都满足 T >= max(F/P, Q/B)
+
+fig, ax = plt.subplots(figsize=(6.4, 4))
+I = np.logspace(-2, 2, 200)
+ax.loglog(I, np.minimum(P, Bw * I) / 1e9, color="0.55", lw=1.5)
+ax.set_ylim(P / 1e9 / 100, P / 1e9 * 2)  # 无论本机测得多少，纵轴至少跨两个数量级
+for k, (F, Q, t) in ops.items():
+    if F:
+        ax.plot(F / Q, F / t / 1e9, "o", color="#5b8def")
+        ax.annotate(k, (F / Q, F / t / 1e9), fontsize=7, xytext=(5, -8), textcoords="offset points")
+F, Q, t = ops["max(ax+b, 0)"]
+ax.plot(3 * F / Q, min(P, Bw * 3 * F / Q) / 1e9, "o", mfc="none", color="#ff7a66")
+ax.annotate("融合后的上界", (3 * F / Q, min(P, Bw * 3 * F / Q) / 1e9), fontsize=7, color="#ff7a66",
+            xytext=(5, 4), textcoords="offset points")
+ax.set_xlabel("算术强度 I（FLOP/字节）"); ax.set_ylabel("实测 GFLOP/s")
+ax.set_title(f"本机实测：{Bw / 1e9:.1f} GB/s，{P / 1e9:.1f} GFLOP/s，屋脊强度 I = {P / Bw:.2f}", fontsize=10)
+plt.show()
+print("内核          达到界限的 %")
+for k, (F, Q, t) in ops.items():
+    print(f"{k:13s}{100 * max(F / P, Q / Bw) / t:5.0f}")
 ```
 ::::
 

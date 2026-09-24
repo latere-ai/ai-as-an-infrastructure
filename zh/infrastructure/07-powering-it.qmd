@@ -27,49 +27,60 @@ $$
 
 方程本身是确定性的。真实计划还应给出情景分析或模拟结果，例如 P50 与 P90 就绪日期，即项目有 50% 与 90% 把握达成的日期。分位数不能机械地相加。沿一条路径把各项活动的 P90 相加，只有在工期完全相关时才等于这条路径的 P90；工期相互独立时，这个和会高估它。多条并行路径汇合时，项目的 P90 会晚于其中最大的路径 P90，因为任何一条路径都可能延误。
 
+下面的单元在本章的示例进度上运行这种模拟。每项工期都围绕 `tasks` 中的中位月数，从对数正态分布中独立抽取，再沿依赖图计算 $T_{\mathrm{ready}}$，共抽样 20,000 次。单元断言上一段的两个结论：沿计划关键路径把各项活动的 P90 相加，会高估这条路径的 P90；项目的 P90 不低于最大的路径 P90。按中位数工期，并网这条路径占绝对主导，路径汇合几乎不增加延误。右图把现场发电的工期中位数调到 30 个月，两条分支开始竞争：项目 P90 比最大路径 P90 晚约两个月，而计划路径上各项 P90 之和反倒低于项目 P90，因为风险落在一条计划并未标为关键的路径上。修改 `tasks` 中的某个离散度，看哪种效应占上风。
+
 :::: {.runnable}
 ```python
-tasks = {
-    "interconnection": {"months": 18, "after": []},
-    "substation": {"months": 14, "after": ["interconnection"]},
-    "onsite generation": {"months": 12, "after": []},
-    "cooling plant": {"months": 10, "after": []},
-    "commissioning": {
-        "months": 3,
-        "after": ["substation", "onsite generation", "cooling plant"],
-    },
+import numpy as np
+import matplotlib.pyplot as plt
+
+tasks = {  # 工期中位数（月）、对数正态离散度、前置任务（按依赖顺序排列）
+    "并网": (18, 0.35, []),
+    "变电站": (14, 0.25, ["并网"]),
+    "现场发电": (12, 0.45, []),
+    "冷却系统": (10, 0.25, []),
+    "调试验收": (3, 0.2, ["变电站", "现场发电", "冷却系统"]),
 }
 
-finish = {}
-paths = {}
-pending = set(tasks)
-while pending:
-    ready = sorted(
-        name for name in pending
-        if all(parent in finish for parent in tasks[name]["after"])
-    )
-    if not ready:
-        raise ValueError("dependency graph contains a cycle")
-    for name in ready:
-        parents = tasks[name]["after"]
-        parent = max(parents, key=lambda item: finish[item]) if parents else None
-        start = finish[parent] if parent else 0
-        finish[name] = start + tasks[name]["months"]
-        paths[name] = (paths[parent] if parent else []) + [name]
-        pending.remove(name)
+def ready(D):  # 最后一项任务的最早完成时间：T_ready 等于各路径工期之和的最大值
+    F = {}
+    for k, (_, _, after) in tasks.items():
+        F[k] = D[k] + (np.max([F[a] for a in after], axis=0) if after else 0)
+    return F["调试验收"]
 
-critical = paths["commissioning"]
-print("Critical path: " + " -> ".join(critical))
-print(f"Ready after: {finish['commissioning']} months")
+def paths(k):  # 所有以任务 k 结尾的依赖路径
+    return [p + [k] for a in tasks[k][2] for p in paths(a)] or [[k]]
+
+rng = np.random.default_rng(0)
+p90 = lambda v: np.percentile(v, 90)
+fig, axes = plt.subplots(2, 1, figsize=(6.2, 7))
+for ax, onsite in zip(axes, (12, 30)):
+    tasks["现场发电"] = (onsite, 0.45, [])
+    D = {k: m * np.exp(s * rng.standard_normal(20000)) for k, (m, s, _) in tasks.items()}  # 各项工期独立抽样
+    T = ready(D)
+    plan = ready({k: m for k, (m, s, _) in tasks.items()})  # 按中位数工期得到的确定性计划
+    crit = max(paths("调试验收"), key=lambda p: sum(tasks[k][0] for k in p))
+    path_p90 = max(p90(sum(D[k] for k in p)) for p in paths("调试验收"))
+    summed = sum(p90(D[k]) for k in crit)  # 沿计划关键路径把各项活动的 P90 相加
+    assert p90(sum(D[k] for k in crit)) < summed  # 工期相互独立时，这个和会高估该路径的 P90
+    assert path_p90 <= p90(T)  # 路径汇合处，项目 P90 不低于最大的路径 P90
+    n, *_ = ax.hist(T, bins=np.linspace(15, np.percentile(T, 99.7), 70), color="#5b8def", alpha=0.55)
+    ax.set_ylim(0, 1.7 * n.max())  # 给图例留出空间
+    for x, c, ls, name in [(plan, "0.55", "-", "按中位数的计划"), (path_p90, "#3dbd8a", "--", "最大路径 P90"),
+                           (p90(T), "#ff7a66", "-", "项目 P90"), (summed, "#b07ae0", ":", "计划路径上活动 P90 之和")]:
+        ax.axvline(x, color=c, ls=ls, lw=1.8, label=f"{name}: {x:.0f}")
+    ax.set_yticks([]); ax.set_ylabel("模拟项目数"); ax.set_xlabel("获得可用电力所需月数"); ax.legend(fontsize=7.5, loc="upper right")
+    ax.set_title(f"现场发电工期中位数 {onsite} 个月：项目 P90\n比最大路径 P90 晚 {p90(T) - path_p90:.1f} 个月", fontsize=9)
+fig.tight_layout(); plt.show()
 ```
 ::::
 
-上面的示例数字不是预测。改变工期或依赖关系，关键路径与就绪日期就会随之改变，而“兆瓦需要几年才能到位”这类笼统说法体现不出这一点。
+上面的工期与离散度仅作示例，不是预测。改变工期或依赖关系，关键路径、就绪日期及其波动范围都会随之改变，而“兆瓦需要几年才能到位”这类笼统说法体现不出这一点。
 
 ```{figure}
 //| figure: delivery-critical-path
 //| label: fig-powering-critical-path
-//| fig-cap: "把上方代码中的示例进度画成甘特图。每项任务在其前置任务完成后开始；橙色任务位于最长的依赖路径上，这条路径决定 $T_{\mathrm{ready}}$。虚线框是任务的浮动时间，即关键路径经过它之前它还能吸收的延误。改变某项工期，可以看到关键路径如何切换，而只有关键任务的工期变化才会移动就绪日期。工期仅作示例，不是预测。"
+//| fig-cap: "把上方代码中的示例进度按中位数工期画成甘特图。每项任务在其前置任务完成后开始；橙色任务位于最长的依赖路径上，这条路径决定 $T_{\mathrm{ready}}$。虚线框是任务的浮动时间，即关键路径经过它之前它还能吸收的延误。改变某项工期，可以看到关键路径如何切换，而只有关键任务的工期变化才会移动就绪日期。工期仅作示例，不是预测。"
 ```
 
 ## 从电源到可用的 IT 电力

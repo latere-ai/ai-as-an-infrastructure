@@ -105,6 +105,77 @@ $$
 
 对于大消息，环算法具有较高的带宽效率，因为每个 rank 大约传输 $2(p-1)n/p$ 字节；但它包含 $2(p-1)$ 个阶段，所以小消息的启动成本很高 [@patarasuk2009allreduce]。树算法会改变延迟项与流量模式。实际结果还会受到协议选择、分块、归约计算、路由、拥塞和链路不均的影响。
 
+下面的单元在 64 个模拟 rank 上运行两种 all-reduce 调度，并统计每个 rank 发出的数据量。环算法需要 $2(p-1)$ 步，每个 rank 发送 $2(p-1)n/p$ 个元素；递归倍增依次与距离为 1、2、4……的伙伴交换整个缓冲区并累加，只需 $\log_2 p$ 步，但每个 rank 要发送 $n\log_2 p$ 个元素。两种算法的结果都与全部 rank 之和核对，环算法的发送量还与上面的带宽项核对。折线图取 $\alpha=5\,\mu\text{s}$ 和一条 50 GB/s 的链路，把统计出的步数和字节数换算成时间，并标出环算法开始占优的消息大小。动画重放一个六 rank 的环：经过 $p-1$ 步归约散布，每个 rank 各持有一块完全归约的数据；再经过 $p-1$ 步全收集，这些数据块传遍整个环。修改 `alpha`、`beta` 或 `p`，交叉点与 $\alpha/\beta$ 成正比，并随 rank 数增加而右移。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+def ring_allreduce(x):
+    """先归约散布，再全收集：每一步中，rank r 把第 (r - step) mod p 块发给 rank r + 1。"""
+    p, n = x.shape
+    buf, parts, sent = x.copy(), np.array_split(np.arange(n), p), np.zeros(p)
+    held = np.ones((p, p), dtype=int)  # held[r, c]：rank r 手中第 c 块已累加了几个 rank 的值
+    frames = [(held.copy(), [])]
+    for step in range(2 * (p - 1)):
+        c = (np.arange(p) - step) % p
+        msgs = [(buf[r, parts[c[r]]].copy(), held[r, c[r]]) for r in range(p)]  # 先全部发出，再全部接收
+        for r, (data, h) in enumerate(msgs):
+            d, add = (r + 1) % p, step < p - 1  # 前 p - 1 步做加法，之后直接覆盖
+            buf[d, parts[c[r]]] = buf[d, parts[c[r]]] + data if add else data
+            held[d, c[r]] = held[d, c[r]] + h if add else h
+            sent[r] += data.size
+        frames.append((held.copy(), [(c[r], (r + 1) % p) for r in range(p)]))
+    return buf, sent, 2 * (p - 1), frames
+
+def doubling_allreduce(x):
+    """递归倍增：共 log2(p) 步，每步加上 rank r XOR k 的整个缓冲区。"""
+    p, n = x.shape
+    buf, sent, k = x.copy(), np.zeros(p), 1
+    while k < p:
+        buf, sent, k = buf + buf[np.arange(p) ^ k], sent + n, 2 * k
+    return buf, sent, int(np.log2(p))
+
+p, n = 64, 64 * 16  # rank 数，每个 rank 的元素数
+x = np.random.default_rng(0).normal(size=(p, n))
+algos = {"环": ring_allreduce(x)[:3], "递归倍增": doubling_allreduce(x)}
+for buf, sent, steps in algos.values():
+    assert np.allclose(buf, x.sum(0))  # 每个 rank 最终都得到全部 rank 之和
+assert np.allclose(algos["环"][1], 2 * (p - 1) / p * n)  # 正文中的 2(p-1)/p 带宽项
+
+alpha, beta = 5e-6, 1 / 50e9  # 每条消息的延迟（秒），单条链路每字节的秒数
+m = np.logspace(3, 9, 200)  # 消息大小（字节）
+T = {k: steps * alpha + sent[0] / n * m * beta for k, (buf, sent, steps) in algos.items()}
+cross = m[np.argmax(T["环"] < T["递归倍增"])]
+fig1, ax = plt.subplots(figsize=(6.2, 3.6))
+for k, t in T.items():
+    ax.loglog(m, t * 1e3, label=f"{k}：{algos[k][2]} 步，每个 rank 发送 {algos[k][1][0] / n:.2f}n")
+ax.axvline(cross, color="0.5", ls=":", lw=1); ax.legend(fontsize=8)
+ax.set_xlabel("消息大小 n（字节）"); ax.set_ylabel("all-reduce 时间（毫秒）")
+ax.set_title(f"p = {p}：消息超过 {cross / 1e6:.1f} MB 时环更快")
+
+q = 6  # 用一个小环观察过程
+frames = ring_allreduce(np.ones((q, q)))[3]
+fig2, ax2 = plt.subplots(figsize=(4.4, 4.2))
+im = ax2.imshow(frames[0][0], vmin=1, vmax=q, cmap="Blues"); ax2.grid(False)
+nums = [[ax2.text(j, i, "", ha="center", va="center", fontsize=9) for j in range(q)] for i in range(q)]
+got = ax2.scatter([], [], s=520, marker="s", facecolors="none", edgecolors="#ff7a66", linewidths=2)
+ax2.set_xticks(range(q)); ax2.set_yticks(range(q)); ax2.set_xlabel("数据块"); ax2.set_ylabel("rank")
+def show(k):
+    held, recv = frames[k]
+    im.set_data(held); got.set_offsets(np.array(recv).reshape(-1, 2))
+    for i in range(q):
+        for j in range(q):
+            nums[i][j].set_text(held[i, j]); nums[i][j].set_color("white" if held[i, j] > q / 2 else "black")
+    phase = "初始" if k == 0 else ("归约散布" if k < q else "全收集")
+    ax2.set_title(f"第 {k} 步（共 {2 * (q - 1)} 步），{phase}\n每块已累加的 rank 数（方框：本步刚收到）", fontsize=9)
+anim = FuncAnimation(fig2, show, frames=len(frames), interval=700)
+plt.show()
+```
+::::
+
 只有依赖图暴露出独立工作，而且运行时成功地并发调度两者，通信才能与计算重叠。分桶大小（一次集合通信携带多少梯度数据）、内核持续时间、流优先级、内存压力和并发流量都会改变可重叠窗口。这里，$T_{\mathrm{comp}}$ 表示独立测得的计算时间，$T_{\mathrm{comm}}$ 表示独立测得的通信时间，$T_{\mathrm{overlap}}$ 表示两者重叠的时间。核算恒等式
 
 $$

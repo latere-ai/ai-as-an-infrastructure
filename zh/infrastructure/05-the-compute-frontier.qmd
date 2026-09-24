@@ -28,21 +28,45 @@ $$
 
 最大的那一项指出第一个优化目标，下文称它为主导项。这条公式不是延迟预测器，因为它假设独立传输与计算可以完全重叠。依赖关系、排队、同步、协议开销与资源争用都会让实测时间更长；无法重叠的阶段可能需要相加，而不是取最大值。规格表峰值不能替代 $P_{\text{eff}}$，也不能替代任何一道边界上的可持续带宽。
 
+下面的单元针对一个约 640 亿参数的稠密模型，计算一个解码步在张量并行把它分摊到 $t$ 台设备上时的四个界限项。每台设备读取 $1/t$ 的权重和 KV 缓存；每一层结束时对激活做两次环形 all-reduce，每次让每台设备承担消息量的 $2(t-1)/t$，也就是 @sec-accelerators-networking 中的环形带宽项。在节点内部，这部分流量走纵向扩展互连；一旦 $t$ 超过节点里的八台设备，环就要跨过横向扩展网络，并受其中最慢的链路约束。单元断言：$t=1$ 时主导项是 HBM 流量，算术项从不主导；越过节点边界后，横向扩展项成为主导项，界限不再下降。这里用规格表峰值代替 $P_{\text{eff}}$ 和各处的可持续带宽。调大批大小 `b`，互连项随之增长，权重流量却不变；把 `g` 设为 72，即机柜级的纵向扩展域，横向扩展项就不再出现在这个范围内。
+
 :::: {.runnable}
 ```python
-# Illustrative units: work in operations, traffic in bytes, rates per second.
-terms = {
-    "arithmetic": 2.0e15 / 1.0e15,
-    "HBM traffic": 8.0e12 / 3.0e12,
-    "scale-up traffic": 1.0e12 / 9.0e11,
-    "scale-out traffic": 5.0e11 / 2.0e11,
-}
+import numpy as np
+import matplotlib.pyplot as plt
 
-for name, seconds in terms.items():
-    print(f"{name:18s} {seconds:.2f} s")
+L, d, s = 80, 8192, 2  # 层数、宽度、每个 BF16 数值的字节数
+N = 12 * L * d * d  # 约 640 亿参数
+b, ctx, kv = 32, 4096, 2 * (d // 8) * s * L  # 解码批大小、上下文长度、每个词元的 KV 字节数（GQA，每个 KV 头对应 8 个查询头）
+g = 8  # 每个纵向扩展域（节点）内的设备数
+# 用规格表峰值代替 P_eff 和可持续带宽（H100 SXM、NVLink、一块 400 Gb/s 网卡）。
+P, B_hbm, B_up, B_out = 989e12, 3.35e12, 450e9, 50e9
 
-binding = max(terms, key=terms.get)
-print(f"Binding term: {binding}")
+def terms(t):
+    """张量并行度为 t 时，一个解码步在每台设备上的四个界限项。"""
+    F = (2 * N * b + 4 * b * ctx * d * L) / t  # 权重矩阵乘，加上对上下文的注意力计算
+    Q_hbm = (s * N + b * ctx * kv) / t  # 每个权重和缓存的键值各读一次
+    Q_ring = 2 * L * 2 * (t - 1) / t * b * d * s  # 每层对激活做两次环形 all-reduce
+    return {"算术": F / P, "HBM": Q_hbm / B_hbm,
+            "纵向扩展": Q_ring / B_up, "横向扩展": Q_ring / B_out if t > g else 0.0}
+
+ts = 2 ** np.arange(7)
+T = {k: np.array([terms(t)[k] for t in ts]) for k in terms(1)}
+bound = np.max(list(T.values()), axis=0)
+binding = [max(terms(t), key=terms(t).get) for t in ts]
+assert binding[0] == "HBM" and "算术" not in binding  # 这里受字节数约束，从不受 FLOP 约束
+if ts[-1] > g:  # 环一旦跨出节点，最慢的链路就决定步长
+    assert binding[-1] == "横向扩展" and ts[np.argmin(bound)] < ts[-1]
+
+fig, ax = plt.subplots(figsize=(6.2, 3.8))
+ax.plot(ts, bound * 1e3, color="0.8", lw=7, solid_capstyle="round", label="步长界限（最大项）")
+for k, v in T.items():
+    ax.plot(ts[v > 0], v[v > 0] * 1e3, "o-", ms=4, label=k)
+ax.axvline(g + 0.5, color="0.5", ls=":", lw=1); ax.text(g * 1.1, bound.max() * 1e3, "节点边界", fontsize=8, va="top")
+ax.set_xscale("log", base=2); ax.set_yscale("log"); ax.set_xticks(ts, ts)
+ax.set_xlabel("张量并行度 t"); ax.set_ylabel("每个解码步的时间（毫秒）")
+ax.set_title(f"t = {ts[np.argmin(bound)]} 时最快：{bound.min() * 1e3:.1f} 毫秒，主导项：{binding[np.argmin(bound)]}", fontsize=10)
+ax.legend(fontsize=8, loc="lower left"); plt.show()
 ```
 ::::
 

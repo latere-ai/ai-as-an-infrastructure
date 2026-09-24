@@ -141,41 +141,13 @@ ETTR directly over a declared window. ETTR, the effective training time ratio,
 is the measured share of wall time that advances training; $E_{\mathrm{approx}}$
 is the model's estimate of the same quantity.
 
-:::: {.runnable}
-```python
-from math import sqrt
-
-hours_observed = 54 * 24
-unexpected_interruptions = 419
-mean_minutes = hours_observed * 60 / unexpected_interruptions
-
-checkpoint_minutes = 1.0
-detection_minutes = 1.0
-recovery_minutes = 1.0
-young_minutes = sqrt(2 * checkpoint_minutes * mean_minutes)
-waste = (
-    checkpoint_minutes / young_minutes
-    + young_minutes / (2 * mean_minutes)
-    + (detection_minutes + recovery_minutes) / mean_minutes
-)
-
-conditional_100k = mean_minutes * 16_384 / 100_000
-
-print(f"Observed interruption interval: {mean_minutes / 60:.2f} hours")
-print(f"Young interval: {young_minutes:.1f} minutes")
-print(f"Approximate useful fraction: {1 - waste:.1%}")
-print(f"Conditional 100k interval: {conditional_100k:.1f} minutes")
-```
-::::
-
-The one-minute checkpoint, detection, and recovery values are illustrative;
-they were not reported for Llama 3. The code keeps the observed input separate
-from the assumed operating costs.
+The figure's defaults of one minute to checkpoint and two minutes to detect
+and recover are illustrative; they were not reported for Llama 3.
 
 ```{figure}
 //| figure: checkpoint-budget
 //| label: fig-machine-budget
-//| fig-cap: "The chapter's first-order budget $W(\tau)$ for a synchronous job of $N$ GPUs, term by term: checkpoint writes $C/\tau$ fall as the interval grows, lost work $\tau/(2M)$ rises, and detection and recovery $(D+R)/M$ is a floor that no interval removes. Under the chapter's independent-hazard model the job interval is $M=M_{\mathrm{GPU}}/N$, so adding GPUs moves $M$ left and the optimum $\tau^*=\sqrt{2CM}$ half as far: on the log axis $\tau^*$ sits midway between $2C$ and $M$. The default per-GPU interval of 5.78 years is not a reported rate; it is the Llama 3 average of 3.1 hours between unexpected interruptions multiplied by 16,384, which holds only under the linear-scaling condition stated in the text. $C$ defaults to one minute and $D+R$ to two, the runnable's illustrative values. The dashed curve is Daly's complete restart model; the dot and the strip are one seeded run of the same process over 400 mean intervals, of which the strip shows the start. Where the curves part, the waste is no longer small and the first-order terms stop holding."
+//| fig-cap: "The chapter's first-order budget $W(\tau)$ for a synchronous job of $N$ GPUs, term by term: checkpoint writes $C/\tau$ fall as the interval grows, lost work $\tau/(2M)$ rises, and detection and recovery $(D+R)/M$ is a floor that no interval removes. Under the chapter's independent-hazard model the job interval is $M=M_{\mathrm{GPU}}/N$, so adding GPUs moves $M$ left and the optimum $\tau^*=\sqrt{2CM}$ half as far: on the log axis $\tau^*$ sits midway between $2C$ and $M$. The default per-GPU interval of 5.78 years is not a reported rate; it is the Llama 3 average of 3.1 hours between unexpected interruptions multiplied by 16,384, which holds only under the linear-scaling condition stated in the text. $C$ defaults to one minute and $D+R$ to two; both are illustrative. The dashed curve is Daly's complete restart model; the dot and the strip are one seeded run of the same process over 400 mean intervals, of which the strip shows the start. Where the curves part, the waste is no longer small and the first-order terms stop holding."
 ```
 
 ::: {.callout-tip}
@@ -283,6 +255,58 @@ straggler or failed participant can delay every rank at the next collective.
 The cost depends on message size, collective algorithm, placement, congestion,
 and topology, not distance alone. @sec-accelerators-networking introduced these
 network domains; @sec-compute-frontier connected them to parallelism placement.
+
+The cell below measures that amplification. Each rank's step takes the ideal
+time plus an exponential jitter with a mean of 2 percent, and in one step out of
+a thousand a rank hiccups and runs 1.5 times slower. A synchronous step lasts
+as long as its slowest rank. The cell computes the expected step time from the
+per-rank distribution $F$ as $E[\max]=1+\int(1-F^N)$, checks it against a
+brute-force simulation up to 4,096 ranks, and checks the jitter-only case
+against the closed form $1+\mu H_N$, where $\mu$ is the mean jitter and $H_N$
+the $N$-th harmonic number. Jitter alone grows only logarithmically with $N$.
+The hiccup is rare for one rank but nearly certain for the step once $N$ passes
+$\ln 2/q$, about 700 ranks here, so at 16,384 GPUs almost every step runs at the
+hiccup's speed. Change `q` or `s`: the knee stays at $\ln 2/q$ whatever the
+slowdown.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+mu, q, s = 0.02, 1e-3, 1.5  # mean jitter (share of the step), chance a rank hiccups in a step, hiccup slowdown
+rng = np.random.default_rng(0)
+
+def rank_times(N, steps, q):  # one step time per rank and step, in units of the ideal step
+    slow = np.where(rng.random((steps, N)) < q, s, 1.0)
+    return slow * (1 + rng.exponential(mu, (steps, N)))
+
+t = np.linspace(1, 2 * s, 40001)
+def F(t, q):  # CDF of one rank's step time: a mixture of normal and hiccup steps
+    cdf = lambda x: np.clip(1 - np.exp(-np.maximum(x - 1, 0) / mu), 0, 1)
+    return (1 - q) * cdf(t) + q * cdf(t / s)
+
+def expected_step(N, q):  # a synchronous step waits for the slowest rank: E[max] = 1 + integral of (1 - F^N)
+    return 1 + np.trapezoid(1 - np.exp(N * np.log(np.maximum(F(t, q), 1e-300))), t)
+
+Ns = np.unique(np.geomspace(1, 1e6, 60).astype(int))
+H = np.cumsum(1 / np.arange(1, Ns[-1] + 1))  # harmonic numbers
+assert np.allclose([expected_step(N, 0) for N in Ns], 1 + mu * H[Ns - 1], atol=1e-4)  # exponential jitter: 1 + mu H_N
+fig, ax = plt.subplots(figsize=(6.4, 4))
+for qq, c, name in [(0, "#5b8def", "jitter only"), (q, "#ff7a66", f"plus 1-in-{1 / q:.0f} hiccups ×{s}")]:
+    ax.plot(Ns, [expected_step(N, qq) for N in Ns], color=c, label=name)
+    for N in (1, 16, 256, 4096):
+        sim = rank_times(N, 400, qq).max(axis=1).mean()
+        assert abs(sim / expected_step(N, qq) - 1) < 0.03  # brute force agrees with the integral
+        ax.plot(N, sim, "o", color=c, ms=5)
+ax.axvline(np.log(2) / q, color="0.5", ls=":", lw=1)
+ax.text(np.log(2) / q * 1.15, 1.02, f"half the steps\nhit a hiccup: N = {np.log(2) / q:.0f}", fontsize=8)
+ax.axvline(16384, color="0.5", lw=1); ax.text(16384 * 1.15, 1.35, "16,384 GPUs", fontsize=8)
+ax.set_xscale("log"); ax.set_xlabel("ranks in lockstep N"); ax.set_ylabel("expected step time / ideal step")
+ax.set_title("A rare per-rank delay becomes every step's delay", fontsize=10); ax.legend(fontsize=8, loc="upper left")
+plt.show()
+```
+::::
 
 NCCLX reports one concrete hierarchy. In Meta's topology connecting more than
 100,000 GPUs, latency across racks within one AI Zone, across AI Zones, and

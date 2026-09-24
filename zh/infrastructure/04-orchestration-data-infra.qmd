@@ -131,27 +131,45 @@ $$
 
 这套模型假设作业运行时间很长，故障彼此独立，中断时间服从指数分布，各项成本恒定，重启能够成功，而且故障在每个间隔内均匀分布。它还假设检查点会阻塞训练、$C\ll T\ll M$，并且保存检查点时不会发生故障。Daly 推导出更高阶的泊松模型，对这个近似做了进一步修正 [@daly2006higher]。当软件故障、抢占、存储事故或相关故障破坏独立性假设时，应当使用作业层面实测的中断率，而不是把各部件故障率简单相加。
 
-下面的可运行示例只使用 Python 标准库。若检查点的暴露成本为 30 秒，作业 MTBF 为 6 小时，一阶模型给出的间隔约为 19 分钟。
+下面的单元直接模拟这个模型所近似的过程。中断按平均间隔为 $M$ 的泊松过程到达；一个含 $T$ 秒有效计算的间隔，只有在计算和检查点期间都没有发生中断时才能提交；中断会丢弃尚未提交的工作，并额外花费 $R+D$。单元取 $C=30$ 秒、$R+D=180$ 秒，分别在 $M$ 为六小时和三十分钟时扫描 $T$，断言模拟出的浪费与同一更新过程的闭式解一致（在这个过程里，每次提交平均消耗 $(M+R+D)(e^{(T+C)/M}-1)$ 秒墙钟时间），并把 $W(T)$ 画在旁边。$M$ 为六小时时两者吻合。$M$ 为三十分钟时，$C\ll T\ll M$ 不再成立，$W(T)$ 把浪费高估了好几个百分点，但真实最优间隔离 $\sqrt{2CM}$ 仍不到百分之六：间隔的选择比浪费的估计更稳健。可以修改 `C`、`DR` 或 `M` 的两个取值。
 
 :::: {.runnable}
 ```python
-from math import sqrt
+import numpy as np
+import matplotlib.pyplot as plt
 
-checkpoint_cost_s = 30.0
-job_mtbf_s = 6 * 60 * 60
-detect_and_restore_s = 180.0
+C, DR = 30.0, 180.0  # 阻塞式检查点成本；每次中断的检测与恢复时间（秒）
+rng = np.random.default_rng(0)
 
-young_s = sqrt(2 * checkpoint_cost_s * job_mtbf_s)
-print(f"Young interval: {young_s / 60:.2f} minutes")
+def simulate(T, M, segments=20000):
+    """运行到 `segments` 个含 T 秒有效计算的间隔都已提交为止，返回墙钟时间中被浪费的比例。"""
+    L = T + C  # 只有计算和检查点期间都没有发生中断，这个间隔才能提交
+    fails = rng.geometric(np.exp(-L / M), size=segments) - 1  # 每次提交之前失败的尝试次数
+    u = rng.random(fails.sum())
+    lost = -M * np.log1p(-u * -np.expm1(-L / M))  # 每次中断发生的时刻：截断于 L 的 Exp(M)
+    return 1 - segments * T / (segments * L + lost.sum() + fails.sum() * DR)
 
-for interval_min in (5, 10, 20, 40, 80):
-    interval_s = interval_min * 60
-    waste = (
-        checkpoint_cost_s / interval_s
-        + interval_s / (2 * job_mtbf_s)
-        + detect_and_restore_s / job_mtbf_s
-    )
-    print(f"{interval_min:>2} min -> expected waste {100 * waste:5.2f}%")
+exact = lambda T, M: 1 - T / ((M + DR) * np.expm1((T + C) / M))  # 同一过程的闭式解
+young = lambda T, M: C / T + T / (2 * M) + DR / M  # 一阶模型
+
+fig, axes = plt.subplots(2, 1, figsize=(6.2, 6.6))
+for ax, M in zip(axes, (6 * 3600, 30 * 60)):
+    T = np.geomspace(60, 6 * np.sqrt(2 * C * M), 60)
+    sim = np.array([simulate(t, M) for t in T])
+    assert np.allclose(sim, exact(T, M), atol=0.01)  # 模拟结果与闭式解一致
+    grid = np.geomspace(T[0], T[-1], 2000)
+    t_y, t_x = np.sqrt(2 * C * M), grid[np.argmin(exact(grid, M))]  # Young 间隔与真实最优间隔
+    gap = young(t_y, M) - exact(t_y, M)
+    assert abs(t_x / t_y - 1) < 0.15  # 浪费估计失准时，间隔依然可用
+    ax.plot(T / 60, 100 * sim, ".", color="#5b8def", ms=4, label="模拟")
+    ax.plot(T / 60, 100 * exact(T, M), color="#5b8def", lw=1, label="精确解")
+    ax.plot(T / 60, 100 * young(T, M), "--", color="#ff7a66", label="一阶近似")
+    ax.axvline(t_y / 60, color="#ff7a66", lw=1, ls=":"); ax.axvline(t_x / 60, color="#5b8def", lw=1, ls=":")
+    ax.set_xscale("log"); ax.set_ylim(0, 100 * min(1, 2.5 * exact(t_x, M)))
+    ax.set_xlabel("检查点间隔 T（分钟）"); ax.set_ylabel("浪费的墙钟时间（%）")
+    ax.set_title(f"M = {M / 3600:g} 小时：最优点在 {t_x / t_y:.2f}·√(2CM)，W(T) 偏差 {100 * gap:+.1f} 个百分点", fontsize=9)
+axes[0].legend(fontsize=8)
+fig.tight_layout(); plt.show()
 ```
 ::::
 

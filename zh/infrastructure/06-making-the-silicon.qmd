@@ -52,27 +52,8 @@ $$
 ```{figure}
 //| figure: supply-ledger
 //| label: fig-making-silicon-ledger
-//| fig-cap: "按封装等价量绘制的本章示例台账。每根条对应 $N_{\text{ship}}$ 上界中的一项，最短的一根构成约束，竖线就是上界。其余条中颜色较淡的部分，是约束输入增加之前上界用不上的库存或产能。可以改变物料清单用量，也可以像 HBM 良率下降、基板延迟交付或最终测试饱和那样单独缩放某项输入，虚线框保留台账原值。数值取自下方代码中的示例台账，不是预测。"
+//| fig-cap: "按封装等价量绘制的本章示例台账。每根条对应 $N_{\text{ship}}$ 上界中的一项，最短的一根构成约束，竖线就是上界。其余条中颜色较淡的部分，是约束输入增加之前上界用不上的库存或产能。可以改变物料清单用量，也可以像 HBM 良率下降、基板延迟交付或最终测试饱和那样单独缩放某项输入，虚线框保留台账原值。数值仅作示意，不是预测。"
 ```
-
-下面的示例台账不采用任何供应商预测，只演示单位换算。改变库存量或物料清单用量，就能观察约束工序如何变化。
-
-:::: {.runnable}
-```python
-package_equivalents = {
-    "known-good logic dies": 7_200 // 2,
-    "qualified HBM stacks": 12_500 // 4,
-    "good interposers": 4_100 // 1,
-    "qualified substrates": 3_800 // 1,
-    "assembly capacity": 3_500,
-    "final-test capacity": 3_400,
-}
-
-binding_stage = min(package_equivalents, key=package_equivalents.get)
-print(f"Binding stage: {binding_stage}")
-print(f"Optimistic shipment bound: {package_equivalents[binding_stage]:,}")
-```
-::::
 
 ## 从晶圆投片到已知良品裸片
 
@@ -89,6 +70,66 @@ print(f"Optimistic shipment bound: {package_equivalents[binding_stage]:,}")
 ```
 
 光刻是把电路图形印到晶圆上的工序，每次透过一块带图形的掩模版曝光一块矩形区域，这块区域就是掩模版视场。掩模版视场限制常规单次曝光裸片的图形化面积，但这并不意味着每一种加速器都必须超过该视场，或必须使用硅中介层。设计者可以选择单片裸片、多块小芯片、2.5D 或 3D 集成、拼接或晶圆级设计。单片裸片把整个设计放进一个视场；小芯片把设计拆成几块较小的裸片；2.5D 集成把裸片并排放在中介层上，3D 集成则把裸片垂直堆叠；拼接设计让一块裸片跨越相邻的多个视场，晶圆级设计则使用整片晶圆。每条路线都会在裸片良率、互连、封装装配、散热与测试之间重新分配成本和风险。TSMC 的 CoWoS（chip-on-wafer-on-substrate）平台是这类 2.5D 先进封装中一条具有商业影响力的路线。其公开说明把逻辑与 HBM 放在中介层上，并支持面积超过两个掩模版视场的中介层 [@tsmc2026cowos]。TSMC 2026 年的路线图称，5.5 个掩模版视场的 CoWoS 已进入量产，并计划在 2028 年推出 14 个掩模版视场的版本 [@tsmc2026symposium]。“量产中”与“规划中”属于不同的证据状态。
+
+下面的单元把这笔交易中裸片良率的一面具体算出来。它在模拟的 300 mm 晶圆上撒下缺陷，平均密度为每平方厘米 0.1 个：一种情形是缺陷均匀分布，另一种是缺陷密度本身在晶圆之间波动（缺陷聚集），然后统计没有被任何缺陷落中的裸片。同样 800 mm² 的逻辑，要么做成一块视场大小的裸片，要么拆成 2 到 32 块小芯片。单元断言模拟计数与良率模型一致：均匀缺陷对应泊松良率 $e^{-AD_0}$，聚集缺陷对应负二项良率 $(1+AD_0/\alpha)^{-\alpha}$，其中 $A$ 是裸片面积，$D_0$ 是平均缺陷密度。随后，它假定晶圆测试能完美筛出每块小芯片，并让每个封装为贴装的每块裸片承担 99% 的装配良率。拆分大约能让每片晶圆的合格封装数翻一番，之后众多小裸片的装配损失又把收益吃回去。缺陷聚集对大裸片更有利，因为挤在少数裸片上的缺陷让其余裸片保持完好。把 `D0` 改成成熟工艺更低的缺陷密度，或者修改 `bond`，最佳拆分方式就会移动。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.collections import PatchCollection
+
+R, edge, D0 = 150.0, 3.0, 0.001  # 晶圆半径与边缘排除宽度（毫米），平均缺陷密度（每平方毫米，即每平方厘米 0.1 个）
+A, bond = 800.0, 0.99  # 每个封装的逻辑面积（平方毫米），每贴装一块裸片的装配良率
+rng = np.random.default_rng(0)
+
+def wafers(w, h, alpha, n=200):
+    """n 片晶圆上各有多少块 w × h 毫米的好裸片；alpha 控制缺陷聚集程度（None 表示随机缺陷）。"""
+    i, j = np.meshgrid(np.arange(np.ceil(2 * R / w)), np.arange(np.ceil(2 * R / h)), indexing="ij")
+    x0, y0 = i * w - R, j * h - R  # 晶圆上按网格排列的裸片角点
+    fits = np.hypot(np.maximum(abs(x0), abs(x0 + w)), np.maximum(abs(y0), abs(y0 + h))) <= R - edge
+    good = []
+    for _ in range(n):
+        D = D0 if alpha is None else rng.gamma(alpha, D0 / alpha)  # 这片晶圆的缺陷密度
+        r = R * np.sqrt(rng.random(rng.poisson(D * np.pi * R * R)))  # 缺陷在圆面上均匀分布
+        th = 2 * np.pi * rng.random(r.size)
+        bad = np.zeros_like(fits)
+        bad[((r * np.cos(th) + R) // w).astype(int), ((r * np.sin(th) + R) // h).astype(int)] = True
+        good.append((fits & ~bad).sum())
+    return fits.sum(), np.array(good), (fits, bad, r * np.cos(th), r * np.sin(th))
+
+def shape(k):  # 把 26 毫米 × A/26 的视场级裸片沿长边对半切分，共 log2(k) 次
+    w, h = 26.0, A / 26
+    for _ in range(int(np.log2(k))):
+        w, h = (w / 2, h) if w > h else (w, h / 2)
+    return w, h
+
+ks = [1, 2, 4, 8, 16, 32]
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 8.4), height_ratios=[1.25, 1])
+for alpha, label, c in [(None, "随机缺陷", "#5b8def"), (2.0, "聚集缺陷（α = 2）", "#ff7a66")]:
+    sim, model = [], []
+    for k in ks:
+        w, h = shape(k)
+        n_dies, good, last = wafers(w, h, alpha)
+        Y = np.exp(-D0 * w * h) if alpha is None else (1 + D0 * w * h / alpha) ** -alpha  # 泊松模型、负二项模型
+        assert abs(good.mean() / (n_dies * Y) - 1) < 0.04  # 模拟结果与良率模型一致
+        sim.append(good.mean() / k * bond**k); model.append(n_dies * Y / k * bond**k)
+        if k == 1 and alpha is None:
+            fits, bad, dx, dy = last
+    ax2.plot(ks, sim, "o", color=c); ax2.plot(ks, model, color=c, lw=1.5, label=f"{label}：最佳 {ks[int(np.argmax(sim))]} 块")
+w, h = shape(1)
+ii, jj = np.nonzero(fits)
+dies = [plt.Rectangle((-R + a * w + 0.4, -R + c * h + 0.4), w - 0.8, h - 0.8) for a, c in zip(ii, jj)]
+ax1.add_collection(PatchCollection(dies, facecolor=np.where(bad[ii, jj], "#ff7a66", "#5b8def")))  # 橙色：有缺陷
+ax1.add_patch(plt.Circle((0, 0), R, fill=False, color="0.55")); ax1.plot(dx, dy, ".", ms=2.5, color="0.45")
+ax1.set_xlim(-R, R); ax1.set_ylim(-R, R); ax1.set_aspect("equal"); ax1.axis("off")
+ax1.set_title(f"一片晶圆，{A:.0f} mm² 裸片：{fits.sum()} 块中 {(fits & ~bad).sum()} 块完好", fontsize=10)
+ax2.set_xscale("log", base=2); ax2.set_xticks(ks, ks); ax2.set_ylim(0)
+ax2.set_xlabel("每个封装的小芯片数"); ax2.set_ylabel("每片晶圆的合格封装数")
+ax2.set_title(f"裸片良率收益与每块 {bond:.0%} 装配良率的权衡", fontsize=10); ax2.legend(fontsize=8)
+fig.tight_layout(); plt.show()
+```
+::::
 
 ## HBM 与先进封装通过同一份产品计划耦合
 

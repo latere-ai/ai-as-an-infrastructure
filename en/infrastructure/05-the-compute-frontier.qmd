@@ -59,21 +59,57 @@ contention can make observed time larger; phases that cannot overlap may need
 to be added rather than maximized. A datasheet peak does not substitute for
 $P_{\text{eff}}$ or for any sustainable bandwidth.
 
+The cell below evaluates the four terms for one decode step of a dense model with
+about 64 billion parameters as tensor parallelism spreads it over $t$ devices.
+Each device reads $1/t$ of the weights and of the KV cache, and every layer ends
+with two ring all-reduces of the activations, each costing a device $2(t-1)/t$ of
+the message, the ring term from @sec-accelerators-networking. Inside a node that
+traffic crosses the scale-up fabric. Once $t$ exceeds the node's eight devices,
+the ring also crosses the scale-out network, and its slowest link bounds it. The
+cell asserts that HBM traffic binds at $t=1$, that arithmetic never binds, and
+that past the node boundary the scale-out term binds and the bound stops
+falling. Datasheet peaks stand in for $P_{\text{eff}}$ and the sustainable
+bandwidths. Raise the batch `b` and the fabric terms grow while the weight
+traffic does not; set `g = 72`, a rack-scale scale-up domain, and the scale-out
+term leaves the range.
+
 :::: {.runnable}
 ```python
-# Illustrative units: work in operations, traffic in bytes, rates per second.
-terms = {
-    "arithmetic": 2.0e15 / 1.0e15,
-    "HBM traffic": 8.0e12 / 3.0e12,
-    "scale-up traffic": 1.0e12 / 9.0e11,
-    "scale-out traffic": 5.0e11 / 2.0e11,
-}
+import numpy as np
+import matplotlib.pyplot as plt
 
-for name, seconds in terms.items():
-    print(f"{name:18s} {seconds:.2f} s")
+L, d, s = 80, 8192, 2  # layers, width, bytes per BF16 value
+N = 12 * L * d * d  # about 64B parameters
+b, ctx, kv = 32, 4096, 2 * (d // 8) * s * L  # decode batch, context, KV bytes per token (GQA, 8 query heads per KV head)
+g = 8  # devices per scale-up domain (node)
+# Datasheet peaks stand in for P_eff and sustainable bandwidths (H100 SXM, NVLink, one 400 Gb/s NIC).
+P, B_hbm, B_up, B_out = 989e12, 3.35e12, 450e9, 50e9
 
-binding = max(terms, key=terms.get)
-print(f"Binding term: {binding}")
+def terms(t):
+    """The four terms of the step bound, per device, for one decode step at tensor-parallel degree t."""
+    F = (2 * N * b + 4 * b * ctx * d * L) / t  # weight matmuls plus attention over the context
+    Q_hbm = (s * N + b * ctx * kv) / t  # every weight and cached key/value read once
+    Q_ring = 2 * L * 2 * (t - 1) / t * b * d * s  # two ring all-reduces of activations per layer
+    return {"arithmetic": F / P, "HBM": Q_hbm / B_hbm,
+            "scale-up": Q_ring / B_up, "scale-out": Q_ring / B_out if t > g else 0.0}
+
+ts = 2 ** np.arange(7)
+T = {k: np.array([terms(t)[k] for t in ts]) for k in terms(1)}
+bound = np.max(list(T.values()), axis=0)
+binding = [max(terms(t), key=terms(t).get) for t in ts]
+assert binding[0] == "HBM" and "arithmetic" not in binding  # bound by bytes, never by FLOPs, here
+if ts[-1] > g:  # once the ring leaves the node, its slowest link sets the step
+    assert binding[-1] == "scale-out" and ts[np.argmin(bound)] < ts[-1]
+
+fig, ax = plt.subplots(figsize=(6.2, 3.8))
+ax.plot(ts, bound * 1e3, color="0.8", lw=7, solid_capstyle="round", label="step bound (max)")
+for k, v in T.items():
+    ax.plot(ts[v > 0], v[v > 0] * 1e3, "o-", ms=4, label=k)
+ax.axvline(g + 0.5, color="0.5", ls=":", lw=1); ax.text(g * 1.1, bound.max() * 1e3, "node boundary", fontsize=8, va="top")
+ax.set_xscale("log", base=2); ax.set_yscale("log"); ax.set_xticks(ts, ts)
+ax.set_xlabel("tensor-parallel degree t"); ax.set_ylabel("time per decode step (ms)")
+ax.set_title(f"Best at t = {ts[np.argmin(bound)]}: {bound.min() * 1e3:.1f} ms, bound by {binding[np.argmin(bound)]}", fontsize=10)
+ax.legend(fontsize=8, loc="lower left"); plt.show()
 ```
 ::::
 

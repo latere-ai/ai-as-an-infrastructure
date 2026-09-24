@@ -3,11 +3,10 @@
 //   N_ship <= min(⌊G_L/d⌋, ⌊G_H/h⌋, ⌊G_I/i⌋, ⌊G_S/s⌋, C_A, C_T)
 //
 // every input converted into package-equivalents before the minimum is taken.
-// The inventories and capacities are the chapter's illustrative ledger (the
-// runnable block beside the figure): 7,200 known-good logic dies at d = 2,
-// 12,500 qualified HBM stacks at h = 4, 4,100 interposers, 3,800 substrates,
-// assembly for 3,500 packages and final test for 3,400. No vendor figure is
-// used. The reader changes the bill of materials (d, h) and scales one input,
+// The inventories and capacities are the chapter's illustrative ledger: 7,200
+// known-good logic dies at d = 2, 12,500 qualified HBM stacks at h = 4, 4,100
+// interposers, 3,800 substrates, assembly for 3,500 packages and final test for
+// 3,400. No vendor figure is used. The reader changes the bill of materials (d, h) and scales one input,
 // as in the chapter's scenarios (lower HBM yield, delayed substrates,
 // final-test saturation), and sees which input binds, how far the bound can
 // rise before the next input binds, and how much of every other input is left
