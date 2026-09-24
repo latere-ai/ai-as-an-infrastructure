@@ -5,8 +5,12 @@
 //
 //   bun run scripts/figure-shots.ts en/inference/memory-scheduling [out-dir]
 //
-// Headless Chrome is driven over the DevTools protocol; set CHROME to its path
-// if it is not the macOS default. Output defaults to $TMPDIR/figure-shots.
+// A headless Chrome is driven over the DevTools protocol. CHROME must name a
+// standalone headless binary such as chrome-headless-shell
+// (`bunx @puppeteer/browsers install chrome-headless-shell@stable`). There is no
+// fallback to the desktop Chrome app: on macOS a headless instance of that app
+// bundle captures the next Dock or Finder launch, so the desktop browser will
+// not open while shots run. Output defaults to $TMPDIR/figure-shots.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +20,9 @@ const page = (process.argv[2] ?? "").replace(/^\/+|\.html$/g, "");
 if (!page) { console.error("usage: bun run scripts/figure-shots.ts <lang>/<chapter-path> [out-dir]"); process.exit(2); }
 const OUT = process.argv[3] ?? join(tmpdir(), "figure-shots");
 const BOOK = join(import.meta.dir, "..", "..", "_book");
-const CHROME = process.env.CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+const CHROME = process.env.CHROME ?? "";
+if (!CHROME) { console.error("set CHROME to a headless Chrome binary, for example chrome-headless-shell"); process.exit(2); }
+if (CHROME.includes(".app/Contents/MacOS/")) { console.error(`CHROME points into a macOS app bundle (${CHROME}); use chrome-headless-shell instead`); process.exit(2); }
 mkdirSync(OUT, { recursive: true });
 
 const server = Bun.serve({
