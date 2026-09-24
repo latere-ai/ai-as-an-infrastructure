@@ -19,23 +19,32 @@ training, or serving playbooks; those layers are covered because they set the
 constraints that shape adaptation, reasoning, evaluation, agents, safety, and
 economics.
 
-The book is web-only: its runnable cells, viz components, and interactive
-diagrams do not survive a static PDF or EPUB.
+It is written for a software engineer who knows systems and distributed
+computing but is new to machine learning, and it holds that level from the
+first chapter to the last: every term is introduced where it is first used.
+
+The book is web-only: its runnable cells, interactive figures, and diagrams do
+not survive a static PDF or EPUB. The English and Chinese editions carry the
+same chapters, sources, equations, and figures.
 
 ## Outline
 
-The spine is the lifecycle of a capability, read as a stack. Each part below
-links to its opening page on the site.
+Thirteen parts and 93 chapters, framed by a preface and an epilogue. The spine
+is the lifecycle of a capability, read as a stack. Each part below links to
+its opening page on the site.
 
 - **[Part 0, Orientation](https://aaai.latere.ai/en/orientation).** The whole
-  stack in one pass, how to read, and the boundary with the AI infrastructure
+  stack in one pass, a map of the field and how to read the book, the ideas AI
+  borrowed from other sciences, and the boundary with the AI infrastructure
   that came before (ranking, recommendation, classical ML).
 - **[Part I, Base Model Formation](https://aaai.latere.ai/en/foundations).**
-  Scaling, data, tokenization, architecture, training at scale, and
-  mid-training bridges.
+  Scaling laws, data curation, tokenization, the transformer, mixture of
+  experts and state-space hybrids, training at scale, and mid-training.
 - **[Part II, Generative and Multimodal
   Architectures](https://aaai.latere.ai/en/generative).** Diffusion and flow
-  matching, diffusion language models, speech, multimodal fusion.
+  matching, non-autoregressive and diffusion language models, speech and
+  realtime voice, multimodal fusion and generation, and world models and
+  embodiment.
 - **[Part III, Post-Training: Adaptation, Preference, and
   Alignment](https://aaai.latere.ai/en/adaptation).** Fine-tuning, behavior
   specifications, preference data, RLHF, direct preference optimization,
@@ -50,14 +59,17 @@ links to its opening page on the site.
   multimodal serving.
 - **[Part VI, Orchestration: Agents, Retrieval,
   Context](https://aaai.latere.ai/en/orchestration).** Training agents to act,
-  memory, personalization and user memory, the harness, computer use,
-  multi-agent, retrieval, context.
+  agent architectures, memory, personalization, the harness, computer use,
+  multi-agent systems, retrieval, embeddings, and context engineering.
 - **[Part VII, Evaluation](https://aaai.latere.ai/en/evaluation).**
   Benchmarks, statistical reliability, human rubrics, model judges, factuality
-  and grounding, agents, and operational governance.
+  and grounding, agents, and operational evaluation.
 - **[Part VIII, Safety, Interpretability, and
-  Governance](https://aaai.latere.ai/en/safety).** Including confidential
-  inference: attested hardware in place of contractual privacy.
+  Governance](https://aaai.latere.ai/en/safety).** Mechanistic
+  interpretability, scalable oversight and control, security and
+  authorization, runtime guardrails, adversarial robustness, privacy and
+  unlearning, confidential inference on attested hardware, and law and
+  regulation.
 - **[Part IX, Infrastructure and
   Compute](https://aaai.latere.ai/en/infrastructure).** Accelerators,
   networking, the software layer (frameworks, autodiff, compilers,
@@ -73,13 +85,16 @@ links to its opening page on the site.
   market structure, adoption and productivity, data rights, and the agent
   economy (identity, delegation, machine payments).
 - **[Part XII, Practice and Operations](https://aaai.latere.ai/en/practice).**
-  The hands-on 2026 stack, plus deployment, reliability, human oversight
-  surfaces, the production data engine, and operating contracts for SLOs, cost
-  governance, incidents, and multi-tenancy.
+  Choosing a model, serving, edge devices, fine-tuning, agents and sandboxes,
+  retrieval, evaluation and observability, wiring a 2026 stack, deployment,
+  reliability, human oversight surfaces, the production data engine, and
+  operating contracts for SLOs, cost governance, incidents, and multi-tenancy.
 
-Also on the site: a [glossary](https://aaai.latere.ai/en/glossary) of the terms
-the book introduces, and a [changelog](https://aaai.latere.ai/en/changelog) of
-what changed week to week.
+Also on the site: a dated State of the Field page that links each
+development to the chapter that explains it, a
+[glossary](https://aaai.latere.ai/en/glossary) of the terms the book
+introduces, and a [changelog](https://aaai.latere.ai/en/changelog) of what
+changed week to week.
 
 ## How to read it
 
@@ -93,15 +108,45 @@ become.
 Every section moves through Problem, Design, Evolution, Trade-offs, and
 Implementation, so a reader finishes able to answer "why is it built this
 way?". Live debates get a "what's contested" box rather than being papered
-over. The writing rules are in [`CONVENTIONS.md`](CONVENTIONS.md).
+over. Chapters on fast-moving topics keep their dated evidence in an "As of"
+section, and every chapter shows the date it was last reviewed under its
+title.
+
+## Citing
+
+```bibtex
+@book{ou2026aaai,
+  author    = {Changkun Ou},
+  title     = {{AI} as an Infrastructure},
+  subtitle  = {From Systems to Agents: History, Design Decisions, and
+               Foundations},
+  publisher = {latere.ai},
+  year      = {2026},
+  url       = {https://aaai.latere.ai}
+}
+```
+
+The book changes as the field does. When a claim matters, cite the chapter's
+address and the date you read it; the
+[changelog](https://aaai.latere.ai/en/changelog) and the
+[releases](https://github.com/latere-ai/ai-as-an-infrastructure/releases) say
+what changed when.
+
+## Reporting a problem
+
+Every chapter ends with **Report an issue** and **Edit this page** links. The
+[Contribute](https://aaai.latere.ai/en/contribute) page says what makes a
+report useful. Reports are welcome in English or Chinese. Factual corrections,
+stale numbers, unclear passages, broken rendering, and disagreements between
+the two editions are all in scope.
 
 ## Contributing
 
-Corrections, typos, and build fixes are welcome. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the repository layout and how to
-build the book locally. Readers arriving from the site land on
-[Contribute](https://aaai.latere.ai/en/contribute), which every chapter links
-to alongside an edit link to its own source file.
+This repository holds the English and Chinese sources, the bibliography, the
+figure sources, and the reader that builds and serves the site.
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers what can be merged under the
+license, the repository layout, and how to build and test the book locally.
+[`CONVENTIONS.md`](CONVENTIONS.md) is how chapters are written and translated.
 
 ## License
 
