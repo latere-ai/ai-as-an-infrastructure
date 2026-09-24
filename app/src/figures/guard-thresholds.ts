@@ -113,7 +113,7 @@ const labels = {
     precBench: "the same thresholds at a 50% base rate: precision {p}",
     queue: "review queue: {n} items, {s} of traffic, {v} of them violating",
     sel: "coverage {c} decided automatically, risk {k} of those decisions wrong",
-    describe: "Base rate {pi}, thresholds {a} and {b}, detector AUROC {auc}: {pa} of items are allowed, {pr} go to review and {pb} are blocked. Recall {r} and false-positive rate {f} do not depend on the base rate, but {p} of blocked items and {qv} of the review queue violate the policy.",
+    describe: "Base rate {pi}, thresholds {a} and {b}, detector AUROC {auc}: {pa} of items are allowed, {pr} go to review and {pb} are blocked. Recall {r} and false-positive rate {f} do not depend on the base rate; {p} of blocked items and {qv} of the review queue violate the policy.",
   },
   zh: {
     title: "守卫的两道阈值与基准率",
@@ -148,7 +148,7 @@ const labels = {
     precBench: "同样的阈值放到 50% 的基准率下：精确率 {p}",
     queue: "审查队列：{n} 条，占流量 {s}，其中违规 {v}",
     sel: "覆盖率 {c}（自动判定的比例），风险 {k}（自动判定中的错误率）",
-    describe: "基准率 {pi}，阈值 {a} 和 {b}，检测器 AUROC {auc}：{pa} 的内容被允许，{pr} 进入审查，{pb} 被阻止。召回率 {r} 和假阳性率 {f} 与基准率无关，但被阻止的内容只有 {p} 违规，审查队列中违规的只占 {qv}。",
+    describe: "基准率 {pi}，阈值 {a} 和 {b}，检测器 AUROC {auc}：{pa} 的内容被允许，{pr} 进入审查，{pb} 被阻止。召回率 {r} 和假阳性率 {f} 与基准率无关；被阻止的内容中违规占 {p}，审查队列中违规占 {qv}。",
   },
 };
 type L = typeof labels.en;
