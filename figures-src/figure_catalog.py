@@ -280,18 +280,6 @@ SPECS = {
         "xlabel": "runtime cost",
         "ylabel": "isolation strength",
     },
-    "multi-agent-systems-1": {
-        "type": "line",
-        "x": [1, 2, 4, 8, 16, 32],
-        "series": [
-            {"label": "useful work", "y": [1.0, 1.7, 2.6, 3.4, 3.9, 4.1], "color": DATA},
-            {"label": "coordination cost", "y": [0.1, 0.3, 0.8, 1.7, 3.2, 5.6], "color": WARN},
-        ],
-        "xlabel": "agent count",
-        "ylabel": "relative units",
-        "logx": True,
-        "ylim": (0, 6.0),
-    },
     "embeddings-representation-1": {
         "type": "scatter",
         "points": [
