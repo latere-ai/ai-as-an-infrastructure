@@ -203,7 +203,7 @@ function stack(x0: number, x1: number, bottom: number, short: boolean): string {
   return parts.join("");
 }
 
-function drawSection(p: P, w: number, narrow: boolean, L: L, lang: Lang): { svg: string; h: number } {
+function drawSection(p: P, w: number, narrow: boolean, L: L): { svg: string; h: number } {
   const parts: string[] = [];
   const blocksW = narrow ? 96 : 150;
   const x0 = narrow ? 2 : 4;
@@ -256,7 +256,6 @@ function drawSection(p: P, w: number, narrow: boolean, L: L, lang: Lang): { svg:
   for (const side of [0, 1] as const) {
     const [sa, sb] = stacks[side];
     const [da, db] = dies[side];
-    const dir = side === 0 ? 1 : -1;
     if (!sp) {
       // Eight lines stand for 2,048 signals: stack base down to the
       // interposer, across, and up into the die.
@@ -276,7 +275,6 @@ function drawSection(p: P, w: number, narrow: boolean, L: L, lang: Lang): { svg:
         memParts.push(el("path", { d: `M${xs},${G.iBot}V${y}H${xd}V${G.dieBot}`, ...pathStyle("memory", 1.3) }));
       }
     }
-    void dir;
   }
   parts.push(g({}, ...memParts));
 
@@ -349,13 +347,12 @@ function drawSection(p: P, w: number, narrow: boolean, L: L, lang: Lang): { svg:
   h += 4 + lg.height;
   parts.push(text(0, h + 12, L.schematic, { "font-size": size, class: "fig-t-muted" }));
   h += 18;
-  void lang;
   return { svg: g({ class: "fig-section" }, ...parts), h };
 }
 
 // ---------------------------------------------------------------- ladder and readout
 
-function drawLadder(p: P, y0: number, w: number, narrow: boolean, L: L, lang: Lang): { svg: string; h: number } {
+function drawLadder(p: P, y0: number, w: number, narrow: boolean, L: L): { svg: string; h: number } {
   const parts: string[] = [];
   const size = narrow ? TYPE.body : TYPE.small;
   let y = y0;
@@ -393,7 +390,6 @@ function drawLadder(p: P, y0: number, w: number, narrow: boolean, L: L, lang: La
   const ticks = [0.1e12, 1e12, 10e12];
   parts.push(axis({ scale: x, orient: "bottom", at: y, ticks, minor: true, title: L.axisX, format: (v) => si(v, "B/s", 2), size }));
   y += axisHeight(true, size);
-  void lang;
   return { svg: g({ class: "fig-ladder" }, ...parts), h: y - y0 };
 }
 
@@ -455,16 +451,16 @@ function render(st: State<P>, lang: Lang): string {
   const p = st.p;
   const w = st.w;
   const narrow = w < 480;
-  const sec = drawSection(p, w, narrow, L, lang);
+  const sec = drawSection(p, w, narrow, L);
   let y = sec.h + 16;
   const parts = [sec.svg];
   if (narrow) {
-    const lad = drawLadder(p, y, w, narrow, L, lang);
+    const lad = drawLadder(p, y, w, narrow, L);
     parts.push(lad.svg); y += lad.h + 14;
     const ro = drawReadout(p, y, w, narrow, L, lang);
     parts.push(ro.svg); y += ro.h;
   } else {
-    const lad = drawLadder(p, y, w, narrow, L, lang);
+    const lad = drawLadder(p, y, w, narrow, L);
     parts.push(lad.svg); y += lad.h + 16;
     const ro = drawReadout(p, y, w, narrow, L, lang);
     parts.push(ro.svg); y += ro.h;
