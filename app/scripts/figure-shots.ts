@@ -113,15 +113,15 @@ try {
       const cold = await js<string[]>(`[...document.querySelectorAll(".fig[data-figure]:not(.fig-ready)")].map((h) => h.dataset.figure + (h.dataset.figError ? ": " + h.dataset.figError : ""))`);
       if (cold.length) { problems++; console.log(`  not hydrated at ${w}: ${cold.join(", ")}`); }
     }
-    const sideways = await js<number>(`(() => { const m = document.querySelector("main"); if (!m) return 0; const b = m.scrollLeft; m.scrollLeft = 1e5; const r = m.scrollLeft; m.scrollLeft = b; return r; })()`);
+    const sideways = await js<number>(`(() => { const m = document.scrollingElement; const b = m.scrollLeft; m.scrollLeft = 1e5; const r = m.scrollLeft; m.scrollLeft = b; return r; })()`);
     if (sideways > 0) { problems++; console.log(`  page scrolls sideways by ${sideways}px at ${w}`); }
     for (const id of ids) {
       // Make the viewport tall enough for the figure, then bring it to the top
-      // of the reader's scroll container (<main>, not the document).
+      // of the page; the document's scroll-padding keeps it clear of the header.
       const h = await js<number>(`document.getElementById(${JSON.stringify(id)}).getBoundingClientRect().height`);
       await send("Emulation.setDeviceMetricsOverride", { width: w, height: Math.ceil(h + 160), deviceScaleFactor: 2, mobile: w < 600 });
       await Bun.sleep(300);
-      await js(`(() => { const f = document.getElementById(${JSON.stringify(id)}); f.scrollIntoView({ block: "start", behavior: "instant" }); const m = document.querySelector("main"); if (m) m.scrollBy({ top: -24, behavior: "instant" }); return true; })()`);
+      await js(`(() => { const f = document.getElementById(${JSON.stringify(id)}); f.scrollIntoView({ block: "start", behavior: "instant" }); return true; })()`);
       await Bun.sleep(300);
       const b = await js<{ x: number; y: number; w: number; h: number }>(`(() => { const r = document.getElementById(${JSON.stringify(id)}).getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; })()`);
       const shot = await send("Page.captureScreenshot", { format: "png", fromSurface: true, captureBeyondViewport: false, clip: { x: Math.max(0, b.x - 8), y: Math.max(0, b.y - 8), width: b.w + 16, height: b.h + 16, scale: 1 } });
