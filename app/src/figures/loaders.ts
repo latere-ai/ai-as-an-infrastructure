@@ -59,4 +59,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "dpo-derivation": () => import("./dpo-derivation.ts"),
   "checkpoint-budget": () => import("./checkpoint-budget.ts"),
   "sdc-rollback": () => import("./sdc-rollback.ts"),
+  "pd-placement": () => import("./pd-placement.ts"),
 };
