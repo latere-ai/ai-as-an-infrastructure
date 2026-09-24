@@ -131,4 +131,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "agent-critical-path": () => import("./agent-critical-path.ts"),
   "shared-surface-channel": () => import("./shared-surface-channel.ts"),
   "interaction-cost": () => import("./interaction-cost.ts"),
+  "infonce-gradient": () => import("./infonce-gradient.ts"),
 };
