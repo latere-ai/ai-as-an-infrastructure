@@ -10,7 +10,9 @@ import { readFileSync } from "node:fs";
 const rt = readFileSync(new URL("./runtime/live.ts", import.meta.url), "utf8");
 const css = readFileSync(new URL("./theme.css", import.meta.url), "utf8");
 
-test("matplotlib output is a transparent SVG (vector, theme-fitting), not a PNG", () => {
+// Animation frames are the exception: the harness may save them as PNG to stay
+// within the cell's payload budget (runtime-harness.test.ts runs that path).
+test("a static matplotlib figure is a transparent SVG (vector, theme-fitting), not a PNG", () => {
   expect(rt).toMatch(/format="svg",\s*bbox_inches="tight",\s*transparent=True/);
   expect(rt).not.toMatch(/format="png"/);
 });
