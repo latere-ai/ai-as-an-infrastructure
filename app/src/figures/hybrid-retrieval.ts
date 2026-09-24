@@ -105,7 +105,7 @@ function model(p: P) {
     excluded: p.access === "pre" ? CORPUS.map((_, i) => i).filter((i) => CORPUS[i].internal) : [],
     internalInFusion: p.access === "post" ? union.filter((i) => CORPUS[i].internal).length : 0,
     recall: { bm: hits(bm.slice(0, k).map((x) => x.i)), de: hits(de.slice(0, k).map((x) => x.i)), fused: hits(fusedTop), rr: hits(reranked) },
-    ndcg: { bm: ndcg(bm.slice(0, k).map((x) => x.i)), de: ndcg(de.slice(0, k).map((x) => x.i)), fused: ndcg(cands), rr: ndcg(reranked) },
+    ndcg: { bm: ndcg(bm.slice(0, k).map((x) => x.i)), de: ndcg(de.slice(0, k).map((x) => x.i)), fused: ndcg(fusedTop), rr: ndcg(reranked) },
     maxScore: p.fusion === "rrf" ? 2 / (p.k0 + 1) : SUM_MAX,
   };
 }
@@ -623,7 +623,7 @@ export default defineFigure({
   params: {
     depth: {
       kind: "range", label: { en: "Candidate depth k", zh: "候选深度 k" }, min: 1, max: MAX_DEPTH, step: 1, default: 4,
-      unit: { en: "per list", zh: "每路" },
+      unit: { en: "per list", zh: "个/路" },
     },
     k0: {
       kind: "range", label: { en: "RRF constant k₀", zh: "RRF 常数 k₀" }, min: 1, max: 100, step: 1, default: 60,
