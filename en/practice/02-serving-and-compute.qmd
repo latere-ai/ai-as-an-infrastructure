@@ -13,7 +13,8 @@ The theory behind the runtime is developed in @sec-serving-problem and
 @sec-memory-scheduling. This chapter turns it into an operating method that
 freezes the contract first and then measures the complete path under
 representative load. Only after that should a team choose an engine, insert a
-@gls-gateway, or buy capacity.
+@gls-gateway, or buy capacity, and the sections on those choices list the
+current engines, compute tiers, and schedulers with what each is built for.
 
 ## Freeze the serving contract
 
@@ -168,12 +169,125 @@ must repeatedly convert it. The exact artifact therefore has to be validated on
 the exact hardware and then pass the task-quality gate from @sec-eval-practice
 again.
 
+Exact reuse follows from how engines find cached state. vLLM identifies each
+full block of the KV cache by a hash of the block's tokens and of the block
+before it, with extra keys for adapters, multimodal inputs, and per-tenant cache
+salts, and it caches only full blocks [@vllm2026prefixcaching]. SGLang keeps the
+same information in a radix tree over token sequences [@zheng2024sglang]. A
+request therefore reuses cached blocks only up to its first differing token. The
+runnable below implements the hash chain and serves 40 requests that share a
+system prompt and one of five documents. A per-request timestamp placed after
+the shared part leaves most prompt tokens reusable; the same timestamp placed
+first makes every block key new. Setting `BLOCK = 256` shows the cost of coarse
+blocks: the partial block at the end of the shared prefix is recomputed on every
+request.
+
+:::: {.runnable}
+```python
+import hashlib
+
+BLOCK = 16                      # tokens per KV-cache block
+
+def block_keys(tokens):
+    """One key per full block, chained to the key of the block before it."""
+    key, keys = b"", []
+    for i in range(0, len(tokens) // BLOCK * BLOCK, BLOCK):
+        key = hashlib.sha256(key + " ".join(tokens[i:i + BLOCK]).encode()).digest()
+        keys.append(key)
+    return keys
+
+def reused_fraction(requests):
+    cache, reused, total = set(), 0, 0
+    for tokens in requests:
+        keys = block_keys(tokens)
+        hits = next((k for k, key in enumerate(keys) if key not in cache), len(keys))
+        reused, total = reused + hits * BLOCK, total + len(tokens)
+        cache.update(keys)
+    return reused / total
+
+system = [f"sys{i}" for i in range(400)]                  # instructions and tool schemas
+docs = [[f"doc{d}.{i}" for i in range(300)] for d in range(5)]
+stamp = lambda r: [f"time={r}"]                           # differs on every request
+ask = lambda r: [f"q{r}.{i}" for i in range(20)]
+
+late = [system + docs[r % 5] + stamp(r) + ask(r) for r in range(40)]
+early = [stamp(r) + system + docs[r % 5] + ask(r) for r in range(40)]
+print(f"timestamp after the shared prefix: {reused_fraction(late):.0%} of prompt tokens reused")
+print(f"timestamp at the start:            {reused_fraction(early):.0%} of prompt tokens reused")
+```
+::::
+
 Grammar-constrained decoding likewise guarantees syntax only, so after
 generation the serving path still checks the finish reason, parse and schema
 result, domain invariants, caller authorization, and any effect-specific
 preconditions. A syntactically valid request to transfer money is still an
 authorization decision, and @sec-security-authorization covers how that
 decision is made.
+
+### Engines and what each is built for
+
+The mechanisms above ship in a small number of open-source engines. The engine
+choice mostly follows where the model runs and what shape the traffic has, and
+each engine is one term, $e$, of the fingerprint.
+
+| Engine | What it is | License and hardware | Built for |
+| --- | --- | --- | --- |
+| **vLLM** | The origin of PagedAttention, with the broadest model and feature coverage; its server speaks the OpenAI and Anthropic Messages APIs [@vllm2026repo] | Apache 2.0; GPUs and other accelerators | General GPU serving; the common default |
+| **SGLang** | Engine built on RadixAttention prefix reuse, with a frontend for structured generation programs [@sglang2026serving44] | Apache 2.0; GPUs | Prefix-heavy traffic such as agents, RAG, and multi-turn chat |
+| **TensorRT-LLM** | NVIDIA's inference library with kernels tuned for its own GPUs and low precisions [@nvidia2023tensorrtllm] | Apache 2.0; NVIDIA GPUs only | Throughput and latency on recent NVIDIA GPUs, including FP8 and FP4 |
+| **LMDeploy** | Toolkit with the TurboMind engine and built-in weight and KV-cache quantization [@lmdeploy2026repo] | Apache 2.0; NVIDIA GPUs | Quantized serving |
+| **llama.cpp** | Portable C/C++ engine for GGUF quantized models [@llamacpp] | MIT; CPUs, CUDA, ROCm, Vulkan, Metal | Local, edge, CPU, and mixed-vendor hardware |
+| **Ollama** | Local model runner with a registry, a command line, and an HTTP API, building on llama.cpp [@ollama2026repo] | MIT; laptops and workstations | Development and a few internal users |
+| **MLX LM** | Language-model package for Apple's MLX framework, which works in the unified memory of Apple silicon [@mlxlm2026repo] | MIT; Apple silicon only | Macs |
+| **NVIDIA Dynamo** | Orchestration above engines: disaggregated prefill and decode, KV-aware routing, KV transfer [@nvidia2026dynamo150] | Apache 2.0; runs vLLM, SGLang, or TensorRT-LLM workers | Multi-node fleets with latency objectives |
+| **llm-d** | Kubernetes-native distributed inference on vLLM workers with cache-aware routing and disaggregation [@llmd2026repo] | Apache 2.0; CNCF Sandbox | Kubernetes fleets that route by cache contents |
+| **Text Generation Inference** | Hugging Face's former serving engine, now archived and in maintenance mode [@hf2026tgi] | Apache 2.0 | Existing deployments only |
+
+The choice follows a few conditions, each confirmed on the production trace
+before it is trusted:
+
+- **vLLM** when one broadly supported default on GPUs matters more than the last
+  increment of performance on one traffic shape.
+- **SGLang** when shared prefixes dominate the traffic, as in agents and
+  retrieval-augmented generation.
+- **TensorRT-LLM** when the fleet is all NVIDIA and throughput and latency
+  justify its toolchain.
+- **llama.cpp, Ollama, or MLX LM** when the target is a laptop, an edge device, a
+  CPU, or a few internal users. These are single-node tools with limited
+  concurrency (@sec-edge).
+- **Dynamo or llm-d** when one node is no longer enough and the fleet needs
+  cache-aware routing, disaggregation, and autoscaling to a latency objective.
+- **No new deployment on Text Generation Inference**, whose maintainers now
+  recommend vLLM, SGLang, llama.cpp, or MLX.
+
+A single-node vLLM launch for a tool-calling model shows how the levers become
+flags. The model ships quantized weights, and prefix caching and chunked prefill
+are on by default for models that support them, so the command names only the
+structured-output backend and the tool-call parser. KV-cache precision is a
+separate flag, `--kv-cache-dtype`, and its effect on quality is tested like any
+other quantization.
+
+```bash
+# gpt-oss-120b ships MXFP4 weights; prefix caching and chunked prefill default to on
+vllm serve openai/gpt-oss-120b \
+  --structured-outputs-config.backend xgrammar \
+  --enable-auto-tool-choice --tool-call-parser openai
+# serves OpenAI-compatible and Anthropic Messages endpoints on port 8000
+```
+
+::: {.callout-note .dated}
+## As of September 2026
+
+The latest releases are vLLM v0.30.0, SGLang v0.5.20, LMDeploy v0.17.0, llm-d
+v0.9.0, and Dynamo v1.5.0 [@vllm2026repo; @sglang2026serving44;
+@lmdeploy2026repo; @llmd2026repo; @nvidia2026dynamo150]. In vLLM the
+structured-output backend defaults to `auto`, which chooses among xgrammar,
+guidance, outlines, and lm-format-enforcer per request, and the
+`--structured-outputs-config` option replaces the older guided-decoding flag
+[@vllm2026repo]. llm-d joined the CNCF as a Sandbox project in March 2026
+[@llmd2026repo]. Hugging Face has archived the Text Generation Inference
+repository [@hf2026tgi].
+:::
 
 ### Benchmark the complete fingerprint
 
@@ -241,6 +355,19 @@ credential references, quotas, routing, budgets, and telemetry when many callers
 or providers would otherwise duplicate them, while a direct, well-tested adapter
 can be simpler for one application and one provider. Centralization is worth
 adding when it creates a boundary the team can enforce and operate.
+
+Products in this role hold the same five concerns: one request schema across
+providers, custody of provider keys behind scoped virtual keys, spend tracking
+by key and team, routing with retries and failover, and budgets with rate limits
+and guardrails. They differ in whether they are managed or self-hosted and in
+whether they also carry tool traffic over MCP and agent-to-agent traffic.
+@sec-wiring-stack compares the current products, among them LiteLLM,
+OpenRouter, Portkey, agentgateway, Agent Router, Cloudflare AI Gateway, and
+Bifrost. Vendor figures for per-request gateway overhead are measured under the
+vendors' own conditions, and for most workloads the provider and model latency
+exceed the gateway's overhead by orders of magnitude. The measurement that
+decides is the gateway's saturation rate under the team's own policy, metering,
+and logging configuration.
 
 A mediation boundary is valuable only if its invariants are explicit:
 
@@ -345,6 +472,21 @@ artifact, or a **self-managed** engine on rented or owned accelerators. The
 right comparison applies the same hard constraints, quality gate, workload,
 and accounting horizon to all three.
 
+Most application teams start on a first-party API and self-manage only when a
+specific pressure applies:
+
+- sustained high utilization, where per-token prices dominate the bill and
+  reserved or owned capacity would stay busy;
+- data residency or compliance rules that keep weights, prompts, and outputs
+  inside the organization's environment;
+- a need for an open-weight model or a fine-tune that no API offers
+  (@sec-training-practice); or
+- control over latency and tail behavior that no provider commits to.
+
+Because the internal contract is the same on every branch, the choice stays
+reversible: a self-managed route enters as one more qualified candidate and
+receives traffic through a route change.
+
 | Dimension | Questions to record |
 | --- | --- |
 | Charging | Per token, request, accelerator-second, or reserved interval? What is the billing quantum and minimum commitment? |
@@ -355,6 +497,35 @@ and accounting horizon to all three.
 | Hardware | Which accelerator, memory size, interconnect, host bandwidth, and topology are allocated in practice? |
 | Operations | Who owns patches, rollout, monitoring, incident response, and capacity forecasting? |
 | Exit | Can artifacts, logs, adapters, and evaluation evidence move without changing the serving contract? |
+
+Suppliers fall into a few tiers whose billing shapes differ more than their
+hourly prices do.
+
+| Tier | Examples | Billing | Suits |
+| --- | --- | --- | --- |
+| Serverless GPU and managed inference | Modal, Baseten, Fireworks, Together, RunPod Serverless | Per second or per token, scaling to zero | Bursty or low-utilization inference with no machines to operate |
+| GPU clouds | CoreWeave, Lambda, Nebius, Crusoe | On-demand or reserved GPU-hours | Steady, high-utilization serving and training clusters |
+| Marketplaces and spot capacity | Vast.ai, spot instances on the large clouds | Hourly and interruptible | Fault-tolerant batch work, never latency-critical serving |
+| Hyperscalers | AWS, Google Cloud, Microsoft Azure | On-demand, reserved, or committed use, with TPUs and Trainium as well as GPUs | Organizations already on that cloud, managed pipelines, custom accelerators |
+| Owned hardware in a colocation facility | Self-operated | Capital expense plus operations | Sustained very high utilization with an operations team |
+
+SkyPilot runs one job or service definition on reserved GPUs, Kubernetes
+clusters, Slurm clusters, or more than 20 clouds, which keeps a workload
+portable across these tiers [@skypilot2026repo]. @sec-wiring-stack computes the
+share of a month above which reserved capacity costs less than per-second
+billing, from two current quotes.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Modal lists an NVIDIA H100 at $0.001097 per second of use, about $3.95 per hour
+[@modal2026pricing44]. Lambda lists an H100 SXM at $3.99 per GPU-hour on demand
+in eight-GPU instances and a B200 at $6.69, and quotes reserved capacity only on
+request [@lambda2026pricing]. The on-demand hourly rates of a serverless
+platform and a GPU cloud are therefore close. The difference between the tiers
+lies in idle time, which serverless billing does not charge, and in reserved
+discounts, which are negotiated.
+:::
 
 There is no universal utilization percentage at which one mode becomes
 cheaper. Capacity is purchased in steps, demand is bursty, warm replicas and
@@ -426,6 +597,20 @@ without replacing the scheduler or job controller [@kueueOverview]. Either can
 be extended, and some organizations combine them. The choice follows the
 lifecycle and scheduling semantics the workload requires; the common rule
 “training uses Slurm, inference uses Kubernetes” is too coarse to decide it.
+
+Each control plane has extensions that supply what AI workloads add to its
+native semantics.
+
+| Control plane | Native strengths | Extensions for AI workloads |
+| --- | --- | --- |
+| Slurm | Queueing, allocation, and all-or-nothing multi-node jobs [@slurmOverview] | Topology-aware placement, checkpoint and requeue |
+| Kubernetes | Service controllers, rolling updates, autoscaling, ingress | Kueue for quota and admission [@kueueOverview]; Volcano [@volcano2026repo] or KAI Scheduler [@kai2026scheduler] for gang and topology-aware scheduling; Dynamic Resource Allocation for device claims [@kubernetesDRA] |
+| Ray on Kubernetes | Python tasks and actors for training, data processing, and serving in one framework | KubeRay runs Ray clusters, jobs, and Ray Serve applications as Kubernetes resources [@kuberay2026repo] |
+| Slurm on Kubernetes | Slurm's job semantics on a shared Kubernetes cluster | Slinky's slurm-operator [@slinky2026operator] and Nebius's Soperator [@nebius2026soperator] |
+
+Running Slurm on Kubernetes lets one pool serve long-lived inference services
+and gang-scheduled training jobs, each under the control plane whose semantics
+it needs.
 
 Autoscaling is bounded by replica startup time. If a replica takes minutes to
 allocate hardware, load weights, compile kernels, and warm caches, a seconds-old
