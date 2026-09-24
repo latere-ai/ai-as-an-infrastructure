@@ -496,6 +496,8 @@ export default defineFigure({
   timeline: {
     rate: 4,
     discrete: false,
+    // Time in forward passes of one stage, as the axis reads it.
+    unit: { symbol: { en: "t_F", zh: "t_F" }, value: (t) => num(t) },
     duration: (p) => run(p.schedule, p.p, p.m).T,
     keyframes: (p, lang) => keyframes(run(p.schedule, p.p, p.m), labels[lang]),
     // The finished step: every idle slot is hatched, so the drawn area can be

@@ -364,6 +364,7 @@ export default defineFigure({
   timeline: {
     rate: 2,
     discrete: false, // continuous time in hours
+    unit: { symbol: { en: "h", zh: "小时" }, value: (t) => fixed(t, 1) },
     duration: (p) => world(p).T,
     keyframes,
     poster,

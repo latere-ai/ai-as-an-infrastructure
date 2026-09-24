@@ -413,6 +413,7 @@ export default defineFigure({
   timeline: {
     rate: 3,
     discrete: false, // continuous time in seconds
+    unit: { symbol: { en: "s", zh: "秒" }, value: (t) => fmtT(Math.round(t * 10) / 10) },
     duration: (p) => model(p).end,
     keyframes,
     // The decisive moment: A's write after its pause.

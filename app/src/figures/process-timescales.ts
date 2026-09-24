@@ -591,6 +591,7 @@ export default defineFigure({
   timeline: {
     rate: 6,
     discrete: false,
+    unit: { symbol: { en: "s", zh: "秒" }, value: (t) => secs(t) },
     duration: (p) => at(plan(p).end),
     keyframes,
     // Halfway through the edit: three observations are in the context, and

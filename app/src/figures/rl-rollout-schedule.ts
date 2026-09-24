@@ -597,6 +597,7 @@ export default defineFigure({
   timeline: {
     rate: 30, // simulated seconds per second of playback
     discrete: true,
+    unit: { symbol: { en: "s", zh: "秒" }, value: (t) => secs(t) },
     duration: () => H,
     keyframes: (p, lang) => {
       const L = labels[lang];

@@ -127,3 +127,20 @@ test("range readouts state a large amount in the magnitude it has reached", () =
   expect(rangeText({ ...usd, unit: { en: "trillion tokens", zh: "万亿词元" } }, 3000, "zh")).toBe("3,000 万亿词元");
   expect(rangeText({ ...usd, unit: { en: "s", zh: "秒" } }, 14, "zh")).toBe("14 秒");
 });
+
+test("a timeline that declares a time unit reads every position as a finite time", () => {
+  let declared = 0;
+  for (const [, fig] of FIGURES) {
+    const unit = fig.timeline?.unit;
+    if (!unit) continue;
+    declared++;
+    const p = defaults(fig);
+    const d = fig.timeline!.duration(p);
+    for (const lang of LANGS) for (const t of [0, d / 3, d]) {
+      const v = unit.value ? unit.value(t, p, lang) : String(t);
+      expect(v.length, fig.name).toBeGreaterThan(0);
+      expect(v, fig.name).not.toMatch(/NaN|undefined|Infinity/);
+    }
+  }
+  expect(declared).toBeGreaterThan(0);
+});

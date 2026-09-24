@@ -464,6 +464,8 @@ export default defineFigure({
   },
   timeline: {
     rate: 400, // simulated ms per second of playback
+    // Positions are milliseconds; the readout uses the cursor's seconds.
+    unit: { symbol: { en: "s", zh: "秒" }, value: (t) => secs(t) },
     duration: (p) => Math.ceil(sim(p).end),
     keyframes: (p, lang) => {
       const L = labels[lang];

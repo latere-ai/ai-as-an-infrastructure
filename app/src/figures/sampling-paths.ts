@@ -669,6 +669,9 @@ export default defineFigure({
   timeline: {
     rate: 2,
     discrete: false,
+    // The sampler's own time, as the readout's "time t" row gives it: diffusion
+    // runs from 1 to 0, the flows from 0 to 1.
+    unit: { symbol: { en: "", zh: "" }, value: (t, p) => fixed(ownT(p.sampler, Math.min(1, Math.max(0, t / p.steps))), 2) },
     duration: (p) => p.steps,
     keyframes: (p, lang) => {
       const Lx = labels[lang];

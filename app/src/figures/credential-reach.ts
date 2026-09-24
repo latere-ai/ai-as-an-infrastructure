@@ -457,6 +457,8 @@ export default defineFigure({
   timeline: {
     rate: 10,
     discrete: true,
+    // Positions are log-spaced; the readout names the time they stand for.
+    unit: { symbol: { en: "", zh: "" }, value: (t, _p, lang) => dur(at(Math.round(t)), labels[lang]) },
     duration: () => DURATION,
     keyframes,
     // Open just after revocation is requested: whether the copy still works
