@@ -13,6 +13,7 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   roofline: () => import("./roofline.ts"),
   "causal-attention": () => import("./causal-attention.ts"),
   "lost-in-the-middle": () => import("./lost-in-the-middle.ts"),
+  "context-compaction": () => import("./context-compaction.ts"),
   "speculative-sampling": () => import("./speculative-sampling.ts"),
   "candidate-tree": () => import("./candidate-tree.ts"),
   "group-relative-rl": () => import("./group-relative-rl.ts"),
