@@ -173,6 +173,12 @@ timeline: {
 },
 ```
 
+Positions in physical time declare a unit, so the transport reads "t = 2.48 s"
+instead of "step 2483 of 2483": `unit: { symbol: { en: "s", zh: "秒" }, value:
+(t) => secs(t) }`, with `value` writing the number the way the figure's own
+cursor writes it (milliseconds shown as seconds, a log-time axis as "3 min
+20 s" with an empty symbol). Without a unit the transport counts steps.
+
 The figure never animates itself; `runtime/transport.ts` owns time. It offers
 play, pause, step back and forward, and a scrubber with a tick per keyframe,
 and it shows the latest keyframe's label. Under `prefers-reduced-motion` there

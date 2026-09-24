@@ -29,8 +29,8 @@ export interface TransportOptions {
 }
 
 const TEXT = {
-  en: { play: "Play", pause: "Pause", back: "Step back", fwd: "Step forward", prevKey: "Previous event", nextKey: "Next event", scrub: "Timeline position", pos: "step {t} of {d}", time: "t = {t}", timeOf: "t = {t} of {d}", reduced: "Reduced motion: the step buttons move between events." },
-  zh: { play: "播放", pause: "暂停", back: "后退一步", fwd: "前进一步", prevKey: "上一个事件", nextKey: "下一个事件", scrub: "时间轴位置", pos: "第 {t} 步 / 共 {d} 步", time: "t = {t}", timeOf: "t = {t}，共 {d}", reduced: "已减少动态效果：步进按钮在事件之间跳转。" },
+  en: { play: "Play", pause: "Pause", back: "Step back", fwd: "Step forward", prevKey: "Previous event", nextKey: "Next event", scrub: "Timeline position", pos: "step {t} of {d}", time: "t = {t}", reduced: "Reduced motion: the step buttons move between events." },
+  zh: { play: "播放", pause: "暂停", back: "后退一步", fwd: "前进一步", prevKey: "上一个事件", nextKey: "下一个事件", scrub: "时间轴位置", pos: "第 {t} 步 / 共 {d} 步", time: "t = {t}", reduced: "已减少动态效果：步进按钮在事件之间跳转。" },
 };
 
 const ICON = {
@@ -205,7 +205,9 @@ export class Transport {
       ? L.time.replace("{t}", time(t))
       : L.pos.replace("{t}", String(Math.round(t))).replace("{d}", String(Math.round(this.o.duration)));
     this.pos.textContent = posText;
-    this.scrub.setAttribute("aria-valuetext", time ? L.timeOf.replace("{t}", time(t)).replace("{d}", time(this.o.duration)) : posText);
+    // A time reads alone: a timeline can run backward in its own time (a
+    // diffusion sampler from t = 1 to 0), so "of <duration>" would mislead.
+    this.scrub.setAttribute("aria-valuetext", posText);
     // The event line names the latest keyframe without a position of its own:
     // the readout beside the scrubber is the one position a reader sees.
     const k = this.currentKey();
