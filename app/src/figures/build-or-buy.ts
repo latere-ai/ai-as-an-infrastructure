@@ -161,7 +161,8 @@ const labels = {
     x: "demand (tokens per month)",
     y: "monthly cost (USD)",
     range: "break-even over {T} yr",
-    beyond: "{v} →",
+    rangeBeyond: "break-even over {T} yr, {v} at the end",
+    rangeNone: "break-even over {T} yr, none at the end",
     strip: "Cheaper each month",
     api: "API",
     self: "self-host",
@@ -199,7 +200,8 @@ const labels = {
     x: "需求（每月词元数）",
     y: "月成本（美元）",
     range: "{T} 年内的盈亏平衡点",
-    beyond: "{v} →",
+    rangeBeyond: "{T} 年内的盈亏平衡点，期末为 {v}",
+    rangeNone: "{T} 年内的盈亏平衡点，期末已不存在",
     strip: "每个月更便宜的方案",
     api: "API",
     self: "自托管",
@@ -360,7 +362,7 @@ function render(st: State<P>, lang: Lang): string {
     marks.push(el("line", { x1: x0, x2: x0, y1: rb - 4, y2: rb + 4, stroke: C.ink, "stroke-width": 1.5 }));
     if (!open) marks.push(el("line", { x1: x1, x2: x1, y1: rb - 4, y2: rb + 4, stroke: C.ink, "stroke-width": 1.5 }));
     else marks.push(el("path", { d: `M${x1 - 6},${rb - 4}L${x1},${rb}L${x1 - 6},${rb + 4}`, fill: "none", stroke: C.ink, "stroke-width": 1.5 }));
-    const lbl = open ? `${tpl(L.range, { T })} ${tpl(L.beyond, { v: aT == null ? "∞" : tok(aT) })}` : tpl(L.range, { T });
+    const lbl = tpl(aT == null ? L.rangeNone : open ? L.rangeBeyond : L.range, { T, v: aT == null ? "" : tok(aT) });
     const lw = textWidth(lbl, fs);
     const lx = Math.min(Math.max((x0 + x1) / 2, left + lw / 2 + 2), right - lw / 2 - 2);
     marks.push(text(lx, rb - 7, lbl, { "font-size": fs, "text-anchor": "middle", class: "fig-t-halo" }));
@@ -438,7 +440,7 @@ function render(st: State<P>, lang: Lang): string {
     yy += 4;
   };
   endpoint(L.whenNow, 0, c0);
-  endpoint(tpl(L.whenEnd, { T }), T, cT, p.decline > 0 ? tpl(L.halfLife, { h: sig(Math.LN2 / -Math.log(1 - p.decline / 100), 2) }) : "");
+  endpoint(tpl(L.whenEnd, { T }), T, cT, p.decline > 0 ? tpl(L.halfLife, { h: sig(Math.LN2 / -Math.log(1 - p.decline / 100), 3) }) : "");
   yy += 6;
   line(tpl(L.totals, { T, r: sig(p.discount, 3), f0: usd(p.setup) }), "fig-t-strong");
   const blg = legend([{ label: L.api, swatch: { kind: "rect", fill: C.c1 } }, { label: L.self, swatch: { kind: "rect", fill: C.c2 } }], 0, yy - fs + 2, w, fs);
