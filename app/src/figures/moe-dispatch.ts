@@ -744,7 +744,7 @@ export default defineFigure({
     focus: {
       kind: "choice", control: "select", label: { en: "Explain token", zh: "查看词元" }, default: 0,
       options: [
-        { value: 0, label: { en: "latest overflow", zh: "最近一次溢出" } },
+        { value: 0, label: { en: "latest overflow, else latest token", zh: "最近一次溢出，没有则取最近的词元" } },
         ...Array.from({ length: T }, (_, i) => ({ value: i + 1, label: { en: `Token ${i + 1}`, zh: `词元 ${i + 1}` } })),
       ],
     },
