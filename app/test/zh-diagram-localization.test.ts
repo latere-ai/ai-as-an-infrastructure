@@ -62,16 +62,6 @@ test("generated zh SVG figures use localized visible labels", () => {
   expect(curation).toContain(">全量两两比较 O(n²)</text>");
   expect(curation).not.toContain("All-pairs O(n");
 
-  const tokenStorage = read("zh/figures/tokenization-1.svg");
-  expect(tokenStorage).toContain("词元索引参数存储量（GiB）");
-  expect(tokenStorage).toContain("输入 / 输出权重绑定");
-  expect(tokenStorage).not.toContain("tied input / output weights");
-
-  const tokenAudit = read("zh/figures/tokenization-2.svg");
-  expect(tokenAudit).toContain("固定平行文本");
-  expect(tokenAudit).toContain("词元溢价分布");
-  expect(tokenAudit).not.toContain("Pinned parallel text");
-
   const sequenceGrowth = read("zh/figures/moe-ssm-hybrids-1.svg");
   expect(sequenceGrowth).toContain("注意力关系（二次增长）");
   expect(sequenceGrowth).toContain("相对 1K 词元的增长倍数");

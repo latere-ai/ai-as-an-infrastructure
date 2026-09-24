@@ -16,25 +16,10 @@ care as an architecture or data mixture.
 
 Several ordered transforms produce the ids a model consumes:
 
-```{dot}
+```{figure}
+//| figure: tokenizer-pipeline
 //| label: fig-tokenization-contract
-//| fig-cap: "The tokenizer contract. Normalization and boundary rules determine the stream seen by the segmentation model; the vocabulary, special-token policy, postprocessor, and decoder then determine the ids and their meaning."
-digraph {
-  bgcolor="transparent";
-  rankdir=TB;
-  nodesep=0.32; ranksep=0.36;
-  node [shape=box, style="rounded,filled", fontname="Helvetica", fontsize=10, color="#6b7280", fontcolor="#6b7280", fillcolor="#f1ece1", penwidth=1.1];
-  edge [fontsize=9, fontname="Helvetica", color="#6b7280", fontcolor="#6b7280"];
-
-  A [label="Input contract\nUnicode text or raw bytes"];
-  B [label="Normalization N\nUnicode / case / whitespace"];
-  C [label="Boundary rules\npretokenizer + protected spans"];
-  D [label="Segmentation model\nBPE ranks or Unigram scores"];
-  E [label="ID mapping + special tokens\nBOS / EOS / PAD / control ids"];
-  F [label="Token stream\nids + offsets + decoder policy", shape=cylinder];
-
-  A -> B -> C -> D -> E -> F;
-}
+//| fig-cap: "The tokenizer contract applied to one string by one of three published tokenizers: the input $x$ one tile per code point (hex under glyphs outside ASCII), its normalized form $N(x)$, the pretokens the boundary rules cut, each piece with its id and offsets into $x$, and the decoded text checked against $x$ and $N(x)$. Tinted tiles mark code points the normalizer changed, control ids parsed from the input text, ids the post-processor inserted, pieces that hold only part of a character, and unknown pieces. Removing the declared normalizer, or encoding control-token text as ordinary text, changes the ids downstream. Every value is measured with the Hugging Face `tokenizers` library on each model's published tokenizer.json."
 ```
 
 The **@gls-tokenizer** is this full contract, not only the segmentation model.
@@ -96,19 +81,16 @@ boundary. A naive pedagogical trainer rescans all symbol positions for every
 merge; production trainers maintain pair-occurrence indexes and update only
 affected neighbors. Complexity therefore depends on the implementation.
 
-The interactive example uses `low low low lo`, so `(l, o)` occurs four times
-while `(o, w)` occurs three times. There is no hidden tie in the first step.
+@fig-tokenization-bpe-merges runs the trainer of the runnable cell below on
+its seven words, one merge per step. `(l, o)` occurs five times and `(o, w)`
+four, so the first three merges have no tie; from the fourth merge on, several
+pairs share the top count and the tie-break rule decides the table.
 
-<figure id="fig-tokenization-stepper">
-<div class="viz" data-viz="stepper">
-<div data-chip="low low low lo" data-title="1 · Start">Treat each word as a separate pretoken. The base symbols are l, o, and w.</div>
-<div data-chip="(l,o) × 4" data-title="2 · Count">The pair (l, o) occurs four times; (o, w) occurs three times.</div>
-<div data-chip="lo w · lo w · lo w · lo" data-title="3 · Merge">Merge (l, o) into lo and record it at rank 1.</div>
-<div data-chip="(lo,w) × 3" data-title="4 · Count">After replacement, (lo, w) is the unique most frequent pair.</div>
-<div data-chip="low low low lo" data-title="5 · Freeze">Merge (lo, w) into low and record it at rank 2.</div>
-</div>
-<figcaption>A tie-free BPE example. Each round counts pairs in the current representation, replaces the selected pair, and records its rank for later encoding.</figcaption>
-</figure>
+```{figure}
+//| figure: bpe-merges
+//| label: fig-tokenization-bpe-merges
+//| fig-cap: "BPE training on the runnable cell's corpus, `low low low lo lower newest widest` with the end-of-word marker `</w>`, one merge per step. Pair counts are weighted by pretoken frequency; the pair the next merge joins is outlined in every occurrence and the symbol the last merge made is tinted. The merge table grows by one rank per step, and the chosen word is encoded by applying ranks 1 to t in order. Ties at the top count go to the chosen rule: lexical order is the cell's, and the other two rules learn different tables from the same counts."
+```
 
 The runnable cell trains a small character BPE, freezes its merge order, and
 then encodes two training words and two words it never saw. Its end-of-word
@@ -274,11 +256,16 @@ $P_{\mathrm{token}}$ counts parameters in the input embedding and output
 projection. Weight tying reuses one matrix. Optimizer state, quantization,
 sharding overhead, and output-projection compute are not included.
 
-@fig-tokenization-1 plots this exact relationship for an illustrative width of
-4,096 with two bytes of parameter storage. It does not claim a universal
-optimal vocabulary size.
+@fig-tokenization-vocabulary draws this relationship for published
+checkpoints next to measured sequence lengths: the same English and Chinese
+text tokenized by five published merge tables, each cut at its first $V$
+ranks. It does not claim a universal optimal vocabulary size.
 
-![Token-indexed parameter storage for a model width of 4,096 using two bytes per parameter. Tied input and output weights require Vd parameters; untied weights require 2Vd. The figure excludes optimizer state and output-projection compute.](/figures/tokenization-1.svg){#fig-tokenization-1}
+```{figure}
+//| figure: vocabulary-tradeoff
+//| label: fig-tokenization-vocabulary
+//| fig-cap: "Vocabulary size against sequence length and token-indexed parameters. Top, measured: tokens per 1,000 UTF-8 bytes of FLORES-200 devtest English and Chinese (1,012 parallel sentences) for five published byte-level BPE merge tables, each cut at its first $V$ ranks and run with its own pretokenizer; open circles mark each table's published size. Llama 3 keeps cl100k's first 100,256 ranks and appends the rest, and Qwen2.5's early ranks track cl100k's, so those lines overlap below $2^{17}$. Bottom: $P_{\mathrm{token}}$ as a share of a published checkpoint's parameters, $Vd$ tied or $2Vd$ untied, with the rest of the checkpoint held at its published size; the diamond marks the vocabulary the checkpoint ships. The table gives each merge table's length at $V$ and its change from $V/2$. Optimizer state and quantization are excluded."
+```
 
 Sequence length changes the rest of the model's work, while vocabulary size
 changes both storage and the logit computation, the step in which the output
@@ -337,9 +324,14 @@ latency still depends on batching, kernels, model architecture, and whether the
 extra tokens occur in prefill, where the prompt is processed in parallel, or in
 serial generation, where output tokens are produced one at a time.
 
-@fig-tokenization-2 shows the audit procedure rather than invented token counts.
+@fig-tokenization-premium runs this measurement on FLORES-200, 1,012
+sentences translated into every language, for nine published tokenizers.
 
-![A tokenizer equity audit starts with pinned parallel content, applies one normalization policy, encodes every language with the same tokenizer artifact, and reports the distribution of token premiums by language and domain.](/figures/tokenization-2.svg){#fig-tokenization-2}
+```{figure}
+//| figure: token-premium
+//| label: fig-tokenization-premium
+//| fig-cap: "Token premium $p_{\ell,i}$ against English over the 1,012 parallel items of FLORES-200 devtest (NLLB Team, 2022) for 16 languages, measured for nine published tokenizers. Each row shows one language's median, interquartile range, and 5th to 95th percentile under the chosen tokenizer, sorted by median; gray ticks are the medians under the other eight. Below, one item as token strips, each piece as wide as its UTF-8 bytes, with pieces that hold only part of a character in yellow, and the fraction $1/p$ of the English content a fixed window holds at the median. Counts exclude automatically inserted special tokens [@petrov2023language]."
+```
 
 Token premium is one metric, not a quality score. Rust et al. found that
 tokenizer choice can contribute to multilingual downstream differences even
