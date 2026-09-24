@@ -206,6 +206,62 @@ upgrades the controller while approval is pending before resuming. It measures
 duplicate effects, lost work, state divergence, latency, cost, and operational
 effort. That evidence stays valid longer than a feature table.
 
+### Current frameworks by control pattern
+
+The proof workflow needs candidates, and the current open-source frameworks
+sort by the control pattern each makes explicit. The table places each one in
+the pattern it documents as its main structure; most also support a simpler
+pattern, and several reach a durable workflow through an external engine.
+
+| Framework | Control pattern it makes explicit | License and maintainer | Fits |
+|---|---|---|---|
+| LangGraph | State graph with checkpointed state and interrupts | MIT; LangChain | Branches, cycles, approval pauses, and resume from a checkpoint |
+| Pydantic AI | Linear loop with validated typed output; durable workflow through Temporal, DBOS, Prefect, or Restate | MIT; Pydantic | Python teams that want schema-checked output and hand durability to a workflow engine |
+| OpenAI Agents SDK | Linear loop with handoffs and manager-style orchestration | MIT; OpenAI | A small primitive set for a moderate agent, over OpenAI APIs or other providers |
+| Claude Agent SDK | Filesystem harness: the Claude Code engine with files, shell, hooks, subagents, and context compaction | MIT; Anthropic | Coding, repository, and operations agents |
+| Strands Agents | Linear loop driven by the model, with turn limits, token budgets, and cancellation | Apache 2.0; Amazon | A minimal in-process loop, with Amazon Bedrock among its first-class providers |
+| Google ADK | State graph and workflow agents, in Python and other languages | Apache 2.0; Google | Teams on Gemini and Google Cloud; the framework itself is model-agnostic |
+| Microsoft Agent Framework | State graph workflows with sequential, concurrent, handoff, and group patterns, in Python and .NET | MIT; Microsoft | .NET and Azure teams; the successor to Semantic Kernel and AutoGen |
+| CrewAI | Supervisor and worker as role-based crews, plus event-driven flows | MIT; CrewAI | Work that decomposes into specialist roles |
+| Mastra | Linear loop plus graph workflows with suspend and resume, in TypeScript | Apache 2.0 outside its enterprise directories; Mastra | TypeScript teams |
+| AG2 | Supervisor and worker through multi-agent conversation, in the AutoGen lineage | Apache 2.0; volunteer maintainers | Conversational multi-agent patterns |
+
+Tool handling no longer separates these frameworks much, because each can call
+MCP servers alongside native function tools. State handling still does. A
+framework that replays a message list each turn is the simplest option; one that
+checkpoints typed state, or hands it to a workflow engine, is the one that
+survives a restart mid-task. The question the contract settles is whether the
+run must survive a worker restart, and if it must, the candidate needs a
+checkpointer or a workflow engine, not a message list. LlamaIndex also ships an
+agent layer, but its main value is retrieval and document parsing, which
+@sec-retrieval-practice covers.
+
+The control pattern gives a starting point for each common case. A coding,
+operations, or filesystem agent starts from a harness SDK, which supplies a
+working loop with real tools, context compaction, and MCP. A general tool agent
+of moderate complexity starts from a linear-loop SDK with a small primitive set.
+A workflow that needs cycles, parallel branches, approval pauses, or crash-resume
+moves to a state graph or a durable workflow engine, and that migration is the
+expected path as an agent's contract grows. In each case the candidate still has
+to pass the proof workflow above.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+The latest releases are LangGraph 1.2.12, Pydantic AI 2.49.0, OpenAI Agents
+SDK 0.22.3, Claude Agent SDK for Python 0.2.159, CrewAI 1.15.22, Google ADK
+for Python 2.9.2, Microsoft Agent Framework 1.19.0 for Python and 1.22.0 for
+.NET, Mastra core 1.69.0, and AG2 1.0.6 [@langgraph2026repo;
+@pydantic2026repo; @openai2026agentssdk44; @anthropic2026claudeagentsdk44;
+@crewai2026repo; @googleadk2026repo; @microsoft2026agentframework;
+@mastra2026repo; @ag22026repo]. Strands Agents now develops its SDK and a new
+harness package in one repository [@strands2026repo]. AutoGen is in maintenance
+mode, and the Semantic Kernel repository names Microsoft Agent Framework 1.0 as
+its successor [@microsoft2026autogen; @microsoft2026semantickernel]. AG2 1.0
+moved the classic `autogen` classes, such as `ConversableAgent` and
+`GroupChat`, to a separate AG2 Classic package [@ag22026repo].
+:::
+
 ## Make recovery safe for effects
 
 Durable execution preserves control state and leaves effects on an external
@@ -231,6 +287,55 @@ an at-least-once attempt needs duplicate handling. Neither label proves exactly
 one real-world effect. Durable workflow documentation makes the same distinction
 between replayable control and external activities [@temporal2026workflows;
 @aws2026idempotency].
+
+The cell below simulates at-least-once delivery. Each logical action is
+redelivered until the worker stores a receipt, and with probability `p_crash`
+the worker dies after the external write but before storing the receipt. The
+external API applies a write only if it has not already seen that write's key.
+A key derived from the network attempt changes on every redelivery, so it
+duplicates exactly as often as no key at all, about $1/(1-p)$ writes per action
+for crash probability $p$; a key derived from the logical action yields one.
+Raising `p_crash` toward 1 makes the unkeyed count grow without bound while the
+logical key stays at one.
+
+:::: {.runnable}
+```python
+import random
+
+p_crash = 0.3   # chance the worker dies after the write, before storing the receipt
+
+def effects_per_action(key_of, n_actions=2000, seed=1):
+    rng = random.Random(seed)
+    seen = set()                      # keys the external API has already applied
+    effects = 0
+    for action in range(n_actions):
+        attempt = 0
+        while True:                   # at-least-once: redeliver until a receipt is stored
+            key = key_of(action, attempt)
+            if key is None or key not in seen:
+                effects += 1          # the external write happens
+                seen.add(key)
+            if rng.random() >= p_crash:
+                break                 # receipt stored, delivery complete
+            attempt += 1
+    return effects / n_actions
+
+no_key = effects_per_action(lambda a, t: None)
+per_attempt = effects_per_action(lambda a, t: (a, t))
+per_action = effects_per_action(lambda a, t: a)
+print(f"no key                  {no_key:.3f}")
+print(f"key per network attempt {per_attempt:.3f}")
+print(f"key per logical action  {per_action:.3f}")
+print(f"expected deliveries 1/(1-p) = {1 / (1 - p_crash):.3f}")
+assert per_action == 1.0
+assert abs(no_key * (1 - p_crash) - 1) < 0.05   # within 5% of 1/(1-p)
+```
+::::
+
+The simulation assumes the external API deduplicates on the key. When it
+cannot, the same key still lets reconciliation query whether the write
+happened, which is why the effect receipt and the reconciliation operation in
+the list above belong to the same contract.
 
 Resume, replay, and reevaluation answer different questions:
 
@@ -367,6 +472,34 @@ pinned and reviewed binaries run as local servers, under an unprivileged
 identity, with explicit filesystem, environment, process, and network
 restrictions. Calling the subprocess through MCP does not sandbox it.
 
+In production, agents reach remote MCP servers through an MCP gateway, a proxy
+that holds the tool servers' credentials, applies the reviewed catalog as an
+allowlist, meters calls, and writes the audit trail, as the model gateway does
+for model calls. agentgateway and Agent Router carry MCP traffic alongside
+model traffic [@agentgateway2026github44; @agentrouter2026], and @sec-wiring-stack compares them with model-only gateways.
+Because MCP is a wire protocol, moving a tool from an in-process server to a
+remote server behind the gateway changes the connection configuration and
+leaves the agent code almost unchanged; @sec-wiring-stack shows an in-process
+tool in the Claude Agent SDK. The stateless revision helps this arrangement
+directly: a gateway can route, rate-limit, and authorize on HTTP headers
+without parsing request bodies, and any server replica can answer any request.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+The `2026-07-28` revision retires the `initialize` and `initialized` exchange
+and the `Mcp-Session-Id` header, so each request carries its own protocol
+version and capabilities. Streamable HTTP requests must now carry the method
+and tool name in `Mcp-Method` and `Mcp-Name` headers. The revision moves Tasks
+into an `io.modelcontextprotocol/tasks` extension within a formal extensions
+framework that also covers MCP Apps and Enterprise Managed Authorization. It
+deprecates Roots, Sampling, Logging, and the legacy HTTP+SSE transport under a
+deprecation policy with a minimum window of twelve months, and it deprecates
+Dynamic Client Registration in favor of Client ID Metadata Documents
+[@mcp2026release]. The official MCP Registry, which lists public servers for
+clients to discover, is in preview with its v0.1 API frozen [@mcp2026registry].
+:::
+
 ## Specify the sandbox from a threat model
 
 A @gls-sandbox is an execution boundary for code and processes whose behavior
@@ -424,6 +557,69 @@ Deployments layer mechanisms so that the failure of one boundary is contained
 by another, and test the configured system. Startup time, density,
 compatibility, accelerators, snapshot support, and cost are workload
 measurements and establish nothing about isolation.
+
+### Sandbox services by mechanism
+
+Hosted sandbox services package one of these mechanisms with an API, a
+lifecycle, and a bill. The isolation column is the one that answers the threat
+model; the other columns decide fit once the mechanism is acceptable.
+
+| Service | Isolation mechanism | Lifecycle | Fits |
+|---|---|---|---|
+| E2B | Firecracker microVM per sandbox, on an open-source runtime | Sessions booted from snapshots, with a session time limit | Short-lived code execution with an open SDK and a self-hosting path |
+| Vercel Sandbox | Firecracker microVM | Sessions with snapshots and persistent drives | Applications on Vercel, and agents that spend most of a run waiting on the model |
+| Modal Sandboxes | gVisor userspace kernel | Default lifetime of minutes, extendable to a day; filesystem snapshots | Untrusted code that needs a GPU in the same sandbox |
+| Sprites (Fly.io) | Dedicated microVM | Persistent disk, checkpoint and restore, idle suspension | A long-lived computer per agent or per task |
+| Cloudflare Sandbox SDK | Linux container, each instance in its own VM | Addressed from a Worker through a Durable Object | Applications on Cloudflare Workers |
+| Daytona | Container by default; full VM sandboxes as an option | Snapshots and volumes; pause, resume, and fork on VM sandboxes | Many parallel sandboxes, with a VM where the threat model needs one |
+| Runloop | Virtual machine devboxes | Snapshot, suspend, and resume; built-in coding benchmarks | Coding agents that are evaluated on repository tasks |
+| Browserbase | Hosted headless browsers, one isolated session each | Sessions with live view and session replay | Agents whose work happens in web pages |
+| AWS Lambda MicroVMs | Firecracker microVM, managed | State kept for up to 8 hours, with suspend and resume | Teams on AWS that want microVMs without operating them |
+| sandbox-runtime (Anthropic) | Operating-system sandbox: Seatbelt on macOS, bubblewrap on Linux, network through a filtering proxy | Per process on one machine | A developer machine running a semi-trusted agent or a local MCP server |
+| Self-hosted Firecracker, gVisor, or Kata Containers | The primitives themselves | Whatever the team builds | Sandboxing as the team's own platform |
+
+The entries follow each service's own documentation [@e2b2026runtime;
+@vercel2026sandbox; @modal2026sandbox; @modal2026security; @sprites2026docs;
+@cloudflare2026sandboxsdk; @cloudflare2026containers; @daytona2026isolation;
+@runloop2026devboxes; @browserbase2026docs; @firecracker2026site;
+@anthropic2026sandboxruntime]. A container-based service is a hardened shared
+kernel in the terms of the mechanism table, whatever its start time, and a
+threat model that assumes hostile generated code treats it as the weaker
+boundary unless a VM or userspace kernel sits beneath it.
+
+Three questions narrow the choice once the mechanism is fixed. The first is
+what the agent must touch: a shell and files, a GPU, or a browser. The second is
+whether the workspace is ephemeral or persistent, since persistence brings the
+snapshot and retention obligations described below. The third is the run shape
+that the bill is computed from.
+
+Billing models differ in which resources accrue while the agent waits on the
+model. A service that bills the whole running time charges CPU and memory for
+every second the sandbox exists. A service that bills active CPU charges CPU
+only while code executes, but may still bill provisioned memory for the whole
+lifetime. For a bursty agent that spends most of a run waiting for model
+responses, the idle fraction of the lifetime therefore decides which model is
+cheaper, and a comparison uses the team's own lifetime, idle fraction, and
+concurrency rather than a per-hour list price.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Firecracker reports boot times under 125 ms, under 5 MiB of memory overhead per
+microVM, and up to 150 microVMs created per second per host
+[@firecracker2026site]. Vercel Sandbox bills active CPU at $0.128 per hour, with
+time spent waiting on I/O and model calls excluded, and provisioned memory at
+$0.0212 per GB-hour for the whole run, with 2 GB per vCPU; sessions run for up
+to 45 minutes on the Hobby plan and 24 hours on Pro [@vercel2026sandboxpricing].
+E2B bills each second a sandbox runs, at $0.000014 per vCPU-second and
+$0.0000045 per GiB-second; Hobby sessions last up to 1 hour, and the $150 per
+month Pro plan allows 24 hours [@e2b2026pricing]. For a 10-minute run on 2
+vCPUs and 4 GB whose CPU is busy 10 percent of the time, these list prices give
+about $0.018 on Vercel, of which memory is 77 percent, and $0.028 on E2B; at
+full CPU use the order reverses, $0.057 against $0.028, and the two cross near
+32 percent CPU use. Sprites bill only running sprites, and their billing notes
+state that RAM is almost always the line that dominates [@sprites2026].
+:::
 
 ### Define the complete sandbox envelope
 
@@ -510,6 +706,17 @@ Persistent workspaces are a separate feature with a separate retention and
 authorization policy. Suspending a process does not make its state safe or
 reproducible. Deleting an overlay also does not erase external API effects,
 backups, or retained logs.
+
+Three operational details recur once these sandboxes run at scale. Agent CLIs
+keep state in a configuration directory, such as settings, caches, and session
+history, and that state changes behavior from one run to the next, so a run that
+must be reproducible gets a fresh configuration directory as part of its clean
+baseline. Agents often run `git init` inside the workspaces they produce, so the
+export step strips nested `.git` directories before results are committed into
+an outer repository. Workloads that start one container per run have spiky
+memory use, so concurrency is capped explicitly; otherwise the kernel's
+out-of-memory killer ends runs with `SIGKILL`, which a shell reports as exit
+status 137.
 
 ### Give browser agents two boundaries
 
