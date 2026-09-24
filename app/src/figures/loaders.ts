@@ -115,4 +115,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "fusion-kv-cost": () => import("./fusion-kv-cost.ts"),
   "market-concentration": () => import("./market-concentration.ts"),
   "adoption-ledger": () => import("./adoption-ledger.ts"),
+  "agent-transaction": () => import("./agent-transaction.ts"),
 };
