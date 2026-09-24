@@ -517,7 +517,7 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
             fontFamily: "var(--font-ui)", fontSize: 16, outline: "none",
           }} />
           <kbd style={{
-            flex: "none", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600, color: "var(--fg-3)",
+            flex: "none", fontFamily: "var(--font-ui)", fontSize: 10.5, fontWeight: 600, color: "var(--fg-3)",
             border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)", padding: "2px 6px",
           }}>ESC</kbd>
         </div>
@@ -526,7 +526,7 @@ function SearchModal({ t, prefix, onClose }: { t: Strings; prefix: string; onClo
             {results.map(({ doc: d, snip }, i) => (
               <a key={`${d.href}#${d.anchor}-${i}`} href={hrefFor(d)} onMouseEnter={() => setSel(i)} className="rdr-hit" style={{ background: i === sel ? "var(--accent-subtle)" : "transparent" }}>
                 <div style={{ fontSize: 13.5, fontWeight: 500 }}>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>
+                  <span style={{ fontSize: 12, fontVariantNumeric: "tabular-nums", color: "var(--fg-3)", marginRight: 6 }}>{d.num || "·"}</span>
                   {d.title}
                   {d.heading && <span style={{ color: "var(--fg-3)", fontWeight: 400 }}> › {d.heading}</span>}
                 </div>
@@ -699,7 +699,7 @@ function PageFooter({ chapter, t }: { chapter: ChapterData; t: Strings }) {
 
 function SettingsPanel({ t, s, set, chapter }:{ t: Strings; s: ReaderSettings; set: (p: Partial<ReaderSettings>) => void; chapter: ChapterData }) {
   const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 12 };
-  const label: React.CSSProperties = { fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: ".1em", textTransform: "uppercase", fontWeight: 500, color: "var(--fg-3)", flex: "none" };
+  const label: React.CSSProperties = { fontFamily: "var(--font-ui)", fontSize: 11, letterSpacing: ".04em", textTransform: "uppercase", fontWeight: 500, color: "var(--fg-3)", flex: "none" };
   const seg: React.CSSProperties = { display: "flex", gap: 2, padding: 2, background: "var(--bg)", border: "1px solid var(--border-strong)", borderRadius: "var(--radius-md)" };
   const langSeg: React.CSSProperties = { ...seg, width: 150, flex: "none" };
   const segBtn = (active: boolean): React.CSSProperties => ({
@@ -742,7 +742,7 @@ function SettingsPanel({ t, s, set, chapter }:{ t: Strings; s: ReaderSettings; s
         <span style={label}>{t.size}</span>
         <div style={{ ...seg, alignItems: "center" }}>
           <button style={{ ...segBtn(false), color: "var(--fg-1)", fontSize: 15 }} onClick={() => set({ fontScale: Math.max(0.8, +(s.fontScale - 0.1).toFixed(1)) })}>−</button>
-          <span style={{ minWidth: 42, textAlign: "center", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--fg-1)" }}>{Math.round(s.fontScale * 100)}%</span>
+          <span style={{ minWidth: 42, textAlign: "center", fontFamily: "var(--font-ui)", fontSize: 12, fontVariantNumeric: "tabular-nums", color: "var(--fg-1)" }}>{Math.round(s.fontScale * 100)}%</span>
           <button style={{ ...segBtn(false), color: "var(--fg-1)", fontSize: 15 }} onClick={() => set({ fontScale: Math.min(1.4, +(s.fontScale + 0.1).toFixed(1)) })}>+</button>
         </div>
       </div>
