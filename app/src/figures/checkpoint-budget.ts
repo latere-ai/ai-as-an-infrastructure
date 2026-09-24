@@ -28,7 +28,8 @@ import { C, TYPE } from "./lib/theme.ts";
 import { linear, log } from "./lib/scale.ts";
 import { axis, axisHeight } from "./lib/axis.ts";
 import { legend, type LegendItem } from "./lib/legend.ts";
-import { placeLabels, drawLabels, lineObstacles, textWidth, wrap, type Box, type LabelRequest } from "./lib/labels.ts";
+import { placeLabels, drawLabels, lineObstacles, textWidth, type Box, type LabelRequest } from "./lib/labels.ts";
+import { wrapCjk as wrap } from "./lib/kinsoku.ts";
 import { int, sig, tpl } from "./lib/format.ts";
 import { rng, exponential } from "./lib/random.ts";
 

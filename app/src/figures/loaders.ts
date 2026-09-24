@@ -58,4 +58,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "preference-losses": () => import("./preference-losses.ts"),
   "dpo-derivation": () => import("./dpo-derivation.ts"),
   "checkpoint-budget": () => import("./checkpoint-budget.ts"),
+  "sdc-rollback": () => import("./sdc-rollback.ts"),
 };
