@@ -114,4 +114,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "constrained-decoding": () => import("./constrained-decoding.ts"),
   "fusion-kv-cost": () => import("./fusion-kv-cost.ts"),
   "market-concentration": () => import("./market-concentration.ts"),
+  "adoption-ledger": () => import("./adoption-ledger.ts"),
 };
