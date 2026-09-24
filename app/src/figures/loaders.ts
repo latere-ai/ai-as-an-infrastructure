@@ -62,4 +62,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "pd-placement": () => import("./pd-placement.ts"),
   "process-timescales": () => import("./process-timescales.ts"),
   "layer-pressure": () => import("./layer-pressure.ts"),
+  "synthetic-generations": () => import("./synthetic-generations.ts"),
 };
