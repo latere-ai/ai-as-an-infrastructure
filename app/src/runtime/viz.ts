@@ -660,40 +660,6 @@
     watchTheme(host, draw);
   };
 
-  // Three data-movement boundaries. Animation speeds preserve the qualitative
-  // locality hierarchy without claiming fixed ratios; sustained rates depend
-  // on the deployed device, domain, topology, direction, and traffic pattern.
-  R['bandwidth-tiers'] = function (host) {
-    var cv = canvas(host, 230);
-    var tiers = [
-      { label: 'HBM · device memory', rate: 'measure sustained', speed: 1.0 },
-      { label: 'NVLink / scale-up', rate: 'domain-specific', speed: 0.55 },
-      { label: 'IB / Ethernet scale-out', rate: 'topology-specific', speed: 0.28 }
-    ];
-    var pos = [0.0, 0.0, 0.0], timer = null;
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 26 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      var laneH = (H - 2 * pd) / 3, x0 = pd + 150 * cv.dpr, x1 = W - pd;
-      tiers.forEach(function (tier, i) {
-        var y = pd + laneH * (i + 0.5);
-        ctx.strokeStyle = t.grid; ctx.lineWidth = 2 * cv.dpr;
-        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
-        var px = x0 + (x1 - x0) * pos[i];
-        ctx.fillStyle = t.accent; ctx.beginPath(); ctx.arc(px, y, 7 * cv.dpr, 0, 7); ctx.fill();
-        ctx.fillStyle = t.ink; ctx.textAlign = 'left'; ctx.font = (12.5 * cv.dpr) + 'px sans-serif';
-        ctx.fillText(tier.label, pd, y - 5 * cv.dpr);
-        ctx.fillStyle = 'rgba(128,128,128,0.75)'; ctx.font = (10.5 * cv.dpr) + 'px ui-monospace, monospace';
-        ctx.fillText(tier.rate, pd, y + 13 * cv.dpr);
-      });
-    }
-    function tick() { timer = requestAnimationFrame(tick); tiers.forEach(function (tier, i) { pos[i] += tier.speed * 0.013; if (pos[i] > 1) pos[i] = 0; }); draw(); }
-    host.addEventListener('mouseenter', function () { if (timer) { cancelAnimationFrame(timer); timer = null; } });
-    host.addEventListener('mouseleave', function () { if (!timer) tick(); });
-    watchTheme(host, draw);
-    tick();
-  };
-
   // Judge agreement vs Cohen's kappa: two judges label items good or bad, each
   // correct with a fixed accuracy. As the base rate of "good" skews, raw
   // agreement stays high while kappa collapses, which is why "the judge agrees

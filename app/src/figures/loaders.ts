@@ -79,4 +79,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "vocabulary-tradeoff": () => import("./vocabulary-tradeoff.ts"),
   "token-premium": () => import("./token-premium.ts"),
   "unigram-lattice": () => import("./unigram-lattice.ts"),
+  "boundary-transfer": () => import("./boundary-transfer.ts"),
 };
