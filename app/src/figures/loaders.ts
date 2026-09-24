@@ -129,4 +129,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "split-leakage": () => import("./split-leakage.ts"),
   "lease-fencing": () => import("./lease-fencing.ts"),
   "agent-critical-path": () => import("./agent-critical-path.ts"),
+  "shared-surface-channel": () => import("./shared-surface-channel.ts"),
 };
