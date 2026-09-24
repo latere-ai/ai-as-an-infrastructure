@@ -141,4 +141,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "sisa-deletion": () => import("./sisa-deletion.ts"),
   "plaintext-path": () => import("./plaintext-path.ts"),
   "attestation-chain": () => import("./attestation-chain.ts"),
+  "incident-clocks": () => import("./incident-clocks.ts"),
 };
