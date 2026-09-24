@@ -23,4 +23,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "difficulty-budget": () => import("./difficulty-budget.ts"),
   "sampling-paths": () => import("./sampling-paths.ts"),
   "flash-attention": () => import("./flash-attention.ts"),
+  "kv-head-sharing": () => import("./kv-head-sharing.ts"),
 };
