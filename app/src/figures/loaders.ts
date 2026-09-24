@@ -126,4 +126,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "device-memory-budget": () => import("./device-memory-budget.ts"),
   "hybrid-route": () => import("./hybrid-route.ts"),
   "bundle-slots": () => import("./bundle-slots.ts"),
+  "split-leakage": () => import("./split-leakage.ts"),
 };
