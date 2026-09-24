@@ -188,8 +188,10 @@ function render(st: State<P>, lang: Lang): string {
   obstacles.push(...lineObstacles([[cx, top], [cx, top + plotH]]));
   const curLabel = tpl(L.cursor, { n: fmtB(m.n) });
   const clw = textWidth(curLabel, TYPE.body);
-  const clx = Math.min(Math.max(cx, left + clw / 2), right - clw / 2);
-  parts.push(text(clx, top - 8, curLabel, { "font-size": TYPE.body, "text-anchor": "middle", class: "fig-t-strong fig-t-num" }));
+  obstacles.push({ x0: cx - clw - 8, y0: top, x1: cx + clw + 8, y1: top + 20 });
+  // Inside the plot beside the cursor, clear of the axis title above it.
+  const flip = cx + 6 + clw > right - 2;
+  parts.push(text(flip ? cx - 6 : cx + 6, top + 14, curLabel, { "font-size": TYPE.body, "text-anchor": flip ? "end" : "start", class: "fig-t-halo fig-t-num" }));
 
   // Labels inside the plot: the arithmetic line and the hidden region.
   const reqs = [];
@@ -217,7 +219,8 @@ function render(st: State<P>, lang: Lang): string {
   // ---- readout: the equation's terms at the chosen payload
   let yy = top + plotH + axisHeight(true, tick) + 22;
   const rp: string[] = [];
-  const head = tpl(L.head, { n: fmtB(m.n), tc: fmtT(m.tc) });
+  const nb = (v: string) => v.replace(/ /g, "\u00a0"); // keep a value and its unit on one line
+  const head = tpl(L.head, { n: nb(fmtB(m.n)), tc: nb(fmtT(m.tc)) });
   for (const ln of wrapCjk(head, TYPE.label, w)) { rp.push(text(0, yy, ln, { "font-size": TYPE.label, class: "fig-t-strong fig-t-num" })); yy += 18; }
   yy += 4;
   if (w >= 600) {
