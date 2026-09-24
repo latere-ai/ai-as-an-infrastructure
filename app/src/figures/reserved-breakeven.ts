@@ -271,7 +271,7 @@ function describe(st: State<P>, lang: Lang): string {
   const d = Math.abs(m.S - m.R);
   const be = m.reachable ? tpl(Lx.beYes, { h: hours(Math.round(m.hStar * 10) / 10), u: pct(m.uStar) }) : tpl(Lx.beNo, { h: hours(Math.round(m.hStar * 10) / 10) });
   const verdict = d < 0.005 ? Lx.vE : m.S < m.R ? tpl(Lx.vS, { d: money(d, Lx) }) : tpl(Lx.vR, { d: money(d, Lx) });
-  return tpl(Lx.describe, { r: money(m.r, Lx), f: money(m.F, Lx), be: lang === "en" ? `${be} ` : be, h: hours(m.h), s: money(m.S, Lx), verdict });
+  return tpl(Lx.describe, { r: money(m.r, Lx), f: money(m.F, Lx), be, h: hours(m.h), s: money(m.S, Lx), verdict });
 }
 
 function render(st: State<P>, lang: Lang): string {
