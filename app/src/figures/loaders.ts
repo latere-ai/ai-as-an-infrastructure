@@ -51,4 +51,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "binomial-interval": () => import("./binomial-interval.ts"),
   "sft-loss-mask": () => import("./sft-loss-mask.ts"),
   "lora-low-rank": () => import("./lora-low-rank.ts"),
+  "task-vector-merge": () => import("./task-vector-merge.ts"),
 };

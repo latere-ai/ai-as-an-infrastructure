@@ -964,46 +964,6 @@
     watchTheme(host, draw);
   };
 
-  // Task arithmetic: a task vector τ = θ_ft − θ_base is a direction in weight
-  // space. Two such vectors add (a model good at both), one negates (unlearn),
-  // and when they point opposite ways their sum cancels, the sign conflict that
-  // TIES and DARE clean up. Slider sets the angle; toggle switches add/negate.
-  R['task-arithmetic'] = function (host) {
-    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
-    var L = zh
-      ? { unlearn: '反向：回到基座', aligned: '方向一致：相互加强', conflict: '符号冲突：相互抵消', combine: '组合两个任务', op: '操作：', add: '相加（多任务）', negate: '取反（遗忘）', result: '结果', angle: '两个任务向量的夹角' }
-      : { unlearn: 'unlearn: returns toward base', aligned: 'aligned: reinforce', conflict: 'sign conflict: cancels', combine: 'combine both tasks', op: 'op: ', add: 'add (multi-task)', negate: 'negate (unlearn)', result: 'result', angle: 'angle between τA and τB' };
-    var ang = 55, op = 'add';
-    var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
-    bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 280);
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, cx = W / 2, cy = H / 2, vectorLength = Math.min(W, H) * 0.3;
-      ctx.clearRect(0, 0, W, H);
-      ctx.strokeStyle = t.grid; ctx.lineWidth = cv.dpr;
-      ctx.beginPath(); ctx.moveTo(18 * cv.dpr, cy); ctx.lineTo(W - 18 * cv.dpr, cy); ctx.moveTo(cx, 14 * cv.dpr); ctx.lineTo(cx, H - 14 * cv.dpr); ctx.stroke();
-      var aA = -Math.PI / 6, Ax = Math.cos(aA) * vectorLength, Ay = Math.sin(aA) * vectorLength;
-      var aB = aA + ang * Math.PI / 180, Bx = Math.cos(aB) * vectorLength, By = Math.sin(aB) * vectorLength;
-      if (op === 'negate') { Bx = -Ax; By = -Ay; }
-      function arrow(x, y, col, w) { ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = w * cv.dpr; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + x, cy + y); ctx.stroke(); ctx.beginPath(); ctx.arc(cx + x, cy + y, 4.5 * cv.dpr, 0, 7); ctx.fill(); }
-      var Rx = Ax + Bx, Ry = Ay + By;
-      arrow(Ax, Ay, t.accent, 2); arrow(Bx, By, t.accent2, 2);
-      ctx.strokeStyle = t.ink; ctx.lineWidth = 3.4 * cv.dpr; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Rx, cy + Ry); ctx.stroke();
-      ctx.fillStyle = t.ink; ctx.beginPath(); ctx.arc(cx + Rx, cy + Ry, 4.5 * cv.dpr, 0, 7); ctx.fill();
-      ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'left';
-      ctx.fillStyle = t.accent; ctx.fillText('τA', cx + Ax + 6 * cv.dpr, cy + Ay);
-      ctx.fillStyle = t.accent2; ctx.fillText(op === 'negate' ? '−τA' : 'τB', cx + Bx + 6 * cv.dpr, cy + By);
-      var mag = Math.sqrt(Rx * Rx + Ry * Ry) / vectorLength;
-      var rel = op === 'negate' ? L.unlearn : (ang < 50 ? L.aligned : ang > 130 ? L.conflict : L.combine);
-      btn.textContent = L.op + (op === 'add' ? L.add : L.negate);
-      read.textContent = L.result + ' ' + mag.toFixed(2) + '× · ' + rel;
-    }
-    btn.addEventListener('click', function () { op = op === 'add' ? 'negate' : 'add'; draw(); });
-    host.appendChild(slider(L.angle, 0, 180, 5, ang, function (v) { ang = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Agent-RL systems have two independent design axes: resource placement
   // (shared or separate pools) and update synchronization (barriered or async).
   // This view switches axes instead of incorrectly equating disaggregation with
