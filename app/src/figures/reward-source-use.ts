@@ -266,8 +266,8 @@ function renderMatrix(p: P, lang: Lang, y0: number, w: number): { svg: string; h
   // the two columns is wide enough to name its systems.
   const rowKeys: Array<Source | Use> = narrow ? USES : SOURCES;
   const colKeys: Array<Source | Use> = narrow ? SOURCES : USES;
-  const rhW = narrow ? 70 : 128;
-  const gap = 6;
+  const rhW = narrow ? 64 : 128;
+  const gap = narrow ? 4 : 6;
   const cw = (w - rhW - gap * colKeys.length) / colKeys.length;
   const isSource = (k: Source | Use): k is Source => k === "checker" || k === "learned";
   const head = (k: Source | Use): Array<[string, string]> => isSource(k)
@@ -287,8 +287,8 @@ function renderMatrix(p: P, lang: Lang, y0: number, w: number): { svg: string; h
     const rowHead = head(rk).flatMap(([s, cls]) => lines(s, fs, rhW - 6, lang).map((ln) => [ln, cls] as [string, string]));
     const cells = colKeys.map((ck) => {
       const src = (isSource(rk) ? rk : ck) as Source, use = (isSource(rk) ? ck : rk) as Use;
-      const name = lines(cellName(L, src, use), fs, cw - 14, lang);
-      const strict = src === "checker" && use === "update" ? lines(L.strict, fs, cw - 14, lang) : [];
+      const name = lines(cellName(L, src, use), fs, cw - 12, lang);
+      const strict = src === "checker" && use === "update" ? lines(L.strict, fs, cw - 12, lang) : [];
       return { src, use, name, strict };
     });
     const rh = Math.max(rowHead.length * 15 + 8, ...cells.map((c) => (c.name.length + c.strict.length) * 15 + 14));
@@ -300,8 +300,8 @@ function renderMatrix(p: P, lang: Lang, y0: number, w: number): { svg: string; h
       let yy = y + 18;
       // Selection shows as fill and outline; the name keeps its regular weight
       // so a long system name fits the phone column.
-      for (const ln of c.name) { parts.push(text(x + 7, yy, ln, { "font-size": fs, class: on ? undefined : "fig-t-muted" })); yy += 15; }
-      for (const ln of c.strict) { parts.push(text(x + 7, yy, ln, { "font-size": fs, class: "fig-t-muted" })); yy += 15; }
+      for (const ln of c.name) { parts.push(text(x + 6, yy, ln, { "font-size": fs, class: on ? undefined : "fig-t-muted" })); yy += 15; }
+      for (const ln of c.strict) { parts.push(text(x + 6, yy, ln, { "font-size": fs, class: "fig-t-muted" })); yy += 15; }
       parts.push(el("rect", { x, y, width: cw, height: rh, rx: 6, fill: "transparent", "data-fig-set": `cell=${c.src}-${c.use}`, class: "fig-hit" }));
     });
     y += rh + gap;
