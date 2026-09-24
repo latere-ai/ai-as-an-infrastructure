@@ -64,10 +64,10 @@ export function workload(order: Order): ReqSpec[] {
 }
 const REQUESTS = 5;
 const FAIL_AT = 2; // iteration whose execution fails when fault = "fail"
-const CANCEL = 3; // request cancelled between reserve and commit when fault = "cancel"
+const CANCEL = 3; // request canceled between reserve and commit when fault = "cancel"
 
 export const St = { Free: 0, Reserved: 1, Committed: 2 } as const;
-export const RS = { Future: 0, Waiting: 1, Running: 2, Finished: 3, Cancelled: 4 } as const;
+export const RS = { Future: 0, Waiting: 1, Running: 2, Finished: 3, Canceled: 4 } as const;
 
 export type Kind = "reserve" | "commit" | "rollback" | "cancel" | "release" | "evict" | "preempt";
 
@@ -204,7 +204,7 @@ export function simulate(fault: Fault, order: Order, N: number): Run {
   for (let it = 1; it <= 60; it++) {
     for (const l of lives) if (l.status === RS.Future && l.spec.arrival <= it) { l.status = RS.Waiting; waiting.push(l); }
     if (!running.length && !waiting.length) {
-      if (lives.every((l) => l.status === RS.Finished || l.status === RS.Cancelled)) break;
+      if (lives.every((l) => l.status === RS.Finished || l.status === RS.Canceled)) break;
       continue;
     }
     for (const l of lives) { l.s = 0; l.dq = 0; l.inPlan = false; l.hit = false; }
@@ -298,7 +298,7 @@ export function simulate(fault: Fault, order: Order, N: number): Run {
         l.pending = [];
         let refs = 0;
         if (l.hit) { for (const b of prefix) { holders[b] &= ~bit(l.spec.id); changed[b] = 1; refs++; } }
-        l.table = []; l.T = 0; l.s = 0; l.dq = 0; l.inPlan = false; l.status = RS.Cancelled;
+        l.table = []; l.T = 0; l.s = 0; l.dq = 0; l.inPlan = false; l.status = RS.Canceled;
         admitted.splice(admitted.indexOf(l), 1);
         inPlan.splice(inPlan.indexOf(l), 1);
         snapshot(it, "cancel", changed, [{ k: "cancel", req: CANCEL, n, refs }]);
@@ -387,7 +387,7 @@ const labels = {
     stRequeued: "requeued",
     stRunning: "running",
     stFinished: "finished",
-    stCancelled: "cancelled",
+    stCanceled: "canceled",
     accounting: "Pool accounting",
     conserve: "free {f} + reserved {r} + committed {c} = {n} blocks",
     delta: "This step: {parts}",
@@ -407,13 +407,13 @@ const labels = {
     mRegister: "the prefix index registers blocks {bl} (r = {r})",
     mFail: "iteration {it} fails: {n:reserved block returns/reserved blocks return} to free and committed blocks stay as they were",
     mFailRefs: "iteration {it} fails: {n:reserved block returns/reserved blocks return} to free, {refs} prefix references are dropped, and committed blocks stay as they were",
-    mCancel: "R{i} is cancelled before commit: its {n:reserved block returns/reserved blocks return} to free",
-    mCancelRefs: "R{i} is cancelled before commit: its {n:reserved block returns/reserved blocks return} to free and its {refs} prefix references are dropped",
+    mCancel: "R{i} is canceled before commit: its {n:reserved block returns/reserved blocks return} to free",
+    mCancelRefs: "R{i} is canceled before commit: its {n:reserved block returns/reserved blocks return} to free and its {refs} prefix references are dropped",
     mFinish: "R{i} finishes: blocks {freed} reach r = 0 and return to free",
     mFinishKept: "R{i} finishes: blocks {freed} reach r = 0 and return to free, blocks {kept} stay committed (r = {r})",
-    mEvict: "iteration {it}: {need} blocks needed, {free} free; no live request holds the cached prefix, so the index drops blocks {bl} and they return to free",
-    mPreempt: "iteration {it}: the running decodes need {need} blocks, {free} free; R{i} is preempted for later recompute and blocks {freed} return to free",
-    mPreemptKept: "iteration {it}: the running decodes need {need} blocks, {free} free; R{i} is preempted for later recompute, blocks {freed} return to free, blocks {kept} stay committed (r = {r})",
+    mEvict: "iteration {it}: {need:block/blocks} needed, {free} free; no live request holds the cached prefix, so the index drops blocks {bl} and they return to free",
+    mPreempt: "iteration {it}: the running decodes need {need:block/blocks}, {free} free; R{i} is preempted for later recompute and blocks {freed} return to free",
+    mPreemptKept: "iteration {it}: the running decodes need {need:block/blocks}, {free} free; R{i} is preempted for later recompute, blocks {freed} return to free, blocks {kept} stay committed (r = {r})",
     and: " and ",
     sep: "; ",
     describe: "Iteration {it}, {phase}: free {f} + reserved {r} + committed {c} = {n} blocks. {what}.",
@@ -440,11 +440,11 @@ const labels = {
     colStatus: "状态",
     stFuture: "未到达",
     stWaiting: "排队",
-    stAdmitted: "已准入",
+    stAdmitted: "已接纳",
     stRequeued: "重新排队",
     stRunning: "运行",
     stFinished: "完成",
-    stCancelled: "已取消",
+    stCanceled: "已取消",
     accounting: "块池记账",
     conserve: "空闲 {f} + 预留 {r} + 已提交 {c} = {n} 个块",
     delta: "本步变化：{parts}",
@@ -670,7 +670,7 @@ function statusText(q: ReqView, L: L): string {
     case RS.Waiting: return q.admitted ? L.stAdmitted : q.preempted ? L.stRequeued : L.stWaiting;
     case RS.Running: return L.stRunning;
     case RS.Finished: return L.stFinished;
-    default: return L.stCancelled;
+    default: return L.stCanceled;
   }
 }
 
@@ -679,7 +679,7 @@ function statusText(q: ReqView, L: L): string {
 function renderTable(f: Frame, x0: number, w: number, rowYs: Array<{ y: number; h: number }>, headerY: number, L: L, narrow: boolean): string {
   const fs = TYPE.body;
   const parts: string[] = [];
-  const statusW = Math.max(...[L.stFuture, L.stWaiting, L.stAdmitted, L.stRequeued, L.stRunning, L.stFinished, L.stCancelled, L.colStatus].map((s) => textWidth(s, fs))) + 10;
+  const statusW = Math.max(...[L.stFuture, L.stWaiting, L.stAdmitted, L.stRequeued, L.stRunning, L.stFinished, L.stCanceled, L.colStatus].map((s) => textWidth(s, fs))) + 10;
   const numW = Math.max(28, Math.floor((w - statusW - (narrow ? 26 : 0)) / 4));
   const lead = narrow ? 26 : 0; // request labels repeated when the table is not beside the pool
   const cols = ["T_[i]", "q_[i]", "s_[i]", "Δq_[i]"];
