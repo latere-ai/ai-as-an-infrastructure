@@ -109,8 +109,8 @@ function classify(source: string): Classified {
   return { lines, kinds, openFence: fence !== "", openMath: math, divDepth, orphanDivClose };
 }
 
-function fenceBodies(source: string, kind: "dot" | "mermaid"): string[] {
-  return [...source.matchAll(new RegExp(`^\`\`\`\\{${kind}\\}[ \\t]*\\n([\\s\\S]*?)\\n\`\`\`[ \\t]*$`, "gm"))].map(
+function dotBodies(source: string): string[] {
+  return [...source.matchAll(/^```\{dot\}[ \t]*\n([\s\S]*?)\n```[ \t]*$/gm)].map(
     (match) => match[1],
   );
 }
@@ -228,7 +228,7 @@ test("every Graphviz figure parses and fits the mobile reading column", () => {
   const failures: string[] = [];
   const wide: string[] = [];
   for (const page of pages) {
-    fenceBodies(page.source, "dot").forEach((body, index) => {
+    dotBodies(page.source).forEach((body, index) => {
       const label = body.match(/^\s*\/\/\|\s*label:\s*(\S+)/m)?.[1] ?? `${page.href}#${index}`;
       const html = renderDot(graphviz, body, new Map(), page.href, "");
       if (html.includes("graphviz error")) {
@@ -249,7 +249,7 @@ test("every Graphviz figure is laid out in the layout font and colored by theme 
   // must follow the theme, whatever the source wrote.
   const failures: string[] = [];
   for (const page of pages) {
-    fenceBodies(page.source, "dot").forEach((body, index) => {
+    dotBodies(page.source).forEach((body, index) => {
       const label = body.match(/^\s*\/\/\|\s*label:\s*(\S+)/m)?.[1] ?? `${page.href}#${index}`;
       const html = renderDot(graphviz, body, new Map(), page.href, "");
       for (const m of html.matchAll(/<text\b[^>]*>/g)) {
@@ -286,7 +286,7 @@ test("every page compiles without leaking markdown syntax or unresolved referenc
 
     if (page.html.includes("katex-error")) report("KaTeX error");
     if (page.html.includes("graphviz error")) report("Graphviz error");
-    if (/\brdr(?:dot|mermaid|html)\b/.test(page.html)) report("diagram fence left unrendered");
+    if (/\brdr(?:dot|html)\b/.test(page.html)) report("diagram fence left unrendered");
     for (const match of page.html.matchAll(/class="rdr-(?:cite|xref|gls) [^"]*-missing">([^<]*)</g)) {
       report(`unresolved reference ${match[1]}`);
     }
@@ -312,12 +312,9 @@ test("content after every diagram, code, math, and div block reaches the page", 
   for (const page of pages) {
     const report = (problem: string) => failures.push(`${page.path}: ${problem}`);
 
-    const dot = fenceBodies(page.source, "dot").length;
-    const mermaid = fenceBodies(page.source, "mermaid").length;
+    const dot = dotBodies(page.source).length;
     const renderedDot = page.html.match(/<div class="rdr-diagram">/g)?.length ?? 0;
-    const renderedMermaid = page.html.match(/<pre class="mermaid">/g)?.length ?? 0;
     if (renderedDot !== dot) report(`${dot} Graphviz fences, ${renderedDot} rendered`);
-    if (renderedMermaid !== mermaid) report(`${mermaid} Mermaid fences, ${renderedMermaid} rendered`);
 
     // One sample from the first prose line after each closing block marker,
     // and one from the last prose line of the page, in document order.

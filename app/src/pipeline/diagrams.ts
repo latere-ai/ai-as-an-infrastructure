@@ -1,8 +1,7 @@
 // Diagram rendering. Graphviz (```{dot}```) is rendered to inline SVG at build
-// time via @hpcc-js/wasm (no system dependency). Mermaid (```{mermaid}```) is
-// emitted as <pre class="mermaid"> and rendered client-side,
-// themed from the palette. Both support Pandoc-style //| label: / %%| label: and
-// fig-cap: directives and become numbered <figure>s via the crossref map.
+// time via @hpcc-js/wasm (no system dependency), themed from the palette. It
+// supports Pandoc-style //| label: and //| fig-cap: directives and becomes a
+// numbered <figure> via the crossref map.
 //
 // A Graphviz figure scales with the reading column. Its SVG is as wide as the
 // column up to its natural size, and no narrower than the width at which its
@@ -53,16 +52,15 @@ const NARROW_LAYOUTS: LayoutOptions[] = [
   { unrank: true, flip: true, wrapEm: 9, tight: true },
 ];
 
-// Pull `//| key: value` (dot) or `%%| key: value` (mermaid) directive lines off
-// the top of a diagram body.
-function extractDirectives(code: string, marker: "//|" | "%%|"): { body: string; label?: string; cap?: string } {
+// Pull `//| key: value` directive lines off the top of a diagram body.
+function extractDirectives(code: string): { body: string; label?: string; cap?: string } {
   const lines = code.split("\n");
   const kept: string[] = [];
   let label: string | undefined, cap: string | undefined;
   for (const line of lines) {
     const t = line.trim();
-    if (t.startsWith(marker)) {
-      const rest = t.slice(marker.length).trim();
+    if (t.startsWith("//|")) {
+      const rest = t.slice(3).trim();
       const mLabel = rest.match(/^label:\s*(\S+)/);
       const mCap = rest.match(/^fig-cap:\s*"?(.*?)"?$/);
       if (mLabel) { label = mLabel[1]; continue; }
@@ -166,7 +164,7 @@ function svgElement(layout: DotLayout, name: string, cls?: string): string {
 }
 
 export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap, currentHref: string, prefix: string): string {
-  const { body, label, cap } = extractDirectives(code, "//|");
+  const { body, label, cap } = extractDirectives(code);
   const name = escapeAttribute(cap || label || "Diagram");
   let inner: string;
   try {
@@ -176,10 +174,4 @@ export function renderDot(gv: GraphvizInstance, code: string, xref: CrossrefMap,
       : svgElement(wide, name, "rdr-dg-wide") + svgElement(narrow, name, "rdr-dg-narrow");
   } catch (e) { inner = `<pre class="rdr-diagram-error">graphviz error: ${String(e)}</pre>`; }
   return figureWrap(`<div class="rdr-diagram">${inner}</div>`, label, cap, xref, currentHref, prefix);
-}
-
-export function renderMermaid(code: string, xref: CrossrefMap, currentHref: string, prefix: string): string {
-  const { body, label, cap } = extractDirectives(code, "%%|");
-  const esc = body.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  return figureWrap(`<pre class="mermaid">${esc}</pre>`, label, cap, xref, currentHref, prefix);
 }

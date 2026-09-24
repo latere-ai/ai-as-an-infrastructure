@@ -1,7 +1,8 @@
 // Cross-reference map: scan every chapter for section labels ({#sec-} on H1)
-// and figure labels ({#fig-} on images + ```{mermaid}/{dot} //| label: }) to
-// assign book-wide numbers, so @sec-x → "Chapter N" and @fig-x → "Figure C.N",
-// each linking to the owning chapter page + anchor.
+// and figure labels ({#fig-} on images, //| label: in ```{dot}/{figure}
+// blocks, id="fig-" on raw figures) to assign book-wide numbers, so @sec-x →
+// "Chapter N" and @fig-x → "Figure C.N", each linking to the owning chapter
+// page + anchor.
 
 import { readFileSync } from "node:fs";
 import type { Book } from "./book.ts";
@@ -33,11 +34,11 @@ export function buildCrossref(book: Book): CrossrefMap {
       });
     }
 
-    // Figures: images ![..](..){#fig-x}, diagram blocks //| or %%| label: fig-x,
+    // Figures: images ![..](..){#fig-x}, diagram blocks //| label: fig-x,
     // and raw {=html} viz figures <figure id="fig-x">, numbered by order of
     // appearance within the chapter.
     let figN = 0;
-    const figRe = /\{#(fig-[a-z0-9-]+)|(?:\/\/\||%%\|)\s*label:\s*(fig-[a-z0-9-]+)|id="(fig-[a-z0-9-]+)"/g;
+    const figRe = /\{#(fig-[a-z0-9-]+)|\/\/\|\s*label:\s*(fig-[a-z0-9-]+)|id="(fig-[a-z0-9-]+)"/g;
     let m: RegExpExecArray | null;
     while ((m = figRe.exec(text))) {
       const figId = m[1] ?? m[2] ?? m[3];

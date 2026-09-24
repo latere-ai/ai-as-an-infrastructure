@@ -1,6 +1,6 @@
 // Markdown → HTML for chapter bodies. markdown-it core + attributes ({#id} on
 // headings/images) + KaTeX math + inline refs/citations + fenced divs (callouts,
-// runnable) + diagrams (dot inline SVG, mermaid client-side) + numbered figures.
+// runnable) + diagrams (dot inline SVG, figure modules) + numbered figures.
 // Raw {=html} viz blocks pass through verbatim (html:true).
 
 import MarkdownIt from "markdown-it";
@@ -14,7 +14,7 @@ import { inlineRefs } from "./inline-refs.ts";
 import type { Bibliography } from "./citations.ts";
 import type { CrossrefMap } from "./crossref.ts";
 import { resolveXrefsInText } from "./crossref.ts";
-import { renderDot, renderMermaid, type GraphvizInstance } from "./diagrams.ts";
+import { renderDot, type GraphvizInstance } from "./diagrams.ts";
 import { renderFigureBlock } from "./figures.ts";
 import { cjkEmphasis } from "./cjk.ts";
 import { expandDivs } from "./divs.ts";
@@ -132,15 +132,14 @@ function createMd(ctx: RenderContext): MarkdownIt {
     glossaryFirstUses: ctx.glossaryFirstUses,
   });
 
-  // Diagram fences: ```{dot}```, ```{mermaid}```, and ```{figure}```.
+  // Diagram fences: ```{dot}``` and ```{figure}```.
   const defFence = md.renderer.rules.fence!.bind(md.renderer.rules);
   md.renderer.rules.fence = (tokens, idx, options, env, self) => {
     const info = tokens[idx].info.trim();
     // Fences are renamed to bare tokens before parsing (markdown-it-attrs strips
-    // {dot}/{mermaid}/{=html} curly infos), so match the renamed forms.
+    // {dot}/{figure}/{=html} curly infos), so match the renamed forms.
     if (info === "rdrhtml") return tokens[idx].content; // Pandoc raw HTML block
     if (info === "rdrdot" || info === "dot") return renderDot(ctx.graphviz, tokens[idx].content, ctx.xref, ctx.currentHref, ctx.prefix);
-    if (info === "rdrmermaid" || info === "mermaid") return renderMermaid(tokens[idx].content, ctx.xref, ctx.currentHref, ctx.prefix);
     // Figure modules: static SVG of the opening state, hydrated on the client.
     // The caption is inline markdown, so math, citations, and @refs render.
     if (info === "rdrfigure") {
@@ -223,7 +222,7 @@ export function renderMarkdown(src: string, ctx: RenderContext): RenderedChapter
   const { titleLine, body } = splitTitle(src);
   // Rename curly diagram fences to bare language tokens so markdown-it-attrs
   // leaves the info intact for our fence renderer.
-  const normalized = body.replace(/^(`{3,})\{(dot|mermaid|figure)\}[ \t]*$/gm, (_m, ticks, kind) => `${ticks}rdr${kind}`);
+  const normalized = body.replace(/^(`{3,})\{(dot|figure)\}[ \t]*$/gm, (_m, ticks, kind) => `${ticks}rdr${kind}`);
   const expanded = expandDivs(normalized);
   const { headings, tokens } = collectHeadings(md, expanded);
   const html = postProcess(md.renderer.render(tokens, (md as any).options, {}), ctx);
