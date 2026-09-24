@@ -43,4 +43,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "superposition-toy": () => import("./superposition-toy.ts"),
   "sae-readback": () => import("./sae-readback.ts"),
   "divergence-direction": () => import("./divergence-direction.ts"),
+  "acceptance-weighting": () => import("./acceptance-weighting.ts"),
 };
