@@ -432,7 +432,10 @@ function renderStrip(p: P, d: ReturnType<typeof derive>, w: number, y0: number, 
   yy += lg.height + 8;
   const rows = narrow ? 6 : 3;
   const rowLen = r.window / rows;
-  const labelW = 50;
+  const rowLabel = (i: number) => (i === 0 ? "0" : dur(i * rowLen, L));
+  let labelW = 0;
+  for (let i = 0; i < rows; i++) labelW = Math.max(labelW, textWidth(rowLabel(i), TYPE.body));
+  labelW = Math.ceil(labelW) + 10;
   const x0 = labelW, x1 = w;
   const barH = 16, rowGap = 26;
   const s = d.tauOn + p.ckpt;
@@ -442,7 +445,7 @@ function renderStrip(p: P, d: ReturnType<typeof derive>, w: number, y0: number, 
     const a = i * rowLen, b = a + rowLen;
     const x = linear([a, b], [x0, x1]);
     const top = yy + i * rowGap + 4;
-    parts.push(text(labelW - 8, top + barH - 3, dur(a, L).replace(/^0 .*/, "0"), { "font-size": TYPE.body, "text-anchor": "end", class: "fig-t-muted fig-t-num" }));
+    parts.push(text(labelW - 8, top + barH - 3, rowLabel(i), { "font-size": TYPE.body, "text-anchor": "end", class: "fig-t-muted fig-t-num" }));
     parts.push(el("rect", { x: x0, y: top, width: x1 - x0, height: barH, fill: C.panel }));
     for (const st of r.stretches) {
       if (st.t1 <= a || st.t0 >= b) continue;
