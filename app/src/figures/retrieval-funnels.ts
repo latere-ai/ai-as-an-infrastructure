@@ -16,6 +16,7 @@ import { svg, el, text, g } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
 import { textWidth } from "./lib/labels.ts";
 import { wrapLines } from "./lib/wrap-lines.ts";
+import { mathText } from "./lib/math-text.ts";
 
 interface Stage { n: number; count: string; name: string; op: string }
 type Side = "rec" | "rag";
@@ -95,7 +96,7 @@ function funnel(side: Side, x0: number, w: number, y0: number, L: L, fs: number)
     parts.push(text(cx, y + 15, s.count, { "font-size": fs, "text-anchor": "middle", class: "fig-t-halo fig-t-num" }));
     y += bandH + 4;
     for (const ln of wrapLines(s.name, fs, w)) { parts.push(text(cx, y + fs, ln, { "font-size": fs, "text-anchor": "middle", class: "fig-t-strong" })); y += textH; }
-    if (s.op) for (const ln of wrapLines(s.op, fs, w)) { parts.push(text(cx, y + fs, ln, { "font-size": fs, "text-anchor": "middle", class: "fig-t-muted fig-t-num" })); y += textH; }
+    if (s.op) for (const ln of wrapLines(s.op, fs, w)) { parts.push(mathText(cx, y + fs, ln, { "font-size": fs, "text-anchor": "middle", class: "fig-t-muted fig-t-num" })); y += textH; }
     y += 10;
     if (!last) {
       parts.push(el("path", { d: `M${cx},${y - 8}L${cx},${y}`, stroke: C.ink3, "stroke-width": 1.2, fill: "none" }));

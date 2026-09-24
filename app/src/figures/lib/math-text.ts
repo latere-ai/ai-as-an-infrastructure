@@ -15,7 +15,7 @@
 import { el, esc, type Attrs } from "./svg.ts";
 import { textWidth } from "./labels.ts";
 
-const TOKEN = /([A-Za-z])̂|([A-Za-z])_([A-Za-z0-9]+)/g;
+const TOKEN = /([A-Za-z])̂|([A-Za-z])_([A-Za-z0-9α-ω]+)/g;
 
 export function mathText(x: number, y: number, s: string | number, a: Attrs = {}): string {
   const str = String(s);
