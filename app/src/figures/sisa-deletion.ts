@@ -200,7 +200,6 @@ function gridPanel(m: Model, L: L, lang: Lang, uid: string, x0: number, y0: numb
     { label: L.lgReq, swatch: { kind: "dot", fill: C.ink } },
   ], x0, y, w, size);
   parts.push(lg.svg);
-  void uid;
   return { svg: g({}, ...parts), h: y + lg.height - y0 };
 }
 

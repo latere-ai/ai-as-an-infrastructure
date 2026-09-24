@@ -24,7 +24,7 @@
 import { defineFigure, type Lang, type State } from "./types.ts";
 import { svg, el, text, g } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
-import { textWidth, wrap } from "./lib/labels.ts";
+import { wrap } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { tpl } from "./lib/format.ts";
 
@@ -511,7 +511,6 @@ function render(st: State<P>, lang: Lang): string {
   put(tpl(L.est, { s: es }), "", size);
   put(tpl(L.not, { s: ns }), "fig-t-muted", size);
   put(tpl(L.faultNote, { f: faultName(f, L) }), "fig-t-muted", size);
-  void textWidth;
   return svg(w, y + 2, describe(st, lang), ...parts);
 }
 

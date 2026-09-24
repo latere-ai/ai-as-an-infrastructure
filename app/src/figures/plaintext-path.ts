@@ -23,7 +23,7 @@ import { defineFigure, type Lang, type State } from "./types.ts";
 import { svg, el, text, g, hatch } from "./lib/svg.ts";
 import { C, TYPE } from "./lib/theme.ts";
 import { legend } from "./lib/legend.ts";
-import { textWidth, wrap } from "./lib/labels.ts";
+import { wrap } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { tpl } from "./lib/format.ts";
 
@@ -313,7 +313,6 @@ function render(st: State<P>, lang: Lang): string {
   put(tpl(L.count, { n: sm.out.length }) + (sm.out.length ? (lang === "zh" ? `：${sm.names.join(sep)}` : `: ${sm.names.join(sep)}`) : ""), "fig-t-strong", TYPE.label);
   put(sm.first ? tpl(L.ends, { s: L[sm.first.key] }) : L.endsNone, "", size);
   if (sm.link) put(tpl(L.linkNote, { s: L[sm.link.key] }), "fig-t-muted", size);
-  void textWidth;
   return svg(w, y + 4, describe(st, lang), ...parts);
 }
 

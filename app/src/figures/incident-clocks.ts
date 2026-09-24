@@ -242,7 +242,6 @@ function render(st: State<P>, lang: Lang): string {
   }
   put(tpl(L.timestamps, { b: dayFmt(p.belief), t: dayFmt(tDet) }), "fig-t-muted fig-t-num", size);
   put(L.euNote, "fig-t-muted", size);
-  void rowsY;
   return svg(w, y + 2, describe(st, lang), ...parts);
 }
 

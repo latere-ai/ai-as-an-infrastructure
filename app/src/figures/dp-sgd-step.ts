@@ -35,7 +35,7 @@ import { textWidth, wrap, placeLabels, drawLabels } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { rng } from "./lib/random.ts";
 import { normalPdf, normalTail, normalFrom } from "./lib/stats.ts";
-import { fixed, sig, tpl } from "./lib/format.ts";
+import { sig, tpl } from "./lib/format.ts";
 import { sci } from "./lib/notation.ts";
 
 const BATCH = 8;
