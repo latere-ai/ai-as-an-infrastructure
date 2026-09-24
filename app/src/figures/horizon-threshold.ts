@@ -151,7 +151,7 @@ const labels = {
   zh: {
     title: "能力地平线：拟合得到的阈值",
     headA: "同一条拟合曲线，每个阈值读出一个地平线",
-    headB: "METR-Horizon-v1.1：按发布日期排列的已发布地平线",
+    headB: "METR-Horizon-v1.1：各模型已发布的地平线",
     legCurve: "σ(α − β ln d)",
     legPub: "{name} 的已发布斜率",
     legDots: "模拟任务：8 次尝试中成功的比例",
@@ -261,10 +261,12 @@ function render(st: State<P>, lang: Lang): string {
   }
   const topA = y + 14;
   const hA = narrow ? 190 : 220;
-  const xa = log(XA, [left, w - right]);
+  // Keep the last time label ("1 wk") inside the figure.
+  const rightA = Math.max(right, Math.ceil(textWidth(tickDur(lang)(XA[1]), fs) / 2) + 2);
+  const xa = log(XA, [left, w - rightA]);
   const ya = linear([0, 1], [topA + hA, topA]);
   parts.push(axis({ scale: xa, orient: "bottom", at: topA + hA, grid: [topA, topA + hA], ticks: [1 / 60, 1, 60, 1440, 10080], format: tickDur(lang), title: L.xA, size: fs }));
-  parts.push(axis({ scale: ya, orient: "left", at: left, grid: [left, w - right], ticks: [0, 0.2, 0.5, 0.8, 1], format: (v) => `${Math.round(v * 100)}%`, title: L.yA, size: fs }));
+  parts.push(axis({ scale: ya, orient: "left", at: left, grid: [left, w - rightA], ticks: [0, 0.2, 0.5, 0.8, 1], format: (v) => `${Math.round(v * 100)}%`, title: L.yA, size: fs }));
 
   // Simulated outcomes.
   // Label obstacles are the curve and the guide lines; labels carry a halo,
@@ -300,7 +302,7 @@ function render(st: State<P>, lang: Lang): string {
     { q: 0.8, h: h80, label: tpl(L.at80, { v: dur(h80, lang) }), strong: near(p.q, 0.8) },
   ];
   if (!near(p.q, 0.5) && !near(p.q, 0.8)) reads.push({ q: p.q, h: hq, label: tpl(L.atQ, { q: pctq(p.q), v: dur(hq, lang) }), strong: true });
-  const xEnd = w - right;
+  const xEnd = w - rightA;
   const guides: Box[][] = [];
   for (const r of reads) {
     const yy = ya(r.q);
@@ -403,19 +405,22 @@ function render(st: State<P>, lang: Lang): string {
     y += 14 + row * 20 + 16;
   }
   const topB = y + 14;
+  // The time labels on this axis are wider than percentages, and wider in zh.
+  const ticksB = [1 / 60, 1, 60, 600];
+  const leftB = Math.max(left, Math.ceil(Math.max(...ticksB.map((v) => textWidth(tickDur(lang)(v), fs)))) + 12);
   const hB = narrow ? 230 : 260;
   const x0 = dayNum("2019-01-01"), x1 = dayNum("2026-07-01");
-  const xb = linear([x0, x1], [left + 6, w - right - 6]);
+  const xb = linear([x0, x1], [leftB + 6, w - right - 6]);
   const yb = log(YB, [topB + hB, topB]);
   const years = Array.from({ length: 8 }, (_, i) => dayNum(`${2019 + i}-01-01`));
   parts.push(axis({ scale: xb, orient: "bottom", at: topB + hB, grid: [topB, topB + hB], ticks: years, format: (v) => String(new Date(v * 86400000).getUTCFullYear()), title: L.xB, size: fs }));
-  parts.push(axis({ scale: yb, orient: "left", at: left, grid: [left, w - right], ticks: [1 / 60, 1, 60, 600], minor: true, format: tickDur(lang), title: L.yB, size: fs }));
+  parts.push(axis({ scale: yb, orient: "left", at: leftB, grid: [leftB, w - right], ticks: ticksB, minor: true, format: tickDur(lang), title: L.yB, size: fs }));
   const obsB: Box[] = [];
 
   // The 16-hour ceiling.
   const yc = yb(CEILING_MIN);
-  parts.push(el("line", { x1: left, x2: w - right, y1: yc, y2: yc, stroke: C.ink3, "stroke-width": 1.25, "stroke-dasharray": "6 3" }));
-  obsB.push(...lineObstacles([[left, yc], [w - right, yc]], 8, 1));
+  parts.push(el("line", { x1: leftB, x2: w - right, y1: yc, y2: yc, stroke: C.ink3, "stroke-width": 1.25, "stroke-dasharray": "6 3" }));
+  obsB.push(...lineObstacles([[leftB, yc], [w - right, yc]], 8, 1));
 
   // Trend lines.
   const tr = [trend(p.window, 0), trend(p.window, 1)] as const;
@@ -467,8 +472,8 @@ function render(st: State<P>, lang: Lang): string {
         sides: ["above-left", "left", "above", "below-left", "above-right", "right", "below-right"], gap: 10, priority: isSel ? 5 : 2,
         attrs: { class: `fig-t-halo${isSel ? " fig-t-strong" : " fig-t-muted"}` } });
     }
-    reqB.push({ x: left + 4, y: yc, text: L.ceiling, size: fs, sides: ["above-right", "below-right"], gap: 4, priority: 4, attrs: { class: "fig-t-halo fig-t-muted" } });
-    const pl = placeLabels(reqB, { x0: left + 2, y0: topB + 2, x1: w - right, y1: topB + hB - 2 }, obsB);
+    reqB.push({ x: leftB + 4, y: yc, text: L.ceiling, size: fs, sides: ["above-right", "below-right"], gap: 4, priority: 4, attrs: { class: "fig-t-halo fig-t-muted" } });
+    const pl = placeLabels(reqB, { x0: leftB + 2, y0: topB + 2, x1: w - right, y1: topB + hB - 2 }, obsB);
     parts.push(drawLabels(pl.placed));
   }
 
