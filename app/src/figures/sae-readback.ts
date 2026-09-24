@@ -136,6 +136,7 @@ const labels = {
     use: "{d:dead latent/dead latents}; {u:active latent matches/active latents match} no vᵢ",
     most: "most frequent latent fires on {p} of inputs",
     bdec: "b_dec = ({x}, {y})",
+    bdecOff: "toward b_dec",
     truth: "Against the true features (toy only)",
     colFeature: "feature",
     colCos: "best cos",
@@ -157,6 +158,7 @@ const labels = {
     use: "死潜变量 {d} 个，另有 {u} 个活跃潜变量不对应任何 vᵢ",
     most: "最频繁的潜变量在 {p} 的输入上激活",
     bdec: "b_dec = ({x}, {y})",
+    bdecOff: "b_dec 在此方向",
     truth: "与真实特征对照（仅玩具模型可做）",
     colFeature: "特征",
     colCos: "最大余弦",
@@ -241,12 +243,21 @@ function render(st: State<P>, lang: Lang): string {
     obstacles.push(...lineObstacles([[cx, cy], [tx, ty]], 6, 2));
   }
   parts.push(g({}, ...cols));
-  // b_dec, when it falls inside the plane.
+  // b_dec: a cross where it falls, or an arrow at the edge pointing toward it.
   const bx = sae.bdec[0], by = sae.bdec[1];
-  if (Math.abs(bx) < RANGE - 0.1 && Math.abs(by) < RANGE - 0.1 && Math.hypot(bx, by) > 0.08) {
-    const qx = X(bx), qy = Y(by);
-    parts.push(el("path", { d: `M${qx - 5},${qy}h10M${qx},${qy - 5}v10`, stroke: C.ink, "stroke-width": 2 }));
-    reqs.push({ x: qx, y: qy, text: "b_dec", size: fs, sides: ["right", "left", "above", "below"], gap: 8, priority: 2, attrs: { class: "fig-t-halo fig-t-soft" } });
+  if (Math.hypot(bx, by) > 0.08) {
+    const lim = RANGE - 0.12;
+    const out = Math.max(Math.abs(bx), Math.abs(by)) > lim;
+    const f = out ? lim / Math.max(Math.abs(bx), Math.abs(by)) : 1;
+    const qx = X(bx * f), qy = Y(by * f);
+    if (out) {
+      const n = Math.hypot(bx, by), ux = bx / n, uy = -by / n;
+      parts.push(el("line", { x1: qx - ux * 14, y1: qy - uy * 14, x2: qx, y2: qy, stroke: C.ink, "stroke-width": 2 }), arrowHead(qx + ux * 4, qy + uy * 4, ux, uy, 8, C.ink));
+    } else {
+      parts.push(el("path", { d: `M${qx - 5},${qy}h10M${qx},${qy - 5}v10`, stroke: C.ink, "stroke-width": 2 }));
+    }
+    obstacles.push({ x0: qx - 8, y0: qy - 8, x1: qx + 8, y1: qy + 8 });
+    reqs.push({ x: qx, y: qy, text: out ? L.bdecOff : "b_dec", size: fs, sides: ["right", "left", "above", "below", "above-right", "below-right", "above-left", "below-left"], gap: 10, priority: 2, attrs: { class: "fig-t-halo fig-t-soft" } });
   }
   const placed = placeLabels(reqs, { x0: px0 + 2, y0: cy - PW / 2 + 2, x1: px0 + PW - 2, y1: cy + PW / 2 - 2 }, obstacles);
   parts.push(drawLabels(placed.placed));
@@ -276,7 +287,7 @@ function render(st: State<P>, lang: Lang): string {
   line(tpl(L.l0, { l: fixed(e.l0, 2), k: p.k }), "fig-t-num");
   line(tpl(L.use, { d: dead, u: unmatched }), "fig-t-num");
   line(tpl(L.most, { p: pct(Math.max(...e.freq)) }), "fig-t-num");
-  line(tpl(L.bdec, { x: fixed(bx, 2), y: fixed(by, 2) }), "fig-t-num fig-t-muted");
+  line(tpl(L.bdec, { x: fixed(sae.bdec[0], 2), y: fixed(sae.bdec[1], 2) }), "fig-t-num fig-t-muted");
   yy += 16;
   line(L.truth, "fig-t-strong", TYPE.label);
   yy += 2;
