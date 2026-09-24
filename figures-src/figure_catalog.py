@@ -88,17 +88,6 @@ def _scatter(name, spec):
 
 
 SPECS = {
-    "field-map-1": {
-        "type": "scatter",
-        "points": [
-            {"label": "scaling", "x": 0.24, "y": 0.78, "color": DATA},
-            {"label": "serving", "x": 0.52, "y": 0.62, "color": ACCENT},
-            {"label": "agents", "x": 0.75, "y": 0.38, "color": WARN},
-            {"label": "policy", "x": 0.86, "y": 0.22, "color": MUTED},
-        ],
-        "xlabel": "system coupling",
-        "ylabel": "measurement maturity",
-    },
     "nar-diffusion-lms-1": {
         "type": "line",
         "x": [8, 16, 32, 64, 128, 256],

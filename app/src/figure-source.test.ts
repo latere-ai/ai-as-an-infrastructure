@@ -36,8 +36,6 @@ test("scatter labels sit top-right by default and only flip left on overflow", (
   const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
   expect(catalog).toContain("FigureCanvasAgg");
   expect(catalog).toMatch(/right_data > xmax/);
-  const fieldMap = readFileSync(join(repoRoot, "zh", "figures", "field-map-1.svg"), "utf8");
-  expect(fieldMap).toMatch(/text-anchor: start;[^>]*>政策/);
 });
 
 test("the retired field-map-stack renderer stays removed and the heading counts twelve parts", () => {
