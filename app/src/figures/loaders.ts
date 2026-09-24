@@ -31,6 +31,7 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "scaling-fit-extrapolation": () => import("./scaling-fit-extrapolation.ts"),
   "compute-law-fit": () => import("./compute-law-fit.ts"),
   "part-dependencies": () => import("./part-dependencies.ts"),
+  "retrieval-funnels": () => import("./retrieval-funnels.ts"),
   "continuous-batching": () => import("./continuous-batching.ts"),
   "serving-lifecycle": () => import("./serving-lifecycle.ts"),
   "kv-admission": () => import("./kv-admission.ts"),
