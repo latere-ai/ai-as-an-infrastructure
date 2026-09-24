@@ -14,6 +14,7 @@
 import { LOADERS } from "../loaders.ts";
 import type { AnyFigure, Lang } from "../types.ts";
 import { coerce, defaults, type ParamRecord } from "../lib/params.ts";
+import { sig } from "../lib/format.ts";
 import { buildControls } from "./controls.ts";
 import { Transport } from "./transport.ts";
 
@@ -82,9 +83,16 @@ function mount(host: HTMLElement, fig: AnyFigure) {
   if (tl) {
     const reduced = reducedMotion();
     const t0 = host.dataset.t != null && host.dataset.t !== "" ? Number(host.dataset.t) : tl.poster(p);
+    const unit = tl.unit;
+    // Reads the current parameters, so a change of scenario or scale is
+    // reflected at the next paint.
+    const time = unit && ((nt: number) => {
+      const v = unit.value ? unit.value(nt, p, lang) : sig(nt, 3);
+      return unit.symbol[lang] ? `${v} ${unit.symbol[lang]}` : v;
+    });
     transport = new Transport({
-      lang, reduced, rate: tl.rate, discrete: tl.discrete ?? true,
-      duration: tl.duration(p), keyframes: tl.keyframes(p, lang), t: Math.min(t0, tl.duration(p)),
+      lang, reduced, rate: tl.rate, discrete: tl.discrete ?? true, time,
+      duration: tl.duration(p), keyframes: tl.keyframes(p, lang), t: t0,
       onSeek: (nt, cause) => {
         t = nt;
         draw();

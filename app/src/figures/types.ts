@@ -65,6 +65,17 @@ export interface State<P> {
 
 export interface Keyframe { t: number; label: string }
 
+// The unit of a timeline in physical time, for the transport's position
+// readout: "t = 2.48 s" where a step count would read "step 2483 of 2483".
+export interface TimelineUnit<P> {
+  // Unit after the number, per language ("s" / "秒", "h" / "小时"); empty when
+  // `value` writes its own units (a log-time axis read as "3 min 20 s").
+  symbol: Text;
+  // The number for position t, written as the figure's own axis or cursor
+  // writes it. Default: t to three significant figures.
+  value?(t: number, p: P, lang: Lang): string;
+}
+
 export interface Timeline<P> {
   // Last timeline position. Positions run from 0 to duration.
   duration(p: P): number;
@@ -72,6 +83,9 @@ export interface Timeline<P> {
   rate: number;
   // Snap positions to integers (a figure whose state changes in steps).
   discrete?: boolean;
+  // Positions in physical time: the transport reads "t = 14 ms". Without a
+  // unit it counts steps ("step 3 of 12").
+  unit?: TimelineUnit<P>;
   // Named moments. Reduced-motion readers step between these; the scrubber
   // marks them; the live region announces them.
   keyframes(p: P, lang: Lang): Keyframe[];

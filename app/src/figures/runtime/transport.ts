@@ -22,12 +22,15 @@ export interface TransportOptions {
   keyframes: Keyframe[];
   reduced: boolean;
   t: number;
+  // A timeline in physical time: position to its value and unit ("2.48 s").
+  // The readout then says "t = 2.48 s"; without it, "step 3 of 12".
+  time?: (t: number) => string;
   onSeek(t: number, cause: "play" | "user"): void;
 }
 
 const TEXT = {
-  en: { play: "Play", pause: "Pause", back: "Step back", fwd: "Step forward", prevKey: "Previous event", nextKey: "Next event", scrub: "Timeline position", pos: "step {t} of {d}", reduced: "Reduced motion: the step buttons move between events." },
-  zh: { play: "播放", pause: "暂停", back: "后退一步", fwd: "前进一步", prevKey: "上一个事件", nextKey: "下一个事件", scrub: "时间轴位置", pos: "第 {t} 步 / 共 {d} 步", reduced: "已减少动态效果：步进按钮在事件之间跳转。" },
+  en: { play: "Play", pause: "Pause", back: "Step back", fwd: "Step forward", prevKey: "Previous event", nextKey: "Next event", scrub: "Timeline position", pos: "step {t} of {d}", time: "t = {t}", timeOf: "t = {t} of {d}", reduced: "Reduced motion: the step buttons move between events." },
+  zh: { play: "播放", pause: "暂停", back: "后退一步", fwd: "前进一步", prevKey: "上一个事件", nextKey: "下一个事件", scrub: "时间轴位置", pos: "第 {t} 步 / 共 {d} 步", time: "t = {t}", timeOf: "t = {t}，共 {d}", reduced: "已减少动态效果：步进按钮在事件之间跳转。" },
 };
 
 const ICON = {
@@ -52,7 +55,7 @@ export class Transport {
 
   constructor(o: TransportOptions) {
     this.o = o;
-    this.t = o.t;
+    this.t = this.clamp(o.t);
     const L = TEXT[o.lang];
     this.root = document.createElement("div");
     this.root.className = "fig-transport";
@@ -116,8 +119,14 @@ export class Transport {
       i.style.left = `${(k.t / Math.max(1, duration)) * 100}%`;
       this.ticks.append(i);
     }
-    this.t = Math.min(this.t, duration);
+    this.t = this.clamp(this.t);
     this.paint();
+  }
+
+  // Positions outside 0..duration (a chapter block's t, a scripted seek) are
+  // shown and rendered at the nearer end.
+  private clamp(t: number): number {
+    return Number.isFinite(t) ? Math.max(0, Math.min(this.o.duration, t)) : 0;
   }
 
   get isPlaying() { return this.playing; }
@@ -166,7 +175,7 @@ export class Transport {
 
   seek(t: number, cause: "play" | "user") {
     const before = this.shown();
-    this.t = t;
+    this.t = this.clamp(t);
     this.paint();
     if (cause === "user" || this.shown() !== before) this.o.onSeek(this.shown(), cause);
   }
@@ -191,12 +200,17 @@ export class Transport {
     const L = TEXT[this.o.lang];
     const t = this.shown();
     this.scrub.value = String(t);
-    const posText = L.pos.replace("{t}", String(Math.round(t))).replace("{d}", String(Math.round(this.o.duration)));
+    const time = this.o.time;
+    const posText = time
+      ? L.time.replace("{t}", time(t))
+      : L.pos.replace("{t}", String(Math.round(t))).replace("{d}", String(Math.round(this.o.duration)));
     this.pos.textContent = posText;
-    this.scrub.setAttribute("aria-valuetext", posText);
+    this.scrub.setAttribute("aria-valuetext", time ? L.timeOf.replace("{t}", time(t)).replace("{d}", time(this.o.duration)) : posText);
+    // The event line names the latest keyframe without a position of its own:
+    // the readout beside the scrubber is the one position a reader sees.
     const k = this.currentKey();
     const fresh = k && t - k.t <= 6;
-    this.event.textContent = k ? (this.o.lang === "zh" ? `第 ${k.t} 步：${k.label}` : `Step ${k.t}: ${k.label}`) : "";
+    this.event.textContent = k ? k.label : "";
     this.event.classList.toggle("is-stale", !fresh);
   }
 
