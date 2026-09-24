@@ -138,18 +138,6 @@ test("NAR figure reports dependency depth rather than synthetic latency", () => 
   expect(spec).not.toContain("latency");
 });
 
-test("multimodal figure shows patch arithmetic rather than invented quality curves", () => {
-  const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
-  const spec = catalog.match(/"multimodal-models-1": \{[\s\S]*?\n    \},/)?.[0] ?? "";
-  expect(spec).toContain('"x": [224, 336, 448, 672]');
-  expect(spec).toContain('"label": "patch size 14", "y": [256, 576, 1024, 2304]');
-  expect(spec).toContain('"label": "patch size 16", "y": [196, 441, 784, 1764]');
-  expect(spec).toContain('"ylabel": "visual patch positions"');
-  expect(spec).not.toContain("cross-modal task quality");
-  expect(spec).not.toContain('"label": "modular"');
-  expect(spec).not.toContain('"label": "unified"');
-});
-
 test("beyond-text figure shows control arithmetic rather than invented modality positions", () => {
   const catalog = readFileSync(join(figuresSrc, "figure_catalog.py"), "utf8");
   const spec = catalog.match(/"beyond-text-1": \{[\s\S]*?\n    \},/)?.[0] ?? "";

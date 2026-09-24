@@ -88,4 +88,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "residual-vq": () => import("./residual-vq.ts"),
   "voice-first-audio": () => import("./voice-first-audio.ts"),
   "vision-connectors": () => import("./vision-connectors.ts"),
+  "patch-grid": () => import("./patch-grid.ts"),
 };

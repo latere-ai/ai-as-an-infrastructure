@@ -187,18 +187,6 @@ SPECS = {
         "yticks": [0, 64, 128, 192, 256],
         "legend": "upper left",
     },
-    "multimodal-models-1": {
-        "type": "line",
-        "x": [224, 336, 448, 672],
-        "series": [
-            {"label": "patch size 14", "y": [256, 576, 1024, 2304], "color": DATA},
-            {"label": "patch size 16", "y": [196, 441, 784, 1764], "color": ACCENT},
-        ],
-        "xlabel": "image edge (pixels)",
-        "ylabel": "visual patch positions",
-        "xint": True,
-        "ylim": (0, 2400),
-    },
     "beyond-text-1": {
         "type": "line",
         "x": [1, 5, 10, 30, 60],
