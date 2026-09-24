@@ -127,7 +127,7 @@ const labels = {
     conflict: "sign conflict",
     plain: "plain sum",
     scale: "row height ±{v}",
-    eqSum: "θ_merge − θ_0 = λ_A τ_A + λ_B τ_B = {la} τ_A + {lb} τ_B",
+    eqSum: "θ_merge − θ_0 = λ_A τ_A + λ_B τ_B = {la} τ_A {op} {lb} τ_B",
     eqTies: "TIES: keep the top {k} of each λ_i τ_i, elect each sign from their sum, average the values that agree",
     eqDare: "DARE: drop each entry with probability p = {p}, scale the rest by 1/(1 − p) = {x}, then add them",
     conflicts: "sign conflicts: {n} of {N} coordinates",
@@ -147,7 +147,7 @@ const labels = {
     conflict: "符号冲突",
     plain: "直接相加",
     scale: "每行高度 ±{v}",
-    eqSum: "θ_merge − θ_0 = λ_A τ_A + λ_B τ_B = {la} τ_A + {lb} τ_B",
+    eqSum: "θ_merge − θ_0 = λ_A τ_A + λ_B τ_B = {la} τ_A {op} {lb} τ_B",
     eqTies: "TIES：每个 λ_i τ_i 只保留绝对值最大的 {k}，按两者之和确定每个坐标的符号，再对符号一致的值取平均",
     eqDare: "DARE：每个元素以概率 p = {p} 丢弃，其余元素乘以 1/(1 − p) = {x}，再相加",
     conflicts: "符号冲突：{N} 个坐标中有 {n} 个",
@@ -261,7 +261,7 @@ function render(st: State<P>, lang: Lang): string {
   y += 10;
 
   const eq = p.method === "sum"
-    ? tpl(L.eqSum, { la: fixed(p.lambdaA, 1), lb: fixed(p.lambdaB, 1) })
+    ? tpl(L.eqSum, { la: fixed(p.lambdaA, 1), op: p.lambdaB < 0 ? "−" : "+", lb: fixed(Math.abs(p.lambdaB), 1) })
     : p.method === "ties" ? tpl(L.eqTies, { k: `${p.keep}%` })
       : tpl(L.eqDare, { p: fixed(p.drop, 2), x: sig(1 / (1 - p.drop), 3) });
   const lines: Array<[string, string]> = [

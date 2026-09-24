@@ -1,7 +1,8 @@
 // LoRA as a rank-r product. A target update ΔW ∈ R^{d_out × d_in} is built
 // from seeded draws, its singular value decomposition ΔW = U Σ Vᵀ is computed
 // in the page (one-sided Jacobi), and the reader picks the adapter rank r. The
-// figure draws the chapter's factorization with s folded into B,
+// figure draws the chapter's factorization with the scale s absorbed into
+// the factors,
 //
 //   B = U_r Σ_r^{1/2} ∈ R^{d_out × r},   A = Σ_r^{1/2} V_rᵀ ∈ R^{r × d_in},
 //
