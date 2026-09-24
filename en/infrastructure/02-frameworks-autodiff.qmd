@@ -117,7 +117,12 @@ The cheap-gradient result is a statement about operation counts, not about
 wall-clock time. Baur and Strassen proved a constant-factor bound for a
 rational straight-line computation, meaning a branch-free sequence of
 arithmetic operations, together with all of its first partial derivatives
-under a particular operation-count convention [@baur1983]. More generally, when
+under a particular operation-count convention [@baur1983]. When only
+multiplications are counted in a polynomial evaluation, the constant is exactly
+3; other cost measures give other constants, and none of them depends on the
+number of inputs [@griewank2012]. This is why the gradient of a loss with
+respect to a billion parameters costs a small multiple of one forward pass
+rather than a billion of them. More generally, when
 primitive VJP rules have bounded relative cost, reverse arithmetic is
 $O(C_f)$ for a scalar function whose evaluation costs $C_f$. The bound does not
 include saved-tensor traffic, kernel launches, communication, synchronization,
@@ -171,8 +176,10 @@ $\bar y=\bar v_1x=x$. The two contributions to $x$ must be added.
 The following runnable implements the scheduling invariant directly. The first
 case deliberately reuses a non-leaf node: $a=x^2$ and $z=a+a$. A recursive
 backward routine that propagates an already accumulated adjoint once per path
-returns the wrong answer for this graph. Topological scheduling processes each
-node once and returns $\mathrm{d}z/\mathrm{d}x=4x=8$ at $x=2$.
+returns the wrong answer for this graph, as the figure's second graph shows.
+Topological scheduling processes each node once and returns
+$\mathrm{d}z/\mathrm{d}x=4x=8$ at $x=2$; the code asserts that value and checks
+the second example against a centered finite difference.
 
 :::: {.runnable}
 ```python
@@ -221,12 +228,14 @@ x = Var(2.0)
 a = x * x
 z = a + a
 z.backward()
-print("shared analytic", x.grad, "expected", 8.0)
+assert x.grad == 8.0                  # dz/dx = 4x at x = 2; each node is visited once
+print("shared node: dz/dx =", x.grad)
 
 x = Var(2.0)
 z = x * x + sin(x)
 z.backward()
 numeric = finite_difference(lambda t: t * t + math.sin(t), 2.0)
+assert abs(numeric - x.grad) < 1e-8
 print("finite difference", round(numeric, 6), "analytic", round(x.grad, 6))
 ```
 ::::
@@ -296,8 +305,12 @@ $$
 Here, $M(k)$ is the peak saved-state count, $n$ is the chain length, $k$ is the
 segment length, and $\lceil\cdot\rceil$ rounds upward. Choosing
 $k\approx\sqrt{n}$ gives $M(k)=O(\!\sqrt{n})$ while recomputing each segment at
-most once [@chen2016sublinear]. Recursive schedules can reach different
-time-memory points. These bounds do not transfer unchanged to arbitrary DAGs,
+most once [@chen2016sublinear]. Chen et al. reported that this schedule cut the
+training memory of a 1,000-layer residual network on ImageNet from 48 GB to
+7 GB for about 30 percent more running time. Recursive schedules reach other
+time-memory points: Griewank's recursive checkpointing makes both the extra
+computation and the stored state grow only logarithmically with the length of
+the computation [@griewank1992]. These bounds do not transfer unchanged to arbitrary DAGs,
 unequal activation sizes, skip connections, or communication-heavy graphs.
 
 Recomputation must reproduce the original forward values. A changed
@@ -307,16 +320,104 @@ error. Framework checkpoint utilities preserve some random-number-generator
 state, but the exact device and state coverage is part of their documented
 contract [@pytorch2026checkpoint]. Checkpointing may lower peak memory while
 increasing arithmetic, communication exposure, or step time, so its net effect
-has to be measured on the real workload.
+has to be measured on the real workload. The repeated forward work is also
+visible from the hardware side: it is arithmetic that hardware FLOPs utilization
+counts and model FLOPs utilization does not, which is how checkpointed training
+comes to report HFU above MFU (@sec-accelerators-networking).
+
+The cell below implements the segment schedule on a chain of $n=64$ tanh
+layers. The forward pass stores only the input of every $k$-th layer; the
+backward pass recomputes one segment at a time and runs its VJPs. The code
+checks the reference gradient against a finite difference, asserts that every
+$k$ returns the same gradient and recomputes each layer exactly once, and plots
+the measured peak number of activations held at once against
+$\lceil n/k\rceil+k$. With `n` set to 256, the peak falls from 257 activations
+to 32, reached near $k=16$.
+
+:::: {.runnable}
+```python
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+n, d = 64, 16                                  # chain length (layers), width
+W = rng.normal(0, 1 / math.sqrt(d), size=(n, d, d))
+x = rng.normal(size=d)
+
+def run(h, lo, hi):                            # forward through layers lo..hi-1
+    acts = []
+    for l in range(lo, hi):
+        h = np.tanh(W[l] @ h)
+        acts.append(h)
+    return acts
+
+def grad(k):
+    """Gradient of sum(h_n) w.r.t. x, keeping activations only every k layers."""
+    starts = list(range(0, n, k))
+    saved, h = {0: x}, x
+    for lo in starts[1:]:                      # forward pass: store segment inputs
+        h = run(h, lo - k, lo)[-1]
+        saved[lo] = h
+    g, peak, redone = np.ones(d), 0, 0
+    for lo in reversed(starts):                # backward: recompute one segment at a time
+        acts = run(saved[lo], lo, min(lo + k, n))
+        redone += len(acts)
+        peak = max(peak, len(saved) + len(acts))
+        for l in reversed(range(len(acts))):   # VJP of tanh(W h)
+            g = W[lo + l].T @ (g * (1 - acts[l] ** 2))
+        del saved[lo]
+    return g, peak, redone
+
+ks = np.arange(1, n + 1)
+runs = [grad(k) for k in ks]
+g_ref = runs[0][0]
+r = rng.normal(size=d); eps = 1e-6
+fd = (sum(run(x + eps * r, 0, n)[-1]) - sum(run(x - eps * r, 0, n)[-1])) / (2 * eps)
+assert abs(g_ref @ r - fd) < 1e-6                           # reverse mode matches a finite difference
+assert all(np.allclose(g, g_ref) for g, _, _ in runs)       # recomputation changes no gradient
+peak = np.array([p for _, p, _ in runs])
+assert np.all(peak <= np.ceil(n / ks) + ks)                 # the M(k) model bounds the measured peak
+assert all(redone == n for _, _, redone in runs)            # one extra forward pass, whatever k
+best = ks[peak.argmin()]
+print(f"n = {n}: peak {peak[0]} states at k = 1, {peak.min()} at k = {best}, sqrt(n) = {math.isqrt(n)}")
+
+fig, ax = plt.subplots(figsize=(6, 3.4))
+ax.plot(ks, peak, "o", ms=3, label="measured peak")
+ax.plot(ks, np.ceil(n / ks) + ks, "k--", lw=1, label=r"$\lceil n/k\rceil + k$")
+ax.axvline(math.sqrt(n), color="gray", lw=0.8)
+ax.set(xscale="log", xlabel="segment length k (layers)", ylabel="activations held at once",
+       title=f"Checkpointing a {n}-layer chain: least memory near $k=\\sqrt{{n}}$")
+ax.legend(frameon=False)
+plt.tight_layout()
+plt.show()
+```
+::::
 
 ## Eager, traced, and compiled are different axes
 
 Early tensor systems exposed the representation they needed for optimization.
-Theano constructed symbolic graphs, and TensorFlow 1 executed a static dataflow
-graph through a session [@theano2016framework; @abadi2016tensorflow]. Chainer and
-PyTorch made eager execution practical by recording the operations of each
-concrete run; PyTorch's design kept ordinary Python control flow while moving
-its tensor hot path below Python [@paszke2019pytorch]. JAX took another route:
+Theano, released in 2010, differentiated and optimized symbolic expression
+graphs before compiling them for CPU or GPU [@bergstra2010theano;
+@theano2016framework], and TensorFlow 1 executed a static dataflow graph through
+a session [@abadi2016tensorflow]. The whole-graph view let a framework fuse
+operations, plan memory, serialize a model, and place subgraphs on devices. It
+cost the programmer: a graph program builds another program, so a shape error
+surfaces far from the line that caused it, a debugger cannot step through code
+that has not yet run, and a loop has to be written as a graph operator instead
+of a `for` statement.
+
+Chainer named the alternative define-by-run in 2015: run host-language code
+eagerly, record the operations of each concrete run, and differentiate the
+recorded tape [@tokui2015chainer]. PyTorch, released in January 2017, drew on
+Chainer, on HIPS autograd, which recorded NumPy operations on a tape
+[@maclaurin2015autograd], and on the C libraries of the Lua framework Torch7
+[@collobert2011torch7]. Its design kept ordinary Python control flow while
+moving the tensor hot path below Python [@paszke2019pytorch]. Research adoption
+followed: in 2019, 69 percent of the CVPR papers that named a framework used
+PyTorch, as did more than 75 percent at NAACL and ACL [@he2019state], and OpenAI
+standardized on PyTorch in January 2020 [@openai2020pytorch]. TensorFlow 2.0
+made eager execution its default in 2019. JAX took another route:
 transform pure functions through tracing, and compose differentiation,
 vectorization, and compilation as program transformations [@frostig2018jax].
 
@@ -349,6 +450,16 @@ while `tf.function` traces and caches specialized TensorFlow graphs. XLA
 compilation is an additional choice, not a synonym for `tf.function`
 [@tensorflow2026autodiff; @tensorflow2026function].
 
+TorchScript, PyTorch's earlier graph representation, required a model either to
+fit a static subset of Python or to be traced for fixed inputs. `torch.compile`, released with PyTorch 2.0 in March 2023,
+reversed that requirement: it captures what it can and leaves the rest to
+Python, so eager semantics hold by construction [@ansel2024pytorch2]. The
+choice of mode moves cost rather than removing it. Host dispatch costs a
+roughly fixed time per operator, negligible beside a large matrix
+multiplication and dominant when kernels run for microseconds; capture
+amortizes that cost and pays instead in compile latency, guard checks, and
+recompilation.
+
 A useful comparison of these modes therefore asks which semantics are visible
 at trace time, what becomes part of the cache key, which effects remain
 observable, how failures fall back, and whether cold compile cost is amortized
@@ -372,8 +483,11 @@ tensor operation has to satisfy several of them at once:
    shape and dtype metadata but no data, as well as graph lowering, shape
    reasoning, and a backend implementation.
 6. A device runtime owns streams, events, synchronization, and a memory
-   allocator. Asynchronous errors and allocator fragmentation surface through
-   this layer rather than through the model equation.
+   allocator. Frameworks cache device memory themselves because returning it
+   to the vendor driver can block until all queued work on the device
+   completes [@paszke2019pytorch]. Asynchronous errors and allocator
+   fragmentation surface through this layer rather than through the model
+   equation.
 7. A distributed tensor system attaches a logical layout to a device mesh and
    defines how operators propagate or change it.
 
@@ -442,6 +556,18 @@ responsibility. An inconsistent mesh or collective order can
 hang every rank even when each local tensor operation is valid. The parallelism
 algorithms built on these interfaces are developed in @sec-training-at-scale.
 
+::: {.callout-note .dated}
+## As of September 2026
+
+PyTorch 2.14.0 was released on 2 September 2026 [@pytorch2026release] and JAX
+0.11.2 on 17 September 2026 [@jax2026release]. The PyTorch documentation still
+labels DTensor alpha: backward compatibility is committed for most listed APIs,
+but API changes remain possible [@pytorch2026dtensor]. PyTorch is governed by the
+PyTorch Foundation, hosted by the Linux Foundation since 2022, which also hosts
+vLLM, DeepSpeed, Ray, Helion, and Safetensors [@pytorchfoundation2026]. JAX
+remains a Google-led open-source project.
+:::
+
 ## An operating checklist
 
 Correctness comes before a speedup claim. For a new model path, operator, or
@@ -490,7 +616,16 @@ view favors a rich eager framework whose compiler captures compatible regions;
 another favors pure staged programs whose transformations are explicit; a third
 pushes more semantics into portable operator and compiler interfaces. These
 approaches trade debugging freedom, compilation scope, custom-kernel control,
-and backend portability. None removes the need to specify derivatives, effects,
+and backend portability. Both of the first two positions run at frontier
+scale. The Gemini 1.0 report describes training with JAX and Pathways, in which
+a single Python controller orchestrates the whole run [@gemini2023], while
+OpenAI standardized on PyTorch [@openai2020pytorch]. Advocates of the functional
+side cite reproducible restarts and compiler leverage; the imperative side
+answers that ecosystem, hiring, and cluster integration decide real projects.
+Liquid AI moved its training from JAX to PyTorch in 2023 after JAX, NCCL, and
+the AWS EFA interconnect failed to work together across nodes
+[@lechner2025jax]. None of the three approaches removes the need to specify
+derivatives, effects,
 layouts, and failure behavior. A framework becomes portable only to the extent
 that those contracts have working implementations on the target system.
 :::

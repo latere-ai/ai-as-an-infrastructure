@@ -60,7 +60,7 @@ $$
 
 雅可比矩阵的形状决定了模式选择。要构造完整雅可比矩阵，通常需要 $n$ 个 JVP 列或 $m$ 个 VJP 行，除非批处理或结构能够减少工作。神经网络训练有许多输入和一个标量损失，因此反向模式很合适。前向模式仍适用于方向导数、输入少而输出多的函数，以及 Hessian 向量积等组合 [@jax2026autodiff]。
 
-廉价梯度结论说的是运算次数，不约束墙钟时间。Baur 与 Strassen 证明，在特定的操作计数约定下，有理直线程序（没有分支的算术运算序列）及其全部一阶偏导数具有常数因子上界 [@baur1983]。更一般地说，如果原语的 VJP 规则相对成本有界，其中 $C_f$ 表示标量函数的求值成本，那么反向算术成本为 $O(C_f)$。这个上界不包括已保存张量的流量、内核启动、通信、同步，也不包括存储和写入 $n$ 个梯度值。实际反向传播时间不必是前向传播时间的固定倍数。
+廉价梯度结论说的是运算次数，不约束墙钟时间。Baur 与 Strassen 证明，在特定的操作计数约定下，有理直线程序（没有分支的算术运算序列）及其全部一阶偏导数具有常数因子上界 [@baur1983]。若在多项式求值中只计乘法次数，这个常数恰好是 3；换用其他成本度量会得到别的常数，但它们都与输入个数无关 [@griewank2012]。正因如此，损失对十亿个参数的梯度，成本只是一次前向传播的小倍数，而不是十亿次前向传播。更一般地说，如果原语的 VJP 规则相对成本有界，其中 $C_f$ 表示标量函数的求值成本，那么反向算术成本为 $O(C_f)$。这个上界不包括已保存张量的流量、内核启动、通信、同步，也不包括存储和写入 $n$ 个梯度值。实际反向传播时间不必是前向传播时间的固定倍数。
 
 ## 反向累积如何工作
 
@@ -91,7 +91,7 @@ $$
 //| fig-cap: "在记录下来的计算图上做反向累积，数值按设定的 $x$ 和 $y$ 在页面中计算。前向计算依次填入各节点的值；反向扫描以 $\bar z=1$ 为种子，沿每条边送出一项贡献 $\bar v_j\,\partial v_j/\partial v_i$，边上标注的是局部导数。在 $z=xy+\sin(x)$ 中，$x$ 有两个消费者，收到两项贡献，$\bar x=y+\cos(x)$。第二张图是可运行示例中的 $z=a+a$、$a=x^2$：按反向拓扑顺序得到 $\bar x=4x$；若递归程序沿每条路径传播已经累积的伴随量，就会把一条路径计入两次，得到 $6x$。最后一步用中心差分检验反向扫描的结果。"
 ```
 
-下面的可运行示例直接实现了这个调度不变量。第一种情况刻意复用一个非叶子节点：$a=x^2$，$z=a+a$。若递归反向程序沿每条路径传播已经累积的伴随量，这张图会得到错误答案。拓扑调度只处理每个节点一次，在 $x=2$ 时得到 $\mathrm{d}z/\mathrm{d}x=4x=8$。
+下面的可运行示例直接实现了这个调度不变量。第一种情况刻意复用一个非叶子节点：$a=x^2$，$z=a+a$。若递归反向程序沿每条路径传播已经累积的伴随量，这张图会得到错误答案，图中的第二张计算图展示了这一点。拓扑调度只处理每个节点一次，在 $x=2$ 时得到 $\mathrm{d}z/\mathrm{d}x=4x=8$；代码断言了这个值，并用中心有限差分核对第二个例子。
 
 :::: {.runnable}
 ```python
@@ -140,13 +140,15 @@ x = Var(2.0)
 a = x * x
 z = a + a
 z.backward()
-print("shared analytic", x.grad, "expected", 8.0)
+assert x.grad == 8.0                  # x = 2 时 dz/dx = 4x；每个节点只访问一次
+print("共享节点：dz/dx =", x.grad)
 
 x = Var(2.0)
 z = x * x + sin(x)
 z.backward()
 numeric = finite_difference(lambda t: t * t + math.sin(t), 2.0)
-print("finite difference", round(numeric, 6), "analytic", round(x.grad, 6))
+assert abs(numeric - x.grad) < 1e-8
+print("有限差分", round(numeric, 6), "解析值", round(x.grad, 6))
 ```
 ::::
 
@@ -174,13 +176,77 @@ $$
 M(k)\approx\left\lceil\frac{n}{k}\right\rceil+k.
 $$
 
-这里，$M(k)$ 是保存状态数量的峰值，$n$ 是链的长度，$k$ 是分段长度，$\lceil\cdot\rceil$ 表示向上取整。取 $k\approx\sqrt{n}$ 时，$M(k)=O(\!\sqrt{n})$，而且每一段最多重算一次 [@chen2016sublinear]。递归调度可以达到其他时间与内存折中。对任意 DAG、不等大小的激活值、跳跃连接或通信密集型计算图，这些上界不能原样套用。
+这里，$M(k)$ 是保存状态数量的峰值，$n$ 是链的长度，$k$ 是分段长度，$\lceil\cdot\rceil$ 表示向上取整。取 $k\approx\sqrt{n}$ 时，$M(k)=O(\!\sqrt{n})$，而且每一段最多重算一次 [@chen2016sublinear]。Chen 等人报告，这种调度把 ImageNet 上一个 1,000 层残差网络的训练内存从 48 GB 降到 7 GB，运行时间只增加约 30%。递归调度可以达到其他时间与内存折中：Griewank 的递归检查点让额外计算量和保存的状态都只随计算长度呈对数增长 [@griewank1992]。对任意 DAG、不等大小的激活值、跳跃连接或通信密集型计算图，这些上界不能原样套用。
 
-重计算必须复现原始前向传播的数值。随机数生成器状态、可变全局量、设备迁移或其他副作用一旦改变，重算路径就可能与原路径不同，造成无声的梯度错误。框架的检查点工具会保留部分随机数生成器状态，但具体覆盖哪些设备和状态，属于它们对外说明的契约 [@pytorch2026checkpoint]。检查点可能降低峰值内存，却增加算术量、暴露更多通信，或延长训练步时间，因此它的净效果必须在真实工作负载上测量。
+重计算必须复现原始前向传播的数值。随机数生成器状态、可变全局量、设备迁移或其他副作用一旦改变，重算路径就可能与原路径不同，造成无声的梯度错误。框架的检查点工具会保留部分随机数生成器状态，但具体覆盖哪些设备和状态，属于它们对外说明的契约 [@pytorch2026checkpoint]。检查点可能降低峰值内存，却增加算术量、暴露更多通信，或延长训练步时间，因此它的净效果必须在真实工作负载上测量。重复的前向计算在硬件一侧也看得见：硬件 FLOPs 利用率会计入这部分算术，模型 FLOPs 利用率则不计入，所以做了检查点的训练会报告高于 MFU 的 HFU（@sec-accelerators-networking）。
+
+下面的代码在 $n=64$ 层 tanh 链上实现分段调度。前向传播只保存每第 $k$ 层的输入；反向传播一次重算一段，并执行该段的 VJP。代码先用有限差分核对参考梯度，再断言每个 $k$ 都得到相同的梯度、每层恰好重算一次，最后把实测的同时保存激活值数量峰值与 $\lceil n/k\rceil+k$ 画在一起。把 `n` 设为 256，峰值从 257 个激活值降到 32 个，在 $k=16$ 附近达到。
+
+:::: {.runnable}
+```python
+import math
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+n, d = 64, 16                                  # 链长（层数）、宽度
+W = rng.normal(0, 1 / math.sqrt(d), size=(n, d, d))
+x = rng.normal(size=d)
+
+def run(h, lo, hi):                            # 前向经过第 lo 至 hi-1 层
+    acts = []
+    for l in range(lo, hi):
+        h = np.tanh(W[l] @ h)
+        acts.append(h)
+    return acts
+
+def grad(k):
+    """sum(h_n) 对 x 的梯度，每隔 k 层才保存一次激活值。"""
+    starts = list(range(0, n, k))
+    saved, h = {0: x}, x
+    for lo in starts[1:]:                      # 前向传播：只保存各段的输入
+        h = run(h, lo - k, lo)[-1]
+        saved[lo] = h
+    g, peak, redone = np.ones(d), 0, 0
+    for lo in reversed(starts):                # 反向传播：一次重算一段
+        acts = run(saved[lo], lo, min(lo + k, n))
+        redone += len(acts)
+        peak = max(peak, len(saved) + len(acts))
+        for l in reversed(range(len(acts))):   # tanh(W h) 的 VJP
+            g = W[lo + l].T @ (g * (1 - acts[l] ** 2))
+        del saved[lo]
+    return g, peak, redone
+
+ks = np.arange(1, n + 1)
+runs = [grad(k) for k in ks]
+g_ref = runs[0][0]
+r = rng.normal(size=d); eps = 1e-6
+fd = (sum(run(x + eps * r, 0, n)[-1]) - sum(run(x - eps * r, 0, n)[-1])) / (2 * eps)
+assert abs(g_ref @ r - fd) < 1e-6                           # 反向模式与有限差分一致
+assert all(np.allclose(g, g_ref) for g, _, _ in runs)       # 重计算不改变任何梯度
+peak = np.array([p for _, p, _ in runs])
+assert np.all(peak <= np.ceil(n / ks) + ks)                 # M(k) 模型给出实测峰值的上界
+assert all(redone == n for _, _, redone in runs)            # 无论 k 取何值，都只多一次前向传播
+best = ks[peak.argmin()]
+print(f"n = {n}：k = 1 时峰值 {peak[0]} 个状态，k = {best} 时 {peak.min()} 个，sqrt(n) = {math.isqrt(n)}")
+
+fig, ax = plt.subplots(figsize=(6, 3.4))
+ax.plot(ks, peak, "o", ms=3, label="实测峰值")
+ax.plot(ks, np.ceil(n / ks) + ks, "k--", lw=1, label=r"$\lceil n/k\rceil + k$")
+ax.axvline(math.sqrt(n), color="gray", lw=0.8)
+ax.set(xscale="log", xlabel="分段长度 k（层）", ylabel="同时保存的激活值数量",
+       title=f"对 {n} 层链做检查点：$k=\\sqrt{{n}}$ 附近内存最少")
+ax.legend(frameon=False)
+plt.tight_layout()
+plt.show()
+```
+::::
 
 ## 即时执行、追踪与编译是不同维度
 
-早期张量系统直接暴露优化所需的程序表示。Theano 构建符号计算图，TensorFlow 1 通过 session 执行静态数据流图 [@theano2016framework; @abadi2016tensorflow]。Chainer 和 PyTorch 记录每次具体运行的操作，让即时执行成为实用方案；PyTorch 的设计保留普通 Python 控制流，同时把张量热路径移到 Python 之外 [@paszke2019pytorch]。JAX 采用另一条路径：通过追踪来变换纯函数，把微分、向量化和编译组合成程序变换 [@frostig2018jax]。
+早期张量系统直接暴露优化所需的程序表示。Theano 于 2010 年发布，先对符号表达式图求导和优化，再编译到 CPU 或 GPU 上运行 [@bergstra2010theano; @theano2016framework]；TensorFlow 1 通过 session 执行静态数据流图 [@abadi2016tensorflow]。整图视角让框架能够融合操作、规划内存、序列化模型，并把子图放到不同设备上。代价由程序员承担：图程序是在构建另一个程序，所以形状错误出现的位置离引发它的那行代码很远，调试器无法单步执行尚未运行的代码，循环也必须写成图算子，而不能写成 `for` 语句。
+
+Chainer 在 2015 年把另一种方案命名为 define-by-run：即时运行宿主语言代码，记录每次具体运行的操作，再对记录下来的磁带求导 [@tokui2015chainer]。PyTorch 于 2017 年 1 月发布，借鉴了 Chainer、在磁带上记录 NumPy 运算的 HIPS autograd [@maclaurin2015autograd]，以及 Lua 框架 Torch7 的 C 库 [@collobert2011torch7]。它的设计保留普通 Python 控制流，同时把张量热路径移到 Python 之外 [@paszke2019pytorch]。研究界随即转向：2019 年，在注明所用框架的 CVPR 论文中，69% 使用 PyTorch，NAACL 和 ACL 上这一比例超过 75% [@he2019state]；OpenAI 于 2020 年 1 月统一采用 PyTorch [@openai2020pytorch]。TensorFlow 2.0 也在 2019 年把即时执行设为默认。JAX 采用另一条路径：通过追踪来变换纯函数，把微分、向量化和编译组合成程序变换 [@frostig2018jax]。
 
 当前系统把这些做法结合起来，在即时执行之外再配合一种或多种分阶段表示：
 
@@ -195,6 +261,8 @@ $$
 
 JAX 的 `grad` 和 `vmap` 是程序变换，`jit` 则会分阶段处理并编译一个特化版本。兼容的调用会复用缓存的可执行程序。普通 Python 副作用发生在追踪阶段，而不是每次设备执行时。若 jitted 区域内存在由运行时数据决定的分支，就需要使用结构化控制流原语，或改换分阶段边界 [@jax2026jit]。TensorFlow 2 默认即时执行；`GradientTape` 记录即时执行的 TensorFlow 操作，`tf.function` 则追踪并缓存特化的 TensorFlow 计算图。XLA 编译是额外选择，不是 `tf.function` 的同义词 [@tensorflow2026autodiff; @tensorflow2026function]。
 
+TorchScript 是 PyTorch 早先的图表示，要求模型要么符合 Python 的一个静态子集，要么针对固定输入做追踪。随 PyTorch 2.0 于 2023 年 3 月发布的 `torch.compile` 把这个要求倒了过来：能捕获的部分就捕获，其余留给 Python 执行，因此即时语义按构造成立 [@ansel2024pytorch2]。选择执行模式只会转移成本，不会消除成本。宿主分派的每个算子开销大致固定，放在大矩阵乘法旁边可以忽略，内核只运行几微秒时却成为主要开销；图捕获摊销了这部分开销，代价转为编译延迟、守卫检查和重新编译。
+
 因此，比较这些模式时，有用的问题是：追踪阶段能看见哪些语义，哪些信息进入缓存键，哪些副作用仍可观察，失败时如何回退，以及冷编译成本是否由热执行摊销。
 
 ## 框架必须明确什么
@@ -206,7 +274,7 @@ JAX 的 `grad` 和 `vmap` 是程序变换，`jit` 则会分阶段处理并编译
 3. 分派器按后端选择实现，也按变换或模式选择实现，例如自动微分、批处理、自动混合精度、函数化（把修改操作改写为纯操作）和张量子类。
 4. 自动微分变换提供 VJP 规则，并在受支持时提供 JVP 规则和已保存张量契约。
 5. 编译器需要抽象张量或 fake tensor 行为（张量只携带形状和 dtype 等元数据，不含实际数据），还需要计算图降级、形状推理和后端实现。
-6. 设备运行时负责流、事件、同步和内存分配器。异步错误与分配器碎片会经由这一层暴露，而不是经由模型方程暴露。
+6. 设备运行时负责流、事件、同步和内存分配器。框架要自己缓存设备内存，因为把内存交还给厂商驱动时，调用可能一直阻塞到设备上所有排队的工作完成 [@paszke2019pytorch]。异步错误与分配器碎片会经由这一层暴露，而不是经由模型方程暴露。
 7. 分布式张量系统把逻辑布局附着到设备网格，并定义算子如何传播或改变这种布局。
 
 ```{dot}
@@ -245,6 +313,12 @@ digraph contract {
 
 GSPMD 展示了编译器如何把少量分片注解传播到计算图中，并生成单程序多数据执行 [@xu2021gspmd]。PyTorch 的分布式张量（DTensor）是一种具有类似全局张量语义的张量子类。它的算子会执行分片计算，并在需要时发起集合通信，因此分布式程序可以像单设备程序一样编写 [@pytorch2026dtensor]。全分片数据并行（FSDP，把参数、梯度和优化器状态分片到多个设备上）则把参数分片整合进分派器、自动微分和分配器 [@zhao2023pytorch]。手写逐设备程序能提供更多控制，却也把集合通信顺序、全局与局部形状以及损失归一化交给程序员负责。网格或集合通信顺序不一致可能让所有 rank 挂起，即使每个本地张量操作都有效。建立在这些接口上的并行算法见 @sec-training-at-scale。
 
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+PyTorch 2.14.0 于 2026 年 9 月 2 日发布 [@pytorch2026release]，JAX 0.11.2 于 2026 年 9 月 17 日发布 [@jax2026release]。PyTorch 文档仍把 DTensor 标为 alpha：对文档列出的大多数 API 承诺向后兼容，但仍可能调整 API [@pytorch2026dtensor]。PyTorch 由 PyTorch 基金会治理，该基金会自 2022 年起由 Linux 基金会托管，还托管 vLLM、DeepSpeed、Ray、Helion 和 Safetensors [@pytorchfoundation2026]。JAX 仍是由 Google 主导的开源项目。
+:::
+
 ## 运行检查清单
 
 正确性先于任何加速结论。对一条新的模型路径、算子或框架后端，应完成以下检查：
@@ -268,7 +342,7 @@ GSPMD 展示了编译器如何把少量分片注解传播到计算图中，并�
 ::: {.callout-important}
 ## 争议所在
 
-尚无定论的问题，是持久的抽象边界应该放在哪里。一种观点倾向功能丰富的即时框架，由编译器捕获相容区域；另一种倾向纯粹的分阶段程序，让所有变换显式可见；第三种则把更多语义放进可移植的算子与编译器接口。这些方案会交换调试自由度、编译范围、自定义内核控制和后端可移植性。它们都不能免除明确导数、副作用、布局和失败行为的责任。框架能在多大程度上移植，取决于这些契约在目标系统上有多少可工作的实现。
+尚无定论的问题，是持久的抽象边界应该放在哪里。一种观点倾向功能丰富的即时框架，由编译器捕获相容区域；另一种倾向纯粹的分阶段程序，让所有变换显式可见；第三种则把更多语义放进可移植的算子与编译器接口。这些方案会交换调试自由度、编译范围、自定义内核控制和后端可移植性。前两种立场都在前沿规模上运行。Gemini 1.0 报告介绍，训练使用 JAX 和 Pathways，由单个 Python 控制进程编排整个训练过程 [@gemini2023]；OpenAI 则统一采用 PyTorch [@openai2020pytorch]。支持函数式一方的人看重可复现的重启和编译器带来的杠杆；命令式一方则回应说，决定实际项目的是生态、招聘和集群集成。Liquid AI 在 2023 年把训练从 JAX 迁到 PyTorch，原因是 JAX、NCCL 与 AWS EFA 互连无法在跨节点时协同工作 [@lechner2025jax]。三种方案都不能免除明确导数、副作用、布局和失败行为的责任。框架能在多大程度上移植，取决于这些契约在目标系统上有多少可工作的实现。
 :::
 
 ## 延伸阅读
