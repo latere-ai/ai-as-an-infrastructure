@@ -135,4 +135,6 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "claim-evidence": () => import("./claim-evidence.ts"),
   "pass-k-suite": () => import("./pass-k-suite.ts"),
   "release-frontier": () => import("./release-frontier.ts"),
+  "guard-thresholds": () => import("./guard-thresholds.ts"),
+  "egress-reachability": () => import("./egress-reachability.ts"),
 };
