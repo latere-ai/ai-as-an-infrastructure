@@ -57,4 +57,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "ppo-clip": () => import("./ppo-clip.ts"),
   "preference-losses": () => import("./preference-losses.ts"),
   "dpo-derivation": () => import("./dpo-derivation.ts"),
+  "checkpoint-budget": () => import("./checkpoint-budget.ts"),
 };
