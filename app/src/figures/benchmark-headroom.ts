@@ -11,8 +11,9 @@
 // once per harness: the standard harness keeps only the notes the model
 // writes, the provider adapter also keeps the provider's reasoning state.
 // Two scores reported under a different protocol with the same benchmark
-// name sit apart as hollow diamonds: the ARC-AGI-2 private set, where only
-// competition entries run, and a vendor-reported HLE score with tools.
+// name sit apart as hollow diamonds at the date of the leaderboard read: the
+// ARC-AGI-2 private set, where only competition entries run, and a
+// vendor-reported HLE score with tools.
 
 import { defineFigure, type Lang, type State } from "./types.ts";
 import { svg, el, text, g } from "./lib/svg.ts";
@@ -34,7 +35,9 @@ const dayNum = (iso: string) => {
   const [y, m, d] = iso.split("-").map(Number);
   return Date.UTC(y, m - 1, d) / 86400000;
 };
-const END = dayNum(SOURCE.arcGenerated); // the snapshot the lines run to
+// The leaderboard read the lines run to; the other-protocol diamonds sit here
+// too, since they are values as of that read, not results at a release date.
+const END = dayNum(SOURCE.arcGenerated);
 
 interface Placed { x: number; score: number; name: string }
 interface Series { key: SeriesKey; focus: Focus; color: string; dash?: string; entries: Placed[]; steps: Placed[] }
@@ -92,7 +95,7 @@ const labels = {
     readHle: "HLE on Scale's leaderboard, no tools: the best listed entry scored {s0} when the current list begins on {d0}, and {s1} by {d1}, from {n1}. A vendor-reported score with tools, {st}, comes from a different system under test and does not continue this line.",
     readArc2: "ARC-AGI-2, verified semi-private set: the best entry scored {s0} at launch on {d0} and {s1} by {d1}, from {n1}. It passed the {h} human panel average on {dh}, {mh} months after launch. On the private set, where only competition entries run, the best is {sp}.",
     readArc3: "ARC-AGI-3: the best entry scored {s0} at launch on {d0}. By {d1}, {n1} scored {s1} under the standard harness, and the best entry under the provider adapter scored {s2}. Humans solve {h}.",
-    describe: "Best listed score by {date}: HLE without tools {h}, ARC-AGI-2 {a2}, ARC-AGI-3 {a3} with the standard harness and {a3p} with the provider adapter.",
+    describe: "Best listed score by {date}: HLE without tools {h}, ARC-AGI-2 {a2}, ARC-AGI-3 {a3} with the standard harness and {a3p} with the provider adapter. Every listed entry of {f} is shown.",
   },
   zh: {
     title: "基准可区分空间随时间的变化",
@@ -113,13 +116,16 @@ const labels = {
     readHle: "Scale 排行榜上的 HLE，不用工具：现有榜单从 {d0}开始，当时最高分为 {s0}；到 {d1}，最高分为 {s1}，来自 {n1}。厂商自报的启用工具分数 {st} 来自另一个受测系统，不是这条曲线的延续。",
     readArc2: "ARC-AGI-2 经验证的半私有题集：{d0}发布时最高分为 {s0}，到 {d1} 为 {s1}，来自 {n1}。最高分在 {dh}超过人类测试组平均的 {h}，距发布 {mh} 个月。私有题集上只有竞赛方案参评，最高为 {sp}。",
     readArc3: "ARC-AGI-3：{d0}发布时最高分为 {s0}。到 {d1}，{n1} 在标准框架下得到 {s1}；服务商适配框架下的最好成绩为 {s2}。人类可以解出 {h}。",
-    describe: "截至 {date} 的榜上最高分：HLE 不用工具 {h}，ARC-AGI-2 {a2}，ARC-AGI-3 标准框架 {a3}、服务商适配框架 {a3p}。",
+    describe: "截至 {date} 的榜上最高分：HLE 不用工具 {h}，ARC-AGI-2 {a2}，ARC-AGI-3 标准框架 {a3}、服务商适配框架 {a3p}。图中逐条画出了 {f} 的全部条目。",
   },
 };
 
-function describe(_st: State<P>, lang: Lang): string {
+const FOCUS_NAME: Record<Focus, string> = { hle: "HLE", arc2: "ARC-AGI-2", arc3: "ARC-AGI-3" };
+
+function describe(st: State<P>, lang: Lang): string {
   const L = labels[lang];
   return tpl(L.describe, {
+    f: FOCUS_NAME[st.p.focus],
     date: dateOf(END, lang), h: pctOf(last(S.hle).score, "hle"), a2: pctOf(last(S.arc2).score, "arc2"),
     a3: pctOf(last(S.arc3std).score, "arc3std"), a3p: pctOf(last(S.arc3pa).score, "arc3pa"),
   });
@@ -246,7 +252,7 @@ function render(st: State<P>, lang: Lang): string {
 
   // Other protocols under the same name, at the snapshot.
   for (const [v, col, lab, f] of [[REFERENCE.arc2Private.score, C.c2, L.private, "arc2"], [REFERENCE.hleWithTools.score, C.c1, L.tools, "hle"]] as const) {
-    const px = xs(dayNum(REFERENCE.hleWithTools.date)), py = ys(v);
+    const px = xs(END), py = ys(v);
     parts.push(el("path", { d: diamond(px, py, 6), fill: C.paper, stroke: col, "stroke-width": f === focus ? 2.25 : 1.5 }));
     obstacles.push({ x0: px - 7, y0: py - 7, x1: px + 7, y1: py + 7 });
     reqs.push({ x: px, y: py, text: tpl(lab, { v: `${fixed(v, 1)}%` }), size: fs, sides: ["left", "above-left", "below-left"], gap: 10, priority: f === focus ? 4 : 2, attrs: { class: `fig-t-halo${f === focus ? " fig-t-strong" : " fig-t-muted"}` } });
@@ -287,7 +293,7 @@ export default defineFigure({
   labels,
   params: {
     focus: {
-      kind: "choice", label: { en: "Show every entry of", zh: "显示全部条目" }, default: "arc2",
+      kind: "choice", label: { en: "Show every entry of", zh: "逐条显示的基准" }, default: "arc2",
       options: [
         { value: "hle", label: { en: "HLE", zh: "HLE" } },
         { value: "arc2", label: { en: "ARC-AGI-2", zh: "ARC-AGI-2" } },

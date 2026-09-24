@@ -23,8 +23,8 @@
 # checked by hand against the cited page: the ARC-AGI-2 human panel average
 # (60%, ARC Prize's ARC-AGI-2 announcement of 24 March 2025), the ARC-AGI-3
 # human result (100%, launch post of 25 March 2026), and a vendor-reported
-# HLE score with tools (67.7% for Claude Opus 5.5, Anthropic's launch table),
-# dated by the release date ARC Prize lists for that model.
+# HLE score with tools (67.7% for Claude Opus 5.5, Anthropic's launch table).
+# The figure draws the last two at the date of the leaderboard read.
 #
 #   python tools/figure-data/benchmark-headroom.py   (standard library only)
 
@@ -127,7 +127,7 @@ def main():
         "  arc2HumanAverage: 60,",
         "  arc3Launch: \"2026-03-25\",",
         "  arc3Human: 100,",
-        "  hleWithTools: { score: 67.7, name: \"Claude Opus 5.5\", date: \"2026-09-22\" },",
+        "  hleWithTools: { score: 67.7, name: \"Claude Opus 5.5\" },",
         f"  arc2Private: {{ score: {private['score']}, name: {js(private['name'])} }},",
         "} as const;",
         "",

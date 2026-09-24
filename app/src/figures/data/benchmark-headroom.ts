@@ -21,7 +21,7 @@ export const REFERENCE = {
   arc2HumanAverage: 60,
   arc3Launch: "2026-03-25",
   arc3Human: 100,
-  hleWithTools: { score: 67.7, name: "Claude Opus 5.5", date: "2026-09-22" },
+  hleWithTools: { score: 67.7, name: "Claude Opus 5.5" },
   arc2Private: { score: 3.1, name: "ARChitects" },
 } as const;
 
