@@ -21,4 +21,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "device-mesh": () => import("./device-mesh.ts"),
   "coverage-selection": () => import("./coverage-selection.ts"),
   "difficulty-budget": () => import("./difficulty-budget.ts"),
+  "sampling-paths": () => import("./sampling-paths.ts"),
 };
