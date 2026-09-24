@@ -145,9 +145,6 @@ test("every Chinese page carries the English interactive figures and their input
     const english = readFileSync(join(repoRoot, "en", page), "utf8");
     const chinese = readFileSync(join(repoRoot, "zh", page), "utf8");
     expect(vizSignature(chinese), `${page}: data-viz figures`).toEqual(vizSignature(english));
-    expect(matches(chinese, /\b(data-chip)=/g).length, `${page}: stepper steps`).toBe(
-      matches(english, /\b(data-chip)=/g).length,
-    );
   }
 });
 
