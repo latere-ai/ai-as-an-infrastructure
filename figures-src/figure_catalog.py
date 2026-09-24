@@ -35,6 +35,10 @@ def _line(name, spec):
         ax.set_xlim(*spec["xlim"])
     if "ylim" in spec:
         ax.set_ylim(*spec["ylim"])
+    if "xticks" in spec:
+        ax.set_xticks(spec["xticks"])
+    if "yticks" in spec:
+        ax.set_yticks(spec["yticks"])
     for ann in spec.get("annotations", []):
         ax.annotate(
             ann["text"],
@@ -172,13 +176,16 @@ SPECS = {
         "type": "line",
         "x": [8, 16, 32, 64, 128, 256],
         "series": [
-            {"label": "autoregressive", "y": [8, 16, 32, 64, 128, 256], "color": DATA},
-            {"label": "iterative NAR", "y": [8, 8, 8, 8, 8, 8], "color": ACCENT},
+            {"label": "autoregressive", "y": [8, 16, 32, 64, 128, 256], "color": DATA, "marker": "o"},
+            {"label": "iterative NAR", "y": [8, 8, 8, 8, 8, 8], "color": ACCENT, "marker": "o"},
         ],
         "xlabel": "output length (tokens)",
         "ylabel": "dependent steps",
-        "logx": True,
-        "ylim": (0, 270),
+        "xlim": (0, 268),
+        "ylim": (0, 268),
+        "xticks": [0, 64, 128, 192, 256],
+        "yticks": [0, 64, 128, 192, 256],
+        "legend": "upper left",
     },
     "speech-and-voice-1": {
         "type": "line",
