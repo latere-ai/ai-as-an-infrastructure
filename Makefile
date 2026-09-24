@@ -44,7 +44,7 @@ build:
 og:
 	cd app && bun run og
 
-# Style/diagram lint on the .qmd sources (no em dashes, no plain ```mermaid).
+# Style/diagram lint on the .qmd sources (no em dashes, no mermaid fences).
 lint:
 	@go tool lateregate lint
 

@@ -90,10 +90,11 @@ an on-ramp added in EN is ported to ZH, not re-invented.
 ## Math and diagrams
 
 - Math is LaTeX: inline `$...$` and display `$$...$$`.
-- Diagrams are Mermaid in `` ```{mermaid} `` blocks (the reader-recognized
-  diagram fence, with braces). A plain `` ```mermaid `` block renders as a
-  code listing, not a diagram. Verify they render, not just that the syntax
-  parses. Use a static image only when Mermaid cannot express the figure.
+- Diagrams are figure modules embedded with a `` ```{figure} `` block (see
+  `app/src/figures/README.md`), or Graphviz in a `` ```{dot} `` block. The
+  reader does not render Mermaid, and the lint rejects a mermaid fence. Verify
+  a diagram renders, not just that its source parses. Use a static image only
+  when neither can express the figure.
 
 ## Tone
 

@@ -24,8 +24,9 @@ to one language tree needs the same change in its twin.
   manifest; the same chapter paths and `{#sec-...}` labels exist under both.
 - `app/` is the reader: a custom React + Bun static site generator that
   compiles the `.qmd` sources (markdown, KaTeX math, citations from
-  `refs/*.bib`, cross-refs, graphviz/mermaid, callouts, runnable cells and
-  viz) into `_book/{en,zh}`. The compiler lives in `app/src/pipeline/`.
+  `refs/*.bib`, cross-refs, graphviz, figure modules, callouts, runnable
+  cells and viz) into `_book/{en,zh}`. The compiler lives in
+  `app/src/pipeline/`.
 - `main.go` is the production server. It embeds `_book` with `//go:embed` and
   serves it as a single binary. `_book` is generated output and is not
   committed.

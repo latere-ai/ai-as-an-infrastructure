@@ -57,8 +57,8 @@ test("figure 2.1 (field-map-stack) is an inline SVG with all 12 substantive part
     expect(figure).not.toMatch(/\n\s*\n/);
     expect(qmd).not.toContain("/figures/field-map-stack.svg");
     expect(qmd).not.toMatch(/```\{dot\}\n\/\/\| label: fig-field-map-stack/);
-    // Part XII must be present (Part XI was missing from the old mermaid
-    // diagram, and Part X was added when Part IX was split),
+    // Part XII must be present (Part XI was missing from an earlier version
+    // of this diagram, and Part X was added when Part IX was split),
     // and every substantive part should have an addressable SVG group.
     for (const id of ["PIX", "PI", "PII", "PIII", "PIV", "PV", "PVI", "PVII", "PVIII", "PX", "PXI", "PXII"]) {
       expect(qmd).toContain(`id="fm-${id}"`);

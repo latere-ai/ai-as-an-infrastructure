@@ -13,7 +13,7 @@ Released under latere.ai, licensed CC BY-NC-ND 4.0.
   and `zh/book.yml` are the chapter/part manifests read by the custom reader.
 - The site is a **custom React + Bun reader** in `app/`. It
   compiles the `.qmd` content (markdown, KaTeX math, citations from
-  `refs/*.bib`, `@sec`/`@fig` cross-refs, graphviz/mermaid, callouts,
+  `refs/*.bib`, `@sec`/`@fig` cross-refs, graphviz, figure modules, callouts,
   runnable/viz) to static HTML in `_book/{en,zh}`. See `app/src/pipeline/`.
 
 ## Authoring philosophy
