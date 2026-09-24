@@ -124,4 +124,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "refusal-threshold": () => import("./refusal-threshold.ts"),
   "selection-frontier": () => import("./selection-frontier.ts"),
   "device-memory-budget": () => import("./device-memory-budget.ts"),
+  "hybrid-route": () => import("./hybrid-route.ts"),
 };
