@@ -52,6 +52,34 @@ $$
 
 The user grant expresses delegated consent. The agent grant bounds the named agent or session. The workload grant says which running software may call. The resource policy applies ownership, sharing, and tenant rules. Runtime constraints include network destinations, approval state, rate and budget limits, and current risk signals. An intersection can only remove authority. In practice, the policy decision point (PDP) computes the decision, while a policy enforcement point (PEP) blocks or performs the effect [@rose2020zerotrust]. Authentication and token issuance supply trusted inputs; neither performs enforcement by itself.
 
+The agent grant usually lives in a versioned, owner-approved agent definition: its
+instructions, tool grants, model binding, budget, and approval steps. That record
+answers the question an investigation asks of an agent, namely what it was allowed
+to attempt at the moment it acted, which a token scope alone cannot answer. A
+revocation test separates the two layers. Revoking a credential or workload identity
+changes who can reach a resource; revising the agent definition changes what an
+authenticated principal may attempt. The token's scope claim sits between them,
+written by the issuer to encode what the definition allows.
+
+The decision point is usually a policy engine, and a deployment runs two policy
+surfaces that are best kept apart: resource-access policy (may this subject read
+this resource?) and action-risk policy (may this agent send this email, and does it
+need approval?). They change for different reasons and at different rates, and the
+second is where human approval attaches.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Open Policy Agent evaluates policies written in Rego over JSON input
+[@opa2026docs]. Cedar was designed so that its policies have a sound and complete
+logical encoding, which lets a tool check whether a policy refactoring changes any
+authorized permission; its authors compared it with Rego and OpenFGA
+[@cutler2024cedar]. Relationship-based systems in the line of Google's Zanzibar,
+such as OpenFGA, decide access by following stored relation tuples between users and
+objects [@pang2019zanzibar]. AuthZEN standardizes the request between enforcement
+and decision points, whichever engine answers it [@authzen2026].
+:::
+
 The intersection model also shows that the attack surface extends beyond the scope list. Tool descriptions, parameter parsing, output dataflow, enabled operations, network reachability, redirects, and credential custody all affect what an attacker can reach.
 
 ## From request to effect
@@ -107,7 +135,76 @@ revoke: expiry
 detect: 21600
 ```
 
+The cell below measures the stale window across a fleet. Each resource-server
+instance caches an introspection answer for `cache_s` seconds, so after a
+revocation it keeps accepting the token until its own entry expires; with pushed
+status, each instance waits for its own delivery instead. A replayed token can reach
+any instance, so exposure is the maximum over the fleet, not the average. The cell
+checks the simulation against two closed forms: the expected maximum of $n$ uniform
+delays is $c\,n/(n+1)$ for cache lifetime $c$, and of $n$ exponential delays with
+mean $m$ it is $m H_n$, where $H_n$ is the $n$th harmonic number. Change `cache_s`
+to see that a shorter cache lowers the curve but leaves its shape: a large fleet
+still waits almost the full cache lifetime.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+trials, cache_s, push_s = 20000, 60.0, 2.0  # introspection cache TTL; mean delay of a pushed revocation
+fleet = np.array([1, 2, 4, 8, 16, 32, 64, 128])  # resource-server instances that accept the token
+
+poll, push = [], []
+for n in fleet:
+    # Each instance cached "active" at a uniform phase before the revocation and keeps accepting until
+    # that entry expires; with pushed status, each instance instead waits for its own delivery.
+    poll.append((cache_s - rng.uniform(0, cache_s, (trials, n))).max(axis=1))
+    push.append(rng.exponential(push_s, (trials, n)).max(axis=1))
+poll_worst, push_worst = np.array([p.mean() for p in poll]), np.array([p.mean() for p in push])
+
+closed_poll = cache_s * fleet / (fleet + 1)  # mean of the maximum of n uniforms on [0, cache_s]
+closed_push = push_s * np.array([np.sum(1 / np.arange(1, n + 1)) for n in fleet])  # push_s * H_n
+assert np.allclose(poll_worst, closed_poll, rtol=0.02) and np.allclose(push_worst, closed_push, rtol=0.03)
+
+fig, ax = plt.subplots(figsize=(6.4, 3.8))
+ax.plot(fleet, poll_worst, "o", color="#c0392b", label="cached introspection: worst instance")
+ax.plot(fleet, closed_poll, "-", color="#c0392b", lw=1)
+ax.axhline(cache_s / 2, color="#c0392b", ls=":", lw=1, label="cached introspection: average instance")
+ax.plot(fleet, push_worst, "s", color="#2471a3", label="pushed status: worst instance")
+ax.plot(fleet, closed_push, "-", color="#2471a3", lw=1)
+ax.set_xscale("log", base=2); ax.set_xticks(fleet, [str(n) for n in fleet])
+ax.set_xlabel("instances accepting the token"); ax.set_ylabel("seconds a revoked token still works")
+ax.set_title("The slowest instance, not the average one, sets revocation latency")
+ax.legend(fontsize=8, frameon=False, loc="lower right", bbox_to_anchor=(1, 0.2))
+plt.show()
+```
+::::
+
 Attenuable credentials, which any holder can narrow further before passing them on, can make restriction composable. Macaroons, for example, let holders add contextual caveats that verifiers check [@birgisson2014macaroons]. They do not automatically produce a per-call token, choose the right caveats, or protect against malicious use that remains inside those caveats.
+
+Credential packaging has moved from broad, durable grants toward narrow, short-lived
+ones, and each form fits a different risk. A broad token costs one consent dialog
+and is defensible only for single-user, low-privilege use; fine-grained repository
+tokens and narrower consent screens exist to pull deployments away from it. A
+per-call capability token earns its plumbing when actions are high-privilege or
+irreversible. Token exchange on behalf of the user matters whenever downstream
+authorization depends on the user, as with row-level security in a warehouse, so
+the resource server sees the human rather than a service account. Workload identity
+is the baseline for any multi-replica service.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+An individual IETF draft proposed OAuth parameters that name the requesting agent
+and carry the delegation chain from user to agent in the access token; its last
+revision (August 2025) expired without working-group adoption
+[@oauth2025agents]. Identity vendors ship agent features as products instead:
+Okta announced early access to agent identity lifecycle and governance
+[@okta2025agents], and Auth0 for AI Agents keeps third-party OAuth tokens in a
+token vault and supports asynchronous approval through client-initiated
+backchannel authentication [@auth02026identity].
+:::
 
 ## MCP authorization has a narrower job
 
@@ -117,13 +214,21 @@ Audience validation prevents one class of token passthrough, in which a server a
 
 ## Keep credentials out, then constrain their use
 
-Reusable secrets should not appear in model context, generated code, logs, or a sandbox environment. A credential broker can give the executor an opaque handle and attach the real credential after authorization. For a static secret, a provider-aware egress proxy may inject it after TLS termination. Both patterns protect custody; neither proves that a permitted request is benign.
+Reusable secrets should not appear in model context, generated code, logs, or a sandbox environment. A credential broker can give the executor an opaque handle and attach the real credential after authorization. That works when something can mint a short-lived credential, as with a provider key behind a model gateway or a service that supports token exchange. A static third-party secret, such as a payment key, a database password, or a partner token a vendor will not rotate per call, needs a different path. Handing it to the sandbox as an environment variable or a mounted file needs no code change but puts the real value where generated code and injected instructions can read it. Egress substitution keeps the same convenience without that exposure: the sandbox holds an opaque placeholder in the secret's place, and a TLS-terminating egress proxy that holds the real value swaps it onto the wire only for requests to the hosts the credential is scoped to. A request carrying the placeholder anywhere else carries nothing usable. Both patterns protect custody; neither proves that a permitted request is benign.
 
-The proxy therefore needs a destination allowlist plus canonical method, path, operation, parameter, redirect, and DNS policy. A host restriction is not API-level authorization: an injected request to an allowed host can still delete data or publish secrets. Provider signing and challenge-response protocols require provider-aware handling rather than string replacement. TLS termination also creates a trust boundary: the proxy sees plaintext and clients must trust its certificate authority. The enforcement record should name that boundary without logging the static secret.
+The proxy therefore needs a destination allowlist plus canonical method, path, operation, parameter, redirect, and DNS policy. A host restriction is not API-level authorization: an injected request to an allowed host can still delete data or publish secrets. Provider signing and challenge-response protocols, such as AWS Signature Version 4 or SCRAM, never put the secret on the wire verbatim, so they require provider-aware handling rather than string replacement. TLS termination also creates a trust boundary: the proxy sees plaintext and clients must trust its certificate authority. The enforcement record should name that boundary without logging the static secret.
 
 ## Tenant isolation is another enforcement layer
 
 The tenant is part of the authenticated subject and resource, supplemented by an explicit ownership or sharing model for global and cross-tenant resources. A pooled database can enforce a row-level policy; namespaces or shards add namespace isolation; separate accounts or clusters add physical isolation. These are defense in depth. Physical isolation reduces the blast radius of some implementation errors, but does not replace authorization at control planes, shared gateways, backups, or routing layers.
+
+| Tier | Mechanism | Blast radius of a query bug | Typical fit |
+|---|---|---|---|
+| Logical | Shared database, tenant column, enforced row policy | A missing predicate can expose every tenant | Internal tools, low-stakes services |
+| Namespace | Schema, namespace, or shard per tenant | A misrouted query reaches one wrong tenant | Most multi-tenant business software |
+| Physical | Database, cluster, or account per tenant | The error stays inside one tenant's resources | Regulated, large enterprise, sovereign deployments |
+
+A platform usually mixes tiers by resource class: sessions logically partitioned for cost, high-sensitivity memory physically separated, and audit in a shared store with tenant-tagged rows. The ownership model above the tiers has its own trade-off. Flat per-user tenancy is simple to isolate and cannot share. An organization-project hierarchy is readable by inspection but fits poorly when the real organization is a matrix. Attribute-based rules fit any structure, but the answer to "who can see this record?" can no longer be read off the data, which makes offline audit and erasure traversal harder. The simplest model that fits the organization and keeps the ownership graph walkable is usually the right one.
 
 Choose isolation separately for each resource according to the consequence of its exposure. Retrieval memory can deserve a stronger boundary than low-sensitivity telemetry. Every tier needs cross-tenant negative tests: forged tenant headers, mismatched resource ownership, shared-resource rules, background jobs, caches, exports, restore paths, and administrative operations.
 
@@ -163,12 +268,14 @@ audit_evidence_and_retention
 
 Before a side effect, append a write-ahead intent outside the agent's write authority. It binds the request hash, decision, executor, reservation, credential handle, and idempotency key. After the attempt, append an effect receipt with status `succeeded`, `failed`, or `unknown`, provider transaction IDs, result hash, actual usage, and error class. The `unknown` status records the case in which a timeout leaves external completion ambiguous. A receipt proves what this enforcement path recorded; it does not prove the model's natural-language rationale, deletion elsewhere, or absence of unlogged effects.
 
+Erasure requests conflict with an audit record that must persist. A tamper-evident log cannot drop a row without breaking its chain, so the usual resolution is tombstone plus proof: purge the payload, keep a tombstone entry that preserves the chain, and record evidence that the deletion happened rather than removing the entry silently.
+
 Verification should exercise denials, not only happy paths: cross-tenant access, forged attributes, modified post-approval arguments, replayed challenges, unapproved redirects, unavailable policy or audit, concurrent budget races, revocation latency, duplicated idempotency keys, and a compromised agent attempting to read a credential. Multi-agent delegation needs the same tests at every handoff (@sec-multi-agent-systems).
 
 ::: {.callout-important}
 ## What's contested
 
-Three boundaries remain unsettled. First, a central policy decision point gives consistent revisioning and evidence, while local decisions reduce latency and correlated outages; many systems combine central policy distribution with local enforcement. Second, an agent or session revision can be a first-class principal or merely a claim attached to user and workload identities. The useful test is whether independent lifecycle, policy, and attribution justify the added principal. Third, exact approval is strong for rare, legible effects but degrades under repetition or opaque previews. None of these choices removes the need for complete mediation and testable failure behavior.
+Three boundaries remain unsettled. First, a central policy decision point gives consistent revisioning and evidence, while local decisions reduce latency and correlated outages; many systems combine central policy distribution with local enforcement. Second, an agent or session revision can be a first-class principal or merely a claim attached to user and workload identities. One position holds that identity already covers the need: attenuable, delegatable tokens and an agent claim in the subject can express every restriction. The other holds that the versioned agent definition, with its instructions, tools, budget, and approval steps, answers questions no token records, so it deserves its own lifecycle and owner. The useful test is whether independent lifecycle, policy, and attribution justify the added principal. Third, exact approval is strong for rare, legible effects but degrades under repetition or opaque previews. None of these choices removes the need for complete mediation and testable failure behavior.
 :::
 
 ::: {.callout-tip}
