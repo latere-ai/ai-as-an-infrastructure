@@ -49,4 +49,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "benchmark-headroom": () => import("./benchmark-headroom.ts"),
   "paired-comparison": () => import("./paired-comparison.ts"),
   "binomial-interval": () => import("./binomial-interval.ts"),
+  "sft-loss-mask": () => import("./sft-loss-mask.ts"),
 };
