@@ -10,6 +10,7 @@ import { readFileSync } from "node:fs";
 
 const css = readFileSync(new URL("../theme.css", import.meta.url), "utf8");
 const reader = readFileSync(new URL("../Reader.tsx", import.meta.url), "utf8");
+const tsx = reader + readFileSync(new URL("../comments.tsx", import.meta.url), "utf8");
 
 test("the document is not locked, so the window scrolls the page", () => {
   expect(css).not.toMatch(/html,\s*body\s*\{[^}]*overflow:\s*hidden/);
@@ -31,6 +32,10 @@ test("anchors are native and land below the sticky header", () => {
   expect(reader).not.toMatch(/scrollingElement;\s*if \(se\) se\.scrollTop = 0/);
   expect(reader).not.toMatch(/addEventListener\("hashchange"/);
   expect(css).toMatch(/html \{[^}]*scroll-padding-top: calc\(var\(--hdr-h\) \+ 12px\)/);
+  // The root's scroll-padding is the one offset. A target's scroll-margin adds
+  // to it, so a heading with both lands twice as far below the header.
+  expect(css).not.toMatch(/scroll-margin-top/);
+  expect(tsx).not.toMatch(/scrollMarginTop/);
 });
 
 test("reading progress and the active heading follow the window's scroll", () => {

@@ -291,7 +291,7 @@ function CommentItem({ c, me, api, t, refresh, onReply, onDelete }: {
   const canEdit = c.mine && !c.deleted;
   const canDel = (c.mine || me?.admin) && !c.deleted;
   return (
-    <div id={`rdr-comment-${c.id}`} style={{ display: "flex", gap: 10, scrollMarginTop: 60 }}>
+    <div id={`rdr-comment-${c.id}`} style={{ display: "flex", gap: 10 }}>
       <Avatar src={c.avatar} name={c.author} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, color: "var(--fg-3)", lineHeight: "26px" }}>
