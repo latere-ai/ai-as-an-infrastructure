@@ -621,50 +621,6 @@
     watchTheme(host, draw);
   };
 
-  // Verifier-threshold: best-of-N remains useful when the selector is reliable;
-  // with a weak proxy, more candidates increase the chance of finding an
-  // over-optimized false positive. The curves are qualitative.
-  R['verifier-threshold'] = function (host) {
-    var zh = host.getAttribute('data-lang') === 'zh';
-    var rel = 0.82;
-    var labels = zh
-      ? { rel: '选择器可靠性', x: '候选数 N', y: '期望真实质量', ideal: '理想核查器', proxy: '当前选择器', peak: '峰值' }
-      : { rel: 'selector reliability', x: 'candidates N', y: 'expected true quality', ideal: 'ideal oracle', proxy: 'current selector', peak: 'peak' };
-    var bar = el('div', 'viz-pa-bar'); var read = el('span', 'viz-pa-read'); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 270);
-    function ideal(n) { return 0.42 + 0.50 * (1 - Math.exp(-n / 16)); }
-    function proxy(n) {
-      var gain = 0.44 * (1 - Math.exp(-n * rel / 15));
-      var exploit = (1 - rel) * 0.095 * Math.pow(Math.log(n + 1), 1.7);
-      return 0.42 + gain - exploit;
-    }
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height, pd = 44 * cv.dpr;
-      ctx.clearRect(0, 0, W, H);
-      function X(n) { return pd + (n - 1) / 63 * (W - 2 * pd); }
-      function Y(q) { return H - pd - (q - 0.25) / 0.75 * (H - 2 * pd); }
-      ctx.strokeStyle = t.grid; ctx.beginPath(); ctx.moveTo(pd, H - pd); ctx.lineTo(W - pd, H - pd); ctx.moveTo(pd, pd); ctx.lineTo(pd, H - pd); ctx.stroke();
-      function line(fn, col, dash) {
-        ctx.strokeStyle = col; ctx.lineWidth = 2 * cv.dpr; ctx.setLineDash(dash ? [5 * cv.dpr, 4 * cv.dpr] : []); ctx.beginPath();
-        for (var n = 1; n <= 64; n++) { var x = X(n), y = Y(fn(n)); if (n === 1) ctx.moveTo(x, y); else ctx.lineTo(x, y); }
-        ctx.stroke(); ctx.setLineDash([]);
-      }
-      line(ideal, '#4b9f6b', true); line(proxy, t.accent, false);
-      var bestN = 1, bestQ = -Infinity;
-      for (var n = 1; n <= 64; n++) { var q = proxy(n); if (q > bestQ) { bestQ = q; bestN = n; } }
-      ctx.fillStyle = t.accent; ctx.beginPath(); ctx.arc(X(bestN), Y(bestQ), 5 * cv.dpr, 0, Math.PI * 2); ctx.fill();
-      ctx.fillStyle = t.ink; ctx.font = (12 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(labels.x, W / 2, H - 12 * cv.dpr);
-      ctx.save(); ctx.translate(14 * cv.dpr, H / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(labels.y, 0, 0); ctx.restore();
-      ctx.textAlign = 'left'; ctx.fillText(labels.ideal, pd + 8 * cv.dpr, pd + 4 * cv.dpr);
-      ctx.fillStyle = t.accent; ctx.fillText(labels.proxy, pd + 8 * cv.dpr, pd + 22 * cv.dpr);
-      read.textContent = labels.rel + '=' + rel.toFixed(2) + ' · ' + labels.peak + ' N=' + bestN;
-    }
-    host.appendChild(slider(labels.rel, 0.55, 0.98, 0.01, rel, function (v) { rel = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Safety frontier: threshold selection moves the operating point between
   // unsafe answers and benign refusals. Better training moves the curve; a
   // deployment still chooses a point on it.
