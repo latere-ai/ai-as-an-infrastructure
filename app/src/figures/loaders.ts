@@ -94,4 +94,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "mixture-ramp": () => import("./mixture-ramp.ts"),
   "phase-record": () => import("./phase-record.ts"),
   "request-binding": () => import("./request-binding.ts"),
+  "credential-reach": () => import("./credential-reach.ts"),
 };

@@ -782,53 +782,6 @@
     watchTheme(host, draw);
   };
 
-  // Blast radius of ambient authority: one standing token reaches every resource
-  // its scope covers, so a single injected instruction acts on the union. Widen
-  // the scope and the reachable set fans out; a longer TTL brightens the exposure.
-  // A short-lived capability token, minted per call, collapses the radius to one.
-  R['blast-radius'] = function (host) {
-    var zh = host.getAttribute('data-lang') === 'zh' || document.documentElement.lang.indexOf('zh') === 0;
-    var L = zh
-      ? { token: '令牌', standing: '长期令牌', capability: '单次能力令牌', reachable: '可达', of: '个资源，共', ttl: '有效期', min: '分钟', scope: '范围宽度', ttlSlider: '有效期（分钟）', description: '令牌可达资源范围的示意图' }
-      : { token: 'token', standing: 'standing token', capability: 'single-call capability token', reachable: 'reachable', of: 'of', ttl: 'TTL', min: 'min', scope: 'scope breadth', ttlSlider: 'TTL (minutes)', description: 'Diagram of resources reachable by a token' };
-    var scope = 0.5, ttl = 30, mode = 'standing', N = 18, cols = 6, rows = 3;
-    var bar = el('div', 'viz-pa-bar'); var btn = el('button', 'viz-pa-toggle'); btn.type = 'button'; var read = el('span', 'viz-pa-read');
-    read.setAttribute('aria-live', 'polite');
-    bar.appendChild(btn); bar.appendChild(read); host.appendChild(bar);
-    var cv = canvas(host, 280);
-    cv.c.setAttribute('role', 'img');
-    function draw() {
-      var t = theme(), ctx = cv.ctx, W = cv.c.width, H = cv.c.height;
-      ctx.clearRect(0, 0, W, H);
-      var ax = W * 0.13, ay = H / 2;
-      var reach = (mode === 'capability') ? 1 : Math.max(1, Math.round(N * scope));
-      var linkA = (mode === 'capability') ? 0.5 : (0.12 + 0.4 * (ttl / 240));
-      var gx = W * 0.3, gw = W * 0.62, gy = 26 * cv.dpr, gh = H - 56 * cv.dpr;
-      for (var i = 0; i < N; i++) {
-        var r = Math.floor(i / cols), c = i % cols;
-        var x = gx + (c + 0.5) * gw / cols, y = gy + (r + 0.5) * gh / rows, on = i < reach;
-        if (on) { ctx.strokeStyle = t.accent; ctx.globalAlpha = linkA; ctx.lineWidth = cv.dpr; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(x, y); ctx.stroke(); ctx.globalAlpha = 1; }
-        ctx.fillStyle = on ? t.accent : t.grid;
-        ctx.fillRect(x - 8 * cv.dpr, y - 8 * cv.dpr, 16 * cv.dpr, 16 * cv.dpr);
-      }
-      ctx.fillStyle = t.accent2; ctx.beginPath(); ctx.arc(ax, ay, 11 * cv.dpr, 0, 7); ctx.fill();
-      ctx.fillStyle = t.ink; ctx.font = (11 * cv.dpr) + 'px sans-serif'; ctx.textAlign = 'center';
-      ctx.fillText(L.token, ax, ay - 16 * cv.dpr);
-      var modeLabel = mode === 'standing' ? L.standing : L.capability;
-      var summary = zh
-        ? L.reachable + ' ' + reach + ' ' + L.of + ' ' + N + ' 个资源 · ' + L.ttl + ' ' + Math.round(ttl) + ' ' + L.min
-        : L.reachable + ' ' + reach + ' ' + L.of + ' ' + N + ' resources · ' + L.ttl + ' ' + Math.round(ttl) + ' ' + L.min;
-      btn.textContent = L.token + ': ' + modeLabel;
-      read.textContent = summary;
-      cv.c.setAttribute('aria-label', zh ? L.description + '。' + modeLabel + '，' + summary : L.description + '. ' + modeLabel + '. ' + summary);
-    }
-    btn.addEventListener('click', function () { mode = (mode === 'standing') ? 'capability' : 'standing'; draw(); });
-    host.appendChild(slider(L.scope, 0.05, 1, 0.05, scope, function (v) { scope = v; draw(); }).wrap);
-    host.appendChild(slider(L.ttlSlider, 1, 240, 1, ttl, function (v) { ttl = v; draw(); }).wrap);
-    draw();
-    watchTheme(host, draw);
-  };
-
   // Agent-RL systems have two independent design axes: resource placement
   // (shared or separate pools) and update synchronization (barriered or async).
   // This view switches axes instead of incorrectly equating disaggregation with
