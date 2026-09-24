@@ -19,7 +19,7 @@ import { C, TYPE } from "./lib/theme.ts";
 import { linear, log } from "./lib/scale.ts";
 import { axis, axisHeight } from "./lib/axis.ts";
 import { legend } from "./lib/legend.ts";
-import { placeLabels, drawLabels, lineObstacles, textWidth, type Box } from "./lib/labels.ts";
+import { placeLabels, drawLabels, lineObstacles, textWidth, type Box, type Side } from "./lib/labels.ts";
 import { wrapCjk } from "./lib/kinsoku.ts";
 import { compact, int, tpl } from "./lib/format.ts";
 import { mathText } from "./lib/math-text.ts";
@@ -58,7 +58,7 @@ const labels = {
     beam: "beam, width {w}",
     budget: "budget B = {B}",
     over: "over budget",
-    end: "{n}",
+    both: "{n}, both",
     levels: "Children the beam generates at each depth",
     kept: "kept",
     pruned: "pruned",
@@ -82,7 +82,7 @@ const labels = {
     beam: "束，宽度 {w}",
     budget: "预算 B = {B}",
     over: "超出预算",
-    end: "{n}",
+    both: "{n}，两者相同",
     levels: "束在每一层生成的子节点",
     kept: "保留",
     pruned: "剪掉",
@@ -131,7 +131,7 @@ function render(st: State<P>, lang: Lang): string {
   // ---- chart
   let y = 0;
   const lg = legend([
-    { label: L.full, swatch: { kind: "line", stroke: C.c2 } },
+    { label: L.full, swatch: { kind: "line", stroke: C.c2, dash: "5 3" } },
     { label: tpl(L.beam, { w: m.w }), swatch: { kind: "line", stroke: C.c1 } },
     { label: L.over, swatch: { kind: "rect", fill: C.bad, opacity: 0.12 } },
   ], 0, y, w, size);
@@ -156,8 +156,10 @@ function render(st: State<P>, lang: Lang): string {
   // Budget line.
   parts.push(el("line", { x1: left, x2: w - right, y1: yb, y2: yb, stroke: C.ink, "stroke-width": 1.4, "stroke-dasharray": "6 3" }));
   obstacles.push(...lineObstacles([[left, yb], [w - right, yb]]));
-  parts.push(el("path", { d: linePath(ptsF), fill: "none", stroke: C.c2, "stroke-width": 2.2, "stroke-linejoin": "round" }));
+  // The beam solid and the full tree dashed on top, so both stay visible over
+  // the depths where the beam keeps every child and the counts coincide.
   parts.push(el("path", { d: linePath(ptsB), fill: "none", stroke: C.c1, "stroke-width": 2.2, "stroke-linejoin": "round" }));
+  parts.push(el("path", { d: linePath(ptsF), fill: "none", stroke: C.c2, "stroke-width": 2.2, "stroke-linejoin": "round", "stroke-dasharray": "5 3" }));
   for (let d = 0; d <= m.D; d++) {
     const over = (n: number) => n > m.B;
     const nF = fullCount(m.b, d), nB = beamCount(m.b, m.w, d);
@@ -166,9 +168,10 @@ function render(st: State<P>, lang: Lang): string {
     obstacles.push({ x0: ptsF[d][0] - 5, y0: ptsF[d][1] - 5, x1: ptsF[d][0] + 5, y1: ptsF[d][1] + 5 });
     obstacles.push({ x0: ptsB[d][0] - 5, y0: ptsB[d][1] - 5, x1: ptsB[d][0] + 5, y1: ptsB[d][1] + 5 });
   }
+  const same = m.nf === m.nb;
   const placed = placeLabels([
-    { x: ptsF[m.D][0], y: ptsF[m.D][1], text: int(m.nf), size, sides: ["right", "above", "above-left", "left", "below-right"], gap: 8, priority: 3, attrs: { class: "fig-t-halo fig-t-num" } },
-    { x: ptsB[m.D][0], y: ptsB[m.D][1], text: int(m.nb), size, sides: ["right", "below", "below-left", "above-right", "left"], gap: 8, priority: 2, attrs: { class: "fig-t-halo fig-t-num" } },
+    { x: ptsF[m.D][0], y: ptsF[m.D][1], text: same ? tpl(L.both, { n: int(m.nf) }) : int(m.nf), size, sides: ["right", "above", "above-left", "left", "below-right"], gap: 8, priority: 3, attrs: { class: "fig-t-halo fig-t-num" } },
+    ...(same ? [] : [{ x: ptsB[m.D][0], y: ptsB[m.D][1], text: int(m.nb), size, sides: ["right", "below", "below-left", "above-right", "left"] as Side[], gap: 8, priority: 2, attrs: { class: "fig-t-halo fig-t-num" } }]),
     { x: w - right - 4, y: yb, text: tpl(L.budget, { B: int(m.B) }), size, sides: ["above-left", "below-left"], gap: 6, priority: 4, attrs: { class: "fig-t-halo" } },
   ], { x0: left + 2, y0: top + 2, x1: w - right, y1: top + plotH - 2 }, obstacles);
   parts.push(drawLabels(placed.placed));
