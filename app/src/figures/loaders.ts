@@ -119,4 +119,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "task-substitution": () => import("./task-substitution.ts"),
   "rubric-weights": () => import("./rubric-weights.ts"),
   "preference-lineage": () => import("./preference-lineage.ts"),
+  "reward-source-use": () => import("./reward-source-use.ts"),
 };
