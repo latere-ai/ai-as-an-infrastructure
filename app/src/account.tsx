@@ -2,7 +2,7 @@
 // (bookmarks, comments, notes), the per-chapter bookmark button, and the
 // view-count + reading-time stats. All talk to the same-origin /api added by the
 // Go server and degrade to nothing when logged out / unconfigured.
-import { useEffect, useRef, useState } from "react";
+import { Component, useEffect, useRef, useState, type ReactNode } from "react";
 
 export type Me = { sub: string; name: string; avatar: string; admin: boolean; csrf: string } | null;
 
@@ -113,13 +113,31 @@ export function BookmarkButton({ lang, path }: { lang: "en" | "zh"; path: string
   );
 }
 
+// Contained renders nothing in place of a widget that throws. The account,
+// stats and comment widgets render server data after hydration; without a
+// boundary, one malformed response unmounts the whole reader, chapter text
+// included.
+export class Contained extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+  static getDerivedStateFromError(): { failed: boolean } { return { failed: true }; }
+  componentDidCatch(err: unknown) { console.error("reader widget failed", err); }
+  render() { return this.state.failed ? null : this.props.children; }
+}
+
+// parseStats accepts only the {views, visitors} counts /api/view promises.
+export function parseStats(d: unknown): { views: number; visitors: number } | null {
+  if (!d || typeof d !== "object") return null;
+  const { views, visitors } = d as Record<string, unknown>;
+  return typeof views === "number" && typeof visitors === "number" ? { views, visitors } : null;
+}
+
 // ChapterStats records a view and shows the view + reader counts as meta items.
 export function ChapterStats({ lang, path }: { lang: "en" | "zh"; path: string }) {
   const t = A[lang];
   const [st, setSt] = useState<{ views: number; visitors: number } | null>(null);
   useEffect(() => {
     fetch("/api/view", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lang, path }) })
-      .then((r) => (r.ok ? r.json() : null)).then(setSt).catch(() => {});
+      .then((r) => (r.ok ? r.json() : null)).then((d) => setSt(parseStats(d))).catch(() => setSt(null));
   }, [lang, path]);
   if (!st) return null;
   const item = (label: string, value: number) => (

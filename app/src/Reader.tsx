@@ -10,7 +10,7 @@ import { DEFAULT_SETTINGS } from "./types.ts";
 import { runSearch, type SearchDoc, type Scored } from "./search-match.ts";
 import { SUGGESTED, emptyStateDocs, pushRecent, readRecent } from "./search-suggest.ts";
 import { Comments } from "./comments.tsx";
-import { BookmarkButton, ChapterStats, HeaderAuth } from "./account.tsx";
+import { BookmarkButton, ChapterStats, Contained, HeaderAuth } from "./account.tsx";
 import { REPO_URL, editUrl, issueUrl } from "./repo.ts";
 import { pageUrl } from "./site.ts";
 
@@ -371,7 +371,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           {settingsOpen && <SettingsPanel t={t} s={s} set={set} chapter={chapter} />}
         </div>
 
-        <HeaderAuth lang={lang} />
+        <Contained><HeaderAuth lang={lang} /></Contained>
 
         <div className="rdr-progress" aria-hidden style={{ transform: `scaleX(${progress})` }} />
       </header>
@@ -393,7 +393,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
             <ChapterOpener chapter={chapter} t={t} />
             {articleBody}
             <PrevNextNav chapter={chapter} t={t} />
-            <Comments lang={chapter.lang} path={chapter.path} />
+            <Contained><Comments lang={chapter.lang} path={chapter.path} /></Contained>
             <PageFooter chapter={chapter} t={t} />
           </article>
         </main>
@@ -451,8 +451,8 @@ function MetaRow({ chapter, t }: { chapter: ChapterData; t: Strings }) {
           <span className="rdr-meta-label">{i.l}</span><span className="rdr-meta-value">{i.v}</span>
         </div>
       ))}
-      <ChapterStats lang={chapter.lang} path={chapter.path} />
-      <BookmarkButton lang={chapter.lang} path={chapter.path} />
+      <Contained><ChapterStats lang={chapter.lang} path={chapter.path} /></Contained>
+      <Contained><BookmarkButton lang={chapter.lang} path={chapter.path} /></Contained>
     </div>
   );
 }
