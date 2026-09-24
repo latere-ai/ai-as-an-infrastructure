@@ -212,7 +212,6 @@ function sampleOf(masked: string | null, lang: Lang): string | null {
 // and a listed figure that now fits, both fail until the list is updated.
 const knownWideFigures = [
   "en:fig-agent-architectures-react-loop",
-  "en:fig-dpo-variants-map",
   "en:fig-harness-state-machine",
   "en:fig-orchestration-control-loop",
   "en:fig-whole-stack-pipeline",
