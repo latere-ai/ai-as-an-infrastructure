@@ -11,6 +11,8 @@
 //   :::
 // and it becomes an editable, runnable cell (no server). Pyodide loads lazily
 // on the first Run, once per page.
+import { Transport } from '../figures/runtime/transport.ts';
+
   var PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v0.27.2/full/';
   var pyPromise = null;
   // Matplotlib's bundled fonts (DejaVu Sans) have no CJK glyphs, so Chinese
@@ -95,9 +97,23 @@
   // axes, thicker lines, a calmer color cycle. Colors come from the live CSS
   // variables, so it tracks the active light/dark palette. Agg backend means
   // plt.show() is a no-op (no canvas leaks into the page body); we capture the
-  // figure via savefig.
+  // figures via savefig.
+  //
+  // Every open pyplot figure is captured, in creation order. A static figure
+  // becomes one inline SVG. A figure that a matplotlib Animation held in the
+  // cell's globals draws into becomes a frame sequence instead: the harness
+  // steps the animation through its own draw function, at most FRAME_CAP
+  // frames, and saves each frame with one bounding box so the image does not
+  // shift between frames. Frames are SVG when the whole sequence fits the
+  // cell's share of PAYLOAD_BUDGET bytes; otherwise PNG, at a lower resolution
+  // when full resolution would not fit, and evenly thinned when the frames
+  // still exceed it.
+  var FRAME_CAP = 60;
+  var PAYLOAD_BUDGET = 3000000;
   var HARNESS = [
-    'import sys, io, json',
+    'import sys, io, json, base64, itertools',
+    '__FRAME_CAP = ' + FRAME_CAP,
+    '__BUDGET = ' + PAYLOAD_BUDGET,
     'def __style_mpl(__t):',
     '    import matplotlib',
     '    matplotlib.use("Agg")',
@@ -124,31 +140,97 @@
     '        mpl.rcParams["font.family"] = "sans-serif"',
     '        mpl.rcParams["font.sans-serif"] = ["' + CJK_FONT_NAME + '", "DejaVu Sans"]',
     '        mpl.rcParams["axes.unicode_minus"] = False',
+    // One frame of an animation, as SVG text or base64 PNG.
+    'def __frame(fig, fmt, box, dpi):',
+    '    b = io.BytesIO()',
+    '    fig.savefig(b, format=fmt, bbox_inches=box, transparent=True, dpi=dpi)',
+    '    v = b.getvalue()',
+    '    return v.decode("utf-8", "replace") if fmt == "svg" else base64.b64encode(v).decode("ascii")',
+    // Step an animation through at most __FRAME_CAP frames within budget
+    // bytes. The first frame decides the format and the resolution.
+    'def __animate(anim, fig, budget):',
+    '    seq = list(itertools.islice(anim.new_frame_seq(), __FRAME_CAP))',
+    '    if not seq:',
+    '        return None',
+    '    anim._init_draw()',
+    '    anim._draw_next_frame(seq[0], False)',
+    '    box = fig.get_tightbbox().padded(0.1)',
+    // Later frames can be larger than the first (points spread out, labels
+    // lengthen), so the estimate keeps a quarter of the budget in reserve.
+    '    fmt, dpi, room = "svg", fig.dpi, 0.75 * budget',
+    '    first = __frame(fig, fmt, box, dpi)',
+    '    if len(first) * len(seq) > room:',
+    '        fmt = "png"',
+    '        first = __frame(fig, fmt, box, dpi)',
+    '        if len(first) * len(seq) > room:',
+    '            dpi = max(48.0, dpi * (room / (len(first) * len(seq))) ** 0.5)',
+    '            first = __frame(fig, fmt, box, dpi)',
+    '    frames = [first]',
+    '    for d in seq[1:]:',
+    '        anim._draw_next_frame(d, False)',
+    '        frames.append(__frame(fig, fmt, box, dpi))',
+    // Over budget after all: keep every step-th frame and the last one, so
+    // the sequence still runs from start to end, and stretch the interval so
+    // it plays for the same time.
+    '    step, keep = 1, frames',
+    '    while sum(map(len, keep)) > budget and step < len(frames):',
+    '        step += 1',
+    '        keep = frames[::step] + ([frames[-1]] if (len(frames) - 1) % step else [])',
+    '    interval = float(getattr(anim, "_interval", 200) or 200) * len(frames) / len(keep)',
+    '    return {"kind": "anim", "fmt": fmt, "frames": keep, "bytes": sum(map(len, keep)), "interval": interval}',
+    // Capture every open figure in creation order; animated figures become
+    // frame sequences that share what the static figures leave of the budget.
+    'def __capture(__g):',
+    '    if "matplotlib.pyplot" not in sys.modules:',
+    '        return []',
+    '    import matplotlib.pyplot as plt',
+    '    anims = {}',
+    '    if "matplotlib.animation" in sys.modules:',
+    '        from matplotlib.animation import Animation',
+    '        for v in list(__g.values()):',
+    '            if isinstance(v, Animation):',
+    '                anims.setdefault(id(v._fig), v)',
+    '    figs = [plt.figure(n) for n in plt.get_fignums()]',
+    '    out = [None] * len(figs)',
+    '    left = __BUDGET',
+    '    for i, fig in enumerate(figs):',
+    '        if id(fig) not in anims:',
+    '            __b = io.BytesIO()',
+    '            fig.savefig(__b, format="svg", bbox_inches="tight", transparent=True)',
+    '            out[i] = {"kind": "svg", "data": __b.getvalue().decode("utf-8", "replace")}',
+    '            left -= len(out[i]["data"])',
+    '    moving = [i for i, fig in enumerate(figs) if id(fig) in anims]',
+    '    for j, i in enumerate(moving):',
+    '        out[i] = __animate(anims[id(figs[i])], figs[i], max(0, left) // (len(moving) - j))',
+    '        left -= out[i]["bytes"] if out[i] else 0',
+    '    plt.close("all")',
+    '    return [o for o in out if o]',
     'def __run_user_code(__src, __theme_json):',
     '    __out = io.StringIO()',
     '    __old = sys.stdout',
     '    sys.stdout = __out',
-    '    __img = None',
+    '    __figs = []',
     '    try:',
     '        try:',
     '            __style_mpl(json.loads(__theme_json))',
     '        except Exception:',
     '            pass',
-    '        exec(__src, {"__name__": "__main__"})',
+    '        if "matplotlib.pyplot" in sys.modules:',
+    '            sys.modules["matplotlib.pyplot"].close("all")',
+    '        __g = {"__name__": "__main__"}',
+    '        exec(__src, __g)',
+    // A failure while drawing (an animation function that raises) is shown
+    // under the cell's printed output instead of discarding the figures.
     '        try:',
-    '            import matplotlib',
-    '            if "matplotlib.pyplot" in sys.modules:',
-    '                import matplotlib.pyplot as plt',
-    '                if plt.get_fignums():',
-    '                    __b = io.BytesIO()',
-    '                    plt.savefig(__b, format="svg", bbox_inches="tight", transparent=True)',
-    '                    plt.close("all")',
-    '                    __img = __b.getvalue().decode("utf-8", "replace")',
+    '            __figs = __capture(__g)',
     '        except Exception:',
-    '            pass',
+    '            import traceback',
+    '            __out.write(traceback.format_exc())',
+    '            import matplotlib.pyplot as plt',
+    '            plt.close("all")',
     '    finally:',
     '        sys.stdout = __old',
-    '    return json.dumps({"out": __out.getvalue(), "img": __img})'
+    '    return json.dumps({"out": __out.getvalue(), "figs": __figs})'
   ].join('\n');
 
   // Resolve a CSS color (hex or rgb/rgba) to "#rrggbb" for matplotlib.
@@ -172,13 +254,14 @@
     };
   }
 
-  function clearSvg(svgEl) {
-    svgEl.replaceChildren();
-    svgEl.style.display = 'none';
+  function clearFigs(figsEl) {
+    figsEl.replaceChildren();
+    figsEl.style.display = 'none';
   }
 
-  function mountSvg(svgEl, markup) {
-    clearSvg(svgEl);
+  // Parse one SVG document from the harness and strip anything executable
+  // before it is placed in the page.
+  function safeSvg(markup) {
     var doc = new DOMParser().parseFromString(markup, 'image/svg+xml');
     if (doc.querySelector('parsererror')) throw new Error('invalid svg output');
     var svg = doc.documentElement;
@@ -196,13 +279,75 @@
         }
       }
     }
-    svgEl.appendChild(document.importNode(svg, true));
-    svgEl.style.display = 'block';
+    return document.importNode(svg, true);
   }
 
-  async function run(cell, code, status, outEl, svgEl) {
+  var reducedMotion = function () {
+    return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  };
+
+  // An animation's frames behind the figures' transport: play, pause, step
+  // and scrub, with a frame counter. Playing starts on its own after Run;
+  // under prefers-reduced-motion nothing plays, the cell opens on the last
+  // frame, and the step buttons move one frame at a time.
+  function mountAnim(fig, labels) {
+    var box = document.createElement('div'); box.className = 'live-anim';
+    var stage = document.createElement('div'); stage.className = 'live-svg live-frame';
+    stage.setAttribute('role', 'img'); stage.setAttribute('aria-label', labels.animation);
+    var frames = fig.frames.map(function (f) {
+      if (fig.fmt === 'svg') return safeSvg(f);
+      var img = new Image(); img.alt = ''; img.src = 'data:image/png;base64,' + f;
+      return img;
+    });
+    var n = frames.length;
+    var reduced = reducedMotion();
+    var transport = new Transport({
+      lang: labels.lang,
+      duration: Math.max(0, n - 1),
+      rate: 1000 / Math.max(16, fig.interval || 200),
+      discrete: true,
+      keyframes: [],
+      reduced: reduced,
+      t: reduced ? n - 1 : 0,
+      readout: function (t) { return labels.frame(Math.round(t) + 1, n); },
+      onSeek: function (t) { stage.replaceChildren(frames[Math.round(t)]); }
+    });
+    stage.replaceChildren(frames[transport.shown()]);
+    box.appendChild(stage); box.appendChild(transport.root);
+    if (typeof IntersectionObserver === 'function') {
+      new IntersectionObserver(function (entries) {
+        for (var i = 0; i < entries.length; i++) {
+          if (!entries[i].isIntersecting && transport.isPlaying) transport.pause();
+        }
+      }).observe(box);
+    }
+    return { node: box, start: function () { if (!reduced && n > 1) transport.play(); } };
+  }
+
+  // Place the captured figures in creation order: static figures as inline
+  // SVG, animations as frame players.
+  function mountFigs(figsEl, figs, labels) {
+    clearFigs(figsEl);
+    var starts = [];
+    for (var i = 0; i < figs.length; i++) {
+      if (figs[i].kind === 'anim') {
+        var anim = mountAnim(figs[i], labels);
+        figsEl.appendChild(anim.node);
+        starts.push(anim.start);
+      } else {
+        var fig = document.createElement('div'); fig.className = 'live-svg';
+        fig.setAttribute('role', 'img'); fig.setAttribute('aria-label', labels.figure);
+        fig.appendChild(safeSvg(figs[i].data));
+        figsEl.appendChild(fig);
+      }
+    }
+    figsEl.style.display = figs.length ? 'block' : 'none';
+    for (var s = 0; s < starts.length; s++) starts[s]();
+  }
+
+  async function run(cell, code, status, outEl, figsEl, labels) {
     cell.classList.add('ran');
-    outEl.textContent = ''; clearSvg(svgEl);
+    outEl.textContent = ''; clearFigs(figsEl);
     var py;
     try { py = await getPyodide(status); }
     catch (e) { status('Failed to load Python: ' + e.message); return; }
@@ -220,13 +365,16 @@
         try { await ensureCjkFont(py, status); theme.cjk = true; }
         catch (e) { /* fall back to tofu rather than failing the run */ }
       }
-      status('Running...');
+      status(/Animation\b/.test(code) ? labels.rendering : 'Running...');
+      // Let the status paint before the synchronous Python call blocks.
+      await new Promise(function (r) { setTimeout(r, 0); });
       py.runPython(HARNESS);
       var res = py.globals.get('__run_user_code')(code, JSON.stringify(theme));
       var data = JSON.parse(res);
       outEl.textContent = data.out || '';
-      if (data.img) mountSvg(svgEl, data.img);
-      status(data.out || data.img ? '' : 'Ran (no output).');
+      var figs = data.figs || [];
+      if (figs.length) mountFigs(figsEl, figs, labels);
+      status(data.out || figs.length ? '' : 'Ran (no output).');
     } catch (e) {
       outEl.textContent = String(e && e.message ? e.message : e);
       status('Error.');
@@ -244,7 +392,11 @@
       run: zh ? '运行' : 'Run',
       reset: zh ? '重置' : 'Reset',
       output: zh ? 'Python 输出' : 'Python output',
-      figure: zh ? 'Python 图形输出' : 'Python figure output'
+      figure: zh ? 'Python 图形输出' : 'Python figure output',
+      animation: zh ? 'Python 动画输出' : 'Python animation output',
+      rendering: zh ? '正在运行并渲染动画帧...' : 'Running and rendering frames...',
+      frame: function (i, n) { return zh ? '第 ' + i + ' 帧 / 共 ' + n + ' 帧' : 'frame ' + i + ' of ' + n; },
+      lang: zh ? 'zh' : 'en'
     };
     var source = codeEl.textContent.replace(/\n$/, '');
     block.classList.add('live-ready');
@@ -271,7 +423,7 @@
     bar.appendChild(runBtn); bar.appendChild(resetBtn); bar.appendChild(status);
     var out = document.createElement('pre'); out.className = 'live-out';
     out.setAttribute('role', 'region'); out.setAttribute('aria-label', labels.output); out.setAttribute('aria-live', 'polite');
-    var svg = document.createElement('div'); svg.className = 'live-svg'; svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', labels.figure); svg.style.display = 'none';
+    var figs = document.createElement('div'); figs.className = 'live-figs'; figs.style.display = 'none';
 
     // Keep the highlight layer in sync with the textarea (content + scroll).
     function paint() { hlCode.innerHTML = highlightPy(ta.value); }
@@ -296,20 +448,20 @@
     });
 
     function setStatus(t) { status.textContent = t; }
-    runBtn.addEventListener('click', function () { run(wrap, ta.value, setStatus, out, svg); });
+    runBtn.addEventListener('click', function () { run(wrap, ta.value, setStatus, out, figs, labels); });
     resetBtn.addEventListener('click', function () {
       ta.value = source; paint(); syncScroll();
-      out.textContent = ''; clearSvg(svg); setStatus('');
+      out.textContent = ''; clearFigs(figs); setStatus('');
       wrap.classList.remove('ran');
     });
     ta.addEventListener('keydown', function (e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); run(wrap, ta.value, setStatus, out, svg); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); run(wrap, ta.value, setStatus, out, figs, labels); }
     });
 
     if (pre) pre.style.display = 'none';
     edit.appendChild(hl); edit.appendChild(ta);
     codeCol.appendChild(edit); codeCol.appendChild(bar);
-    resultCol.appendChild(out); resultCol.appendChild(svg);
+    resultCol.appendChild(out); resultCol.appendChild(figs);
     grid.appendChild(codeCol); grid.appendChild(resultCol);
     wrap.appendChild(grid);
     block.appendChild(wrap);
@@ -321,4 +473,4 @@
       if (!blocks[i].classList.contains('live-ready')) enhance(blocks[i]);
     }
   }
-export { init as mountRunnable };
+export { init as mountRunnable, HARNESS, FRAME_CAP, PAYLOAD_BUDGET };

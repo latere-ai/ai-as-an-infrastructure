@@ -40,7 +40,8 @@ test("the figure canvas is transparent (no baked-in background color)", () => {
 
 test("the result panel mounts generated SVG inline, not through an image data URI", () => {
   expect(rt).toContain("new DOMParser().parseFromString(markup, 'image/svg+xml')");
-  expect(rt).toContain("document.createElement('div'); svg.className = 'live-svg'");
+  expect(rt).toContain("document.createElement('div'); fig.className = 'live-svg'");
+  expect(rt).toContain("fig.appendChild(safeSvg(figs[i].data))");
   expect(rt).not.toContain("data:image/svg+xml;base64,");
   expect(rt).not.toContain("document.createElement('img')");
 });

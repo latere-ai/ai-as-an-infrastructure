@@ -4,8 +4,9 @@
 // The figure never animates itself. It declares a timeline (duration, rate,
 // keyframes, poster) and renders a pure function of the position; this
 // controller owns time. Under prefers-reduced-motion nothing plays: the play
-// button is not offered and the step buttons move between keyframes, so a
-// reader still reaches every named moment without motion. The scrubber works
+// button is not offered and the step buttons move between keyframes (or one
+// position at a time on a timeline without keyframes), so a reader still
+// reaches every named moment without motion. The scrubber works
 // in both modes, since dragging it is the reader's own motion.
 //
 // Keyboard: the scrubber takes arrow keys, Page Up/Down, Home, and End
@@ -25,6 +26,9 @@ export interface TransportOptions {
   // A timeline in physical time: position to its value and unit ("2.48 s").
   // The readout then says "t = 2.48 s"; without it, "step 3 of 12".
   time?: (t: number) => string;
+  // A readout that is neither a step nor a time, such as the frame counter
+  // of a runnable cell's animation ("frame 3 of 60"); it replaces both.
+  readout?: (t: number) => string;
   onSeek(t: number, cause: "play" | "user"): void;
 }
 
@@ -78,9 +82,12 @@ export class Transport {
       buttons.append(this.playBtn,
         btn(ICON.back, L.back, () => this.step(-1)),
         btn(ICON.fwd, L.fwd, () => this.step(1)));
-    } else {
+    } else if (o.keyframes.length) {
       buttons.append(btn(ICON.back, L.prevKey, () => this.jumpKey(-1)), btn(ICON.fwd, L.nextKey, () => this.jumpKey(1)));
       buttons.title = L.reduced;
+    } else {
+      // A timeline without named events steps one position at a time.
+      buttons.append(btn(ICON.back, L.back, () => this.step(-1)), btn(ICON.fwd, L.fwd, () => this.step(1)));
     }
     const track = document.createElement("div");
     track.className = "fig-scrub";
@@ -201,7 +208,9 @@ export class Transport {
     const t = this.shown();
     this.scrub.value = String(t);
     const time = this.o.time;
-    const posText = time
+    const posText = this.o.readout
+      ? this.o.readout(t)
+      : time
       ? L.time.replace("{t}", time(t))
       : L.pos.replace("{t}", String(Math.round(t))).replace("{d}", String(Math.round(this.o.duration)));
     this.pos.textContent = posText;
