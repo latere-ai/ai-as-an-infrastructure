@@ -104,7 +104,7 @@ function simulate(p: P): Run {
   const tStart = Math.max(ckptEnd, -dP / r);
   const t: number[] = [], load: number[] = [], grid: number[] = [];
   let L = P0, deficit = 0, charged = 0, soc = 0; // soc: energy owed back to storage, MW·min
-  let delivered = 0, reach: number | null = null, reboundMin = 0, reboundPeak = 0, lastActive = H;
+  let delivered = 0, reach: number | null = null, reboundMin = 0, reboundPeak = 0, lastActive = H, descending = false;
   const horizon = H + 600;
   for (let k = 0; ; k++) {
     const tt = t0 + k * DT;
@@ -112,20 +112,22 @@ function simulate(p: P): Run {
     // The level the site steers toward, then one ramp-limited step.
     let target = P0;
     if (tt >= tStart && tt < H) target = P0 - dP;
-    else if (tt >= H && spare > 0 && deficit > 0) {
+    else if (tt >= H && spare > 0 && deficit > 0 && !descending) {
       // Keep catching up while the remaining deficit exceeds what the ramp
-      // back down to P0 will repay.
+      // back down to P0 will repay; once the descent starts it continues.
       const over = Math.max(0, L - P0);
-      target = deficit > (over * over) / (2 * r) + 1e-9 ? P0 + spare : P0;
+      if (tt > H && deficit <= (over * over) / (2 * r) + 1e-9) descending = true;
+      else target = P0 + spare;
     }
     L += Math.max(-r * DT, Math.min(r * DT, target - L));
     if (Math.abs(L - target) < 1e-9) L = target;
     deficit += (P0 - L) * DT;
+    const reboundDone = tt >= H && L <= P0 + 1e-9 && (spare === 0 || deficit <= 1e-9 || descending);
     // Storage: discharge to the requested level in the window, recharge after
     // the rebound has ended.
     let s = 0;
     if (tt >= 0 && tt < H) s = Math.max(0, Math.min(Sb, L - (P0 - dP)));
-    else if (tt >= H && (deficit <= 1e-9 || spare === 0) && L <= P0 + 1e-9 && soc > 1e-9) s = -Math.min(Sb, soc / DT);
+    else if (reboundDone && soc > 1e-9) s = -Math.min(Sb, soc / DT);
     soc += s * DT;
     if (s > 0) charged += s * DT;
     const G = L - s;
@@ -138,7 +140,7 @@ function simulate(p: P): Run {
       if (G > P0 + 1e-6) { reboundMin += DT; reboundPeak = Math.max(reboundPeak, G - P0); }
       if (Math.abs(G - P0) > 1e-6 || Math.abs(L - P0) > 1e-6) lastActive = tt;
     }
-    if (tt >= H && Math.abs(L - P0) < 1e-9 && Math.abs(G - P0) < 1e-9 && (deficit <= 1e-9 || spare === 0) && soc <= 1e-9 && tt > lastActive + 20) break;
+    if (reboundDone && Math.abs(L - P0) < 1e-9 && Math.abs(G - P0) < 1e-9 && soc <= 1e-9 && tt > lastActive + 20) break;
   }
   const tEnd = Math.min(horizon, Math.max(H + 30, lastActive + 15));
   const run: Run = {
@@ -186,13 +188,32 @@ function render(st: State<P>, lang: Lang): string {
   parts.push(lg.svg);
 
   const left = narrow ? 40 : 46, right = narrow ? 6 : 12;
-  const top = lg.height + 30;
-  const plotH = narrow ? 200 : 240;
   const x = linear([m.t0, m.tEnd], [left, w - right]);
+  // Event markers are labeled above the plot; a label that would touch one
+  // already placed moves up a row. The y title holds the right end of row 0.
+  const rowStep = fs + 4;
+  const marks: Array<[number, string]> = [[-p.notice, L.notice], [0, L.start], [p.hold, L.end]];
+  const placed: Array<{ x0: number; x1: number; row: number; xx: number; name: string }> = [
+    { x0: w - right - textWidth(L.y, fs), x1: w - right, row: 0, xx: NaN, name: "" },
+  ];
+  for (const [tt, name] of marks) {
+    const xx = x(tt);
+    const tw = textWidth(name, fs);
+    const lx = Math.max(0, xx - tw / 2);
+    let row = 0;
+    while (row < 2 && placed.some((q) => q.row === row && lx < q.x1 + 6 && lx + tw > q.x0 - 6)) row++;
+    placed.push({ x0: lx, x1: lx + tw, row, xx, name });
+  }
+  const rows = Math.max(...placed.map((q) => q.row)) + 1;
+  const top = lg.height + 18 + rows * rowStep;
+  const plotH = narrow ? 200 : 240;
   const peak = Math.max(...m.grid, ...m.load);
   const y = linear([Math.max(0, p.base - p.cut - 60), Math.max(p.base + 60, peak + 20)], [top + plotH, top]);
   const bottom = top + plotH;
-  parts.push(axis({ scale: y, orient: "left", at: left, grid: [left, w - right], title: L.y, size: fs, format: (v) => int(v) }));
+  // The y title sits at the right end above the plot, clear of the event
+  // markers, which are near the start of the time axis.
+  parts.push(axis({ scale: y, orient: "left", at: left, grid: [left, w - right], size: fs, format: (v) => int(v) }));
+  parts.push(text(w - right, top - 8, L.y, { "font-size": fs, "text-anchor": "end", class: "fig-t-muted" }));
   parts.push(axis({ scale: x, orient: "bottom", at: bottom, ticks: x.ticks(narrow ? 4 : 8), title: L.x, size: fs, format: (v) => String(v).replace(/^-/, "−") }));
 
   const n = m.t.length;
@@ -227,18 +248,10 @@ function render(st: State<P>, lang: Lang): string {
 
   // Baseline, event markers, and the two lines.
   parts.push(el("line", { x1: left, x2: w - right, y1: y(p.base), y2: y(p.base), stroke: C.ink3, "stroke-width": 1, "stroke-dasharray": "5 3" }));
-  // Event markers, labeled inside the plot to the right of each line; a label
-  // that would touch the previous one drops a line.
-  const marks: Array<[number, string]> = [[-p.notice, L.notice], [0, L.start], [p.hold, L.end]];
-  const placed: Array<{ x0: number; x1: number; row: number }> = [];
-  for (const [tt, name] of marks) {
-    const xx = x(tt);
-    parts.push(el("line", { x1: xx, x2: xx, y1: top, y2: bottom, stroke: C.ink3, "stroke-width": 1 }));
-    const tw = textWidth(name, fs);
-    let row = 0;
-    while (placed.some((q) => q.row === row && xx + 4 < q.x1 + 4 && xx + 4 + tw > q.x0 - 4)) row++;
-    placed.push({ x0: xx + 4, x1: xx + 4 + tw, row });
-    parts.push(text(Math.min(xx + 4, w - right - tw), top + 14 + row * (fs + 4), name, { "font-size": fs, class: "fig-t-halo fig-t-soft" }));
+  for (const q of placed.slice(1)) {
+    const ly = top - 8 - q.row * rowStep;
+    parts.push(el("line", { x1: q.xx, x2: q.xx, y1: ly + 3, y2: bottom, stroke: C.ink3, "stroke-width": 1 }));
+    parts.push(text(q.x0, ly, q.name, { "font-size": fs, class: "fig-t-halo fig-t-soft" }));
   }
   if (p.storage > 0) parts.push(el("path", { d: linePath(all.map((i) => [x(m.t[i]), y(m.load[i])])), fill: "none", stroke: C.ink2, "stroke-width": 1.2, "stroke-dasharray": "4 3" }));
   parts.push(el("path", { d: linePath(all.map((i) => [x(m.t[i]), y(m.grid[i])])), fill: "none", stroke: C.ink, "stroke-width": 2, "stroke-linejoin": "round" }));
