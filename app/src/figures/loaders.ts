@@ -74,4 +74,8 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "package-cross-section": () => import("./package-cross-section.ts"),
   "review-backlog": () => import("./review-backlog.ts"),
   "verification-gap": () => import("./verification-gap.ts"),
+  "tokenizer-pipeline": () => import("./tokenizer-pipeline.ts"),
+  "bpe-merges": () => import("./bpe-merges.ts"),
+  "vocabulary-tradeoff": () => import("./vocabulary-tradeoff.ts"),
+  "token-premium": () => import("./token-premium.ts"),
 };
