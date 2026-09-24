@@ -95,64 +95,71 @@ Safetensors 是专为存储张量设计的文件格式，它改变了载荷的�
 
 分片会带来单个校验和无法暴露的失效方式。应确认分片索引点名的每个分片都存在，没有张量名称同时映射到两个分片，而且分片索引本身也在清单中。部分下载或续传文件必须留在隔离区，直到最终大小和文件摘要完全匹配。只有这时，下载器才能把文件原子地移入共享缓存。中断文件绝不能占用已验证数据块的路径。
 
-下面这个不依赖第三方库的例子实现准确清单检查。它单独构造可信清单，验证每个文件的大小与摘要，并拒绝任何意外文件。在生产中，可信清单必须来自经过认证的发布流程，或一份另行批准的摘要。根据刚下载到的内容重新计算出的清单，会与任何下载结果一致，包括被篡改的下载。
+严格的加载器和摘要回答的是不同的问题，下面的单元测量两者差得有多远。它按前面介绍的 safetensors 布局写出三个张量，再用一个解析器读回。这个解析器把不借助外部信息能做的检查都做了：头部长度、JSON、每个张量的数据类型、形状和字节范围，以及没有任何字节落在张量之外。文件的 SHA-256 摘要作为可信清单条目。随后，单元在文件的每个区域里每次随机翻转一个字节。解析器拒绝了每一个受损的长度字段和几乎每一个受损的头部，却接受了每一个受损的张量字节，因为任何位模式都是合法的浮点数；只有摘要能拒绝全部篡改。这个摘要必须来自经过认证的发布流程，或一份另行批准的记录。根据刚下载到的内容重新计算出的清单，会与任何下载结果一致，包括被篡改的下载。在 `tensors` 里增加一个张量或放大某个形状：头部增长得慢，数据增长得快，所以格式检查能保护的那部分文件，占比随模型增大而缩小。
 
 :::: {.runnable}
 ```python
+import json, struct
 from hashlib import sha256
+import numpy as np
+import matplotlib.pyplot as plt
 
-trusted_files = {
-    "config.json": b'{"model_type":"demo"}\n',
-    "model.safetensors": b"tensor-bytes-v1",
-    "tokenizer.json": b'{"version":"1.0"}\n',
-}
+def save(tensors):  # safetensors 布局：8 字节小端序的头部长度、JSON 头部、原始字节
+    header, blobs, off = {}, [], 0
+    for name, a in tensors.items():
+        b = a.astype("<f4").tobytes()
+        header[name] = {"dtype": "F32", "shape": list(a.shape), "data_offsets": [off, off + len(b)]}
+        blobs.append(b); off += len(b)
+    h = json.dumps(header).encode()
+    return struct.pack("<Q", len(h)) + h + b"".join(blobs)
 
-manifest = {
-    path: {"size": len(blob), "sha256": sha256(blob).hexdigest()}
-    for path, blob in trusted_files.items()
-}
+def load(buf):  # 严格的加载器：不借助可信摘要时，解析器能做的检查都做
+    n = struct.unpack("<Q", buf[:8])[0]
+    if n > len(buf) - 8:
+        raise ValueError("头部长度超出文件末尾")
+    header, data, out, end = json.loads(buf[8:8 + n]), buf[8 + n:], {}, 0
+    for name, d in sorted(header.items(), key=lambda kv: kv[1]["data_offsets"][0]):
+        a, b = d["data_offsets"]
+        if d["dtype"] != "F32" or a != end or b - a != 4 * int(np.prod(d["shape"])):
+            raise ValueError(f"{name} 的描述符无效")
+        out[name], end = np.frombuffer(data[a:b], "<f4").reshape(d["shape"]), b
+    if end != len(data):
+        raise ValueError("存在不属于任何张量的字节")
+    return out
 
-def verify(label, files):
-    expected = set(manifest)
-    actual = set(files)
+rng = np.random.default_rng(0)
+tensors = {"embed": rng.normal(size=(64, 16)), "proj": rng.normal(size=(16, 16)), "bias": rng.normal(size=16)}
+blob = save(tensors)
+digest = sha256(blob).hexdigest()  # 可信清单条目，在发布时记录
+clean = load(blob)
+assert all(np.array_equal(clean[k], tensors[k].astype("<f4")) for k in tensors)  # 往返读写逐位一致
+n = struct.unpack("<Q", blob[:8])[0]
+regions = {"长度字段": (0, 8), "JSON 头部": (8, 8 + n), "张量字节": (8 + n, len(blob))}
+counts = {}
+for region, (lo, hi) in regions.items():
+    c = np.zeros(3)  # 被解析器拒绝、被接受但张量已变、被接受且张量不变
+    for _ in range(600):
+        bad = bytearray(blob); i = rng.integers(lo, hi); bad[i] ^= rng.integers(1, 256)  # 翻转一个字节
+        assert sha256(bad).hexdigest() != digest  # 摘要拒绝每一次篡改
+        try:
+            got = load(bytes(bad))
+        except Exception:
+            c[0] += 1; continue
+        same = got.keys() == clean.keys() and all(np.array_equal(got[k], clean[k]) for k in clean)
+        c[2 if same else 1] += 1
+    counts[f"{region} ({hi - lo} B)"] = c / c.sum()
+assert counts[list(counts)[2]][1] > 0.99  # 解析器几乎接受每一个受损的张量字节
 
-    unexpected = sorted(actual - expected)
-    if unexpected:
-        return f"{label}: rejected (unexpected file: {unexpected[0]})"
-
-    missing = sorted(expected - actual)
-    if missing:
-        return f"{label}: rejected (missing file: {missing[0]})"
-
-    for path in sorted(expected):
-        blob = files[path]
-        descriptor = manifest[path]
-        if len(blob) != descriptor["size"]:
-            return f"{label}: rejected (size mismatch: {path})"
-        if sha256(blob).hexdigest() != descriptor["sha256"]:
-            return f"{label}: rejected (digest mismatch: {path})"
-
-    return f"{label}: verified ({len(files)} files)"
-
-tampered = dict(trusted_files)
-tampered["tokenizer.json"] = b'{"version":"1.1"}\n'
-
-extra = dict(trusted_files)
-extra["modeling_custom.py"] = b"raise RuntimeError('unexpected code')\n"
-
-print(verify("release-a", trusted_files))
-print(verify("release-a-tampered", tampered))
-print(verify("release-a-extra", extra))
+fig, ax = plt.subplots(figsize=(6.4, 2.8))
+left = np.zeros(len(counts))
+for j, (name, c) in enumerate([("解析器拒绝", "#5b8def"), ("解析器接受，张量已变", "#ff7a66"), ("解析器接受，张量不变", "0.6")]):
+    v = np.array([counts[k][j] for k in counts])
+    ax.barh(list(counts), v, left=left, color=c, label=name); left += v
+ax.invert_yaxis(); ax.set_xlim(0, 1); ax.set_xlabel("单字节篡改中的占比")
+ax.set_title("每次篡改都通不过 SHA-256 摘要；\n只靠解析器，会漏掉受损的张量字节", fontsize=10)
+ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.3), ncol=2); plt.show()
 ```
 ::::
-
-预期输出：
-
-```text
-release-a: verified (3 files)
-release-a-tampered: rejected (digest mismatch: tokenizer.json)
-release-a-extra: rejected (unexpected file: modeling_custom.py)
-```
 
 ## 每次转换都会产生派生制品
 
