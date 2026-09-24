@@ -275,11 +275,11 @@ function describe(st: State<P>, lang: Lang): string {
   const m = ledger(p);
   const v = verdict(p);
   const sens = sensitivity(p).filter((r) => r.crosses).map((r) => L[`d_${r.key}` as keyof L]);
-  const join = lang === "zh" ? "、" : ", ";
+  const list = (xs: string[]) => (lang === "zh" || xs.length < 2 ? xs.join("、") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
   return tpl(L.describe, {
     nb: money(m.nb), r: money(m.rev), c: money(m.costDelta), lab: money(m.labor), idle: money(m.idle), m: money(m.model), rep: money(m.repair),
     f: money(m.fixed), l: money(m.loss), lo: money(v.lo), hi: money(v.hi), v: L[`v${v.v}` as keyof L],
-    sens: sens.length ? tpl(L.sensSome, { s: p.spread, keys: sens.join(join) }) : tpl(L.sensNone, { s: p.spread }),
+    sens: sens.length ? tpl(L.sensSome, { s: p.spread, keys: list(sens) }) : tpl(L.sensNone, { s: p.spread }),
   });
 }
 
