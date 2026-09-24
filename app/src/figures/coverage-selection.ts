@@ -35,6 +35,7 @@ import { logitScale } from "./lib/logit-scale.ts";
 import { axis, axisHeight } from "./lib/axis.ts";
 import { legend, type LegendItem } from "./lib/legend.ts";
 import { placeLabels, drawLabels, lineObstacles, textBox, textWidth, overlaps, wrap, type Box } from "./lib/labels.ts";
+import { wrapCjk } from "./lib/kinsoku.ts";
 import { fixed, int, pct, sig, tpl } from "./lib/format.ts";
 import { binomPmf, normalPdf, normalTail, logitNormalQuantiles } from "./lib/stats.ts";
 
@@ -434,9 +435,12 @@ function render(st: State<P>, lang: Lang): string {
           return tpl(L.noteVoteOne, { v: sig(c.plateau, 2), rel, cmp, d: sig(p.share, 2) });
         })())
       : tpl(p.fp > 0 ? L.noteVer : L.noteVerZero, { k: int(c.best.k), a: f3(c.best.a), e, b: sig(p.fp, 2) });
-  for (const ln of wrap(covLine, fs, w)) { rp.push(text(0, yy, ln, { "font-size": fs, class: "fig-t-num" })); yy += 17; }
+  // Chinese lines keep closing punctuation off the line start; the helper may
+  // move one mark back past the width, so it wraps one glyph narrower.
+  const wrapRead = (s: string) => (lang === "zh" ? wrapCjk(s, fs, w - fs) : wrap(s, fs, w));
+  for (const ln of wrapRead(covLine)) { rp.push(text(0, yy, ln, { "font-size": fs, class: "fig-t-num" })); yy += 17; }
   yy += 2;
-  for (const ln of wrap(note, fs, w)) { rp.push(text(0, yy, ln, { "font-size": fs, class: "fig-t-muted" })); yy += 17; }
+  for (const ln of wrapRead(note)) { rp.push(text(0, yy, ln, { "font-size": fs, class: "fig-t-muted" })); yy += 17; }
   parts.push(g({ class: "fig-readout" }, ...rp));
   return svg(w, yy, describe(st, lang), ...parts);
 }
