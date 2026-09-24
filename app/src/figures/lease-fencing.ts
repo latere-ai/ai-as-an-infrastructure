@@ -371,7 +371,7 @@ function render(st: State<P>, lang: Lang): string {
   }
 
   // Cursor, behind the write arrows.
-  parts.push(el("line", { x1: x(t), x2: x(t), y1: 16, y2: plotBottom + 4, stroke: C.ink3, "stroke-width": 1 }));
+  parts.push(el("line", { x1: x(t), x2: x(t), y1: top - 4, y2: plotBottom + 4, stroke: C.ink3, "stroke-width": 1 }));
   parts.push(text(clx, 12, cl, { "font-size": TYPE.body, "text-anchor": "middle", class: "fig-t-strong fig-t-num" }));
   parts.push(...over);
 
