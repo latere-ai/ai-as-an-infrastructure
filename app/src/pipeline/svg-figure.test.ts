@@ -23,23 +23,23 @@ test("local SVG figures render inline instead of as img replacements", () => {
   const src = [
     "# Scaling Laws",
     "",
-    "![Schematic illustration of power-law extrapolation.](/figures/scaling-laws-1.svg){#fig-scaling-laws-1}",
+    "![Schematic large-batch tradeoff.](/figures/scaling-laws-2.svg){#fig-scaling-laws-2}",
     "",
   ].join("\n");
   const xref: RenderContext["xref"] = new Map([
-    ["fig-scaling-laws-1", { kind: "fig", label: "Figure 1.1", href: "foundations/scaling-laws.html#fig-scaling-laws-1" }],
+    ["fig-scaling-laws-2", { kind: "fig", label: "Figure 1.2", href: "foundations/scaling-laws.html#fig-scaling-laws-2" }],
   ]);
   const { html } = renderMarkdown(src, ctx(xref));
 
-  expect(html).toContain('<figure class="rdr-figure" id="fig-scaling-laws-1"><svg');
+  expect(html).toContain('<figure class="rdr-figure" id="fig-scaling-laws-2"><svg');
   expect(html).toContain('class="rdr-inline-svg"');
   expect(html).toContain('role="img"');
-  expect(html).toContain('aria-label="Schematic illustration of power-law extrapolation."');
-  expect(html).toContain('id="fig-scaling-laws-1-figure_1"');
-  expect(html).toContain('xlink:href="#fig-scaling-laws-1-');
-  expect(html).toContain('clip-path="url(#fig-scaling-laws-1-');
-  expect(html).toContain('<figcaption><span class="rdr-fig-num">Figure 1.1.</span> Schematic illustration of power-law extrapolation.</figcaption>');
-  expect(html).not.toContain('<img src="../figures/scaling-laws-1.svg"');
+  expect(html).toContain('aria-label="Schematic large-batch tradeoff."');
+  expect(html).toContain('id="fig-scaling-laws-2-figure_1"');
+  expect(html).toContain('xlink:href="#fig-scaling-laws-2-');
+  expect(html).toContain('clip-path="url(#fig-scaling-laws-2-');
+  expect(html).toContain('<figcaption><span class="rdr-fig-num">Figure 1.2.</span> Schematic large-batch tradeoff.</figcaption>');
+  expect(html).not.toContain('<img src="../figures/scaling-laws-2.svg"');
 });
 
 test("inline SVG figure text is selectable in the reader CSS", () => {

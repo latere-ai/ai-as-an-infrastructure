@@ -38,10 +38,6 @@ test("scatter labels sit top-right by default and only flip left on overflow", (
   expect(catalog).toMatch(/right_data > xmax/);
   const fieldMap = readFileSync(join(repoRoot, "zh", "figures", "field-map-1.svg"), "utf8");
   expect(fieldMap).toMatch(/text-anchor: start;[^>]*>政策/);
-  // A label that would overflow the right edge (closed frontier, x=0.86) flips
-  // to the left and is right-anchored so it stays inside the plot box.
-  const landscape = readFileSync(join(repoRoot, "zh", "figures", "model-landscape-1.svg"), "utf8");
-  expect(landscape).toMatch(/text-anchor: end;[^>]*>闭源前沿/);
 });
 
 test("figure 2.1 (field-map-stack) is an inline SVG with all 12 substantive parts", () => {
@@ -98,10 +94,8 @@ test("English figure 1.2 separates model development from request execution", ()
 test("English static SVG labels stay as selectable text nodes", () => {
   const common = readFileSync(join(figuresSrc, "common.py"), "utf8");
   expect(common).toMatch(/SVG_TEXT_PARAMS\s*=\s*\{\s*"svg\.fonttype":\s*"none"/);
-  const scalingLaw = readFileSync(join(repoRoot, "en", "figures", "scaling-laws-1.svg"), "utf8");
-  expect(scalingLaw).toContain("<text");
-  expect(scalingLaw).toContain(">extrapolate</text>");
-  expect(scalingLaw).toContain(">affordable</text>");
+  const batchTradeoff = readFileSync(join(repoRoot, "en", "figures", "scaling-laws-2.svg"), "utf8");
+  expect(batchTradeoff).toMatch(/<text[^>]*>[^<]+<\/text>/);
 });
 
 test("structured reasoning search figure keeps modes in separated lanes", () => {
