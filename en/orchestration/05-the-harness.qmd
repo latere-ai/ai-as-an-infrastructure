@@ -133,6 +133,15 @@ checkpoint. A rollout policy then routes *new* runs to a canary or stable
 definition and states whether existing runs remain pinned, migrate at a safe
 boundary, or stop.
 
+Without per-run resolution, the prompt and model binding are deploy-time constants
+shared by every session, and a regression reaches every session until the rollback
+completes. OpenAI's sycophantic GPT-4o update shows the timescale: it rolled out on
+April 25, 2025, rollback began on April 28, and the full revert took about 24 hours
+[@openai2025sycophancyexpanded]. A definition resolved per run confines a regression
+to the canary slice while pinned runs keep the stable version. The price is a
+resolution step on every run, a consistency requirement across replicas, and one more
+version to read in every incident.
+
 Provider protocols differ in features and semantics. A compatibility adapter
 should publish a feature matrix for tool calls, structured output, streaming,
 cancellation, usage data, continuation identifiers, and error semantics. When a
@@ -140,6 +149,25 @@ feature cannot be represented, fail explicitly or declare the downgrade. Do
 not silently interpret “request accepted” as feature parity. Pin adapter and
 provider versions alongside the agent definition so an evaluation or incident
 can reproduce the actual path.
+
+A coding harness is usually built against one provider's dialect, so pairing it
+with another provider's model goes through a translation gateway. The gateway maps
+each request through an intermediate representation, and because the dialects are
+not isomorphic the mapping can drop fields such as reasoning settings, cache
+directives, or tool options. A gateway that reports each dropped field to the caller
+lets the loss be tested; one that forwards what it can and discards the rest changes
+behavior silently.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Claude Code speaks the Anthropic Messages API, and a gateway in front of it must
+expose Messages, Bedrock InvokeModel, or Vertex rawPredict and forward the
+`anthropic-version` and `anthropic-beta` headers [@anthropic2026gatewayprotocol].
+Codex supports only the Responses wire protocol for a model provider
+[@openai2026codexconfig]. Open-weight serving engines expose OpenAI-compatible
+endpoints, and vLLM also serves the Anthropic Messages API [@vllm2026repo].
+:::
 
 ## Control verbs have different meanings
 
@@ -187,8 +215,8 @@ Workers consume commands from a queue, claim them with a bounded lease, and
 write results against a stable step ID and attempt number. A lease limits
 concurrent ownership; it does not prove the previous owner stopped. For a
 correctness-critical resource, attach a monotonically increasing fencing token
-and require every write path to reject stale tokens. Without receiver-side
-validation, the token is only metadata.
+and require every write path to reject stale tokens [@kleppmann2016distributed].
+Without receiver-side validation, the token is only metadata.
 
 ```{figure}
 //| figure: lease-fencing
@@ -202,6 +230,13 @@ Duplicate delivery and execution are still possible. Kubernetes documents that
 even a single-completion Job may start the same program twice
 [@kubernetes2026jobs]. A scheduler lease prevents overlap while it remains
 valid, and duplicate effects still have to be handled at the receiver.
+
+Whether an occurrence continues one persistent session or starts a fresh one is a
+separate choice. A persistent session lets a monitoring agent compare against last
+week's baseline, but its history grows without bound and makes context projection
+mandatory. A fresh session per occurrence is correct when occurrences are
+independent. A persistent session for a stateless job stores history nothing reads,
+and a fresh session for a job that needs history discards it every time.
 
 Effect safety depends on the receiver:
 
@@ -223,7 +258,20 @@ touched by another run. Use resource-level concurrency through conditional
 writes, database constraints, protected branches, merge queues, or a lock keyed
 to the actual resource. A Git worktree separates local files; pushes from
 different worktrees to the same remote still need one of these resource-level
-controls.
+controls. Such collisions are routine: a dataset of more than 142,000 pull requests
+opened by five coding agents reports a merge-conflict rate of 27.67 percent
+[@ogenrwot2026agenticflict].
+
+Database locks carry a pooling hazard. A PostgreSQL session-level advisory lock is
+held by the server connection until it is released or the connection closes, and a
+session that already holds it acquires it again immediately
+[@postgresql2026advisory]. PgBouncer's transaction pooling hands a server connection
+to a different client after each transaction and does not support session-level
+advisory locks [@pgbouncer2026features]: a `pg_advisory_lock` taken through it stays
+on a pooled connection, the unlock may run on another, and a later client handed the
+same connection acquires the lock as if it were free. A transaction-scoped
+`pg_advisory_xact_lock`, or a dedicated session-pooled connection, keeps the lock
+with the work that holds it.
 
 ## A tool is a typed, authorized effect boundary
 
@@ -274,6 +322,28 @@ per-turn exposure, but each adds a failure mode: missing the required tool,
 surfacing a dangerous irrelevant tool, or spending additional calls on
 discovery.
 
+The three mechanisms differ in who selects. Tool retrieval indexes names,
+descriptions, and argument descriptions and loads the best matches for each turn.
+Namespacing exposes a subset per phase, such as read-only tools while diagnosing
+and write tools while fixing, which requires the harness to track the phase.
+Model-driven discovery gives the model a search tool and lets it ask, so discovery
+quality depends on the model. Tool definitions also sit near the start of the
+prompt, where a provider's prompt cache keys on the exact prefix; a scheme that
+rewrites the tool list each turn invalidates the cache from that point on, while one
+that appends discovered definitions later in the conversation keeps the cached
+prefix intact.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Anthropic's API provides a tool search tool. Definitions marked `defer_loading` stay
+out of the context; the model searches names, descriptions, and argument
+descriptions by regular expression or BM25, and matching tools are expanded inline
+without changing the cached prompt prefix. A request can defer up to 10,000 tools,
+and the documentation reports that the model's tool selection degrades once more
+than 30 to 50 tools are loaded [@anthropic2026toolsearch].
+:::
+
 ## Stateful tools: separate three kinds of state
 
 “Stateful tool” hides three different responsibilities:
@@ -287,11 +357,26 @@ discovery.
 
 Recovery should reconnect, rediscover capabilities, and resume from a cursor or
 explicit handle when the protocol supports it. Otherwise it starts a new
-connection without pretending that durable resource state vanished. Protocols
-can change these mechanics; MCP, for example, has revised transports and
-authorization across dated specification versions [@mcp2025transports;
-@mcp2025changelog]. Pin the version and design to its declared guarantees,
-without assuming that every connection is a durable session.
+connection without pretending that durable resource state vanished.
+
+Connection state is also what limits horizontal scaling. Holding connections in
+memory per replica, keyed by `(session_id, server_url)`, works on one replica. When
+a replica holding $N$ sessions, each connected to $M$ servers, fails, recovery opens
+$N \times M$ connections at once against the surviving replicas, each renegotiating
+capabilities and losing its cursor. The mitigations follow from that mechanism:
+session affinity keeps a connection on one replica, reconnect backoff with jitter
+spreads the reconnections over time, and resumable streams make each reconnection
+cheap. MCP's transports moved along the same path. Streamable HTTP replaced the
+earlier HTTP with Server-Sent Events transport and lets a client resume a stream
+from its last event ID within an `Mcp-Session-Id` session [@mcp2025transports]. The
+transport working group then set out to remove protocol-level sessions
+[@mcp2025transport], and the 2026-07-28 specification drops the initialization
+handshake and the protocol session, so any request can reach any replica and state
+that spans calls travels as an explicit handle the model passes back as an ordinary
+argument [@mcp2026rc; @mcp2026release]. Authorization changed across the same
+dated versions [@mcp2025changelog], so a harness pins the protocol version and
+designs to its declared guarantees, without assuming that every connection is a
+durable session.
 
 ## Context is a projection of history
 
@@ -342,6 +427,15 @@ user-space kernel, or microVM, plus non-root execution, restricted mounts,
 dropped privileges, system-call policy, and default-deny egress
 [@nist2017containers].
 
+For correctness between cooperating agents, the worktree is the stronger of the
+cheap options. In a study of asynchronous multi-agent software engineering, agents
+in separate worktrees scored 59.1 percent on Commit0-Lite, against 56.1 percent for
+agents instructed to edit only their own files in one shared workspace and 53.1
+percent for a single agent. On PaperBench the instruction-only arrangement scored
+55.5 percent, below the single agent's 57.2 percent, while worktrees reached 63.3
+percent [@geng2026asynchronous]. An instruction to stay out of another agent's
+files holds only while the model complies; a separate worktree holds regardless.
+
 Do not mount long-lived secrets. A broker can issue short-lived, narrowly
 scoped, audience- and resource-bound credentials after validating the exact
 action. The broker must also redact logs and support rotation and revocation.
@@ -357,7 +451,64 @@ or tool call, reserve its worst allowed consumption; after completion,
 reconcile the actual usage and release the remainder. Reject work that cannot
 be reserved. Enforce independent ceilings for wall-clock and idle time, model
 calls, input and output tokens, money, tool calls, external mutations, bytes,
-child runs, concurrent operations, and sandbox resources.
+child runs, concurrent operations, and sandbox resources. The wall-clock ceiling
+holds even when token accounting lags, because the harness measures elapsed time
+itself; one user report describes a Claude Code session whose plan-and-execute loop
+and recursive hooks consumed about 1.67 billion tokens in five hours
+[@claudecode2025tokens].
+
+The order of checking and charging decides whether a ceiling holds under
+concurrency. The cell below runs the same workload under two ledgers. One checks
+that the run is under budget, launches up to $c$ calls, and charges each call when
+it returns; the other reserves each call's declared worst cost before launch and
+releases the unused part on completion. The first overshoots by up to $c$ times the
+worst call, because every call in flight passed the check before any of them was
+charged; the cell asserts that bound and asserts that the reserving ledger never
+exceeds the ceiling and stops less than one worst-case call short of it. Raise
+`worst` to see the price of reservation: a looser declared maximum leaves more
+budget unused at the end.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(1)
+B, worst, trials = 1000.0, 8.0, 2000  # budget ceiling, declared worst cost of one call, runs per point
+widths = np.array([1, 2, 4, 8, 16, 32])  # calls the harness lets run concurrently
+
+def final_spend(c, reserve):
+    """Spend at the end of each run; calls launch in waves of up to c and are charged on completion."""
+    spent, open_ = np.zeros(trials), np.ones(trials, bool)
+    while open_.any():
+        if reserve:  # admit a call only if its worst case still fits under the ceiling
+            n = np.minimum(c, np.floor((B - spent) / worst))
+        else:        # check the ledger, charge after the call returns
+            n = np.where(spent < B, c, 0)
+        n = np.where(open_, n, 0)
+        cost = rng.uniform(1, worst, (trials, c)) * (np.arange(c) < n[:, None])
+        spent += cost.sum(axis=1)
+        open_ = n > 0
+    return spent
+
+check = [final_spend(c, reserve=False) for c in widths]
+held = [final_spend(c, reserve=True) for c in widths]
+assert all((s <= B).all() and (B - s < worst).all() for s in held)
+assert all((s - B < c * worst).all() for s, c in zip(check, widths))
+
+fig, ax = plt.subplots(figsize=(6.4, 3.8))
+ax.plot(widths, [s.max() / B for s in check], "o-", color="#c0392b", label="check, then charge: worst run")
+ax.plot(widths, [s.mean() / B for s in check], "o--", color="#c0392b", alpha=0.5, label="check, then charge: mean")
+ax.plot(widths, (B + widths * worst) / B, ":", color="0.3", label="bound: ceiling + c × worst call")
+ax.plot(widths, [s.max() / B for s in held], "s-", color="#2471a3", label="reserve worst case: worst run")
+ax.axhline(1, color="0.6", lw=1)
+ax.set_xscale("log", base=2); ax.set_xticks(widths, [str(w) for w in widths])
+ax.set_xlabel("concurrent calls c"); ax.set_ylabel("final spend / budget ceiling")
+ax.set_title("Charging after the call overshoots; reserving stays under the ceiling")
+ax.legend(fontsize=8, frameon=False)
+plt.show()
+```
+::::
 
 A child receives a sub-budget carved from its parent's remaining budget. Parent
 and child reservations therefore remain under the same monotone ceiling. Store
@@ -423,7 +574,11 @@ harness fixed or let each provider use its own adapter.
 ## Lower-layer constraint arrow
 Scores attributed to an agent are joint properties of the model, harness,
 tools, and environment. Benchmark infrastructure can leak answers or expose a
-grader that an agent learns to exploit [@rdi2025trustworthy]. Therefore
+grader that an agent learns to exploit: an audit of ten agent benchmarks found 219
+flaws and built exploits that reach near-perfect scores on most of them without
+solving the intended tasks [@rdi2025trustworthy]. A held-out answer key protects
+against memorized answers and does nothing against an agent that reads the grader.
+Therefore
 @sec-benchmarks and @sec-evaluating-agents must report and hold the harness
 version fixed when comparing models. A provider configuration file is useful,
 but the effective serialized request and observed response are the stronger
@@ -435,7 +590,16 @@ fields.
 ## What remains contested
 Two questions remain open. First, no context-projection strategy reliably knows
 which detail a future step will need; compaction, masking, retrieval, and larger
-windows trade different errors. Second, a portable harness can normalize common
+windows trade different errors. On SWE-bench Verified, masking old observations
+matched LLM summarization's solve rate at the lowest cost in four of five
+configurations, and summarization lengthened trajectories by 13 to 15 percent: the
+summaries appear to hide the failure signals that would tell an agent to stop
+[@lindenbauer2025complexity]. Learned compression guidelines report lower peak token
+use with higher task success on long-horizon benchmarks [@acon2025context], while
+longer windows degrade with input length even when retrieval is perfect
+[@du2025context; @hong2025contextrot]. The runtime can trigger compaction and reload
+an externalized plan at the right moment; whether the summary keeps what the next
+step needs depends on the model that writes and reads it. Second, a portable harness can normalize common
 operations but cannot manufacture provider capabilities or identical error and
 cancellation semantics. Both are product choices that a generic “agent” API
 should state explicitly, and both should be measured.
