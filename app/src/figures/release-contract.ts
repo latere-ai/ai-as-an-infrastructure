@@ -86,7 +86,7 @@ const PAIRS: Pair[] = [
       name: "GPT-5.6 Sol", v: { en: "GPT-5.6 Sol", zh: "GPT-5.6 Sol" }, t: SEP,
       source: { en: "OpenAI API changelog (2026)", zh: "OpenAI API 更新日志（2026）" },
       f: {
-        A: { kind: "hosted-tier", en: "Hosted; Daybreak Blue opens it to approved defenders for defensive security work", zh: "托管服务；Daybreak Blue 向获批的防御方开放，用于防御性安全工作" },
+        A: { kind: "hosted-tier", en: "Hosted; Daybreak Blue is a separately approved tier for defensive security work", zh: "托管服务；Daybreak Blue 是面向防御性安全工作、需单独审批的层级" },
         X: { kind: "none", en: "No weights; hosted products only", zh: "不提供权重，只能通过托管产品使用" },
         P: null,
         O: { kind: "provider", en: "OpenAI operates it", zh: "由 OpenAI 运营" },

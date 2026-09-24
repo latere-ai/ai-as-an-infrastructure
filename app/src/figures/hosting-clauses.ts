@@ -124,6 +124,7 @@ const labels = {
     readout: "{biz} at {v}: {a} of 8 licenses require a separate license, agreement, or authorization{names}; {r} a security review; {n} only a notice; {u} not settled by the record.",
     describe: "{biz} at {v}: {a} of the 8 recorded licenses require a separate license, agreement, or authorization{names}, {r} a security review, {n} only a notice, and {u} are not settled by the record.",
     internal: "Internal use", hosted: "A hosted API", assistant: "An AI work-assistant product",
+    source: "Source: each release's license or model card, as cited in the chapter's September 2026 note.",
   },
   zh: {
     title: "按被许可方收入排列的托管条款",
@@ -142,6 +143,7 @@ const labels = {
     readout: "{biz}，收入 {v}：8 份许可证中有 {a} 份要求另行取得许可、另签协议或书面授权{names}；{r} 份要求安全审查；{n} 份只须标注声明；{u} 份记录未说明。",
     describe: "{biz}，收入 {v}：在已记录的 8 份许可证中，{a} 份要求另行取得许可、另签协议或书面授权{names}，{r} 份要求安全审查，{n} 份只须标注声明，{u} 份记录未说明。",
     internal: "内部使用", hosted: "提供托管 API", assistant: "提供 AI 办公助手产品",
+    source: "来源：各发布的许可证或模型卡，见本章截至 2026 年 9 月的注释所引文献。",
   },
 };
 type L = typeof labels.en;
@@ -288,7 +290,10 @@ function render(st: State<P>, lang: Lang): string {
   let y = ay + axisHeight(true) + 16;
   const ro = wrapLines(tpl(L.readout, { biz: L[p.business], v: usd(t.v, lang), a: t.a.length, names: names(t.a, lang), r: t.r.length, n: t.n.length, u: t.u.length }), TYPE.body, w);
   ro.forEach((ln, i) => parts.push(text(0, y + i * 15, ln, { "font-size": TYPE.body })));
-  y += (ro.length - 1) * 15 + 6;
+  y += ro.length * 15 + 4;
+  const src = wrapLines(L.source, TYPE.small, w);
+  src.forEach((ln, i) => parts.push(text(0, y + i * 15, ln, { "font-size": TYPE.small, class: "fig-t-muted" })));
+  y += (src.length - 1) * 15 + 6;
   return svg(w, y + 4, describe(st, lang), g({ class: "fig-clauses" }, ...parts));
 }
 
