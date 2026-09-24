@@ -210,7 +210,7 @@ function sampleOf(masked: string | null, lang: Lang): string | null {
 // their narrowest layout, scaled until its smallest text is 11 px, is wider
 // than the column. The list is exact: a figure that newly exceeds the column,
 // and a listed figure that now fits, both fail until the list is updated.
-const knownWideFigures = [
+const knownWideFigures: string[] = [
 ];
 
 // Hard-wrapped hyphenated compounds already in the sources, as
