@@ -14,11 +14,11 @@
 // byte and the whole cache cross memory once per generated token, which is
 // the bandwidth bound, not a prediction.
 //
-// Defaults are the planning values of the chapter's runnable cell: 3e9
+// Defaults are illustrative planning values for a small on-device model: 3e9
 // parameters at 4 bits, L = 28, n_kv = 8, d_h = 128, S = 4,096, an 8-bit
 // cache, and 1.1 GB for the rest. The memory budget and effective bandwidth
 // are the reader's measured values for a device tier; their defaults are
-// illustrative. GB here is 1e9 bytes, as in the runnable.
+// illustrative. GB here is 1e9 bytes.
 
 import { defineFigure, type Lang, type State } from "./types.ts";
 import { svg, el, text, g, linePath, hatch } from "./lib/svg.ts";
