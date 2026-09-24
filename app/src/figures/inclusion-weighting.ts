@@ -114,7 +114,7 @@ const labels = {
     eqHt: "μ̂_HT = (1/N)(k_low/π_low + k_high/π_high) = ({kL}/{pL} + {kH}/{pH}) / {N} = {v}",
     eqRatio: "ratio = ({kL}/{pL} + {kH}/{pH}) / ({nL}/{pL} + {nH}/{pH}) = {v}",
     drawNote: "draw {k}: {nL} of {NL} events below τ and {nH} of {NH} at or above τ are labeled",
-    describe: "With τ = {t}, π = {pl} below τ and {ph} above, the raw pass rate of the labeled sample averages {nv} over {d} draws, the Horvitz-Thompson estimate {ht}, and the ratio form {rt}, against a population pass rate of {mu}.",
+    describe: "With τ = {t}, π = {pl} below τ and {ph} above, the raw pass rate of the labeled sample averages {nv} over {d} draws, the Horvitz-Thompson estimate {ht}, and the ratio form {rt}, against a population pass rate of {mu}. Draw {k} gives {cn}, {ch}, and {cr}.",
   },
   zh: {
     title: "纳入概率与通过率估计",
@@ -141,7 +141,7 @@ const labels = {
     eqHt: "μ̂_HT = (1/N)(k_low/π_low + k_high/π_high) = ({kL}/{pL} + {kH}/{pH}) / {N} = {v}",
     eqRatio: "比值形式 = ({kL}/{pL} + {kH}/{pH}) / ({nL}/{pL} + {nH}/{pH}) = {v}",
     drawNote: "第 {k} 次抽样：低于 τ 的 {NL} 个事件中标注了 {nL} 个，不低于 τ 的 {NH} 个事件中标注了 {nH} 个",
-    describe: "τ = {t}，低于 τ 时 π = {pl}，不低于 τ 时 π = {ph}：{d} 次抽样中，已标注样本的原始通过率平均为 {nv}，Horvitz-Thompson 估计平均为 {ht}，比值形式平均为 {rt}，总体通过率为 {mu}。",
+    describe: "τ = {t}，低于 τ 时 π = {pl}，不低于 τ 时 π = {ph}：{d} 次抽样中，已标注样本的原始通过率平均为 {nv}，Horvitz-Thompson 估计平均为 {ht}，比值形式平均为 {rt}，总体通过率为 {mu}。第 {k} 次抽样分别为 {cn}、{ch} 和 {cr}。",
   },
 };
 
@@ -159,10 +159,13 @@ function describe(st: State<P>, lang: Lang): string {
   const L = labels[lang];
   const p = st.p;
   const r = simulate(p);
-  const ok = (k: keyof Draw) => r.draws.map((d) => d[k]).filter(Number.isFinite);
+  const ok = (k: keyof Draw) => r.draws.map((q) => q[k]).filter(Number.isFinite);
+  const k = Math.min(DRAWS, Math.max(1, Math.round(p.draw)));
+  const d = { k, draw: r.draws[k - 1] };
   return tpl(L.describe, {
     t: sig(p.tau, 2), pl: fp(p.piLow), ph: fp(p.piHigh), d: DRAWS,
     nv: f3(mean(ok("naive"))), ht: f3(mean(ok("ht"))), rt: f3(mean(ok("ratio"))), mu: f3(MU),
+    k: d.k, cn: f3(d.draw.naive), ch: f3(d.draw.ht), cr: f3(d.draw.ratio),
   });
 }
 
