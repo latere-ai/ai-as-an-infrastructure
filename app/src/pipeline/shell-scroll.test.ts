@@ -20,11 +20,20 @@ test("the document is not locked, so the window scrolls the page", () => {
   expect(reader).not.toMatch(/overflowY:\s*"auto"[^}]*borderRadius: 28/);
 });
 
-test("the header and side columns are sticky; only the nav scrolls within itself", () => {
-  expect(css).toMatch(/\.rdr-header \{[^}]*position: sticky; top: 0;/);
-  expect(css).toMatch(/\.rdr-nav \{[^}]*position: sticky; top: var\(--hdr-h\);[^}]*height: calc\(100vh - var\(--hdr-h\)\)/);
+// Elastic overscroll translates everything in the document flow, sticky
+// elements included, so a sticky header and sidebar were dragged along when
+// the page bounced. Fixed elements stay pinned to the viewport.
+test("the header, sidebar and on-this-page card are fixed, so only the page bounces", () => {
+  expect(css).toMatch(/\.rdr-header \{[^}]*position: fixed; top: 0; left: 0; right: 0;/);
+  expect(css).toMatch(/\.rdr-nav \{[^}]*position: fixed; top: var\(--hdr-h\); bottom: 0; left: 0;/);
+  expect(css).toMatch(/\.rdr-toc \{[^}]*position: fixed; top: calc\(var\(--hdr-h\) \+ var\(--toc-gap\)\); right: var\(--toc-gap\);/);
+  for (const sel of [".rdr-header", ".rdr-nav", ".rdr-toc"]) {
+    expect(css).not.toMatch(new RegExp(`\\${sel} \\{[^}]*position: sticky`));
+  }
+  // The page content starts below the fixed header, right of the sidebar slot.
+  expect(css).toMatch(/\.rdr-body \{[^}]*padding-top: var\(--hdr-h\);/);
+  expect(reader).toMatch(/<div className="rdr-nav-slot" style=\{\{ width \}\}/);
   expect(css).toMatch(/\.rdr-nav-scroll \{[^}]*overflow-y: auto; overscroll-behavior: contain;/);
-  expect(css).toMatch(/\.rdr-toc \{[^}]*position: sticky; top: calc\(var\(--hdr-h\) \+ var\(--toc-gap\)\);[^}]*max-height: calc\(100vh - var\(--hdr-h\) - 2 \* var\(--toc-gap\)\)/);
 });
 
 test("anchors are native and land below the sticky header", () => {

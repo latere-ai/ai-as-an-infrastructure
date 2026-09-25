@@ -54,7 +54,8 @@ const LS_KEY = "aaai-reader-settings";
 const HEADER_H = 48;
 const MAIN_MIN = 640 + 2 * 32;
 const TOC_MIN_VW = 1200;
-// The margin right of the floating "On this page" card (--toc-gap in theme.css).
+// The inset of the floating "On this page" card from the viewport edge and
+// the header (--toc-gap in theme.css).
 const TOC_GAP = 16;
 
 const SIDEBAR_EXTERNAL_LINKS = [
@@ -117,6 +118,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   // screens before hydration corrects it.
   const [vw, setVw] = useState(1440);
   const [tocFits, setTocFits] = useState(true);
+  const [tocCompact, setTocCompact] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
 
   // Remember this page for the search dialog's list of recent pages.
@@ -274,14 +276,31 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   };
   const fontScale = Math.min(1.4, Math.max(0.8, s.fontScale));
 
+  // The card is compact when its full width would reach over the end of the
+  // text lines: measured from the first paragraph, so it follows the layout,
+  // text size and sidebar width the reader has chosen.
+  useEffect(() => {
+    const measure = () => {
+      const p = document.querySelector(".rdr-article > p");
+      if (!p) return;
+      const cardLeft = document.documentElement.clientWidth - TOC_GAP - Math.max(170, Math.min(s.tocW, 360));
+      setTocCompact(p.getBoundingClientRect().right + TOC_GAP > cardLeft);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [s.tocW, s.navW, s.navCollapsed, s.layout, s.fontScale, chapter.path]);
+
   // Column fit: the article column keeps at least MAIN_MIN, so a widened nav
-  // gives way first, and the mini-TOC docks only where it still fits beside it.
-  // Below that it lives in the same drawer the phone layout uses.
+  // gives way first. Below TOC_MIN_VW "On this page" lives in the same drawer
+  // the phone layout uses.
   const showSidebar = !mobile && !s.navCollapsed;
   const navW = Math.max(200, Math.min(s.navW, vw - MAIN_MIN));
-  const tocRoom = vw - (showSidebar ? navW : 0) - MAIN_MIN - TOC_GAP;
-  const tocDocked = !mobile && tocFits && tocRoom >= 170;
-  const tocW = Math.max(170, Math.min(s.tocW, tocRoom));
+  // "On this page" floats over the page, so it takes no width from the
+  // article. Where it would cover the end of the text lines it shows only its
+  // title and opens on hover, focus or tap (tocCompact, measured below).
+  const tocDocked = !mobile && tocFits;
+  const tocW = Math.max(170, Math.min(s.tocW, 360));
   const hasToc = chapter.headings.length > 0;
   const showMiniToc = tocDocked && hasToc && !s.tocCollapsed;
   const bodyFont = s.serifBody ? "var(--font-cjk)" : "var(--font-ui)";
@@ -402,7 +421,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
         <div className="rdr-desktop-aside rdr-toc-wrap">
           {showMiniToc && (
-            <MiniToc t={t} chapter={chapter} activeId={activeId} width={tocW}
+            <MiniToc t={t} chapter={chapter} activeId={activeId} width={tocW} compact={tocCompact}
               onStartDrag={(e) => startDrag("toc", e)} onClose={() => set({ tocCollapsed: true })} />
           )}
         </div>
@@ -636,11 +655,17 @@ function SidebarTree({ t, chapter, embedded, onNavigate, onStartDrag, width = 26
     </nav>
   );
   if (embedded) return list;
+  // The panel is fixed to the viewport so the page's elastic overscroll does
+  // not drag it; the slot keeps its width in the row so the article starts
+  // right of it.
   return (
-    <aside className="rdr-nav" style={{ width }}>
-      {list}
-      {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize" style={{ right: -4 }} />}
-    </aside>
+    <>
+      <div className="rdr-nav-slot" style={{ width }} aria-hidden="true" />
+      <aside className="rdr-nav" style={{ width }}>
+        {list}
+        {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize" style={{ right: -4 }} />}
+      </aside>
+    </>
   );
 }
 
@@ -665,13 +690,17 @@ function TocLinks({ chapter, activeId, onNavigate }: { chapter: ChapterData; act
   );
 }
 
-function MiniToc({ t, chapter, activeId, onClose, width = 208, onStartDrag }: { t: Strings; chapter: ChapterData; activeId: string; onClose: () => void; width?: number; onStartDrag?: (e: React.PointerEvent) => void }) {
+function MiniToc({ t, chapter, activeId, onClose, width = 208, compact = false, onStartDrag }: { t: Strings; chapter: ChapterData; activeId: string; onClose: () => void; width?: number; compact?: boolean; onStartDrag?: (e: React.PointerEvent) => void }) {
+  // Compact: the list opens on hover or keyboard focus (CSS), and a tap on the
+  // title pins it open on touch screens.
+  const [peek, setPeek] = useState(false);
+  const cls = ["rdr-toc", compact ? "is-compact" : "", compact && peek ? "is-peek" : ""].filter(Boolean).join(" ");
   return (
-    <aside className="rdr-toc" style={{ width }}>
+    <aside className={cls} style={{ width }}>
       {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize" style={{ left: -4 }} />}
       <div className="rdr-toc-scroll">
         <div className="rdr-toc-head">
-          <span className="rdr-toc-title">{t.onThisPage}</span>
+          <span className="rdr-toc-title" onClick={compact ? () => setPeek((p) => !p) : undefined}>{t.onThisPage}</span>
           <button onClick={onClose} aria-label="close" className="rdr-btn" style={{ width: 22, height: 22 }}>
             <Icon d={<path d="M3 3l8 8M11 3l-8 8" strokeLinecap="round" />} size={12} />
           </button>

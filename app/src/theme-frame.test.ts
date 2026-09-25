@@ -52,12 +52,12 @@ test("solid accent buttons label in the surface color, not fixed white", () => {
 });
 
 // Both side columns are resizable from the rule they share with the article.
-// The handle is a child of the sticky column, not of the column's scroller,
+// The handle is a child of the fixed panel, not of the panel's scroller,
 // which would clip it at the rule and scroll it away with the list.
 test("both side columns keep a resize handle outside their scroller", () => {
   const reader = readFileSync(resolve(here, "Reader.tsx"), "utf8");
   expect(reader.match(/className="rdr-resize"/g)?.length).toBe(2);
-  expect(reader).toMatch(/<aside className="rdr-toc"[^>]*>\s*\{onStartDrag && <div[^>]*className="rdr-resize"/);
+  expect(reader).toMatch(/<aside className=\{cls\}[^>]*>\s*\{onStartDrag && <div[^>]*className="rdr-resize"/);
   expect(reader).toMatch(/<aside className="rdr-nav"[^>]*>\s*\{list\}\s*\{onStartDrag && <div[^>]*className="rdr-resize"/);
   expect(rule(".rdr-toc")).not.toContain("overflow");
   expect(rule(".rdr-nav")).not.toContain("overflow");

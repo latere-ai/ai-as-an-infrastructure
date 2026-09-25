@@ -126,13 +126,15 @@ test("narrow viewports hide the side columns before hydration", () => {
   expect(reader).toContain("const MAIN_MIN = 640 + 2 * 32;");
 });
 
-// The floating "On this page" card sits one gap in from the right edge; the
-// column-fit arithmetic in Reader.tsx must subtract the same gap, or a docked
-// card pushes the article below its minimum width.
-test("the column fit reserves the same gap the floating card uses", () => {
+// "On this page" floats over the page: opening it must not take width from
+// the article. The compact check measures the card at the same inset the CSS
+// places it.
+test("the on-this-page card overlays the article and measures its own inset", () => {
   const cssGap = css.match(/--toc-gap: (\d+)px/)?.[1];
   const tsGap = reader.match(/const TOC_GAP = (\d+);/)?.[1];
   expect(cssGap).toBeTruthy();
   expect(tsGap).toBe(cssGap);
-  expect(reader).toContain("- MAIN_MIN - TOC_GAP;");
+  expect(reader).not.toMatch(/tocRoom/);
+  expect(reader).toContain("clientWidth - TOC_GAP - ");
+  expect(css).toMatch(/\.rdr-toc\.is-compact:not\(:hover\):not\(:focus-within\):not\(\.is-peek\) \.rdr-toc-list \{ display: none; \}/);
 });
