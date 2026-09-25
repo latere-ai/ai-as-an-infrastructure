@@ -242,3 +242,15 @@ test("on the home page the on-this-page card starts closed", () => {
   });
   expect(html(chapter)).toContain('class="rdr-toc"');
 });
+
+// Stacked on a phone, the title page repeated the cover's title, subtitle and
+// author in large type directly under the cover.
+test("the stacked landing does not repeat what the cover shows", () => {
+  const css = readFileSync(join(repoRoot, "app/src/theme.css"), "utf8");
+  const narrow = css.slice(css.indexOf("@container lp (max-width: 680px)"));
+  const block = narrow.slice(0, narrow.indexOf("\n}\n"));
+  expect(block).toContain(".lp-imprint, .lp-subtitle, .lp-author { display: none; }");
+  // The title is hidden visually only; it remains the page's h1.
+  expect(block).toMatch(/\.lp-title \{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset\(50%\)/);
+  expect(block).not.toMatch(/\.lp-title[^{]*\{[^}]*display: none/);
+});
