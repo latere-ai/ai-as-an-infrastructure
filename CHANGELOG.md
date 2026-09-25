@@ -10,6 +10,17 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- An address that matches no page now answers 404 with a short page, in
+  English and Chinese, that links to both editions. It used to redirect to
+  the home page. A crawler that resolved the home page's links against the
+  address it had asked for turned every such redirect into more invented
+  addresses, at about twenty requests a second; a 404 gives it nothing to
+  follow, and search engines no longer see those addresses as copies of the
+  home page. Old chapter addresses from before the reorganization still
+  redirect to their new pages.
+
 ## v0.10.3 - 2026-09-25
 
 ### Changed
