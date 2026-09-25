@@ -309,7 +309,14 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const tocDocked = !mobile && tocFits;
   const tocW = Math.max(170, Math.min(s.tocW, 360));
   const hasToc = chapter.headings.length > 0;
-  const showMiniToc = tocDocked && hasToc && !s.tocCollapsed;
+  // On the home page the title spread fills the first screen, so "On this
+  // page" starts closed there; the header button opens it for this visit only
+  // and the saved choice for every other page stays as it was.
+  const [homeTocOpen, setHomeTocOpen] = useState(false);
+  const isHome = !!chapter.landingHtml;
+  const tocOpen = isHome ? homeTocOpen : !s.tocCollapsed;
+  const setTocOpen = (open: boolean) => (isHome ? setHomeTocOpen(open) : set({ tocCollapsed: !open }));
+  const showMiniToc = tocDocked && hasToc && tocOpen;
   const bodyFont = s.serifBody ? "var(--font-cjk)" : "var(--font-ui)";
   const showBreadcrumbTitle = !chapter.isPartIntro && !!chapter.chapterNum && chapter.title !== chapter.crumbChapter;
 
@@ -388,8 +395,8 @@ export default function Reader({ chapter, initial }: ReaderProps) {
         )}
 
         {hasToc && (
-          <button onClick={() => (tocDocked ? set({ tocCollapsed: !s.tocCollapsed }) : (setDrawer(false), setTocDrawer((d) => !d)))}
-            title={t.onThisPage} aria-label={t.onThisPage} aria-pressed={tocDocked ? !s.tocCollapsed : tocDrawer} className="rdr-btn">
+          <button onClick={() => (tocDocked ? setTocOpen(!tocOpen) : (setDrawer(false), setTocDrawer((d) => !d)))}
+            title={t.onThisPage} aria-label={t.onThisPage} aria-pressed={tocDocked ? tocOpen : tocDrawer} className="rdr-btn">
             <Icon d={<><rect x="2" y="3" width="12" height="10" rx="2" /><line x1="9.5" y1="3" x2="9.5" y2="13" /></>} />
           </button>
         )}
@@ -432,7 +439,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
         <div className="rdr-desktop-aside rdr-toc-wrap">
           {showMiniToc && (
             <MiniToc t={t} chapter={chapter} activeId={activeId} width={tocW}
-              onStartDrag={(e) => startDrag("toc", e)} onClose={() => set({ tocCollapsed: true })} />
+              onStartDrag={(e) => startDrag("toc", e)} onClose={() => setTocOpen(false)} />
           )}
         </div>
       </div>

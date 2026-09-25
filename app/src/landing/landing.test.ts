@@ -230,3 +230,17 @@ for (const lang of ["en", "zh"] as Lang[]) {
     expect(html.indexOf("<h1")).toBeLessThan(html.indexOf('class="rdr-title"'));
   });
 }
+
+// The floating "On this page" card covered the top right corner of the title
+// spread, so on the home page it starts closed; other pages keep the saved
+// choice, which is open by default.
+test("on the home page the on-this-page card starts closed", () => {
+  const html = (c: ChapterData) => renderToString(createElement(Reader, { chapter: c }));
+  expect(html(pages.en)).not.toContain('class="rdr-toc"');
+  const book = loadBook("en", repoRoot);
+  const chapter = compileChapter(book, book.chapters.find((c) => c.num === "1")!, {
+    bib: loadBibliographyDir(join(repoRoot, "refs")), xref: buildCrossref(book), graphviz,
+    refsDir: join(repoRoot, "refs"), glossary, glossaryUsed: new Set<string>(), glossaryFirstUses: new Map(),
+  });
+  expect(html(chapter)).toContain('class="rdr-toc"');
+});

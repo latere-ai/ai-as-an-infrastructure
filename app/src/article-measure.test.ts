@@ -133,5 +133,5 @@ test("the on-this-page card overlays the article and always shows its list", () 
   expect(reader).not.toMatch(/tocRoom/);
   expect(css).not.toMatch(/\.rdr-toc[^{]*:hover[^{]*\.rdr-toc-list/);
   expect(css).not.toMatch(/is-compact/);
-  expect(reader).toMatch(/aria-pressed=\{tocDocked \? !s\.tocCollapsed : tocDrawer\}/);
+  expect(reader).toMatch(/aria-pressed=\{tocDocked \? tocOpen : tocDrawer\}/);
 });
