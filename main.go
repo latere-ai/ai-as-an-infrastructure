@@ -34,6 +34,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
 	"latere.ai/x/pkg/authkit/oidc"
 	"latere.ai/x/pkg/otel"
 
@@ -390,9 +392,21 @@ func isProbe(path string) bool {
 // newHandler wraps the routing contract in OpenTelemetry tracing and metrics.
 // The probes are excluded: Kubernetes polls them every few seconds and they
 // would otherwise be the bulk of the recorded spans.
+//
+// routeOf names every request on both signals. WithRouteTemplate sets the span
+// name and the span's http.route. otelhttp does not read span attributes when
+// it records the request metrics; it reads the labeler in the request context,
+// so the route goes there too, once serve has run.
 func newHandler() http.Handler {
-	return otel.Handler(http.HandlerFunc(serve), "aaai",
+	labeled := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serve(w, r)
+		if l, ok := otelhttp.LabelerFromContext(r.Context()); ok {
+			l.Add(attribute.String("http.route", routeOf(r)))
+		}
+	})
+	return otel.Handler(labeled, "aaai",
 		otel.WithSkip(func(r *http.Request) bool { return isProbe(r.URL.Path) }),
+		otel.WithRouteTemplate(routeOf),
 	)
 }
 
