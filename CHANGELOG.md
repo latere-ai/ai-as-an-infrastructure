@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.1 - 2026-09-25
+
 ### Fixed
 
 - On phones, the home page's title page repeated the cover's title,
