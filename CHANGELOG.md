@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.9.3 - 2026-09-25
+
 ### Fixed
 
 - The search field and the other header items moved sideways when the
