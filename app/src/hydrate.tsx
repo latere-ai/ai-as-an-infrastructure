@@ -11,6 +11,7 @@ import { wrapTables } from "./runtime/tables.ts";
 import { mountRunnable } from "./runtime/live.ts";
 import { mountViz } from "./runtime/viz.ts";
 import { mountFigures } from "./figures/runtime/client.ts";
+import { startReaderTelemetry } from "./telemetry.ts";
 
 declare global {
   interface Window {
@@ -31,3 +32,5 @@ const root = document.getElementById("root");
 if (root && window.__CHAPTER__) {
   hydrateRoot(root, <Reader chapter={window.__CHAPTER__} />);
 }
+
+startReaderTelemetry();
