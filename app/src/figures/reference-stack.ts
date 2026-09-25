@@ -9,7 +9,7 @@
 // store; a trace correlates events and grants no authority.
 //
 // Selecting a component shows what it does, example projects and products,
-// the contract in this chapter that governs it, and each call in and out with
+// the section of this chapter that covers its seam, and each call in and out with
 // its credential. With no component selected the readout groups every hop by
 // the credential it carries.
 //
@@ -233,15 +233,15 @@ const LAYERS: Record<Layer, Text> = {
   observe: { en: "Observability and evaluation", zh: "可观测性与评测" },
 };
 
-// Each contract names the section of the chapter that states it.
+// Each contract names the section of the chapter that covers its seam.
 const CONTRACTS: Record<Contract, Text> = {
-  admission: { en: "policy admission (Separate the planes; Make compatibility explicit)", zh: "策略准入（分离三个平面；明确兼容性）" },
-  operation: { en: "the model-operation state machine, with its error, retry, and overload rules", zh: "模型操作状态机，以及相应的错误、重试与过载规则" },
-  toolpath: { en: "the tool authorization path and effect ledger (Tools and MCP)", zh: "工具授权路径与操作账本（工具与 MCP）" },
+  admission: { en: "admission, capability profiles, and routing (The model gateway)", zh: "准入、能力说明与路由（模型网关）" },
+  operation: { en: "the model operation, with its retry, error, and overload rules (Operations, retries, and overload)", zh: "模型操作，以及相应的重试、错误与过载规则（操作、重试与过载）" },
+  toolpath: { en: "the tool authorization path and effect receipts (The tool seam)", zh: "工具授权路径与操作回执（工具接缝）" },
   evidence: { en: "the retrieval evidence contract (Retrieval and evidence)", zh: "检索证据契约（检索与证据）" },
-  telemetry: { en: "telemetry as evidence", zh: "把遥测当作证据" },
-  accounting: { en: "accounting for the accepted task, including build versus rent", zh: "核算整个合格任务，包括自建与租用的取舍" },
-  tests: { en: "boundary tests and the cutover protocol", zh: "边界测试与切换协议" },
+  telemetry: { en: "trace evidence (Telemetry as evidence)", zh: "追踪证据（作为证据的遥测）" },
+  accounting: { en: "accounting for the accepted task, including build versus rent (The accepted task)", zh: "按合格任务核算，包括自建与租用的取舍（合格任务）" },
+  tests: { en: "boundary tests and cutover (The integration release)", zh: "边界测试与切换（集成发布）" },
 };
 
 // ---------------------------------------------------------------- labels
@@ -250,7 +250,7 @@ const labels = {
   en: {
     title: "A reference stack by layer, with the credential each call carries",
     all: "Which credential each call carries",
-    hint: "Select a component to see what it does, example choices, and the contract in this chapter that governs it.",
+    hint: "Select a component to see what it does, example choices, and the section of this chapter that covers its seam.",
     examplesHead: "Examples",
     governed: "Governed by {c}.",
     callsOut: "Calls out",
@@ -275,7 +275,7 @@ const labels = {
   zh: {
     title: "按层划分的参考技术栈，以及每次调用携带的凭据",
     all: "每次调用携带什么凭据",
-    hint: "选中一个组件，可以查看它的作用、可选的实现，以及本章哪一份契约约束它。",
+    hint: "选中一个组件，可以查看它的作用、可选的实现，以及本章讲述其接缝的小节。",
     examplesHead: "实现示例",
     governed: "约束它的是{c}。",
     callsOut: "向外调用",
