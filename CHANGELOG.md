@@ -10,6 +10,18 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- Server telemetry names each request by the route it took instead of its
+  raw URL: a language home, a part or top-level page, a chapter, a build file
+  such as the search index, an asset by type, a legacy redirect, an API
+  endpoint, or an unknown path that falls back to the home page. The name is
+  the span name and the `http.route` attribute on traces and on the request
+  metrics, which are recorded for every request, so traffic, errors and
+  latency can now be split by route. A crawler composing URLs out of the home
+  page's relative links had produced over ten thousand distinct operation
+  names a day; those requests now appear together as `GET /{unknown}`.
+
 ## v0.10.2 - 2026-09-25
 
 ### Fixed
