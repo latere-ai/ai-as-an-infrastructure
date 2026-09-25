@@ -254,3 +254,10 @@ test("the stacked landing does not repeat what the cover shows", () => {
   expect(block).toMatch(/\.lp-title \{ position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset\(50%\)/);
   expect(block).not.toMatch(/\.lp-title[^{]*\{[^}]*display: none/);
 });
+
+// Tilted in 3D, the book's layers showed jagged edges: the compositor draws a
+// layer boundary without anti-aliasing unless the edge lies inside the texture.
+test("the book's tilted layers carry a transparent outline against jagged edges", () => {
+  const css = readFileSync(join(repoRoot, "app/src/theme.css"), "utf8");
+  expect(css).toContain(".cv-face, .cv-spine, .cv-pages { outline: 1px solid transparent; }");
+});
