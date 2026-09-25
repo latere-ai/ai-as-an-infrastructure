@@ -100,3 +100,58 @@ ${FONT_LINKS}
 </body>
 </html>`;
 }
+
+// The page the server answers with, status 404, for a content URL that matches
+// nothing. It is served at whatever address was requested, so every link and
+// resource is absolute: a relative link resolved against an invented path is
+// how a crawler composes the next invented path. It carries no reader bundle,
+// no canonical URL, and noindex, and it does not set the language cookie.
+export function notFoundPage(opts: { css: string }): string {
+  const style = `
+.nf{min-height:100vh;display:grid;place-items:center;padding:24px 16px;font-family:var(--font-ui);color:var(--fg-1)}
+.nf-card{width:100%;max-width:460px}
+.nf-site{font-family:var(--font-serif);font-size:20px;color:var(--fg-2);text-decoration:none}
+.nf-site:hover{color:var(--fg-1)}
+.nf-code{margin-top:40px;font:500 13px var(--font-mono);letter-spacing:.06em;color:var(--fg-3)}
+.nf h1,.nf h2{font-family:var(--font-serif);font-weight:400;line-height:1.15}
+.nf h1{font-size:40px;margin:6px 0 10px}
+.nf h2{font-family:var(--font-cjk);font-size:26px;margin-bottom:8px}
+.nf p{color:var(--fg-2);line-height:1.6}
+.nf-zh{margin-top:28px;padding-top:24px;border-top:1px solid var(--border)}
+.nf-zh p{font-family:var(--font-cjk)}
+.nf-links{display:flex;flex-wrap:wrap;gap:10px;margin-top:32px}
+.nf-links a{padding:9px 16px;border:1px solid var(--border-strong);border-radius:var(--radius-md);background:var(--bg-surface);color:var(--fg-1);font-size:14px;font-weight:500;text-decoration:none}
+.nf-links a:hover{background:var(--bg-raised)}
+.nf-links a[lang]{font-family:var(--font-cjk)}`;
+  return `<!DOCTYPE html>
+<html lang="en" data-theme="${DEFAULT_SETTINGS.theme}" data-palette="${DEFAULT_SETTINGS.palette}" data-layout="${DEFAULT_SETTINGS.layout}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+${THEME_SCRIPT}
+<title>Page not found · ${SITE_NAME}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+${FONT_LINKS}
+<style>${opts.css}${style}</style>
+</head>
+<body>
+<main class="nf">
+<div class="nf-card">
+<a class="nf-site" href="/en/">${SITE_NAME}</a>
+<p class="nf-code">404</p>
+<h1>Page not found</h1>
+<p>No page exists at this address.</p>
+<div class="nf-zh" lang="zh-Hans">
+<h2>页面不存在</h2>
+<p>此地址没有对应的页面。</p>
+</div>
+<nav class="nf-links">
+<a href="/en/">English edition</a>
+<a href="/zh/" lang="zh-Hans">中文版</a>
+</nav>
+</div>
+</main>
+</body>
+</html>`;
+}

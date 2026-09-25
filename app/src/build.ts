@@ -6,7 +6,7 @@
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
 import Reader from "./Reader.tsx";
-import { page } from "./html.ts";
+import { page, notFoundPage } from "./html.ts";
 import { loadBook } from "./pipeline/book.ts";
 import { compileChapter } from "./pipeline/compile.ts";
 import { loadBibliographyDir } from "./pipeline/citations.ts";
@@ -103,6 +103,8 @@ for (const lang of ["en", "zh"] as Lang[]) {
 // Root artifacts (served from _book root): favicon, robots, hreflang sitemap.
 cpSync(join(repoRoot, "app", "static", "favicon.svg"), join(outRoot, "favicon.svg"));
 writeFileSync(join(outRoot, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${BASE}/sitemap.xml\n`);
+// Served by the Go server, status 404, for content URLs that match nothing.
+writeFileSync(join(outRoot, "404.html"), notFoundPage({ css }));
 
 const allPaths = [...new Set([...pathsByLang.en, ...pathsByLang.zh])].sort();
 const loc = (lang: string, p: string) => `${BASE}/${lang}/${p}`;
