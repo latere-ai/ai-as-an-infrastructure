@@ -164,3 +164,13 @@ test("with motion allowed the tilt follows the pointer", () => {
   expect(poseAt(0, -1).rx).toBe(MAX_TURN.x);
   expect(poseAt(5, 5)).toEqual(poseAt(1, 1)); // clamped to the cover
 });
+
+// The title spread and the Preface opener each rendered an <h1>, so the home
+// page had two top-level headings.
+for (const lang of ["en", "zh"] as Lang[]) {
+  test(`${lang}: the home page has exactly one h1, the book title`, () => {
+    const html = renderToString(createElement(Reader, { chapter: pages[lang] }));
+    expect(html.match(/<h1\b/g)?.length).toBe(1);
+    expect(html.indexOf("<h1")).toBeLessThan(html.indexOf('class="rdr-title"'));
+  });
+}

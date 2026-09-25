@@ -492,7 +492,9 @@ function ChapterOpener({ chapter, t }: { chapter: ChapterData; t: Strings }) {
   return (
     <div>
       {chapter.eyebrow && <div className="rdr-kicker">{chapter.eyebrow}</div>}
-      <h1 className="rdr-title">{chapter.title}</h1>
+      {/* On the home page the title spread holds the book's one <h1>; the
+          Preface heading below it is a section of that page. */}
+      {chapter.landingHtml ? <h2 className="rdr-title">{chapter.title}</h2> : <h1 className="rdr-title">{chapter.title}</h1>}
       <MetaRow chapter={chapter} t={t} />
     </div>
   );
