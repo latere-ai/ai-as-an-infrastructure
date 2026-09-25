@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.2 - 2026-09-25
+
 ### Fixed
 
 - The site went down after v0.10.0: the server compressed every response on
