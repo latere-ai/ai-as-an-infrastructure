@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.5 - 2026-09-26
+
 ### Added
 
 - The reader measures how pages load for the people reading them: load
