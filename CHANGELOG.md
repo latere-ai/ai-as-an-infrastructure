@@ -10,8 +10,23 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Added
+
+- A new Practice chapter, Wiring the Training Stack, assembles the stack a
+  model builder runs: a reference architecture from data plane to release,
+  the stages from pretraining to agentic RL, one section per seam (data
+  plane, cluster and job, checkpoint store, rollout fleet, environments and
+  verifiers, evaluation gate, release artifact) with its tools, configuration
+  and contract, three reference stacks, the arithmetic of a run, and what
+  releasing a model as a provider involves. It has a runnable simulation of
+  synchronous against asynchronous RL. The theory chapters whose mechanisms
+  it puts into practice now point to it.
+
 ### Changed
 
+- Wiring the Stack is now titled Wiring the Application Stack, to pair with
+  the new training chapter. Its address is unchanged; the Practice chapters
+  after it are numbered one higher.
 - The home page opens like a book: a title spread with the cover beside a
   title page (title, subtitle, author, a Start reading action, the edition,
   language and license), then the contents by part, then the Preface.
