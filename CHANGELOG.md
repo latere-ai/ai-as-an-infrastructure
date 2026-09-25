@@ -10,6 +10,12 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- Callout text is set a step smaller and in a muted color, so it reads as an
+  aside next to the body text. Where the window leaves a margin beside the
+  text, the callout's label hangs in that margin as a marginal note.
+
 ## v0.9.6 - 2026-09-25
 
 ### Fixed
