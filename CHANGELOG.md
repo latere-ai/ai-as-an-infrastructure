@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.9.4 - 2026-09-25
+
 ### Fixed
 
 - Bullets and numbers of top-level lists hung outside the text column, left
