@@ -17,7 +17,7 @@
 //     A = P(c ≥ 2, c > e) + ½ P(c ≥ 2, c = e) + (1/k) P(c = 1, e ≤ 1),
 //   summed over n with P(Bin(n, ρ) > n / 2) advanced by a one-step recurrence.
 //   As k grows, A tends to 1 on problems with p > (1 − p) d and to 0 below.
-// - Learned verifier, the chapter runnable's model: a sample's score has mean
+// - Learned verifier, a constructed failure model: a sample's score has mean
 //   1.0 if correct, 1.5 if it is one of the wrong samples the verifier
 //   overrates (probability β among wrong samples), 0.0 otherwise, plus
 //   Gaussian noise σ; the highest score is returned. With F the CDF of one
@@ -42,7 +42,7 @@ import { binomPmf, normalPdf, normalTail, logitNormalQuantiles } from "./lib/sta
 // ---------------------------------------------------------------- model
 
 const PROBLEMS = 40;
-const MEAN = { correct: 1.0, overrated: 1.5, wrong: 0.0 }; // the runnable's mean scores
+const MEAN = { correct: 1.0, overrated: 1.5, wrong: 0.0 }; // mean score by sample kind
 
 // P(X > n / 2) for X ~ Bin(n, r), summed over the window that carries the mass.
 function aboveHalf(n: number, r: number): number {

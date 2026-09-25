@@ -114,42 +114,90 @@ $$
 
 ## 被剪掉的分支无法挽回
 
-下面这个可运行示例故意使用具有误导性的局部状态启发式。`fast` 分支在两个可见状态上的分数都更高，最后却失败。`patient` 分支起初分数较低，但能到达唯一经过验证的解。
+下面的可运行单元格在一棵带种子的树上运行这两类控制器。树的分支数为 3、深度为 4，局部状态启发式带有误导：根的第 1 个子节点之下，每个状态的分数都比真实价值（其下解叶子所占的比例）高 0.5；三个经过验证的解都在根的第 3 个子节点之下，而启发式在根处把它排在最后。束搜索跟着启发式走，宽度为 1 和 3 时返回的都是子节点 1 之下的叶子。单元格随后按上面的选择规则运行 300 次 UCT 迭代，只把启发式当作 $Q(s,a)$ 中相当于两次访问的先验，并把随机推演到叶子的回报回传；它断言访问次数最多的路径止于一个解。动画显示，陷阱分支的推演一再返回零，根的访问随之离开它。把 `c` 设为 0，根的第 2 个子节点一次也不会被访问：这次搜索仍能逃出陷阱，因为子节点 3 的先验高于子节点 2，但如果解在子节点 2 之下，就永远找不到。
 
 :::: {.runnable}
 ```python
-GRAPH = {
-    "start": [("fast", 0.90), ("patient", 0.70)],
-    "fast": [("dead_end", 0.95)],
-    "patient": [("bridge", 0.60)],
-    "bridge": [("solution", 1.00)],
-}
-VERIFIED = {"dead_end": False, "solution": True}
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.collections import LineCollection
 
-def beam_search(width):
-    frontier = [("start", ["start"], 0.0)]
-    while frontier:
-        candidates = []
-        for state, path, _ in frontier:
-            if VERIFIED.get(state, False):
-                return path
-            for child, heuristic in GRAPH.get(state, []):
-                candidates.append((child, path + [child], heuristic))
-        frontier = sorted(
-            candidates,
-            key=lambda item: item[2],
-            reverse=True,
-        )[:width]
-    return None
+rng = np.random.default_rng(3)
+b, D = 3, 4                              # 分支数和深度：121 个状态，81 个叶子
+n, first_leaf = (b ** (D + 1) - 1) // 2, (b ** D - 1) // 2
+kids = lambda s: np.arange(b * s + 1, b * s + b + 1)   # 状态 s 的子节点，按层序编号
+SOL = {113, 117, 119}                    # 经过验证的解，都在根的第 3 个子节点之下
+v = np.zeros(n); v[list(SOL)] = 1
+for s in range(first_leaf - 1, -1, -1):  # 真实价值：s 之下解叶子所占的比例
+    v[s] = v[kids(s)].mean()
+trap = np.zeros(n); trap[1] = 1
+for s in range(1, first_leaf):
+    trap[kids(s)] = trap[s]              # 根的第 1 个子节点及其之下的所有状态
+h = v + 0.5 * trap + 0.05 * rng.normal(size=n)       # 启发式分数，被误导偏向子节点 1
 
-for width in (1, 2):
-    path = beam_search(width)
-    result = "no verified solution" if path is None else " -> ".join(path)
-    print(f"width={width}: {result}")
+def beam(width):                         # 每层按 h 保留前 `width` 个状态
+    front = [0]
+    for _ in range(D):
+        front = sorted(np.concatenate([kids(s) for s in front]), key=lambda s: -h[s])[:width]
+    return front[0]
+
+c, n0, iters = 1.0, 2, 300               # 探索权重（试试 c = 0）、先验权重、迭代次数
+N, S, expanded, frames = np.zeros(n), np.zeros(n), {0}, []
+for it in range(iters):
+    path = [0]
+    while path[-1] in expanded and path[-1] < first_leaf:        # 按 UCT 选择
+        ch = kids(path[-1])
+        q = (n0 * h[ch] + S[ch]) / (n0 + N[ch])                  # 以 h 为先验的 Q
+        path.append(ch[np.argmax(q + c * np.sqrt(np.log(N[path[-1]] + 1) / (1 + N[ch])))])
+    expanded.add(path[-1])                                       # 扩展
+    leaf = path[-1]
+    while leaf >= 0 and leaf < first_leaf:                       # 随机推演到叶子
+        leaf = b * leaf + 1 + rng.integers(b)
+    N[path] += 1; S[path] += leaf in SOL                          # 回传
+    if it % 10 == 9:
+        frames.append((it + 1, N.copy(), S.copy()))
+best = 0
+while best < first_leaf:                 # 沿访问次数最多的子节点走
+    best = kids(best)[np.argmax(N[kids(best)])]
+assert beam(1) not in SOL and h[3] < h[1] and best in SOL
+
+x = np.zeros(n); x[first_leaf:] = np.arange(n - first_leaf)
+for s in range(first_leaf - 1, -1, -1):
+    x[s] = x[kids(s)].mean()
+y = -np.floor(np.log(2 * np.arange(n) + 1) / np.log(b) + 1e-9)  # 每个状态的深度
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2), height_ratios=(3, 2))
+ax1.add_collection(LineCollection([[(x[s], y[s]), (x[k], y[k])] for s in range(first_leaf) for k in kids(s)], colors="grey", lw=0.5, alpha=0.5))
+ax1.scatter(x[list(SOL)], y[list(SOL)], s=110, marker="*", c="#3dbd8a", zorder=3)
+g = beam(1); path1 = [g]
+while path1[-1] > 0:
+    path1.append((path1[-1] - 1) // b)
+ax1.plot(x[path1], y[path1], c="#ff7a66", lw=1.5, ls="--", label="束搜索，宽度 1")
+dots = ax1.scatter(x, y, s=4, c="#5b8def", alpha=0.7, zorder=2)
+for k in (1, 2, 3):
+    ax1.text(x[k] - 3, y[k] + 0.15, f"{k}", fontsize=10)
+ax1.set(xticks=[], yticks=[-k for k in range(D + 1)], yticklabels=range(D + 1), ylabel="深度")
+ax1.grid(False); ax1.legend(fontsize=8.5, loc="upper left")
+share = np.array([f[1][1:4] / f[1][0] for f in frames])
+lines = [ax2.plot([], [], label=f"根的子节点 {k}" + ("（陷阱）" if k == 1 else ""))[0] for k in (1, 2, 3)]
+ax2.set(xlim=(0, iters), ylim=(0, 1), xlabel="UCT 迭代次数", ylabel="根访问次数占比")
+ax2.legend(fontsize=8.5, loc="center right")
+fig.tight_layout()
+
+def update(t):
+    it, Nt, St = frames[t]
+    dots.set_sizes(4 + 400 * Nt / Nt[0])
+    for k, line in enumerate(lines):
+        line.set_data([f[0] for f in frames[: t + 1]], share[: t + 1, k])
+    ax1.set_title(f"第 {it} 次迭代：圆的面积表示访问次数，星号是解", fontsize=10)
+
+anim = FuncAnimation(fig, update, frames=len(frames), interval=100)
+print(f"束宽 1 返回叶子 {beam(1)}（不是解）；束宽 3 返回 {beam(3)}；"
+      f"UCT 访问最多的路径止于 {best}，是一个解")
 ```
 ::::
 
-输出为 `width=1: no verified solution` 和 `width=2: start -> patient -> bridge -> solution`。束宽为一时，搜索选择 `fast`，一旦剪掉，就无法回到那个备选分支。束宽为二时，两条分支会保留到终止状态检查器足以区分它们为止。更宽的束可以提高候选覆盖率，也会增加工作量。只有当扩展函数提出了有用分支，而且局部状态评估器没有过早将其删除时，增加宽度才会有帮助。
+束搜索的剪枝不可撤销：一个状态一旦离开束，搜索此后不会再生成它。UCT 让每个已扩展的状态始终保有被选中的资格，并允许回报推翻启发式，代价是每次迭代都要下探到叶子，300 次迭代最多生成 1,200 个状态，而束宽 1 只生成 12 个。更宽的束可以提高候选覆盖率，也会增加工作量。只有当扩展函数提出了有用分支，而且局部状态评估器没有过早将其删除时，增加宽度才会有帮助。
 
 ## 这里的「图」有两种含义
 

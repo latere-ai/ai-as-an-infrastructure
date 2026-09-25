@@ -40,6 +40,68 @@ $$
 
 这三种目标不能互换。正确步骤可能毫无进展。有缺陷的前缀也可能有很高的后续价值，只要续写策略经常能够修复它。蒙特卡洛估计会从前缀出发采样多次续写，统计其中有多少得到正确答案。因此，这种对成功续写的估计并不会自动成为局部步骤正确性的标签。训练数据必须说明标签针对什么；只要使用逐步分数，也必须说明聚合规则。取所有步骤的最低分、最后一步的分数，或把各步分数相乘，会对轨迹长度和错误位置产生不同偏好。
 
+下面的可运行单元格测量这个差距。每条推理轨迹有 $T=8$ 步：处在正轨上的一步以 0.05 的概率出错；已经偏离的一步以 `jump` 的概率毫无依据地跳回正确值，否则就从错误的值出发继续做有效推导。出错和跳回都是无效步骤，只有停在正轨上，最终检查才会通过。单元格为 1,000 条轨迹的每个前缀各抽取 $K=16$ 条续写，用蒙特卡洛估计给前缀打标签，并断言这些标签与动态规划算出的精确后续价值一致；然后标出第一个标签低于 0.5 的步骤，也就是下文 ProcessBench 的任务。在 `jump = 0.3` 时，刚刚出错的前缀，后续价值仍接近 0.8；五分之一的轨迹经由无效步骤得到正确答案；在含有错误的轨迹中，这种标记只在 27% 的情况下找到第一个无效步骤。把 `jump` 设为 0.0，出错的前缀再也无法修复，后续价值为 0，标记几乎总能找到第一个错误。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+T, slip, tau, K = 8, 0.05, 0.5, 16       # 步数、出错率、标记阈值、每个前缀的续写次数
+jump = 0.3                               # 偏离后的一步跳回正轨的概率；试试 0.0
+
+def value(jump):                         # 精确后续价值 V[t, s]；s = 1 表示在正轨上
+    V = np.zeros((T + 1, 2)); V[T, 1] = 1
+    for t in range(T - 1, -1, -1):
+        V[t] = [jump * V[t + 1, 1] + (1 - jump) * V[t + 1, 0], (1 - slip) * V[t + 1, 1] + slip * V[t + 1, 0]]
+    return V
+
+def step(s, jump):                       # 写出一步；出错和跳回都是无效步骤
+    new = np.where(s == 1, rng.random(s.shape) >= slip, rng.random(s.shape) < jump).astype(int)
+    return new, new == s
+
+def run(jump, n=1000, K=K):              # 轨迹、蒙特卡洛标签、第一个错误的定位
+    S, ok = np.ones((n, T + 1), int), np.ones((n, T), bool)
+    for t in range(T):
+        S[:, t + 1], ok[:, t] = step(S[:, t], jump)
+    lab = np.zeros((n, T))
+    for t in range(1, T + 1):            # 每个前缀续写 K 次，在末尾检查
+        s = np.repeat(S[:, t], K)
+        for _ in range(t, T):
+            s = step(s, jump)[0]
+        lab[:, t - 1] = s.reshape(n, K).mean(1) if K else value(jump)[t, S[:, t]]
+    first = lambda m: np.where(m.any(1), m.argmax(1), T)
+    return S, lab, np.mean((first(lab < tau) == first(~ok))[(~ok).any(1)])  # 只看含有错误的轨迹
+
+S, lab, acc = run(jump)
+V = value(jump)
+for t in range(1, T + 1):                # 蒙特卡洛标签与精确后续价值一致
+    for s in (0, 1):
+        m = S[:, t] == s
+        if m.sum() > 20:
+            assert abs(lab[m, t - 1].mean() - V[t, s]) < 4 * np.sqrt(V[t, s] * (1 - V[t, s]) / (K * m.sum())) + 1e-9
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2))
+for s, name in ((1, "有效前缀，在正轨上"), (0, "无效步骤之后的前缀")):
+    line, = ax1.plot(range(1, T + 1), V[1:, s], label=f"{name}，精确值")
+    ax1.plot(range(1, T + 1), [lab[S[:, t] == s, t - 1].mean() for t in range(1, T + 1)], "o", c=line.get_color())
+ax1.axhline(tau, c="grey", ls=":", lw=1)
+ax1.set(xlabel="前缀长度 t", ylabel="后续价值", ylim=(0, 1.02))
+ax1.set_title(f"jump = {jump} 时，无效前缀仍保有很高的标签", fontsize=11)
+ax1.legend(fontsize=8.5, loc="lower left")
+js = np.linspace(0, 0.6, 13)
+ax2.plot(js, [run(j, n=4000, K=0)[2] for j in js], c="grey", label="精确后续价值标签")
+ax2.plot(js[::2], [run(j)[2] for j in js[::2]], "o", label=f"蒙特卡洛标签，K = {K}")
+ax2.set(xlabel="跳回率", ylabel="找到第一个无效步骤的比例", ylim=(0, 1.02))
+ax2.set_title(f"含错误的轨迹：标出第一个低于 {tau} 的标签", fontsize=11)
+ax2.legend(fontsize=8.5, loc="lower left")
+fig.tight_layout()
+print(f"jump = {jump} 时，蒙特卡洛标签定位第一个错误的比例：{acc:.0%}；"
+      f"最终答案正确却含无效步骤的轨迹：{np.mean((S[:, -1] == 1) & (S[:, 1:] == 0).any(1)):.0%}")
+```
+::::
+
 结果标签通常更便宜，因为一个标签就能覆盖完整候选项，但它难以做贡献归因，也就是指出每一步对成败的贡献。最终答案失败，并不会指出最早出错的步骤。过程标签提供了更早的干预位置，可供训练或搜索使用；可是每增加一个标签，就多一次可能昂贵、不一致或错误的判断。
 
 ```{figure}
@@ -81,30 +143,7 @@ $$
 
 Cobbe 等人在 GSM8K 上展示了这种分工的好处：大量采样再由训练好的验证器选择，可以提高准确率；而且随着训练数据增加，验证方案比他们的微调基线扩展得更好 [@cobbe2021verifiers]。这是针对特定生成器、验证器、数据集和采样过程的实验结果，并不意味着验证器固定而不完美时，样本越多一定越好。在同一项研究中，选择后的准确率在约 400 个候选项时达到峰值，之后反而下降。作者把这种下降归因于少见却能骗过验证器的对抗性解答 [@cobbe2021verifiers]。
 
-下面的示例具体展示这种失效方式。代理分数（代替真实效用的验证器分数）能正确排列前三个候选项。加入一份表述精致但答案错误的候选项后，样本池中的最高真实效用并没有提高，这份错误答案却因代理分数最高而被选中。数字只是示意，并非实测结果。
-
-:::: {.runnable}
-```python
-candidates = [
-    {"name": "direct partial", "true_utility": 0.62, "proxy_score": 0.60},
-    {"name": "careful correct", "true_utility": 0.90, "proxy_score": 0.82},
-    {"name": "concise correct", "true_utility": 0.95, "proxy_score": 0.87},
-    {"name": "polished wrong", "true_utility": 0.20, "proxy_score": 0.98},
-]
-
-for n in range(1, len(candidates) + 1):
-    pool = candidates[:n]
-    selected = max(pool, key=lambda item: item["proxy_score"])
-    oracle = max(pool, key=lambda item: item["true_utility"])
-    regret = oracle["true_utility"] - selected["true_utility"]
-    print(
-        f"N={n}: selected={selected['name']!r}; "
-        f"selection regret={regret:.2f}"
-    )
-```
-::::
-
-这里的 $N$ 是候选项数量。当 $N=3$ 时，选择器返回 `concise correct`，选择遗憾为零。当 $N=4$ 时，它改为返回 `polished wrong`，遗憾升至 0.75。真实系统不会暴露 `true_utility`，所以需要独立评估集和隐藏检查，即对生成器和选择器都不可见的测试。
+真实系统观察不到真实效用，所以要测量选择遗憾，就需要独立评估集和隐藏检查，即对生成器和选择器都不可见的测试。
 
 ## 如何评估验证器
 

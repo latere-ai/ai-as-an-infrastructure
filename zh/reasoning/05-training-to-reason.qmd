@@ -69,32 +69,68 @@ $$
 
 这个式子给训练数据带来一项约束：几乎总能答对或几乎总会答错的问题，会浪费大部分组内相对采样。扩大组规模可以提高同时出现成功与失败样本的概率，但生成成本也随 $G$ 增长。有效的训练集位于当前策略能力边界附近，也就是时而通过、时而失败的那些题目，而且会随着策略提升而移动。
 
-下面的小实验针对一个同时包含成功与失败样本的组，计算两种优势值：GRPO 的优势，以及下文 RLOO 所用的留一法优势，即把每条回答与其余回答的平均奖励比较。随后，它给出二元奖励组出现学习信号的概率。
+下面的可运行单元格计算，对于一个以概率 $p=\sigma(\theta)$ 通过的提示，各种优势会让策略梯度变成什么样。它实现了 GRPO 的优势、下文 RLOO 所用的留一法优势（把每条回答与其余回答的平均奖励比较），以及不带基线的原始奖励。更新量只通过一组中的通过数 $k$ 依赖于这一组，所以单元格对 $k\sim\mathrm{Binomial}(G,p)$ 精确求和。它断言 RLOO 与无基线的更新都等于真实梯度 $p(1-p)$，并用 20,000 个抽样的组核对每种估计量以及上面的混合组概率。除以组内标准差，会让难题和易题得到比真实梯度更大的权重：在 $G=8$ 时，$p=0.05$ 的提示得到的相对权重是 $p=0.5$ 的提示的 1.33 倍。下图说明这种效应为何取决于组大小：不同时包含通过与失败的组不贡献任何更新，所以 $G=4$ 时重新加权几乎消失，$G=64$ 时则逼近 $1/(2\sqrt{p(1-p)})$。把 `G` 设为 64，上图也会随之变化。
 
 :::: {.runnable}
 ```python
+from math import comb
 import numpy as np
+import matplotlib.pyplot as plt
 
-def grpo_advantages(rewards):
-    rewards = np.asarray(rewards, dtype=float)
-    spread = rewards.std()
-    return np.zeros_like(rewards) if spread == 0 else (rewards - rewards.mean()) / spread
+rng = np.random.default_rng(0)
+G = 8                                    # 组大小；试试 G = 64
 
-def rloo_advantages(rewards):
-    rewards = np.asarray(rewards, dtype=float)
-    group_size = len(rewards)
-    return rewards - (rewards.sum() - rewards) / (group_size - 1)
+def advantages(r, kind):                 # r 是整组的奖励，形状为 (..., G)
+    mean = r.mean(-1, keepdims=True)
+    if kind == "REINFORCE，无基线":
+        return r
+    if kind == "RLOO":
+        return r - (r.sum(-1, keepdims=True) - r) / (r.shape[-1] - 1)
+    s = r.std(-1, keepdims=True)
+    return (r - mean) / np.where(s > 0, s, np.inf)   # GRPO；奖励全相同的组得到 0
 
-def mixed_group_probability(pass_rate, group_size):
-    return 1 - pass_rate ** group_size - (1 - pass_rate) ** group_size
+# 一个提示，通过率 p = sigmoid(theta)，所以 d log pi(y) / d theta = r - p。更新量
+# g = mean_i A_i (r_i - p) 只通过通过数 k 依赖于这一组。
+def moments(kind, p, G=G):               # 对 k ~ Binomial(G, p) 精确求和，得到 E[g] 与 sd[g]
+    k = np.arange(G + 1)
+    r = (np.arange(G) < k[:, None]).astype(float)
+    g = (advantages(r, kind) * (r - p)).mean(-1)
+    w = np.array([comb(G, j) for j in k]) * p ** k * (1 - p) ** (G - k)
+    return w @ g, np.sqrt(w @ (g - w @ g) ** 2)
 
-rewards = [1, 0, 1, 0]
-print("GRPO:", np.round(grpo_advantages(rewards), 2).tolist())
-print("RLOO:", np.round(rloo_advantages(rewards), 2).tolist())
-print("all equal:", grpo_advantages([1, 1, 1, 1]).tolist())
-for pass_rate in (0.01, 0.10, 0.50):
-    probability = mixed_group_probability(pass_rate, group_size=8)
-    print(f"p={pass_rate:.2f}, mixed group={probability:.3f}")
+kinds = ["REINFORCE，无基线", "RLOO", "GRPO"]
+ps = np.linspace(0.01, 0.99, 99)
+M = {kind: np.array([moments(kind, p) for p in ps]) for kind in kinds}
+for kind in kinds[:2]:                   # 两者都无偏：E[g] = dJ/dtheta = p(1 - p)
+    assert np.allclose(M[kind][:, 0], ps * (1 - ps))
+for p in (0.1, 0.5, 0.9):                # 抽样的组与精确求和一致
+    r = (rng.random((20000, G)) < p).astype(float)
+    for kind in kinds:
+        g = (advantages(r, kind) * (r - p)).mean(-1)
+        m, sd = moments(kind, p)
+        assert abs(g.mean() - m) < 4 * sd / np.sqrt(len(g))
+    assert abs(np.mean(r.std(-1) > 0) - (1 - p ** G - (1 - p) ** G)) < 0.01   # 混合组
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2), sharex=True)
+half = len(ps) // 2
+ax1.plot(ps, ps * (1 - ps) / 0.25, c="grey", ls="--", label="真实梯度 p(1 − p) = REINFORCE = RLOO")
+ax1.plot(ps, M["GRPO"][:, 0] / M["GRPO"][half, 0], c="#ff7a66", label=f"GRPO，G = {G}")
+ax1.set(ylabel="E[更新量] / p = 0.5 处的值", ylim=(0, 1.3))
+ax1.set_title("除以组内标准差，会按难度给提示重新加权", fontsize=11)
+ax1.legend(fontsize=8.5, loc="lower center")
+ax2.axhline(1, c="grey", ls="--", lw=1)
+for n in (4, 16, 64):
+    e = np.array([moments("GRPO", p, n)[0] for p in ps]) / (ps * (1 - ps))
+    ax2.plot(ps, e / e[half], label=f"G = {n}")
+ax2.plot(ps, 0.5 / np.sqrt(ps * (1 - ps)), c="grey", lw=1, ls=":", label="1 / (2 √(p(1 − p)))，G → ∞")
+ax2.set(xlabel="通过率 p", ylabel="GRPO 权重 / 真实梯度", ylim=(0, 3))
+ax2.set_title("全对或全错的组抵消了两端的重新加权", fontsize=11)
+ax2.legend(fontsize=8.5, loc="upper center", ncols=2)
+fig.tight_layout()
+for p in (0.05, 0.5):
+    i = np.argmin(np.abs(ps - p))
+    print(f"p = {p}：GRPO 更新量 / 真实梯度 = {M['GRPO'][i, 0] / (p * (1 - p)):.2f}，"
+          f"有学习信号的组占 {1 - p ** G - (1 - p) ** G:.2f}")
 ```
 ::::
 

@@ -181,48 +181,105 @@ restore them.
 
 ## A pruned branch cannot recover later
 
-This runnable example uses a deliberately misleading partial-state heuristic. The
-`fast` branch looks best at both of its visible states but ends in failure. The
-`patient` branch starts with a lower score and reaches the only verified solution.
+The runnable cell below runs both kinds of controller on one seeded tree with
+branching 3 and depth 4 and a misleading partial-state heuristic. Every state under
+root child 1 scores 0.5 above its true value, the share of solution leaves beneath it,
+and the three verified solutions sit under root child 3, which the heuristic ranks last
+at the root. Beam search follows the heuristic: widths 1 and 3 both return a leaf under
+child 1. The cell then runs 300 iterations of UCT with the selection rule above, using
+the heuristic only as a prior worth two visits in $Q(s,a)$ and backing up random
+rollouts to a leaf, and asserts that the most visited path ends at a solution. The
+animation shows the root's visits leaving the trap as its rollouts keep returning zero.
+Set `c = 0` and root child 2 receives no visits at all: the search still escapes this
+trap because child 3's prior outranks child 2's, but a solution under child 2 would
+never be found.
 
 :::: {.runnable}
 ```python
-GRAPH = {
-    "start": [("fast", 0.90), ("patient", 0.70)],
-    "fast": [("dead_end", 0.95)],
-    "patient": [("bridge", 0.60)],
-    "bridge": [("solution", 1.00)],
-}
-VERIFIED = {"dead_end": False, "solution": True}
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+from matplotlib.collections import LineCollection
 
-def beam_search(width):
-    frontier = [("start", ["start"], 0.0)]
-    while frontier:
-        candidates = []
-        for state, path, _ in frontier:
-            if VERIFIED.get(state, False):
-                return path
-            for child, heuristic in GRAPH.get(state, []):
-                candidates.append((child, path + [child], heuristic))
-        frontier = sorted(
-            candidates,
-            key=lambda item: item[2],
-            reverse=True,
-        )[:width]
-    return None
+rng = np.random.default_rng(3)
+b, D = 3, 4                              # branching and depth: 121 states, 81 leaves
+n, first_leaf = (b ** (D + 1) - 1) // 2, (b ** D - 1) // 2
+kids = lambda s: np.arange(b * s + 1, b * s + b + 1)   # children of state s, level order
+SOL = {113, 117, 119}                    # verified solutions, all under root child 3
+v = np.zeros(n); v[list(SOL)] = 1
+for s in range(first_leaf - 1, -1, -1):  # true value: share of solution leaves below s
+    v[s] = v[kids(s)].mean()
+trap = np.zeros(n); trap[1] = 1
+for s in range(1, first_leaf):
+    trap[kids(s)] = trap[s]              # root child 1 and everything below it
+h = v + 0.5 * trap + 0.05 * rng.normal(size=n)       # heuristic score, misled toward child 1
 
-for width in (1, 2):
-    path = beam_search(width)
-    result = "no verified solution" if path is None else " -> ".join(path)
-    print(f"width={width}: {result}")
+def beam(width):                         # keep the top `width` states per level by h
+    front = [0]
+    for _ in range(D):
+        front = sorted(np.concatenate([kids(s) for s in front]), key=lambda s: -h[s])[:width]
+    return front[0]
+
+c, n0, iters = 1.0, 2, 300               # exploration weight (try c = 0), prior weight, iterations
+N, S, expanded, frames = np.zeros(n), np.zeros(n), {0}, []
+for it in range(iters):
+    path = [0]
+    while path[-1] in expanded and path[-1] < first_leaf:        # selection by UCT
+        ch = kids(path[-1])
+        q = (n0 * h[ch] + S[ch]) / (n0 + N[ch])                  # Q with h as a prior
+        path.append(ch[np.argmax(q + c * np.sqrt(np.log(N[path[-1]] + 1) / (1 + N[ch])))])
+    expanded.add(path[-1])                                       # expansion
+    leaf = path[-1]
+    while leaf >= 0 and leaf < first_leaf:                       # rollout to a leaf
+        leaf = b * leaf + 1 + rng.integers(b)
+    N[path] += 1; S[path] += leaf in SOL                          # backup
+    if it % 10 == 9:
+        frames.append((it + 1, N.copy(), S.copy()))
+best = 0
+while best < first_leaf:                 # follow the most visited child
+    best = kids(best)[np.argmax(N[kids(best)])]
+assert beam(1) not in SOL and h[3] < h[1] and best in SOL
+
+x = np.zeros(n); x[first_leaf:] = np.arange(n - first_leaf)
+for s in range(first_leaf - 1, -1, -1):
+    x[s] = x[kids(s)].mean()
+y = -np.floor(np.log(2 * np.arange(n) + 1) / np.log(b) + 1e-9)  # depth of each state
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2), height_ratios=(3, 2))
+ax1.add_collection(LineCollection([[(x[s], y[s]), (x[k], y[k])] for s in range(first_leaf) for k in kids(s)], colors="grey", lw=0.5, alpha=0.5))
+ax1.scatter(x[list(SOL)], y[list(SOL)], s=110, marker="*", c="#3dbd8a", zorder=3)
+g = beam(1); path1 = [g]
+while path1[-1] > 0:
+    path1.append((path1[-1] - 1) // b)
+ax1.plot(x[path1], y[path1], c="#ff7a66", lw=1.5, ls="--", label="beam, width 1")
+dots = ax1.scatter(x, y, s=4, c="#5b8def", alpha=0.7, zorder=2)
+for k in (1, 2, 3):
+    ax1.text(x[k] - 3, y[k] + 0.15, f"{k}", fontsize=10)
+ax1.set(xticks=[], yticks=[-k for k in range(D + 1)], yticklabels=range(D + 1), ylabel="depth")
+ax1.grid(False); ax1.legend(fontsize=8.5, loc="upper left")
+share = np.array([f[1][1:4] / f[1][0] for f in frames])
+lines = [ax2.plot([], [], label=f"root child {k}" + (" (trap)" if k == 1 else ""))[0] for k in (1, 2, 3)]
+ax2.set(xlim=(0, iters), ylim=(0, 1), xlabel="UCT iteration", ylabel="share of root visits")
+ax2.legend(fontsize=8.5, loc="center right")
+fig.tight_layout()
+
+def update(t):
+    it, Nt, St = frames[t]
+    dots.set_sizes(4 + 400 * Nt / Nt[0])
+    for k, line in enumerate(lines):
+        line.set_data([f[0] for f in frames[: t + 1]], share[: t + 1, k])
+    ax1.set_title(f"iteration {it}: circle area is visits; stars are solutions", fontsize=10)
+
+anim = FuncAnimation(fig, update, frames=len(frames), interval=100)
+print(f"beam width 1 returns leaf {beam(1)} (no solution); width 3 returns {beam(3)}; "
+      f"UCT's most visited path ends at {best}, a solution")
 ```
 ::::
 
-The output is `width=1: no verified solution` and
-`width=2: start -> patient -> bridge -> solution`. Width one commits to `fast` and
-cannot return to the pruned alternative. Width two
-retains both branches long enough for the terminal check to distinguish them. A wider
-beam raises candidate coverage, but it also raises work. It helps only if the expansion
+Beam pruning is irreversible: once a state leaves the beam, no later step of the
+search generates it again. UCT keeps every expanded state eligible and lets returns
+overrule the heuristic, at a price: each of its 300 iterations descends to a leaf, up
+to 1,200 generated states against the 12 of width 1. A wider beam raises candidate
+coverage, but it also raises work. It helps only if the expansion
 function proposes the useful branch and the partial-state evaluator keeps it in the
 beam.
 

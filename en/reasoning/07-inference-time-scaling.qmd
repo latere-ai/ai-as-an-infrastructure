@@ -163,47 +163,8 @@ pool.
 ```{figure}
 //| figure: coverage-selection
 //| label: fig-inference-time-coverage-selection
-//| fig-cap: "Coverage and realized accuracy as the number of samples per problem $k$ grows. The benchmark is 40 illustrative problems whose one-sample success rates spread around the median $p$ (spread 0 is one prompt). The upper panel averages over the problems; the lower panel shows each problem at the chosen $k$, with the problems as ticks along its axis. Coverage $C_k(x)=1-(1-p_x)^k$ is what an exact checker returns. Majority vote assumes a share $d$ of wrong samples agree on one wrong answer and the rest never repeat. The learned verifier is the runnable's model below: a share $\beta$ of wrong samples score 1.5 on average against 1.0 for correct ones, plus noise $\sigma$. The shaded band is the coverage the chosen selector does not turn into correct answers (there is none for the exact checker). Every curve is computed exactly for these models; no value is measured."
+//| fig-cap: "Coverage and realized accuracy as the number of samples per problem $k$ grows. The benchmark is 40 illustrative problems whose one-sample success rates spread around the median $p$ (spread 0 is one prompt). The upper panel averages over the problems; the lower panel shows each problem at the chosen $k$, with the problems as ticks along its axis. Coverage $C_k(x)=1-(1-p_x)^k$ is what an exact checker returns. Majority vote assumes a share $d$ of wrong samples agree on one wrong answer and the rest never repeat. The learned verifier is a constructed failure model: a share $\beta$ of wrong samples score 1.5 on average against 1.0 for correct ones, plus noise $\sigma$. The shaded band is the coverage the chosen selector does not turn into correct answers (there is none for the exact checker). Every curve is computed exactly for these models; no value is measured."
 ```
-
-The following runnable is a constructed failure model, not an empirical fit.
-Each candidate is correct with probability `p`. Each wrong candidate has
-probability `selector_bias` of receiving a misleadingly high mean score, and
-Gaussian noise has standard deviation `noise`. Increasing `k` always raises
-coverage, but it also creates more opportunities for a misleading wrong
-candidate to win.
-
-:::: {.runnable}
-```python
-import numpy as np
-import matplotlib.pyplot as plt
-
-rng = np.random.default_rng(0)
-p = 0.30
-selector_bias = 0.05
-noise = 0.40
-trials = 4000
-ks = range(1, 65)
-coverage, selected_accuracy = [], []
-
-for k in ks:
-    correct = rng.random((trials, k)) < p
-    misleading = (~correct) & (rng.random((trials, k)) < selector_bias)
-    mean_score = np.where(misleading, 1.5, np.where(correct, 1.0, 0.0))
-    score = mean_score + rng.normal(0, noise, (trials, k))
-    coverage.append(np.mean(correct.any(axis=1)))
-    chosen = score.argmax(axis=1)
-    selected_accuracy.append(np.mean(correct[np.arange(trials), chosen]))
-
-plt.plot(list(ks), coverage, label="coverage")
-plt.plot(list(ks), selected_accuracy, label="imperfect selector")
-plt.xlabel("candidates k")
-plt.ylabel("fraction correct")
-plt.legend()
-plt.show()
-print("best selector k:", list(ks)[int(np.argmax(selected_accuracy))])
-```
-::::
 
 ## Sequential work needs a feedback source
 
@@ -244,6 +205,72 @@ information available to the next step; a second opinion from the same model may
 only restate the first error. Sequential compute adds value when the loop
 supplies a useful search operation or a feedback channel; transcript length
 alone supplies neither.
+
+The runnable cell below compares three feedback sources on one prompt at the same
+number of generations. Self-critique revises every answer without new evidence: it
+breaks a correct answer with probability $a=0.15$ and fixes a wrong one with
+probability $b=0.25$, so correctness follows a two-state Markov chain whose accuracy
+converges to $b/(a+b)=0.625$ from any start. Revision on test failure keeps an answer
+that passes an exact test and otherwise revises it using the failure, fixing it with
+probability 0.35. Parallel sampling draws a fresh answer each time and keeps any that
+passes the test. The cell simulates 4,000 attempts per curve and asserts that every
+point matches the closed form of its chain. On a hard prompt, with one-sample accuracy
+0.2, self-critique climbs toward 0.625 while test feedback nearly reaches 1. On an easy
+prompt, at 0.8, self-critique pulls accuracy down to 0.625, the degradation Huang et
+al. report, and fresh tested samples beat revision because a new draw is more likely
+to be right than a revision is to fix. Set `a = 0`, so that revision never breaks a
+correct answer: self-critique then only improves, though more slowly than with a test.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+a, b = 0.15, 0.25                        # a revision breaks a right answer / fixes a wrong one; try a = 0
+b_test = 0.35                            # fix rate when a failing test says what went wrong
+K, trials = 16, 4000                     # generations per prompt, simulated prompts
+
+def simulate(p0, mode):                  # share correct after each generation
+    ok = rng.random(trials) < p0
+    acc = [ok.mean()]
+    for _ in range(K - 1):
+        u = rng.random(trials)
+        if mode == "self-critique":      # no new evidence: every answer is revised
+            ok = np.where(ok, u >= a, u < b)
+        elif mode == "revise on test failure":
+            ok = ok | (u < b_test)       # a passing answer is kept
+        else:                            # "parallel samples, tested": a fresh draw each time
+            ok = ok | (u < p0)
+        acc.append(ok.mean())
+    return np.array(acc)
+
+def exact(p0, mode, t):
+    if mode == "self-critique":          # two-state Markov chain, stationary share b / (a + b)
+        pi = b / (a + b)
+        return pi + (p0 - pi) * (1 - a - b) ** t
+    return 1 - (1 - p0) * (1 - (b_test if mode == "revise on test failure" else p0)) ** t
+
+modes = ["self-critique", "revise on test failure", "parallel samples, tested"]
+t = np.arange(K)
+fig, axes = plt.subplots(2, 1, figsize=(6.2, 6.2), sharex=True)
+for ax, p0 in zip(axes, (0.2, 0.8)):
+    for mode in modes:
+        sim, ex = simulate(p0, mode), exact(p0, mode, t)
+        assert np.all(np.abs(sim - ex) < 4 * np.sqrt(ex * (1 - ex) / trials) + 1e-9)
+        line, = ax.plot(t + 1, ex, label=mode)
+        ax.plot(t[::3] + 1, sim[::3], "o", ms=4, c=line.get_color())
+    ax.axhline(b / (a + b), c="grey", ls=":", lw=1)
+    ax.set(ylabel="share correct", ylim=(0, 1.02))
+    ax.set_title(f"one-sample accuracy {p0}: " + ("feedback beats fresh samples" if p0 < 0.5 else
+                 "self-critique pulls a strong start down to b / (a + b)"), fontsize=10.5)
+axes[0].legend(fontsize=8.5, loc="lower right")
+axes[1].set_xlabel("generations spent on the prompt (lines exact, dots simulated)")
+fig.tight_layout()
+print(f"self-critique converges to b / (a + b) = {b / (a + b):.3f} from any start; after {K} generations: "
+      f"hard {exact(0.2, modes[0], K - 1):.2f}, easy {exact(0.8, modes[0], K - 1):.2f}")
+```
+::::
 
 Every form of sequential work above carries its intermediate state through
 emitted tokens. A transformer applies a fixed stack of layers to produce each

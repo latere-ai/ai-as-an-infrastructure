@@ -158,6 +158,66 @@ $$
 //| fig-cap: "合成的双峰教师下一词元分布 $q_T$，定义在沿一条轴排列的 40 个词元上；学生所在的分布族只能形成一个峰，$p_S(v)\propto\exp(-(v-\mu)^2/2\sigma^2)$，图中是两个方向的散度各自对应的最优学生。正向 KL 拟合最小化 $D_{\mathrm{KL}}(q_T\|p_S)$，即 $\tau=1$ 时 $\mathcal L_{\mathrm{soft}}$ 中的散度，也是模仿教师样本的期望损失（两者只差教师熵这一常数）；它横跨两个峰，还把概率质量放到阴影词元上，那里 $q_T<0.1\%$。反向 KL 拟合最小化 $D_{\mathrm{KL}}(p_S\|q_T)$，这是对学生自身样本取的期望；两峰拉开到一定距离后，它只落在质量较大的那个峰上（质量相等时落在哪个都一样）。下方面板把所选散度拆成逐词元项：正向 KL 用 $q_T(v)$ 给每个词元的对数比加权，漏掉教师的一个峰代价很高；反向 KL 用 $p_S(v)$ 加权，漏掉一个峰不产生代价，把质量放在教师几乎不给概率的词元上却代价很高。两峰靠近时教师只有一个峰，两种拟合几乎一致。教师分布是示意，所有数值都由上述定义算出。"
 ```
 
+下面的可运行单元格在玩具规模上单独考察期望的这一变化。一条序列是 $T$ 步的游走，状态是相对教师路径的偏移，取值从 −8 到 8。教师的下一步总是回到偏移 0。学生在训练过的状态上照搬教师的一步，在其他状态上沿用最近的已训练状态的一步，并以概率 `eps = 0.01` 失误，随机走一步。教师强制得到的数据只包含偏移 0，因为教师从不离开自己的路径；于是这个学生一旦失误，就会当作自己仍在路径上继续走下去，再也回不来。在策略训练的学生则训练两轮，训练数据是它自己的 rollout 到达的状态，每个状态都标上教师的一步。单元格从每个学生的马尔可夫链精确算出偏离路径的期望步数，断言 4,000 条采样 rollout 与之一致，并断言教师强制的代价大约按 $T^2$ 增长，而在策略的代价按 $T$ 增长。在 $T=100$ 时，教师强制训练的学生偏离路径 25 步，在策略训练的学生只有 0.7 步，每次失误只付出一步。把 `T` 设为 1000：到序列末尾，几乎每条教师强制的序列都已偏离路径，它的曲线转为线性，停在 698 步，在策略训练的学生则只有 6.7 步。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+W, eps, T = 8, 0.01, 100                 # 相对教师路径的偏移 -W..W、失误率、序列长度
+x = np.arange(-W, W + 1)
+teacher = -np.sign(x)                    # 教师的下一步总是回到偏移 0
+
+def student(known):                      # 训练过的状态照搬教师，其余状态沿用最近的已训练状态
+    near = np.array([np.flatnonzero(known)[np.argmin(np.abs(np.flatnonzero(known) - i))] for i in range(2 * W + 1)])
+    return teacher[near]
+
+def chain(act):                          # 转移矩阵：执行动作，或以概率 eps 随机失误
+    P = np.zeros((2 * W + 1, 2 * W + 1))
+    for i in range(2 * W + 1):
+        for a in (-1, 0, 1):
+            P[i, np.clip(x[i] + a, -W, W) + W] += eps / 3 + (1 - eps) * (a == act[i])
+    return P
+
+def off_path(act):                       # t = 1..T 时偏离路径步数的精确期望
+    d, off = np.eye(2 * W + 1)[W], []
+    for _ in range(T):
+        d = d @ chain(act); off.append(1 - d[W])
+    return np.cumsum(off)
+
+def rollouts(act, n=4000):               # 采样学生自己的轨迹
+    s, visits, off = np.full(n, W), np.zeros(2 * W + 1, bool), np.zeros(n)
+    for _ in range(T):
+        a = np.where(rng.random(n) < eps, rng.integers(-1, 2, n), act[s])
+        s = np.clip(s + a, 0, 2 * W); visits[s] = True; off += s != W
+    return visits, off.mean()
+
+forced = student(x == 0)                 # 教师强制：教师从不离开偏移 0
+known = x == 0
+for _ in range(2):                       # 在策略轮次：为学生到达的状态打标签
+    known |= rollouts(student(known))[0]
+online = student(known)
+curves = {"教师强制训练的学生": off_path(forced), "在策略训练的学生，2 轮": off_path(online)}
+for (name, c), act in zip(curves.items(), (forced, online)):
+    assert abs(rollouts(act)[1] - c[-1]) < 0.05 * c[-1] + 0.05   # 采样的 rollout 与精确的马尔可夫链一致
+slope = lambda c: np.polyfit(np.log([5, 20]), np.log(c[[4, 19]]), 1)[0]
+assert slope(curves["教师强制训练的学生"]) > 1.7 and slope(curves["在策略训练的学生，2 轮"]) < 1.1
+
+fig, ax = plt.subplots(figsize=(6.2, 4.4))
+t = np.arange(1, T + 1)
+for name, c in curves.items():
+    ax.loglog(t, c, label=f"{name}：T = {T} 时偏离 {c[-1]:.1f} 步")
+ax.loglog(t, eps * 2 / 3 * t ** 2 / 2, c="grey", ls=":", lw=1, label="ε (2/3) T² / 2")
+ax.loglog(t, eps * 2 / 3 * t, c="grey", ls="--", lw=1, label="ε (2/3) T")
+ax.set(xlabel="序列长度 T", ylabel="偏离教师路径的期望步数")
+ax.set_title("教师强制让失误累积，在策略标签把它们修正回来", fontsize=11)
+ax.legend(fontsize=8.5)
+print(f"训练过的状态：教师强制 {int((x == 0).sum())} 个，在策略 {int(known.sum())} 个，共 {2 * W + 1} 个")
+```
+::::
+
 教师若是另一个模型，在策略蒸馏就要求它在训练期间常驻。离策略蒸馏只生成一次语料，此后训练面对的是一个文件，教师因此可以是封闭 API，训练任务也就是普通的监督微调。在策略蒸馏则需要教师为学生的每一次 rollout（学生在训练中采样出的序列）打分，训练回路里同时驻留两个模型，成本更接近强化学习而不是 SFT。它还要求双方共用分词器、词表可比，所以只返回文本、不返回词元分布的 API 无法充当在策略教师。
 
 付出这份成本，得到的是更密集的监督。可验证奖励对整条轨迹只返回一个标量（@sec-training-to-reason），而教师会在同一条 rollout 的每个位置返回完整的下一词元分布。因此，在策略蒸馏既能用来压缩能力，也能用来整合能力。MOPD（multi-teacher on-policy distillation，多教师在策略蒸馏）先用强化学习分别训练多个专用模型，再在学生自身的 rollout 上把它们一起蒸馏进同一个学生，其报告的整合效果优于把各专用任务混在一次训练里、按顺序级联、在其输出上做离策略微调，以及直接合并参数 [@ma2026mopd]。这一证据来自单条工业级后训练流水线，因此它比较的是同一套设置下的几种配方，而不是对四种策略做普遍排序。

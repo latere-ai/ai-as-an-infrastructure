@@ -84,6 +84,79 @@ and any use of per-step scores must state its aggregation rule. Taking the minim
 last score, or a product over steps creates different preferences over length and error
 position.
 
+The runnable cell below measures that gap. Each trace has $T=8$ steps; an on-track
+step slips with probability 0.05, and an off-track step jumps back to the correct value
+without justification with probability `jump`, otherwise it continues validly from the
+wrong value. A slip and a jump are the invalid steps, and the final check passes only on
+track. The cell labels every prefix of 1,000 traces with the Monte Carlo estimate from
+$K=16$ continuations, asserts that the labels agree with the exact value to go from
+dynamic programming, and then flags the first step whose label falls below 0.5, the
+ProcessBench task below. At `jump = 0.3` a prefix that has just gone wrong still has a
+value to go near 0.8, a fifth of all traces reach a correct answer through an invalid
+step, and the flag finds the first invalid step in only 27% of the traces that contain
+one. Set `jump = 0.0`: a wrong prefix can no longer be repaired, its value to go is 0,
+and the flag finds the first error in almost every trace.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+T, slip, tau, K = 8, 0.05, 0.5, 16       # steps, slip rate, flag threshold, rollouts per prefix
+jump = 0.3                               # chance that an off-track step jumps back; try 0.0
+
+def value(jump):                         # exact value to go V[t, s]; s = 1 means on track
+    V = np.zeros((T + 1, 2)); V[T, 1] = 1
+    for t in range(T - 1, -1, -1):
+        V[t] = [jump * V[t + 1, 1] + (1 - jump) * V[t + 1, 0], (1 - slip) * V[t + 1, 1] + slip * V[t + 1, 0]]
+    return V
+
+def step(s, jump):                       # write one step; a slip and a jump back are both invalid
+    new = np.where(s == 1, rng.random(s.shape) >= slip, rng.random(s.shape) < jump).astype(int)
+    return new, new == s
+
+def run(jump, n=1000, K=K):              # traces, Monte Carlo labels, first-error localization
+    S, ok = np.ones((n, T + 1), int), np.ones((n, T), bool)
+    for t in range(T):
+        S[:, t + 1], ok[:, t] = step(S[:, t], jump)
+    lab = np.zeros((n, T))
+    for t in range(1, T + 1):            # K continuations from every prefix, checked at the end
+        s = np.repeat(S[:, t], K)
+        for _ in range(t, T):
+            s = step(s, jump)[0]
+        lab[:, t - 1] = s.reshape(n, K).mean(1) if K else value(jump)[t, S[:, t]]
+    first = lambda m: np.where(m.any(1), m.argmax(1), T)
+    return S, lab, np.mean((first(lab < tau) == first(~ok))[(~ok).any(1)])  # traces with an error
+
+S, lab, acc = run(jump)
+V = value(jump)
+for t in range(1, T + 1):                # Monte Carlo labels agree with the exact value to go
+    for s in (0, 1):
+        m = S[:, t] == s
+        if m.sum() > 20:
+            assert abs(lab[m, t - 1].mean() - V[t, s]) < 4 * np.sqrt(V[t, s] * (1 - V[t, s]) / (K * m.sum())) + 1e-9
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6.2, 6.2))
+for s, name in ((1, "valid prefix, on track"), (0, "prefix after an invalid step")):
+    line, = ax1.plot(range(1, T + 1), V[1:, s], label=f"{name}, exact")
+    ax1.plot(range(1, T + 1), [lab[S[:, t] == s, t - 1].mean() for t in range(1, T + 1)], "o", c=line.get_color())
+ax1.axhline(tau, c="grey", ls=":", lw=1)
+ax1.set(xlabel="prefix length t", ylabel="value to go", ylim=(0, 1.02))
+ax1.set_title(f"With jump = {jump}, an invalid prefix keeps a high label", fontsize=11)
+ax1.legend(fontsize=8.5, loc="lower left")
+js = np.linspace(0, 0.6, 13)
+ax2.plot(js, [run(j, n=4000, K=0)[2] for j in js], c="grey", label="exact value-to-go labels")
+ax2.plot(js[::2], [run(j)[2] for j in js[::2]], "o", label=f"Monte Carlo labels, K = {K}")
+ax2.set(xlabel="jump-back rate", ylabel="first invalid step found", ylim=(0, 1.02))
+ax2.set_title(f"Traces with an error: flag the first label below {tau}", fontsize=11)
+ax2.legend(fontsize=8.5, loc="lower left")
+fig.tight_layout()
+print(f"first-error localization with Monte Carlo labels at jump = {jump}: {acc:.0%}; "
+      f"traces with a correct final answer and an invalid step: {np.mean((S[:, -1] == 1) & (S[:, 1:] == 0).any(1)):.0%}")
+```
+::::
+
 Outcome labels are often cheaper because one label covers the whole candidate, but they
 give poor credit assignment: they do not attribute a success or failure to the steps
 that caused it. A failed final answer does not identify the first bad step. Process
@@ -166,36 +239,9 @@ help with a fixed imperfect verifier. In the same study, selected accuracy peake
 roughly 400 candidates and then declined. The authors attributed the decline to rare,
 adversarial solutions that fooled the verifier [@cobbe2021verifiers].
 
-The following example makes the failure mode concrete. The first three candidates are
-ranked correctly by the proxy, the verifier score that stands in for true utility.
-Adding a polished but wrong candidate increases the best available true utility no
-further, yet its proxy score wins. The numbers are illustrative, not measured results.
-
-:::: {.runnable}
-```python
-candidates = [
-    {"name": "direct partial", "true_utility": 0.62, "proxy_score": 0.60},
-    {"name": "careful correct", "true_utility": 0.90, "proxy_score": 0.82},
-    {"name": "concise correct", "true_utility": 0.95, "proxy_score": 0.87},
-    {"name": "polished wrong", "true_utility": 0.20, "proxy_score": 0.98},
-]
-
-for n in range(1, len(candidates) + 1):
-    pool = candidates[:n]
-    selected = max(pool, key=lambda item: item["proxy_score"])
-    oracle = max(pool, key=lambda item: item["true_utility"])
-    regret = oracle["true_utility"] - selected["true_utility"]
-    print(
-        f"N={n}: selected={selected['name']!r}; "
-        f"selection regret={regret:.2f}"
-    )
-```
-::::
-
-Here, at $N=3$, the selector returns `concise correct` with zero selection regret. At $N=4$,
-it returns `polished wrong`, and regret rises to 0.75. A real system will not expose
-`true_utility`; that is why an independent evaluation set and hidden checks, tests
-withheld from the generator and the selector, are needed.
+A real system does not observe true utility, so measuring selection regret needs an
+independent evaluation set and hidden checks, tests withheld from the generator and the
+selector.
 
 ## Evaluating the verifier
 

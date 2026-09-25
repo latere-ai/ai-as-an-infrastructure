@@ -303,6 +303,80 @@ and accuracy) and long-text generation for students from 120M to 13B parameters
 //| fig-cap: "A synthetic two-mode teacher next-token distribution $q_T$ over 40 tokens ordered along one axis, and the best student from a family that can form only one peak, $p_S(v)\propto\exp(-(v-\mu)^2/2\sigma^2)$, under each direction of the divergence. The forward-KL fit minimizes $D_{\mathrm{KL}}(q_T\|p_S)$, the divergence in $\mathcal L_{\mathrm{soft}}$ at $\tau=1$ and, up to the teacher's entropy, the expected loss of imitating teacher samples; it stretches over both modes and puts mass on the shaded tokens, where $q_T<0.1\%$. The reverse-KL fit minimizes $D_{\mathrm{KL}}(p_S\|q_T)$, an expectation over the student's own samples; once the modes are far enough apart it sits on the heavier one (on either, at equal mass). The lower panel splits the selected divergence into per-token terms: forward KL weights each token's log ratio by $q_T(v)$, so a missed teacher mode is expensive, while reverse KL weights it by $p_S(v)$, so a missed mode costs nothing and mass where the teacher puts almost none is expensive. With the modes close together the teacher has one peak and the two fits nearly agree. The teacher is illustrative; every value is computed from these definitions."
 ```
 
+The runnable cell below isolates the change of expectation at toy scale. A
+sequence is a walk of $T$ steps whose state is the offset from the teacher's path,
+from −8 to 8. The teacher's next step always heads back to offset 0. The student
+copies the teacher's step at every state it was trained on, uses the step of the
+nearest trained state elsewhere, and slips to a random step with probability
+`eps = 0.01`. Teacher-forced data contains only offset 0, because the teacher never
+leaves its path, so after a slip that student carries on as if it were still on the
+path and never returns. The on-policy student is trained for two rounds on the states
+its own rollouts reach, each labeled with the teacher's step. The cell computes each
+student's expected number of steps off the path exactly from its Markov chain, asserts
+that 4,000 sampled rollouts agree, and asserts that the teacher-forced cost grows
+about as $T^2$ while the on-policy cost grows as $T$. At $T=100$ the teacher-forced
+student spends 25 steps off the path and the on-policy student 0.7, one step per slip.
+Set `T = 1000`: by the end nearly every teacher-forced sequence has left the path, its
+curve turns linear at 698 steps, and the on-policy student stays at 6.7.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+W, eps, T = 8, 0.01, 100                 # offsets -W..W from the teacher's path, slip rate, length
+x = np.arange(-W, W + 1)
+teacher = -np.sign(x)                    # the teacher's next step always heads back to offset 0
+
+def student(known):                      # copy the teacher where trained, nearest trained state elsewhere
+    near = np.array([np.flatnonzero(known)[np.argmin(np.abs(np.flatnonzero(known) - i))] for i in range(2 * W + 1)])
+    return teacher[near]
+
+def chain(act):                          # transition matrix: the action, or a random slip with prob eps
+    P = np.zeros((2 * W + 1, 2 * W + 1))
+    for i in range(2 * W + 1):
+        for a in (-1, 0, 1):
+            P[i, np.clip(x[i] + a, -W, W) + W] += eps / 3 + (1 - eps) * (a == act[i])
+    return P
+
+def off_path(act):                       # exact expected number of steps off the path, for t = 1..T
+    d, off = np.eye(2 * W + 1)[W], []
+    for _ in range(T):
+        d = d @ chain(act); off.append(1 - d[W])
+    return np.cumsum(off)
+
+def rollouts(act, n=4000):               # sample the student's own trajectories
+    s, visits, off = np.full(n, W), np.zeros(2 * W + 1, bool), np.zeros(n)
+    for _ in range(T):
+        a = np.where(rng.random(n) < eps, rng.integers(-1, 2, n), act[s])
+        s = np.clip(s + a, 0, 2 * W); visits[s] = True; off += s != W
+    return visits, off.mean()
+
+forced = student(x == 0)                 # teacher forcing: the teacher never leaves offset 0
+known = x == 0
+for _ in range(2):                       # on-policy rounds: label the states the student reaches
+    known |= rollouts(student(known))[0]
+online = student(known)
+curves = {"teacher-forced student": off_path(forced), "on-policy student, 2 rounds": off_path(online)}
+for (name, c), act in zip(curves.items(), (forced, online)):
+    assert abs(rollouts(act)[1] - c[-1]) < 0.05 * c[-1] + 0.05   # sampled rollouts match the exact chain
+slope = lambda c: np.polyfit(np.log([5, 20]), np.log(c[[4, 19]]), 1)[0]
+assert slope(curves["teacher-forced student"]) > 1.7 and slope(curves["on-policy student, 2 rounds"]) < 1.1
+
+fig, ax = plt.subplots(figsize=(6.2, 4.4))
+t = np.arange(1, T + 1)
+for name, c in curves.items():
+    ax.loglog(t, c, label=f"{name}: {c[-1]:.1f} steps off at T = {T}")
+ax.loglog(t, eps * 2 / 3 * t ** 2 / 2, c="grey", ls=":", lw=1, label="ε (2/3) T² / 2")
+ax.loglog(t, eps * 2 / 3 * t, c="grey", ls="--", lw=1, label="ε (2/3) T")
+ax.set(xlabel="sequence length T", ylabel="expected steps off the teacher's path")
+ax.set_title("Teacher forcing compounds slips; on-policy labels repair them", fontsize=11)
+ax.legend(fontsize=8.5)
+print(f"trained states: teacher forcing {int((x == 0).sum())}, on-policy {int(known.sum())} of {2 * W + 1}")
+```
+::::
+
 On-policy distillation with a separate teacher keeps that teacher resident
 during training. Off-policy distillation generates a corpus once and then
 trains against a file, so the teacher can be a closed API and the training job
