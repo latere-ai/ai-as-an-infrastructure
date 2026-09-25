@@ -10,6 +10,21 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- The home page opens like a book: a title spread with the cover beside a
+  title page (title, subtitle, author, a Start reading action, the edition,
+  language and license), then the contents by part, then the Preface.
+- The cover is drawn in SVG instead of two raster images, in the site's ink
+  palette with one red accent, in both languages and both themes, and shows
+  in full without script. The front is a cross-section of the book's parts
+  from compute to governance with a capability's path through them; the back
+  is an engineering drawing of a rack row with a title block. Hovering tilts
+  the book toward the pointer; a click, a tap, Enter or Space turns it over.
+  Under reduced motion it does not tilt, and the faces swap without turning.
+- "On this page" starts closed on the home page, where it would cover the
+  title spread.
+
 ## v0.9.7 - 2026-09-25
 
 ### Changed
