@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.4 - 2026-09-25
+
 ### Changed
 
 - An address that matches no page now answers 404 with a short page, in
