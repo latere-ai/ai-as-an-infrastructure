@@ -10,6 +10,13 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- On phones, the home page's title page repeated the cover's title,
+  subtitle and author in large type directly under the cover. Stacked, it
+  now shows only the reading actions and the edition details; the title
+  remains the page's heading for screen readers.
+
 ## v0.10.0 - 2026-09-25
 
 ### Added
