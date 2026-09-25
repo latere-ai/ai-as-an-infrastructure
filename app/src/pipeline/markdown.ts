@@ -214,7 +214,23 @@ function postProcess(html: string, ctx: RenderContext): string {
       }
       return `<figure${newAttrs}>${inner}</figure>`;
     });
-  return html;
+  return addHeadingAnchors(html, ctx.lang);
+}
+
+const ANCHOR_LABEL: Record<Lang, { link: string; copied: string }> = {
+  en: { link: "Link to this section", copied: "Link copied" },
+  zh: { link: "本节链接", copied: "链接已复制" },
+};
+
+// A link at the end of every section heading (h2, h3 with an id), so a
+// section can be shared with a URL that opens at it. The link is plain HTML
+// and works without script; the reader's click handler also copies the URL.
+// It carries no text, so heading text in the contents and search is unchanged.
+export function addHeadingAnchors(html: string, lang: Lang): string {
+  const l = ANCHOR_LABEL[lang];
+  const icon = `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6.8 9.2a2.8 2.8 0 0 0 4 0l2.2-2.2a2.8 2.8 0 0 0-4-4l-.9.9M9.2 6.8a2.8 2.8 0 0 0-4 0L3 9a2.8 2.8 0 0 0 4 4l.9-.9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`;
+  return html.replace(/<(h[23]) id="([^"]+)"([^>]*)>([\s\S]*?)<\/\1>/g, (_m, tag: string, id: string, attrs: string, inner: string) =>
+    `<${tag} id="${id}"${attrs}>${inner}<a class="rdr-anchor" href="#${id}" aria-label="${l.link}" data-copied="${l.copied}">${icon}</a></${tag}>`);
 }
 
 export function renderMarkdown(src: string, ctx: RenderContext): RenderedChapter {

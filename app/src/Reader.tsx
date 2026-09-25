@@ -117,6 +117,22 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   const [tocFits, setTocFits] = useState(true);
   const settingsRef = useRef<HTMLDivElement>(null);
 
+  // Section links: the click follows the link as usual, so the address bar
+  // gets the fragment, and also copies the full URL, confirmed on the link.
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      const a = (e.target as Element | null)?.closest?.("a.rdr-anchor");
+      if (!a) return;
+      const url = new URL(a.getAttribute("href") ?? "", location.href).href;
+      navigator.clipboard?.writeText(url).then(() => {
+        a.classList.add("is-copied");
+        window.setTimeout(() => a.classList.remove("is-copied"), 1600);
+      }).catch((err) => console.error("copy section link", err));
+    };
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, []);
+
   // Remember this page for the search dialog's list of recent pages.
   useEffect(() => { pushRecent(lang, chapter.path || "index"); }, [lang, chapter.path]);
 
