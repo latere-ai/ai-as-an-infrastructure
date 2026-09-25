@@ -5,7 +5,6 @@
 export const BASE = "https://aaai.latere.ai";
 export const SITE_NAME = "AI as an Infrastructure";
 export const AUTHOR = "Changkun Ou";
-export const SITE_CARD_EYEBROW = "A design driven technical book";
 
 // A page's absolute address. `path` is the lang-root-relative clean path
 // ("" for a language's home page), the same value ChapterData.path carries.

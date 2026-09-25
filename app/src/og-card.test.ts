@@ -1,22 +1,44 @@
-import { readFileSync } from "node:fs";
 import { expect, test } from "bun:test";
-import { SITE_CARD_EYEBROW, SITE_DESCRIPTION } from "./site.ts";
+import { cardHtml, chapterCard, type CardChapter } from "./og-card.ts";
 import { selectCards } from "./og-select.ts";
 
-const source = readFileSync(new URL("./og.ts", import.meta.url), "utf8");
+const ch = (c: Partial<CardChapter>): CardChapter => ({ partLabel: "", num: "", title: "", role: "chapter", ...c });
+const PART = "Part IX: Infrastructure and Compute";
 
-test("home share card uses reader-facing book copy", () => {
-  expect(SITE_CARD_EYEBROW).toBe("A design driven technical book");
-  expect(SITE_DESCRIPTION).toContain("lifecycle of a capability");
-  expect(source).toContain("SITE_CARD_EYEBROW");
-  expect(source).toContain("SITE_DESCRIPTION");
-  expect(source).not.toContain("A bilingual technical book");
+test("a numbered chapter card carries its part, number and title", () => {
+  const card = chapterCard(ch({ partLabel: PART, num: "67", title: "Making the Silicon" }), "en", "Book", "Author");
+  expect(card.label).toBe("Part IX · Chapter 67");
+  expect(card.title).toBe("Making the Silicon");
 });
 
-test("share card footer does not print a subtitle under the author", () => {
-  expect(source).toContain('<div class="author">${esc(AUTHOR)}</div>');
-  expect(source).not.toContain('class="kind"');
-  expect(source).not.toContain("design-first technical book");
+test("a part's opening page and its summary are titled with the part", () => {
+  const intro = chapterCard(ch({ partLabel: PART, title: PART, role: "part" }), "en", "Book", "Author");
+  const summary = chapterCard(ch({ partLabel: PART, title: "Summary" }), "en", "Book", "Author");
+  expect(intro).toMatchObject({ label: "Part IX", title: "Infrastructure and Compute" });
+  expect(summary).toMatchObject({ label: "Part IX · Summary", title: "Infrastructure and Compute" });
+});
+
+test("a page outside the parts is labeled with the book", () => {
+  expect(chapterCard(ch({ title: "Glossary" }), "en", "Book", "Author")).toMatchObject({ label: "Book", title: "Glossary" });
+});
+
+test("zh chapter cards take the zh part and chapter forms", () => {
+  const card = chapterCard(ch({ partLabel: "第九部分 · 基础设施与算力", num: "67", title: "制造芯片" }), "zh", "书", "作者");
+  expect(card.label).toBe("第九部分 · 第 67 章");
+});
+
+test("cards render in the ink palette without gradients, with text escaped", () => {
+  const chapter = cardHtml({ kind: "chapter", label: "Part I", title: "A <b> & C", author: "Author" }, "en", "", "");
+  const home = cardHtml({ kind: "home", title: "Book Title", subtitle: "The subtitle", author: "Author" }, "en", "", "<div class=\"cv\"></div>");
+  for (const html of [chapter, home]) {
+    expect(html).toContain('data-palette="ink"');
+    expect(html).toContain('data-theme="light"');
+    expect(html).not.toMatch(/gradient\(/);
+  }
+  expect(chapter).toContain("A &lt;b&gt; &amp; C");
+  expect(home).toContain('<div class="cv"></div>');
+  expect(home).toContain("The subtitle");
+  expect(cardHtml({ kind: "chapter", label: "", title: "", author: "" }, "zh", "", "")).toContain('lang="zh-Hans"');
 });
 
 test("no arguments draws every card, an href draws only that one", () => {

@@ -92,7 +92,7 @@ export function partTitle(label: string): string {
 
 // The title set on two lines the way the cover sets it: the last word of a
 // Latin title on its own line ("AI as an / Infrastructure").
-function titleLines(title: string, lang: Lang): string {
+export function titleLines(title: string, lang: Lang): string {
   if (lang === "zh" || !title.includes(" ")) return esc(title);
   const i = title.lastIndexOf(" ");
   return `<span>${esc(title.slice(0, i))}</span> <span>${esc(title.slice(i + 1))}</span>`;
