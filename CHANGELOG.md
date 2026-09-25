@@ -10,6 +10,18 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- The search field and the other header items moved sideways when the
+  reading progress reached 100%, because the count was set in a box narrower
+  than "100%". The count now keeps one width.
+
+### Changed
+
+- "On this page" shows its full list whenever it is open, at every window
+  width; the header button opens and closes it. The title-only form that
+  opened on hover is gone.
+
 ## v0.9.2 - 2026-09-25
 
 ### Fixed
