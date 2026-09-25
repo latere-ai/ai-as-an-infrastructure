@@ -14,7 +14,7 @@ import type { Book } from "../pipeline/book.ts";
 import { formatDate } from "../pipeline/dates.ts";
 import { esc } from "../figures/lib/svg.ts";
 import type { Lang } from "../types.ts";
-import { renderCover } from "./cover.ts";
+import { DEFAULT_COVER, renderCover, type CoverData, type CoverVariant, type Release } from "./cover.ts";
 
 // Where "Start reading" lands: the Preface, directly below the landing.
 export const START_ID = "preface";
@@ -66,11 +66,6 @@ const STRINGS: Record<Lang, Strings> = {
   },
 };
 
-export interface Release {
-  version: string; // "0.9.1"
-  date: string; // "2026-09-25"
-}
-
 // The newest released version in CHANGELOG.md: the first "## vX.Y.Z - date"
 // heading. Unreleased notes sit above it under their own heading and are
 // skipped, so the page names the edition a reader is actually looking at.
@@ -105,7 +100,14 @@ function titleLines(title: string, lang: Lang): string {
 
 const ARROW = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4"/></svg>`;
 
-export function renderLanding(book: Book, repoRoot: string): string {
+// What a cover draws from the book: its parts in manifest order, numbered as
+// the contents number them, and the edition.
+export function coverDataFor(book: Book, repoRoot: string): CoverData {
+  const parts = book.parts.filter((p) => !p.single);
+  return { parts: parts.map((p, i) => ({ num: ROMAN[i] ?? String(i), title: partTitle(p.label) })), release: readRelease(repoRoot) };
+}
+
+export function renderLanding(book: Book, repoRoot: string, cover: CoverVariant = DEFAULT_COVER): string {
   const lang = book.lang;
   const s = STRINGS[lang];
   const release = readRelease(repoRoot);
@@ -154,7 +156,7 @@ export function renderLanding(book: Book, repoRoot: string): string {
     + (backLinks ? `<p class="lp-back"><span>${s.alsoIn}</span> ${backLinks}</p>` : "")
     + `</nav>`;
 
-  return `<div class="lp-spread"><div class="lp-verso">${renderCover(lang)}</div>${recto}</div>`
+  return `<div class="lp-spread"><div class="lp-verso">${renderCover(lang, cover, coverDataFor(book, repoRoot))}</div>${recto}</div>`
     + contents
     + `<div class="lp-start-anchor" id="${START_ID}"></div>`;
 }

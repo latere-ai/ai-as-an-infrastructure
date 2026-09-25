@@ -18,8 +18,8 @@ import { buildCrossref } from "../pipeline/crossref.ts";
 import { loadGraphviz } from "../pipeline/diagrams.ts";
 import { loadGlossary } from "../pipeline/glossary.ts";
 import type { ChapterData, Lang } from "../types.ts";
-import { renderCover } from "./cover.ts";
-import { latestRelease, partTitle } from "./landing.ts";
+import { COVER_VARIANTS, DEFAULT_COVER, renderCover } from "./cover.ts";
+import { coverDataFor, latestRelease, partTitle, renderLanding } from "./landing.ts";
 import { MAX_TURN, mountCover, poseAt, REDUCED_MOTION, type CoverEnv } from "./tilt.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
@@ -43,7 +43,9 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const html = renderToString(createElement(Reader, { chapter: pages[lang] }));
     const cover = html.slice(html.indexOf("data-cover"));
     expect(cover.length).toBeGreaterThan(0);
-    for (const layer of LAYERS) expect(cover).toContain(`<svg class="cv-l cv-l-${layer}"`);
+    const layers = layerNames(renderCover(lang, DEFAULT_COVER, coverData[lang]));
+    expect(layers.length).toBeGreaterThanOrEqual(3);
+    for (const layer of layers) expect(cover).toContain(`<svg class="cv-l cv-l-${layer}"`);
     // The type layer draws text, so the cover reads without script or images.
     expect(cover.match(/<text\b/g)?.length ?? 0).toBeGreaterThan(10);
     expect(html.slice(html.indexOf('class="lp"'), html.indexOf('class="rdr-kicker"'))).not.toContain("<img");
@@ -74,10 +76,10 @@ test("only the home page carries a landing", () => {
   expect(other.landingHtml).toBeUndefined();
 });
 
-test("the en and zh covers share one layer structure", () => {
+test("the first cover keeps its six layers in both languages", () => {
   const layers = (html: string) => [...html.matchAll(/<svg class="cv-l cv-l-(\w+)"/g)].map((m) => m[1]);
-  expect(layers(renderCover("en"))).toEqual(LAYERS);
-  expect(layers(renderCover("zh"))).toEqual(LAYERS);
+  expect(layers(renderCover("en", "horizon"))).toEqual(LAYERS);
+  expect(layers(renderCover("zh", "horizon"))).toEqual(LAYERS);
 });
 
 test("no raster cover is referenced or shipped", () => {
@@ -113,15 +115,41 @@ test("part titles drop the part number in both manifests", () => {
 test("every cover color token has a dark value", () => {
   const css = readFileSync(join(repoRoot, "app/src/theme.css"), "utf8");
   const section = css.slice(css.indexOf("Home page (app/src/landing)"));
-  const block = (sel: string) => section.slice(section.indexOf(sel + " {"), section.indexOf("}", section.indexOf(sel + " {")));
-  const names = (s: string) => new Set([...s.matchAll(/(--cv-[\w-]+):/g)].map((m) => m[1]));
-  const light = names(block(":root"));
-  const dark = names(block(':root[data-theme="dark"]'));
-  light.delete("--cv-song"); // a font stack, not a color
-  expect([...light].filter((n) => !dark.has(n))).toEqual([]);
-  // Every token the cover and the stylesheet use is defined.
-  const used = new Set([...(renderCover("en") + renderCover("zh") + section).matchAll(/var\(--cv-([\w-]+)\)|stop-color:var\(--cv-([\w-]+)\)/g)].map((m) => `--cv-${m[1] ?? m[2]}`));
-  for (const n of used) expect({ n, defined: light.has(n) || n === "--cv-song" }).toEqual({ n, defined: true });
+  const block = (sel: string) => { const i = section.indexOf(sel); return section.slice(i, section.indexOf("}", i)); };
+  const names = (s: string) => new Set([...s.matchAll(/(--cv-[\w-]+):\s*([^;]+);/g)].filter((m) => !m[2].startsWith("var(")).map((m) => m[1]));
+  // The first cover's palette on :root, and the ink covers' shared palette.
+  const horizonLight = names(block(":root {"));
+  const horizonDark = names(block(':root[data-theme="dark"] {'));
+  horizonLight.delete("--cv-song"); // a font stack, not a color
+  expect([...horizonLight].filter((n) => !horizonDark.has(n))).toEqual([]);
+  // Every token the covers and the stylesheet use is defined.
+  const defined = new Set([...section.matchAll(/(--cv-[\w-]+):/g)].map((m) => m[1]));
+  const markup = COVER_VARIANTS.flatMap((v) => (["en", "zh"] as Lang[]).map((l) => renderCover(l, v, coverData[l]))).join("");
+  const used = new Set([...(markup + section).matchAll(/var\(--cv-([\w-]+)\)/g)].map((m) => `--cv-${m[1]}`));
+  for (const n of used) expect({ n, defined: defined.has(n) }).toEqual({ n, defined: true });
+});
+
+const coverData = { en: coverDataFor(loadBook("en", repoRoot), repoRoot), zh: coverDataFor(loadBook("zh", repoRoot), repoRoot) };
+const plain = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+const layerNames = (html: string) => [...html.matchAll(/<svg class="cv-l cv-l-(\w+)"/g)].map((m) => m[1]);
+
+for (const v of COVER_VARIANTS) {
+  test(`cover ${v}: both languages draw the same layers, with type`, () => {
+    const en = renderCover("en", v, coverData.en), zh = renderCover("zh", v, coverData.zh);
+    expect(en).toContain(`data-cover="${v}"`);
+    expect(layerNames(en).length).toBeGreaterThanOrEqual(3);
+    expect(layerNames(zh)).toEqual(layerNames(en));
+    for (const html of [en, zh]) expect(html.match(/<text\b/g)?.length ?? 0).toBeGreaterThan(5);
+  });
+}
+
+test("the landing draws the cover it is given, and a build can preview one", () => {
+  const book = loadBook("en", repoRoot);
+  for (const v of COVER_VARIANTS) expect(renderLanding(book, repoRoot, v)).toContain(`data-cover="${v}"`);
+  expect(pages.en.landingHtml).toContain(`data-cover="${DEFAULT_COVER}"`);
+  const prev = process.env.AAAI_COVER;
+  process.env.AAAI_COVER = "no-such-cover";
+  try { expect(() => home("en")).toThrow(/AAAI_COVER/); } finally { if (prev === undefined) delete process.env.AAAI_COVER; else process.env.AAAI_COVER = prev; }
 });
 
 // A stand-in for the cover root and the window, recording what the tilt does.
