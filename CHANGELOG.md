@@ -10,6 +10,13 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- Scrollbars in the reader, the sidebar's among them, were always visible,
+  because the reader styled them and a styled scrollbar is never hidden. The
+  style now applies only where the system shows scrollbars permanently;
+  elsewhere they hide until scrolling, as the system does.
+
 ## v0.9.5 - 2026-09-25
 
 ### Added
