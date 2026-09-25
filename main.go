@@ -218,10 +218,10 @@ func serveStatic(w http.ResponseWriter, r *http.Request, p string) {
 	// One page must not be reachable under two spellings. A page's own links and
 	// images are relative, and the browser resolves them against the directory
 	// of the URL it is on, so "/en" and "/en/" are not interchangeable: at "/en"
-	// the cover image "figures/cover-dark.png" resolves to "/figures/..." and
-	// 404s. Each form therefore serves only if it is the canonical one, and 301s
-	// to the other when it is not: a directory index takes the trailing slash, a
-	// page file does not.
+	// the home page's "search.json" resolves to "/search.json" and 404s. Each
+	// form therefore serves only if it is the canonical one, and 301s to the
+	// other when it is not: a directory index takes the trailing slash, a page
+	// file does not.
 	if name == "" || strings.HasSuffix(name, "/") {
 		if writeFile(w, r, name+"index.html", false) {
 			return

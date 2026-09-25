@@ -68,7 +68,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
   rmSync(langOut, { recursive: true, force: true });
   mkdirSync(langOut, { recursive: true });
 
-  // figures (committed SVGs + covers)
+  // figures (committed SVGs)
   const figSrc = join(repoRoot, lang, "figures");
   if (existsSync(figSrc)) cpSync(figSrc, join(langOut, "figures"), { recursive: true });
 

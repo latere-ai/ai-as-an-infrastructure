@@ -110,7 +110,7 @@ func TestRouting(t *testing.T) {
 
 	// One page, one URL. A page's images and links are relative, so serving the
 	// same file under both spellings breaks every one of them on the wrong form:
-	// at "/en" the home's "figures/cover-dark.png" would resolve to "/figures/".
+	// at "/en" the home's "search.json" would resolve to "/search.json".
 	// A directory index keeps the trailing slash, a page file drops it.
 	loc(t, nf, base, "/en", "/en/", "")
 	loc(t, nf, base, "/zh", "/zh/", "")
