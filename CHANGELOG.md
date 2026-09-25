@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.0 - 2026-09-25
+
 ### Added
 
 - A new Practice chapter, Wiring the Training Stack, assembles the stack a
