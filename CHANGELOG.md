@@ -10,6 +10,16 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- The reading measure is wider: Codex, the default, sets 828 px of text in
+  English and 756 px in Chinese, Manuscript 720 px and 684 px. Code cells,
+  code blocks, tables and display math break out of the measure into the
+  full column, up to 1,296 px: a code cell sets its code beside its output,
+  and code blocks and tables grow only as far as their content needs.
+- "On this page" is a card pinned to the top right, as tall as its list,
+  instead of a full-height column with its own rule.
+
 ## v0.9.0 - 2026-09-25
 
 ### Fixed
