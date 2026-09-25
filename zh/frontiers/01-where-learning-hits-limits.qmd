@@ -39,21 +39,7 @@ $$
 
 这个方程假设 $S$ 固定，且 $g$ 代表固定的指数增长率。论文使用了更完整的不确定性模型；这里的方程只用于敏感性计算。
 
-:::: {.runnable}
-```python
-from math import log
-
-stock_trillion = 400.0
-start_trillion = 15.0
-start_year = 2024.0
-
-for annual_growth in (2.4, 1.8, 3.0):
-    crossing = start_year + log(stock_trillion / start_trillion) / log(annual_growth)
-    print(f"{annual_growth:.1f}x/year crossing: {crossing:.2f}")
-```
-::::
-
-15 万亿词元的起点和 400 万亿词元的存量，取自论文报告的 2024 年规模与有效交点存量，仅用作示例。若每年增长 2.4 倍，这个简单计算得到的交点是 2027 年末；增长放慢后，结果会推迟数年。它并不复现论文的蒙特卡洛预测。
+15 万亿词元的起点和 400 万亿词元的存量，取自论文报告的 2024 年规模与有效交点存量，仅用作示例。若每年增长 2.4 倍，上式给出的交点是 2027 年末；增长放慢后，结果会推迟数年。它并不复现论文的蒙特卡洛预测。
 
 ```{figure}
 //| figure: data-crossing
@@ -145,6 +131,63 @@ $$
 这里，$n$ 是候选池大小，$c_x$ 是其中被接受的数量，$\binom{a}{b}$ 是从 $a$ 个元素中选取 $b$ 个元素的组合数，上方的帽子表示估计量 [@chen2021humaneval]。两种表达式都假设样本来自固定解码器，彼此可交换或相互独立，而且验证器可信。它是覆盖率指标，不是最终返回答案的可靠性。部署系统仍然需要选择规则。高 pass@k 无法判断应该返回哪个候选结果；有限 $k$ 下没有观察到成功，也不能证明 $p=0$。
 
 Yue 等人在 NeurIPS 2025 发表的研究中，在数学、编程和视觉推理任务上评估了六种 RLVR 算法。在所测试的设置中，强化学习后的检查点在较小 $k$ 下更好；$k$ 增大后，强化学习开始前的初始检查点会追平或超过它。对这些模型家族、提示、解码器与预算而言，结果支持「激发」解释 [@yue2025rlvr]，但它并不是强化学习无法创造新策略的定理，这里的策略指模型选择输出的规则。
+
+这一现象背后有一个简单机制，下面的单元格复现了它。单元格构造 400 道玩具题，每题有八个候选答案，验证器只接受其中一个；强化学习被建模为单纯的锐化：训练后的策略以温度 `T = 0.5` 对基座模型的 logits 采样，因此给不出基座模型给不出的答案。对两个策略，单元格每题抽取 $n=200$ 个样本，用上面的估计量根据被接受的次数计算 pass@k，并断言它的平均值与精确的 pass@k 一致。对被接受答案本来就最可能出现的题目，锐化会提高 $p$；其余题目的 $p$ 则被压向零。所以锐化后的策略在 $k=1$ 时领先，基座模型从 $k=4$ 起领先。把 `T` 改为 `0.3`：pass@1 进一步上升，pass@128 从 0.87 降到 0.73，基座模型从 $k=2$ 起就已领先。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+X, M, n = 400, 8, 200             # 题目数、每题候选答案数、每题采样数
+T = 0.5                           # 把强化学习看作锐化：相对基座模型的采样温度；可改为 0.3
+logits = rng.normal(0, 1.5, (X, M))
+right = rng.integers(0, M, X)     # 验证器唯一接受的答案
+logits[np.arange(X), right] += 1.5
+
+def solve_rate(temp):             # 该温度下单次采样的 p = Pr[v(x, Y) = 1]
+    w = np.exp(logits / temp)
+    return (w / w.sum(1, keepdims=True))[np.arange(X), right]
+
+ks = 2 ** np.arange(8)            # k = 1 .. 128
+lf = np.concatenate([[0], np.cumsum(np.log(np.arange(1, n + 1)))])   # log m!
+def chen(c, k):                   # 1 - C(n - c, k) / C(n, k)，不放回抽取
+    a = np.maximum(n - c, k)
+    return np.where(n - c < k, 1.0, 1 - np.exp(lf[a] - lf[a - k] - lf[n] + lf[n - k]))
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.0))
+curves = []
+for i, (name, temp) in enumerate([("基座模型", 1.0), ("强化学习后", T)]):
+    p = solve_rate(temp)
+    c = rng.binomial(n, p)        # 每题 n 次采样中被接受的次数
+    exact = np.array([np.mean(1 - (1 - p) ** k) for k in ks])
+    est = np.array([chen(c, k).mean() for k in ks])
+    assert np.abs(est - exact).max() < 0.03          # 估计量无偏
+    ax.plot(ks, exact, color=f"C{i}", label=name)
+    ax.plot(ks, est, "o", color=f"C{i}", ms=5)
+    curves.append((p, exact))
+(pb, eb), (pr, er) = curves
+assert er[0] > eb[0] and eb[-1] > er[-1]             # 强化学习在 k = 1 时领先，在 k = 128 时落后
+cross = ks[np.argmax(eb > er)]
+ax.axvline(cross, color="grey", ls=":", lw=1)
+ax.set(xscale="log", xticks=ks, xticklabels=ks, xlabel="采样数 k", ylabel="pass@k",
+       title=f"从 k = {cross} 起基座模型领先；圆点为 n = {n} 的估计")
+ax.minorticks_off()
+ax.legend(fontsize=9, loc="lower right")
+
+mode = logits.argmax(1) == right  # 被接受的答案正是基座模型最可能给出的答案
+bx.scatter(pb[mode], pr[mode], s=9, color="C2", label="被接受的答案概率最高")
+bx.scatter(pb[~mode], pr[~mode], s=9, color="C1", label="其他答案概率最高")
+bx.plot([0, 1], [0, 1], color="grey", lw=0.8)
+bx.set(xlabel="每题的 p（基座模型）", ylabel="每题的 p（强化学习后）",
+       title="锐化把 p 推向 1 或推向 0")
+bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"pass@1 {eb[0]:.2f} -> {er[0]:.2f}；pass@128 {eb[-1]:.2f} -> {er[-1]:.2f}；"
+      f"强化学习后 {np.mean(pr < 0.01):.0%} 的题目 p 低于 0.01，之前为 {np.mean(pb < 0.01):.0%}")
+```
+::::
 
 ProRL 使用了不同的训练协议：延长强化学习训练，并施加 KL 控制，也就是用一个惩罚项让训练中的模型不偏离参考模型太远；同时定期重置参考模型，使用多样化任务，并从一个 15 亿参数的蒸馏推理模型开始。论文报告，候选预算增加到 256 时仍有增益，其中一些任务在初始检查点的 256 个样本中没有观察到成功 [@prorl2025]。有限样本中的零成功，不代表任何预算下都不可能成功。两项研究在经验结果上存在分歧，比较二者也不能据此确定绝对的能力边界。2025 年底以来的研究发现，强化学习是扩大还是缩小大 $k$ 下的覆盖范围，取决于训练设置，尤其是哪些题目得到更新、预训练还留有多少余地；@sec-training-to-reason 梳理了这些证据。
 

@@ -86,23 +86,6 @@ reasonable alternative fits lowered recent models' 50 percent horizons by up to
 35 percent and raised their 80 percent horizons by up to 100 percent
 [@barry2026modelling].
 
-The following calculation uses 18 hours and 3.5 hours only as illustrative
-midpoints of early-2026 reported ranges. It recovers the slope implied by those
-two thresholds; it does not refit METR's task-level data.
-
-:::: {.runnable}
-```python
-from math import log
-
-h50 = 18.0
-h80 = 3.5
-beta = log(4.0) / log(h50 / h80)
-
-print(f"fitted slope: {beta:.3f}")
-print(f"50% / 80% horizon ratio: {h50 / h80:.3f}")
-```
-::::
-
 A second intuition, kept separate from the fitted curve, explains why long
 workflows can be fragile. If a task had $n$ independent, homogeneous steps, each
 succeeding with probability $p$, its all-step success probability would be
@@ -153,6 +136,73 @@ reported a shorter one still for a fit from 2024. Values from different windows
 answer different questions, so a list of them does not show one doubling time
 shrinking within a few weeks. Task composition, baseline estimation, model
 selection, and the short recent window all affect the trend.
+
+The following cell runs that estimation pipeline on simulated outcomes with a
+known answer. Seven models, released five months apart, have true 50 percent
+horizons that double every seven months and a common slope $\beta=0.6$; each
+attempts 170 tasks from one minute to 16 hours four times. The cell fits
+$\sigma(\alpha-\beta\ln d)$ to each model by Newton's method, regresses
+$\log_2 h_{0.5}$ on release month, and resamples tasks 200 times; it asserts
+that the bootstrap interval, 5.7 to 7.3 months around a fit of 6.4, contains
+the true doubling time. It then refits with an L2 penalty `lam` that pulls
+$\beta$ toward zero, like the regularization METR removed. The flatter curves
+raise the latest model's horizon from 107 to 131 minutes and lower the earliest
+model's, so the same outcomes yield a doubling time of 5.4 months. Set
+`lam = 300` and the penalized doubling time falls to 4.2 months, while the
+unpenalized fit does not move.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(3)
+beta, doubling = 0.6, 7.0          # true slope and true h50 doubling time in months
+lam = 100.0                        # L2 penalty that pulls the fitted beta toward 0; try 300
+months = np.arange(0, 31, 5)       # release month of each model
+h50 = 4 * 2 ** (months / doubling) # true 50 percent horizon in minutes
+d = np.exp(rng.uniform(0, np.log(16 * 60), 170))            # human minutes, 1 min to 16 h
+y = rng.binomial(4, 1 / (1 + np.exp(-beta * np.log(h50[:, None] / d))))  # 4 attempts per task
+X = np.stack([np.ones_like(d), -np.log(d)], 1)              # eta = alpha - beta ln d
+
+def fit(w, penalty):               # Newton steps on the weighted, penalized log-likelihood
+    th = np.zeros(w.shape[:-1] + (2,))
+    for _ in range(12):
+        s = 1 / (1 + np.exp(-(th @ X.T)))
+        g = ((w * (y - 4 * s)) @ X) - penalty * th * [0, 1]
+        H = np.einsum("...t,ti,tj->...ij", w * 4 * s * (1 - s), X, X) + penalty * np.diag([0, 1])
+        th = th + np.linalg.solve(H, g[..., None])[..., 0]
+    return th                      # (alpha, beta); h_q = exp((alpha - logit q) / beta)
+
+boot = rng.multinomial(len(d), np.ones(len(d)) / len(d), 200)[:, None, :]  # resample tasks
+th0, thp, thb = fit(np.ones((len(months), len(d))), 0), fit(np.ones((len(months), len(d))), lam), fit(boot, 0)
+lh = lambda th: np.log2(np.exp(th[..., 0] / th[..., 1]))    # log2 of the fitted h50
+dt = lambda l: 1 / np.polyfit(months, l.T, 1)[0]            # months per doubling
+lo, hi = np.percentile(dt(lh(thb)), [2.5, 97.5])
+assert lo < doubling < hi and abs(lh(th0) - np.log2(h50)).max() < 0.8
+assert lh(thp)[-1] >= lh(th0)[-1] and lh(thp)[0] <= lh(th0)[0]   # the penalty spreads the horizons
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.2))
+grid = np.exp(np.linspace(0, np.log(16 * 60), 200))
+ax.plot(d, y[-1] / 4 + rng.uniform(-0.03, 0.03, len(d)), ".", color="grey", ms=4, alpha=0.6)
+for th, style, label in [(th0[-1], "-", "fit"), (thp[-1], "--", f"fit, penalty {lam:g}")]:
+    ax.plot(grid, 1 / (1 + np.exp(-(th[0] - th[1] * np.log(grid)))), style, label=label)
+ax.plot(grid, 1 / (1 + np.exp(-beta * np.log(h50[-1] / grid))), color="grey", lw=1, label="true curve")
+ax.set(xscale="log", xlabel="human task time (minutes)", ylabel="success share of 4 attempts",
+       title=f"Latest model: true h50 {h50[-1]:.0f} min, fit {2 ** lh(th0)[-1]:.0f}, penalized {2 ** lh(thp)[-1]:.0f}")
+ax.legend(fontsize=9)
+q = np.percentile(lh(thb), [2.5, 97.5], axis=0)
+bx.errorbar(months, lh(th0), yerr=[lh(th0) - q[0], q[1] - lh(th0)], fmt="o", capsize=3, label="fit, 95% bootstrap")
+bx.plot(months, lh(thp), "s", mfc="none", color="C1", label=f"fit, penalty {lam:g}")
+bx.plot(months, np.log2(h50), color="grey", lw=1, label="true trend")
+bx.set(xlabel="release month", ylabel="log2 h50 (minutes)",
+       title=f"Doubling: true {doubling:.1f}, fit {dt(lh(th0)):.1f} [{lo:.1f}, {hi:.1f}], penalized {dt(lh(thp)):.1f} months")
+bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"doubling time {dt(lh(th0)):.2f} months (95% bootstrap {lo:.2f} to {hi:.2f}); "
+      f"with the penalty {dt(lh(thp)):.2f}")
+```
+::::
 
 ::: {.callout-note .dated}
 ## As of September 2026

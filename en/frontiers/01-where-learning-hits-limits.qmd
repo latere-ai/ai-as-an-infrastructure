@@ -77,23 +77,9 @@ This equation assumes a fixed $S$ and constant exponential growth $g$. The
 published forecast uses a richer uncertainty model; the equation here serves
 only as a sensitivity calculation.
 
-:::: {.runnable}
-```python
-from math import log
-
-stock_trillion = 400.0
-start_trillion = 15.0
-start_year = 2024.0
-
-for annual_growth in (2.4, 1.8, 3.0):
-    crossing = start_year + log(stock_trillion / start_trillion) / log(annual_growth)
-    print(f"{annual_growth:.1f}x/year crossing: {crossing:.2f}")
-```
-::::
-
 The 15T starting point and 400T stock are illustrative inputs taken from the
 paper's reported 2024 scale and effective crossing stock. At 2.4x annual
-growth, this simple calculation gives late 2027. Slower growth moves the answer
+growth, the equation gives late 2027. Slower growth moves the answer
 by years. It does not reproduce the paper's Monte Carlo forecast.
 
 ```{figure}
@@ -261,6 +247,73 @@ passed them at larger $k$. The result supports an elicitation interpretation
 for those model families, prompts, decoders, and budgets [@yue2025rlvr]. It is
 not a theorem that RL cannot create a new policy, where the policy is the
 model's rule for choosing outputs.
+
+The pattern has a simple mechanism, which the following cell reproduces. It
+builds 400 toy problems, each with eight candidate answers of which the
+verifier accepts one, and models RL as pure sharpening: the trained policy
+samples the base model's logits at temperature `T = 0.5`, so it can produce no
+answer the base model could not. For both policies the cell draws $n=200$
+samples per problem, computes the estimator above from the accepted counts, and
+asserts that its average matches the exact pass@k. Sharpening raises $p$ on
+problems where the accepted answer was already the most likely one and pushes
+the other problems toward zero, so the sharpened policy wins at $k=1$ and the
+base model leads from $k=4$. Set `T = 0.3`: pass@1 rises further, pass@128
+falls from 0.87 to 0.73, and the base model leads from $k=2$.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+X, M, n = 400, 8, 200             # problems, candidate answers per problem, samples per problem
+T = 0.5                           # RL as sharpening: sampling temperature against the base; try 0.3
+logits = rng.normal(0, 1.5, (X, M))
+right = rng.integers(0, M, X)     # the one answer the verifier accepts
+logits[np.arange(X), right] += 1.5
+
+def solve_rate(temp):             # p = Pr[v(x, Y) = 1] for one sample at this temperature
+    w = np.exp(logits / temp)
+    return (w / w.sum(1, keepdims=True))[np.arange(X), right]
+
+ks = 2 ** np.arange(8)            # k = 1 .. 128
+lf = np.concatenate([[0], np.cumsum(np.log(np.arange(1, n + 1)))])   # log m!
+def chen(c, k):                   # 1 - C(n - c, k) / C(n, k), without replacement
+    a = np.maximum(n - c, k)
+    return np.where(n - c < k, 1.0, 1 - np.exp(lf[a] - lf[a - k] - lf[n] + lf[n - k]))
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.0))
+curves = []
+for i, (name, temp) in enumerate([("base", 1.0), ("after RL", T)]):
+    p = solve_rate(temp)
+    c = rng.binomial(n, p)        # accepted samples out of n drawn per problem
+    exact = np.array([np.mean(1 - (1 - p) ** k) for k in ks])
+    est = np.array([chen(c, k).mean() for k in ks])
+    assert np.abs(est - exact).max() < 0.03          # the estimator is unbiased
+    ax.plot(ks, exact, color=f"C{i}", label=name)
+    ax.plot(ks, est, "o", color=f"C{i}", ms=5)
+    curves.append((p, exact))
+(pb, eb), (pr, er) = curves
+assert er[0] > eb[0] and eb[-1] > er[-1]             # RL wins at k = 1, loses at k = 128
+cross = ks[np.argmax(eb > er)]
+ax.axvline(cross, color="grey", ls=":", lw=1)
+ax.set(xscale="log", xticks=ks, xticklabels=ks, xlabel="samples k", ylabel="pass@k",
+       title=f"The base model leads from k = {cross}; dots: estimate, n = {n}")
+ax.minorticks_off()
+ax.legend(fontsize=9, loc="lower right")
+
+mode = logits.argmax(1) == right  # the accepted answer is the base model's most likely one
+bx.scatter(pb[mode], pr[mode], s=9, color="C2", label="accepted answer is the mode")
+bx.scatter(pb[~mode], pr[~mode], s=9, color="C1", label="another answer is the mode")
+bx.plot([0, 1], [0, 1], color="grey", lw=0.8)
+bx.set(xlabel="p per problem, base", ylabel="p per problem, after RL",
+       title="Sharpening moves p toward 1 or toward 0")
+bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"pass@1 {eb[0]:.2f} -> {er[0]:.2f}; pass@128 {eb[-1]:.2f} -> {er[-1]:.2f}; "
+      f"{np.mean(pr < 0.01):.0%} of problems fall below p = 0.01 after RL, {np.mean(pb < 0.01):.0%} before")
+```
+::::
 
 ProRL used a different training protocol: prolonged RL with KL control, a
 penalty that keeps the trained model close to a reference model, periodic
