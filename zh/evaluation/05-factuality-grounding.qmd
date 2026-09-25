@@ -113,6 +113,65 @@ $$
 
 应当展示整个覆盖度范围内的风险，不能看过测试结果后才挑阈值。部署阈值属于成本政策：医疗助手、问答工具和内部搜索框，对错误、拒答和升级处理的代价并不相同。校准与选择彼此相关，但并不相同。若随机变量 $P$ 和 $Z$ 分别表示目标总体上的报告置信度和候选答案正确性，那么概率校准要求在相关的 $p$ 取值上满足 $\Pr(Z=1\mid P=p)=p$。应用弃答阈值之前，要先检查这项关系。只在已发布答案上校准会描述一个经过筛选的子集，可能把阈值以下的失败藏起来。
 
+下面的单元格把这两种性质分开。一个过度自信的系统报告 $p_n=\sigma(2z_n)$，其中 $z_n$ 是其答案正确的真实对数几率。单元格在 6,000 个案例的一半上用牛顿法拟合温度 $T$，得到 $q_n=\sigma(\operatorname{logit}(p_n)/T)$，再在另一半上画出可靠性图和风险-覆盖度曲线。温度缩放找回 $T\approx2$，把期望校准误差从 0.10 降到 0.015；但它是单调变换，所以单元格断言风险-覆盖度曲线保持不变。改变的是阈值的含义：按报告置信度 0.9 发布，覆盖 43% 的案例，风险为 0.14；按校准后的置信度用同一阈值，只发布 15%，风险为 0.05，满足该阈值本应保证的 0.1。把 `over` 改为 `1.0`，两个工作点几乎重合。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+N, over = 6000, 2.0                   # 问题数；对数几率上的过度自信倍数，可改为 1.0
+z = rng.normal(0.8, 1.5, N)           # 候选答案正确的真实对数几率
+right = rng.random(N) < 1 / (1 + np.exp(-z))
+logit = over * z                      # 系统报告的置信度 p_n = sigma(logit)
+cal, test = np.arange(N) < N // 2, np.arange(N) >= N // 2    # 一半用于拟合，另一半用于报告
+
+s = 1.0                               # 温度缩放：q = sigma(s * logit)，s = 1 / T
+for _ in range(20):                   # 在拟合用的一半数据上，对负对数似然做牛顿迭代
+    q = 1 / (1 + np.exp(-s * logit[cal]))
+    s -= ((q - right[cal]) @ logit[cal]) / ((q * (1 - q)) @ logit[cal] ** 2)
+p_raw, p_cal = 1 / (1 + np.exp(-logit[test])), 1 / (1 + np.exp(-s * logit[test]))
+y = right[test]
+
+def ece(p, bins=10):                  # 期望校准误差，等宽分箱
+    b = np.minimum((p * bins).astype(int), bins - 1)
+    return sum(abs(y[b == k].mean() - p[b == k].mean()) * (b == k).mean() for k in range(bins) if (b == k).any())
+
+def risk_coverage(p):                 # 先发布置信度最高的答案
+    order = np.argsort(-p, kind="stable")
+    wrong = np.cumsum(~y[order])
+    return np.arange(1, len(p) + 1) / len(p), wrong / np.arange(1, len(p) + 1)
+
+cov, risk = risk_coverage(p_raw)
+assert np.allclose(risk, risk_coverage(p_cal)[1])     # 单调的再校准不改变这条曲线
+assert abs(1 / s / over - 1) < 0.1 and ece(p_cal) <= max(ece(p_raw) / 3, 0.02)
+t = 0.9                               # 置信度 >= t 时发布，本意是让风险低于 1 - t
+ops = [((p >= t).mean(), 1 - y[p >= t].mean()) for p in (p_raw, p_cal)]
+assert ops[1][1] <= 1 - t
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.0))
+for k, (p, name) in enumerate([(p_raw, "报告的置信度"), (p_cal, "温度缩放后")]):
+    b = np.minimum((p * 10).astype(int), 9)
+    ks = [k2 for k2 in range(10) if (b == k2).sum() > 20]
+    ax.plot([p[b == k2].mean() for k2 in ks], [y[b == k2].mean() for k2 in ks], "o-", color=f"C{k}",
+            label=f"{name}: ECE {ece(p):.3f}")
+ax.plot([0, 1], [0, 1], color="grey", lw=0.8)
+ax.set(xlabel="分箱内的平均置信度", ylabel="答对比例", title=f"留出数据上的可靠性图；拟合的 T = {1 / s:.2f}")
+ax.legend(fontsize=9)
+bx.plot(cov, risk, color="grey", lw=1.5, label="风险-覆盖度曲线，两种置信度相同")
+for k, (c, r) in enumerate(ops):
+    bx.plot(c, r, "os"[k], color=f"C{k}", ms=8, label=f"{['报告值', '缩放后'][k]} >= {t}：覆盖度 {c:.2f}，风险 {r:.2f}")
+bx.axhline(1 - t, color="grey", ls="--", lw=1)
+bx.set(xlim=(0, 1), ylim=(0, 0.4), xlabel="覆盖度（已发布答案的比例）", ylabel="选择性风险",
+       title="同一条曲线，不同的工作点")
+bx.legend(fontsize=9, loc="upper left")
+fig.tight_layout()
+print(f"阈值 {t}：按报告的置信度发布 {ops[0][0]:.0%}，风险 {ops[0][1]:.3f}；"
+      f"按校准后的置信度发布 {ops[1][0]:.0%}，风险 {ops[1][1]:.3f}")
+```
+::::
+
 ## 逐段诊断有据生成流水线
 
 检索增强生成会增加失效面，并不会让回答天然有据。这条流水线先从语料库检索段落，经过重排并打包进模型的上下文，再生成回答、附上引用。每个阶段都要用它收到的工件来测试：

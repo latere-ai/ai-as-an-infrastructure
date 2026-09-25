@@ -133,6 +133,57 @@ observe -> triage -> de-identify -> reproduce -> label and test grader
 
 应结合三种互补的监控信号。固定哨兵案例用来发现本应固定的系统是否变化；抽样线上流量估计当前服务群体中的实际行为；延迟结果标签把代理得分与任务完成、纠正、申诉或事故等事件连接起来。第一种稳定但范围窄，第二种及时却需要兼顾隐私的抽样和评分，第三种最接近用户价值，却往往来得晚而且有选择偏差。直接风险监控方法可以使用抽样或延迟标签，并在反复查看结果时继续提供保证，但它仍然依赖事先声明的损失函数（逐条预测的误差度量，其平均值就是被跟踪的风险）和抽样过程 [@podkopaev2022tracking]。
 
+下面的单元格在一条数据流上比较三种监控方法：每天评分 200 个样本，可容忍的错误率为 $p_0=0.10$。第一种每天用截至当天的全部数据重复一次固定样本量的 $z$ 检验。第二种是下注式 e 过程：每个样本把财富乘以 $1+\lambda(x-p_0)$；只要错误率不高于 $p_0$，财富的期望就不会增长，因此由 Ville 不等式，无论查看多少次，财富达到 $1/\alpha$ 的概率都不超过 $\alpha$。第三种在财富跌破 1 时重新开始下注，也就是 CUSUM 形式，并把 $\alpha$ 分摊到 60 个可能的重启日上。在 4,000 条没有退化的模拟数据流上，单元格断言每日 $z$ 检验的误报率超过名义 5% 的三倍（实际为 28%），两种 e 过程都没有超出预算。第 30 天错误率升至 0.13 后，可重启的监控在第 36 天前已在半数数据流中报警，与不做校正的检验一样快；从第 1 天开始的 e 过程在前 30 个正常日里一直输掉财富，到第 60 天只在 49% 的数据流中报警。把 `p1` 改为 `0.12`，可重启的监控要到第 43 天才在半数数据流中报警。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from statistics import NormalDist
+
+rng = np.random.default_rng(0)
+S, D, n = 4000, 60, 200               # 模拟的数据流条数、天数、每天评分的样本数
+p0, p1, change = 0.10, 0.13, 30       # 可容忍的错误率；第 30 天退化后的错误率，可改为 0.12
+alpha = 0.05                          # 整个观察窗口的误报预算
+lam = (p1 - p0) / (p0 * (1 - p0))     # 每个样本的下注比例，按要捕捉的退化幅度设定
+
+def alarmed(k):                       # k：每天的错误数，形状 (S, D)；返回「截至第 t 天是否已报警」
+    N, K = n * np.arange(1, D + 1), np.cumsum(k, 1)
+    z = (K / N - p0) / np.sqrt(p0 * (1 - p0) / N)          # 固定样本量的检验，每天重复一次
+    naive = z > NormalDist().inv_cdf(1 - alpha)
+    e = k * np.log1p(lam * (1 - p0)) + (n - k) * np.log1p(-lam * p0)   # 当天各样本 1 + lam (x - p0) 之积的对数
+    wealth = np.cumsum(e, 1) >= np.log(1 / alpha)          # Ville 不等式：Pr[财富曾经 >= 1 / alpha] <= alpha
+    c, cus = np.zeros(S), np.zeros((S, D))
+    for t in range(D):                # 财富跌破 1 时重新开始下注
+        c = np.maximum(c, 0) + e[:, t]
+        cus[:, t] = c
+    cusum = cus >= np.log(D / alpha)  # 对 D 个重启日取并集上界
+    return [np.maximum.accumulate(m, 1) for m in (naive, wealth, cusum)]
+
+null = alarmed(rng.binomial(n, p0, (S, D)))
+drift = alarmed(rng.binomial(n, np.where(np.arange(D) < change, p0, p1), (S, D)))
+fa = [m[:, -1].mean() for m in null]
+assert fa[0] > 3 * alpha and fa[1] <= alpha + 0.01 and fa[2] <= alpha + 0.01
+
+days = np.arange(1, D + 1)
+names = ["每日 z 检验，不做校正", "从第 1 天起的 e 过程", "可重启的 e 过程（CUSUM）"]
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.0), sharex=True)
+for i in range(3):
+    ax.plot(days, null[i].mean(0), color=f"C{i}", label=f"{names[i]}: {fa[i]:.0%}")
+    bx.plot(days, drift[i].mean(0), color=f"C{i}")
+ax.axhline(alpha, color="grey", ls="--", lw=1)
+ax.set(ylabel="截至当天已报警的数据流比例", title=f"没有退化：错误率保持在 {p0}")
+ax.legend(fontsize=9)
+bx.axvline(change, color="grey", ls=":", lw=1)
+bx.set(xlabel="天", ylabel="截至当天已报警的数据流比例", title=f"第 {change} 天错误率升至 {p1}")
+fig.tight_layout()
+delay = [np.median(np.argmax(m[:, change:], 1)[m[:, -1]]) for m in drift]
+print(f"{D} 天内的误报率：{fa[0]:.1%}、{fa[1]:.1%}、{fa[2]:.1%}；退化发生后，"
+      f"半数数据流在第 {change + delay[2]:.0f} 天前由 CUSUM 报警，从第 1 天起的 e 过程到第 {D} 天"
+      f"只在 {drift[1][:, -1].mean():.0%} 的数据流中报警")
+```
+::::
+
 输入分布告警可以帮助定位变化。Rabanser、Günnemann 和 Lipton 比较了多种数据集迁移检测方法，发现在他们研究的图像迁移中，基于表示的双样本方法（检验两份由模型计算出的输入向量样本是否来自同一分布）表现有效 [@rabanser2019failing]。这个结果并不意味着提示嵌入（模型为提示计算出的向量）之间的距离就是质量结论。分布告警不能证明质量回退，稳定的输入分布也不能证明行为稳定。应把信号送去调查，再检查受影响切片上的实际结果。
 
 欠定性是另一项相关限制：如果测试没有约束所有相关行为，那么留出集（训练时没有用到的数据）得分相近的系统，在部署后仍可能表现不同 [@damour2020underspecification]。因此，运营监控必须保留结果和切片证据，不能只确认汇总数字看起来接近发布时的得分。

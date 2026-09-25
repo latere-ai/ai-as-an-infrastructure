@@ -139,6 +139,71 @@ $$
 
 不存在适用于所有评测的安全阈值。报告应当同时给出系数的不确定性、原始一致率、标签占比、混淆模式、标注者和单位数量、缺失情况，以及具体使用的系数变体。系数必须基于同一评分准则版本下彼此独立的原始判断计算。把仲裁后的标签或多个评分准则版本混在一起，只会得到一个容易计算却没有一致解释的数字。
 
+下面的单元格用符合矩阵（coincidence matrix）计算 $\alpha$：四位标注者在五级量表上为 80 个单位打分，30% 的分配缺失。每位标注者读取单位的潜在质量时带有噪声，还带有各自的宽严偏移。单元格从两方面检验这个系数。一是闭式解：两位标注者完整标注且使用名义距离时，$\alpha$ 可由 Scott 的 $\pi$ 直接算出。二是与随机水平比较：把所有已有标签在已有格子之间随机打乱后，$\alpha$ 接近零，单元格对每种距离函数都断言这一点。95% 区间来自按单位重抽样。使用名义距离时 $\alpha$ 只有 0.17，因为 3 与 4 的差别被算作完全不一致；同一批标签在有序距离和区间距离下都得到 0.47。把 `sev` 改为 `[0, 1, -1, 1.5]`：标注者仍按同一个潜在质量给单位排序，有序 $\alpha$ 却降到 0.19，因为 $\alpha$ 衡量的是标签本身是否一致，而不是排序是否一致。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+U, R, L = 80, 4, 5                        # 单位数、标注者数、有序等级 1..5
+sev = np.array([0.0, 0.3, -0.3, 0.6])     # 各标注者在潜在尺度上的宽严偏移；可改为 [0, 1, -1, 1.5]
+full = np.clip(np.rint(rng.normal(3, 1, U) + sev[:, None] + rng.normal(0, 0.7, (R, U))), 1, L)
+X = np.where(rng.random((R, U)) < 0.3, np.nan, full)   # 30% 的分配缺失
+lv = np.arange(1, L + 1)
+
+def coincidence(X):                       # 在可配对的单位上累计 o_ck，每个单位权重为 1 / (m_u - 1)
+    N = (X[..., None] == lv).sum(-3).astype(float)       # (..., 单位, 等级)
+    m = N.sum(-1, keepdims=True)
+    W = np.where(m > 1, N / np.maximum(m - 1, 1), 0)
+    return np.einsum("...uc,...uk->...ck", W, N) - np.einsum("...uc,ck->...ck", W, np.eye(L))
+
+def alpha(X, metric):                     # 1 - D_o / D_e
+    o = coincidence(X); nc = o.sum(-1); n = nc.sum(-1)[..., None, None]
+    c, k = np.meshgrid(lv - 1, lv - 1, indexing="ij")
+    if metric == "nominal": d2 = (c != k) * 1.0
+    elif metric == "interval": d2 = (c - k) ** 2.0
+    else:                                 # 有序：两个等级之间累计频数的平方
+        cs = np.cumsum(nc, -1)
+        lo, hi = np.minimum(c, k), np.maximum(c, k)
+        d2 = (cs[..., hi] - cs[..., lo] + (nc[..., lo] - nc[..., hi]) / 2) ** 2
+    De = (nc[..., :, None] * nc[..., None, :] * d2).sum((-1, -2)) / (n[..., 0, 0] - 1)
+    return 1 - (o * d2).sum((-1, -2)) / De
+
+pa, pb = full[0], full[1]                 # 两位完整标注的标注者：alpha = 1 - (1 - pi)(n - 1) / n
+pe = (((pa[:, None] == lv).sum(0) + (pb[:, None] == lv).sum(0)) / (2 * U)) ** 2
+pi = (np.mean(pa == pb) - pe.sum()) / (1 - pe.sum())
+assert np.isclose(alpha(full[:2], "nominal"), 1 - (1 - pi) * (2 * U - 1) / (2 * U))
+
+obs = ~np.isnan(X)                        # 随机水平：把所有已有标签在已有格子之间打乱
+perm = np.repeat(X[None], 500, 0)
+perm[:, obs] = X[obs][np.argsort(rng.random((500, obs.sum())), 1)]
+boot = X[:, rng.integers(0, U, (400, U))].transpose(1, 0, 2)   # 按单位重抽样
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.0), height_ratios=(1, 1))
+o = coincidence(X)
+ax.imshow(o, cmap="Blues")
+for (i, j), v in np.ndenumerate(o):
+    ax.text(j, i, f"{v:.0f}", ha="center", va="center", fontsize=9, color="white" if v > o.max() / 2 else "grey")
+ax.set(xticks=range(L), xticklabels=lv, yticks=range(L), yticklabels=lv, xlabel="评分", ylabel="配对的另一个评分",
+       title="符合矩阵：大多数分歧只差一级")
+ax.grid(False)
+for i, metric in enumerate(["nominal", "ordinal", "interval"]):
+    a, null, ci = alpha(X, metric), alpha(perm, metric), np.percentile(alpha(boot, metric), [2.5, 97.5])
+    assert abs(null.mean()) < 0.02            # 已校正随机一致：打乱后的标签得分为 0
+    lo, hi = np.percentile(null, [2.5, 97.5])
+    bx.plot([lo, hi], [i, i], color="grey", lw=8, alpha=0.4, solid_capstyle="butt")
+    bx.plot(ci, [i, i], color=f"C{i}", lw=2); bx.plot(a, i, "o", color=f"C{i}")
+    bx.text(ci[1] + 0.02, i, f"{a:.2f}", va="center", fontsize=9)
+bx.set(yticks=range(3), yticklabels=["名义", "有序", "区间"], ylim=(-0.6, 2.6), xlim=(-0.3, 1),
+       xlabel="Krippendorff 的 alpha", title="alpha 及其 95% bootstrap 区间；灰色为打乱后的标签")
+fig.tight_layout()
+print(f"alpha：名义 {alpha(X, 'nominal'):.2f}，有序 {alpha(X, 'ordinal'):.2f}，区间 {alpha(X, 'interval'):.2f}；"
+      f"打乱标签后的平均值为 {alpha(perm, 'ordinal').mean():+.3f}")
+```
+::::
+
 一致性衡量可靠性，而不是效度。可靠性指的是标注者给出的标签是否一致；效度指的是这些标签测的是否就是待测概念。标注者可以一致地执行一份错误准则，有效准则也可能暴露真实存在的视角差异。应当按准则、项目和标注者群体分析分歧。反复出现的分歧可能意味着需要改清楚措辞、拆出单独维度、提供更多证据，或明确报告不同视角下的结果，而不是强行达成共识。
 
 ## 根据主张选择观测形式

@@ -114,6 +114,68 @@ $$
 //| fig-cap: "对一份示意用的模拟投票记录做极大似然拟合得到的 Bradley-Terry 评分：五个系统两两比较，每票相互独立，含平局。表格统计行系统胜过列系统的次数，点击某一格即选中这一对。点图在显示尺度 $R_i = 1000 + S\beta_i/\ln 10$（$\sum_i\beta_i = 0$）上画出各系统的拟合评分，上方的标尺在同样的位置标出 $\beta$；横条是对投票做 400 次自助法重采样得到的 95% 区间。这里按单票重采样是合适的，因为每张模拟投票都来自不同的提示。拖动显示尺度 $S$，显示评分和曲线会拉开或收拢，但投票、拟合的 $\beta$ 以及每个预测胜率 $1/(1 + 10^{-(R_i - R_j)/S}) = \sigma(\beta_i - \beta_j)$ 都不变；评分差为 $S$ 分时，预测胜率总是 0.909。把每次平局算作双方各得半胜，评分会彼此靠拢。某个系统从未输过时，胜负图不再强连通，它的评分没有有限的极大似然值，其余系统只在彼此之间拟合。这里的拟合省略了协变量项 $\boldsymbol{\gamma}^{\mathsf T}\mathbf{x}_k$。"
 ```
 
+下面的单元格补上图中省略的协变量项 $\boldsymbol{\gamma}^{\mathsf T}\mathbf{x}_k$，协变量取呈现顺序。评判模型对第一个位置有 $\gamma=0.6$ 的偏好，它在 4,000 对答案中比较五个系统；现有系统（系统 2）在它参与的比较中有 85% 排在第一位。忽略顺序、用牛顿法拟合 Bradley-Terry 时，评判模型的偏差会记到现有系统头上，约为 $\gamma(2\cdot0.85-1)$，单元格断言了这一点；加入顺序协变量的拟合则能找回 $\gamma$ 和每个系统的评分。把每对答案按相反顺序再评一次，并把前后不一致的答案对记为平局，同样能消除偏差，但每个评分差都会缩小到约 $4\sigma(\gamma)\sigma(-\gamma)$ 倍，单元格也检查了这一点。交换顺序还能直接测量偏差：在结果反转的答案对中，两次都由第一个位置胜出的概率是 $\sigma(2\gamma)$，与评分差无关。把 `gamma` 改为 `0.0`，三种拟合结果一致，反转的答案对在两个位置之间平均分布。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+K, n = 5, 4000                             # 系统数、评判的答案对数
+beta = np.array([0.8, 0.4, 0.0, -0.4, -0.8])   # 真实评分，总和为零
+gamma = 0.6                                # 评判模型对第一个位置的偏好（logit）；可改为 0.0
+inc, share = 2, 0.85                       # 系统 2 是现有系统，在它参与的比较中 85% 排在第一位
+sig = lambda z: 1 / (1 + np.exp(-z))
+
+i, j = rng.integers(0, K, (2, 3 * n)); keep = i != j; i, j = i[keep][:n], j[keep][:n]
+flip = np.where((i == inc) | (j == inc), (j == inc) == (rng.random(n) < share), rng.random(n) < 0.5)
+a, b = np.where(flip, j, i), np.where(flip, i, j)          # a 在第一个位置，b 在第二个位置
+won = rng.random(n) < sig(beta[a] - beta[b] + gamma)       # 裁定：第一个位置胜出
+swap = rng.random(n) < sig(beta[b] - beta[a] + gamma)      # 同一对答案交换顺序：排在前面的 b 胜出
+
+def fit(first, second, y, order):          # 用牛顿迭代拟合 Bradley-Terry；可选 gamma 项
+    D = np.zeros((len(y), K + order)); np.put_along_axis(D, first[:, None], 1, 1)
+    np.put_along_axis(D, second[:, None], -1, 1); D[:, K:] = 1
+    th = np.zeros(K + order)
+    for _ in range(25):
+        p = sig(D @ th)
+        H = D.T @ (D * (p * (1 - p))[:, None]) + 1e-6 * np.eye(K + order)
+        th += np.linalg.solve(H, D.T @ (y - p))
+    return th[:K] - th[:K].mean(), th[K:]
+
+naive, _ = fit(a, b, won, 0)
+cov, g = fit(a, b, won, 1)
+consistent = won != swap                   # 两种顺序下胜出的是同一个系统
+swapped, _ = fit(a, b, np.where(consistent, won, 0.5), 0)   # 前后不一致的答案对：各记半胜
+c = 4 * sig(gamma) * sig(-gamma)          # 一阶近似下，对两种顺序取平均会把每个评分差缩小为 c 倍
+assert abs(g[0] - gamma) < 0.1 and abs(cov - beta).max() < 0.12
+assert abs(swapped - c * beta).max() < 0.12
+assert abs(naive[inc] - beta[inc] - gamma * (2 * share - 1)) < 0.15
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.2))
+ax.plot([-1, 1], [-1, 1], color="grey", lw=0.8)
+for k, (est, m, label) in enumerate([(naive, "o", "忽略顺序"), (cov, "s", "顺序作为协变量"),
+                                     (swapped, "D", "两种顺序，不一致记平局")]):
+    ax.plot(beta, est, m, color=f"C{k}", label=label, ms=7, mfc="none" if k else None)
+ax.annotate("现有系统", (beta[inc], naive[inc]), (0.15, 0.55), fontsize=9, arrowprops=dict(arrowstyle="-", color="grey"))
+ax.set(xlabel="真实评分 beta", ylabel="拟合评分", title=f"协变量拟合得到 gamma = {g[0]:.2f}")
+ax.legend(fontsize=9)
+gap, first = np.round(abs(beta[a] - beta[b]), 2), won[~consistent]   # 结果反转的答案对：是否两次都是第一个位置胜出？
+share = [first[gap[~consistent] == v].mean() for v in np.unique(gap)]
+assert abs(first.mean() - sig(2 * gamma)) < 0.03          # 在每个评分差上，该比例都等于 sigma(2 gamma)
+bx.plot(np.unique(gap), share, "o", color="C1", label="模拟")
+bx.axhline(sig(2 * gamma), color="C1", lw=1.5, label=f"闭式解 sigma(2 gamma) = {sig(2 * gamma):.2f}")
+bx.axhline(0.5, color="grey", ls="--", lw=1, label="无位置偏差")
+bx.set(ylim=(0.3, 1), xlabel="真实评分差 |beta_i - beta_j|", ylabel="两种顺序下都是第一个位置胜出",
+       title=f"{1 - consistent.mean():.0%} 的答案对结果反转，其中多数由第一个位置两次胜出")
+bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"现有系统的评分：真实 {beta[inc]:+.2f}，忽略顺序 {naive[inc]:+.2f}，协变量 {cov[inc]:+.2f}；"
+      f"两种顺序取平均后，最高与最低评分相差 {swapped[0] - swapped[-1]:.2f}，真实为 {beta[0] - beta[-1]:.2f}")
+```
+::::
+
 这个模型是一项紧凑的假设：各系统在抽样比较总体上具有一个标量强度，而这些强度足以解释可传递的偏好。发布全局排名之前，需要检查这项假设依赖的条件：
 
 - 有向胜负图是否强连通，也就是把系统任意分成两组时，两组之间是否都有双向流动的胜负路径？若不满足这一条件，不败或彼此隔离的模型组可能让无正则化的极大似然评分发散 [@ford1957ranking]：极大似然会选出让已观测胜负最可能出现的评分；没有任何项惩罚过大的评分时，两组之间的评分差越大，拟合就越好，因此估计值会无限增大。

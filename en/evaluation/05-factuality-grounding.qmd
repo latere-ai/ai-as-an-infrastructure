@@ -113,6 +113,65 @@ Here $N$ is the number of evaluation cases; $n$ indexes a case and each sum runs
 
 Plot risk across the coverage range rather than choosing a threshold after seeing the test result. The deployed threshold belongs to a cost policy: a medical assistant, a trivia tool, and an internal search box do not have the same cost for error, refusal, or escalation. Calibration and selection are related but distinct. If random variables $P$ and $Z$ denote reported confidence and candidate-answer correctness on the target population, probability calibration requires $\Pr(Z=1\mid P=p)=p$ for relevant values $p$. Check that relation before applying the abstention threshold; calibration only on released answers describes a selected subset and can hide failures below the threshold.
 
+The following cell separates the two properties. An overconfident system reports $p_n=\sigma(2z_n)$, where $z_n$ is the true log-odds that its answer is correct. The cell fits a temperature $T$ on half of 6,000 cases by Newton's method, $q_n=\sigma(\operatorname{logit}(p_n)/T)$, and on the other half draws the reliability diagram and the risk-coverage curve. Temperature scaling recovers $T\approx2$ and cuts the expected calibration error from 0.10 to 0.015, but it is monotone, so the cell asserts that the risk-coverage curve does not change. What changes is the meaning of a threshold: releasing at reported confidence 0.9 covers 43% of cases at a risk of 0.14, while the calibrated confidence at the same threshold releases 15% at a risk of 0.05, inside the 0.1 the threshold was meant to guarantee. Set `over = 1.0` and the two operating points nearly coincide.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+N, over = 6000, 2.0                   # questions; overconfidence factor on the log-odds, try 1.0
+z = rng.normal(0.8, 1.5, N)           # true log-odds that the candidate answer is correct
+right = rng.random(N) < 1 / (1 + np.exp(-z))
+logit = over * z                      # the system reports p_n = sigma(logit)
+cal, test = np.arange(N) < N // 2, np.arange(N) >= N // 2    # fit on one half, report on the other
+
+s = 1.0                               # temperature scaling: q = sigma(s * logit), s = 1 / T
+for _ in range(20):                   # Newton steps on the negative log-likelihood of the fit half
+    q = 1 / (1 + np.exp(-s * logit[cal]))
+    s -= ((q - right[cal]) @ logit[cal]) / ((q * (1 - q)) @ logit[cal] ** 2)
+p_raw, p_cal = 1 / (1 + np.exp(-logit[test])), 1 / (1 + np.exp(-s * logit[test]))
+y = right[test]
+
+def ece(p, bins=10):                  # expected calibration error, equal-width bins
+    b = np.minimum((p * bins).astype(int), bins - 1)
+    return sum(abs(y[b == k].mean() - p[b == k].mean()) * (b == k).mean() for k in range(bins) if (b == k).any())
+
+def risk_coverage(p):                 # release the most confident answers first
+    order = np.argsort(-p, kind="stable")
+    wrong = np.cumsum(~y[order])
+    return np.arange(1, len(p) + 1) / len(p), wrong / np.arange(1, len(p) + 1)
+
+cov, risk = risk_coverage(p_raw)
+assert np.allclose(risk, risk_coverage(p_cal)[1])     # a monotone recalibration keeps the curve
+assert abs(1 / s / over - 1) < 0.1 and ece(p_cal) <= max(ece(p_raw) / 3, 0.02)
+t = 0.9                               # release when confidence >= t, meant to keep risk below 1 - t
+ops = [((p >= t).mean(), 1 - y[p >= t].mean()) for p in (p_raw, p_cal)]
+assert ops[1][1] <= 1 - t
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.0))
+for k, (p, name) in enumerate([(p_raw, "reported"), (p_cal, "temperature-scaled")]):
+    b = np.minimum((p * 10).astype(int), 9)
+    ks = [k2 for k2 in range(10) if (b == k2).sum() > 20]
+    ax.plot([p[b == k2].mean() for k2 in ks], [y[b == k2].mean() for k2 in ks], "o-", color=f"C{k}",
+            label=f"{name}: ECE {ece(p):.3f}")
+ax.plot([0, 1], [0, 1], color="grey", lw=0.8)
+ax.set(xlabel="mean confidence in bin", ylabel="share correct", title=f"Held-out reliability; fitted T = {1 / s:.2f}")
+ax.legend(fontsize=9)
+bx.plot(cov, risk, color="grey", lw=1.5, label="risk-coverage, both confidences")
+for k, (c, r) in enumerate(ops):
+    bx.plot(c, r, "os"[k], color=f"C{k}", ms=8, label=f"{['reported', 'scaled'][k]} >= {t}: coverage {c:.2f}, risk {r:.2f}")
+bx.axhline(1 - t, color="grey", ls="--", lw=1)
+bx.set(xlim=(0, 1), ylim=(0, 0.4), xlabel="coverage (share of answers released)", ylabel="selective risk",
+       title="Same curve, different operating point")
+bx.legend(fontsize=9, loc="upper left")
+fig.tight_layout()
+print(f"threshold {t}: reported confidence releases {ops[0][0]:.0%} at risk {ops[0][1]:.3f}; "
+      f"calibrated releases {ops[1][0]:.0%} at risk {ops[1][1]:.3f}")
+```
+::::
+
 ## Diagnose the Grounding Pipeline
 
 Retrieval-augmented generation adds failure surfaces; it does not make an answer grounded by construction. The pipeline retrieves passages from a corpus, reranks and packs them into the model's context, generates the answer, and attaches citations. Test each stage with the artifact it receives:

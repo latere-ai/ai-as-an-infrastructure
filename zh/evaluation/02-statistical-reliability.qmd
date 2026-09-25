@@ -108,6 +108,70 @@ $$
 
 保留每个独立单位的结果，还能暴露均值掩盖的工程取舍。平均分可能提高，但某个安全切片却退化；B 也可能只是用一类新失败换掉另一类旧失败。应当保存任务 ID、双方原始输出、运行 ID、评分器版本、解析结果和配对差值。有了这些记录，配对分析才能重算和审计。
 
+配对并不能决定独立单位。下面的单元格模拟 400 次评测：两个系统在 30 个仓库上比较，二者没有真实差异。每个仓库会同时抬高或压低两个系统的成功几率，并让其中一个系统略占优势，优势方向因仓库而异，因此同一仓库内的配对差值 $d_g$ 彼此相关。对每次评测，单元格运行 McNemar 检验和按行 bootstrap，二者都把每个任务当作独立单位；再运行按整个仓库重抽样的聚类 bootstrap，并统计各方法在 5% 水平下拒绝零假设的频率。按行检验的拒绝率符合设计效应的预测 $2\bigl(1-\Phi(1.96/\sqrt{1+(m-1)\,\mathrm{ICC}})\bigr)$，其中 $m$ 是每个仓库的任务数，ICC 是 $d_g$ 在仓库内部的相关系数；单元格断言 McNemar 的拒绝率与预测相差不超过 0.06。每个仓库有 16 个任务时，两种按行检验都会在约三分之一的零假设评测中拒绝。聚类 bootstrap 保持在 10% 以下；只有 30 个聚类时，它略高于名义水平。第二幅图说明了原因：增加任务会让按行区间不断变窄，聚类区间却停在仓库之间的差异水平。把 `tau` 改为 `0.0`，仓库之间不再共享差异，按行检验也回到约 5%。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from math import erf, sqrt
+
+rng = np.random.default_rng(0)
+G, sims, B = 30, 400, 200          # 仓库数、零假设下的评测次数、bootstrap 重采样次数
+tau = 0.8                          # B 在各仓库上优势的离散程度（logit）；可改为 0.0
+ms = np.array([1, 2, 4, 8, 16])    # 每个仓库的任务数
+
+def outcomes(n, m):                # 每个任务的 d = y_B - y_A；平均而言 B 与 A 相同
+    a = rng.normal(0.8, 1.0, (n, G, 1))            # 仓库难度，两个系统共享
+    u = rng.normal(0, tau, (n, G, 1))              # 仓库层面的差异，均值为 0
+    yA = rng.random((n, G, m)) < 1 / (1 + np.exp(u - a))
+    yB = rng.random((n, G, m)) < 1 / (1 + np.exp(-u - a))
+    return yB.astype(int) - yA
+
+def rejects(lo, hi):
+    return ((lo > 0) | (hi < 0)).mean()
+
+labels = ["McNemar", "按行 bootstrap", "聚类 bootstrap"]
+fpr, width = [[], [], []], [[], []]
+for m in ms:
+    d = outcomes(sims, m)
+    n10, n01 = (d == -1).sum((1, 2)), (d == 1).sum((1, 2))
+    fpr[0].append(((n10 - n01) ** 2 / np.maximum(n10 + n01, 1) > 3.84).mean())
+    cells = np.stack([n10, (d == 0).sum((1, 2)), n01], 1) / (G * m)
+    rows = rng.multinomial(G * m, cells[:, None, :], size=(sims, B)) @ [-1, 0, 1] / (G * m)
+    S = d.sum(2)                                    # 各仓库的差值之和
+    clus = np.take_along_axis(S[:, None, :], rng.integers(0, G, (sims, B, G)), 2).sum(2) / (G * m)
+    for j, boot in enumerate((rows, clus)):
+        lo, hi = np.percentile(boot, [2.5, 97.5], axis=1)
+        fpr[j + 1].append(rejects(lo, hi))
+        width[j].append((hi - lo).mean())
+
+d = outcomes(10_000, 2)                             # d 在仓库内部的相关系数
+icc = np.mean(d[..., 0] * d[..., 1]) / np.mean(d ** 2)
+grid = np.geomspace(1, 16, 60)
+design = [1 - erf(1.96 / sqrt(2 * (1 + (k - 1) * icc))) for k in grid]  # 2(1 - Phi(1.96 / sqrt(deff)))
+assert np.all(abs(np.array(fpr[0]) - np.interp(ms, grid, design)) < 0.06)   # McNemar 与预测一致
+assert max(fpr[2]) < 0.1                    # 聚类 bootstrap 保持在 5% 附近
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.8))
+ax.plot(grid, design, color="grey", lw=1, label=f"设计效应，ICC {icc:.2f}")
+for i in range(3):
+    ax.plot(ms, fpr[i], "osD"[i], color=f"C{i}", label=labels[i])
+ax.axhline(0.05, color="grey", ls="--", lw=1)
+ax.set(xscale="log", xticks=ms, xticklabels=ms, xlabel="每个仓库的任务数（共 30 个仓库）",
+       ylabel="假阳性率", title="没有真实差异：按行的检验拒绝得过于频繁")
+ax.minorticks_off(); ax.legend(fontsize=9)
+bx.plot(ms, width[0], "s-", color="C1", label=labels[1])
+bx.plot(ms, width[1], "D-", color="C2", label=labels[2])
+bx.set(xscale="log", xticks=ms, xticklabels=ms, xlabel="每个仓库的任务数（共 30 个仓库）",
+       ylabel="95% 区间的平均宽度", title="按行区间不断变窄，聚类区间逐渐持平")
+bx.minorticks_off(); bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"每个仓库 16 个任务时：McNemar 在 {fpr[0][-1]:.0%} 的零假设评测中拒绝，"
+      f"按行 bootstrap 为 {fpr[1][-1]:.0%}，聚类 bootstrap 为 {fpr[2][-1]:.0%}")
+```
+::::
+
 ## 预先说明什么结果会改变决策
 
 产品决策很少以零效应为界。收集决定性样本之前，应当定义最小关注效应 $\delta$。这里的 $\delta$ 是考虑成本、延迟和风险之后，足以改变决策的最小收益或损失。

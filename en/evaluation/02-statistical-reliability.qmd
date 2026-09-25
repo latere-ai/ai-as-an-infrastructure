@@ -108,6 +108,70 @@ When disagreement counts are small, use the exact paired-binomial form rather th
 
 Per-unit retention also exposes engineering tradeoffs hidden by an average. The mean can improve while a safety slice regresses, or while B exchanges one failure class for another. Store task ids, both raw outputs, run ids, scorer versions, parsed outcomes, and pairwise differences. These records let the paired analysis be recomputed and audited.
 
+Pairing does not settle the unit. The following cell simulates 400 evaluations of two systems with no true difference on 30 repositories. Each repository shifts both systems' odds of success together and gives one of them an advantage whose sign varies from repository to repository, so the paired differences $d_g$ within a repository are correlated. For each evaluation the cell runs McNemar's test and a bootstrap over rows, which both treat every task as independent, and a bootstrap that resamples whole repositories, and counts how often each rejects at the 5% level. The row-level tests follow the design-effect prediction $2\bigl(1-\Phi(1.96/\sqrt{1+(m-1)\,\mathrm{ICC}})\bigr)$, where $m$ is the number of tasks per repository and ICC the correlation of $d_g$ within a repository; the cell asserts that McNemar's rate stays within 0.06 of it. At 16 tasks per repository both row-level tests reject about a third of the null evaluations. The cluster bootstrap stays below 10%; with only 30 clusters it runs slightly above the nominal rate. The second plot shows the cause: extra tasks keep narrowing the row intervals, while the cluster intervals level off at the variation between repositories. Set `tau = 0.0` and the repositories carry no shared difference, so the row-level tests return to about 5%.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from math import erf, sqrt
+
+rng = np.random.default_rng(0)
+G, sims, B = 30, 400, 200          # repositories, null evaluations, bootstrap resamples
+tau = 0.8                          # spread of B's per-repository advantage (logit); try 0.0
+ms = np.array([1, 2, 4, 8, 16])    # tasks per repository
+
+def outcomes(n, m):                # d = y_B - y_A per task; B equals A on average
+    a = rng.normal(0.8, 1.0, (n, G, 1))            # repository difficulty, shared
+    u = rng.normal(0, tau, (n, G, 1))              # repository-level difference, mean 0
+    yA = rng.random((n, G, m)) < 1 / (1 + np.exp(u - a))
+    yB = rng.random((n, G, m)) < 1 / (1 + np.exp(-u - a))
+    return yB.astype(int) - yA
+
+def rejects(lo, hi):
+    return ((lo > 0) | (hi < 0)).mean()
+
+labels = ["McNemar", "row bootstrap", "cluster bootstrap"]
+fpr, width = [[], [], []], [[], []]
+for m in ms:
+    d = outcomes(sims, m)
+    n10, n01 = (d == -1).sum((1, 2)), (d == 1).sum((1, 2))
+    fpr[0].append(((n10 - n01) ** 2 / np.maximum(n10 + n01, 1) > 3.84).mean())
+    cells = np.stack([n10, (d == 0).sum((1, 2)), n01], 1) / (G * m)
+    rows = rng.multinomial(G * m, cells[:, None, :], size=(sims, B)) @ [-1, 0, 1] / (G * m)
+    S = d.sum(2)                                    # per-repository sums
+    clus = np.take_along_axis(S[:, None, :], rng.integers(0, G, (sims, B, G)), 2).sum(2) / (G * m)
+    for j, boot in enumerate((rows, clus)):
+        lo, hi = np.percentile(boot, [2.5, 97.5], axis=1)
+        fpr[j + 1].append(rejects(lo, hi))
+        width[j].append((hi - lo).mean())
+
+d = outcomes(10_000, 2)                             # intra-repository correlation of d
+icc = np.mean(d[..., 0] * d[..., 1]) / np.mean(d ** 2)
+grid = np.geomspace(1, 16, 60)
+design = [1 - erf(1.96 / sqrt(2 * (1 + (k - 1) * icc))) for k in grid]  # 2(1 - Phi(1.96 / sqrt(deff)))
+assert np.all(abs(np.array(fpr[0]) - np.interp(ms, grid, design)) < 0.06)   # McNemar follows the prediction
+assert max(fpr[2]) < 0.1                    # the cluster bootstrap stays near 5 percent
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 6.8))
+ax.plot(grid, design, color="grey", lw=1, label=f"design effect, ICC {icc:.2f}")
+for i in range(3):
+    ax.plot(ms, fpr[i], "osD"[i], color=f"C{i}", label=labels[i])
+ax.axhline(0.05, color="grey", ls="--", lw=1)
+ax.set(xscale="log", xticks=ms, xticklabels=ms, xlabel="tasks per repository (30 repositories)",
+       ylabel="false-positive rate", title="No true difference: row-level tests reject too often")
+ax.minorticks_off(); ax.legend(fontsize=9)
+bx.plot(ms, width[0], "s-", color="C1", label=labels[1])
+bx.plot(ms, width[1], "D-", color="C2", label=labels[2])
+bx.set(xscale="log", xticks=ms, xticklabels=ms, xlabel="tasks per repository (30 repositories)",
+       ylabel="mean 95% interval width", title="Row intervals keep shrinking; cluster intervals level off")
+bx.minorticks_off(); bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"16 tasks per repository: McNemar rejects {fpr[0][-1]:.0%} of null evaluations, "
+      f"row bootstrap {fpr[1][-1]:.0%}, cluster bootstrap {fpr[2][-1]:.0%}")
+```
+::::
+
 ## Define What Would Change the Decision
 
 A zero-effect threshold is rarely the product threshold. Before collecting the decisive sample, define a smallest effect of interest, $\delta$. Here $\delta$ means the smallest gain or loss large enough to change the decision after cost, latency, and risk are considered.
