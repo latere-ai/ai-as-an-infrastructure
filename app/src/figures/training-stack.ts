@@ -109,7 +109,7 @@ const COMPS: readonly Comp[] = [
   {
     id: "trainer", layer: "runtime",
     name: { en: "Training runtime", zh: "训练运行时" },
-    examples: { en: "Megatron Core, TorchTitan, DeepSpeed, MaxText; the learner of an RL framework", zh: "Megatron Core、TorchTitan、DeepSpeed、MaxText；强化学习框架中的学习器" },
+    examples: { en: "Megatron Core, TorchTitan, DeepSpeed, MaxText; data, tensor, pipeline, context, and expert parallelism; the learner of an RL framework", zh: "Megatron Core、TorchTitan、DeepSpeed、MaxText；数据、张量、流水线、上下文和专家并行；强化学习框架中的学习器" },
     more: { en: "Megatron Core, TorchTitan, DeepSpeed, or MaxText, with a layout over data, tensor, pipeline, context, and expert parallelism. In RL, a framework such as verl, OpenRLHF, NeMo RL, slime, prime-rl, SkyRL, or AReaL drives the same kind of runtime as its learner.", zh: "Megatron Core、TorchTitan、DeepSpeed 或 MaxText，按数据、张量、流水线、上下文和专家几个维度做并行布局。强化学习中，verl、OpenRLHF、NeMo RL、slime、prime-rl、SkyRL、AReaL 等框架把同类运行时当作学习器来驱动。" },
     does: { en: "Runs the optimizer step on a gang of accelerators under a parallelism layout. Every stage uses it: pretraining, mid-training, SFT, preference training, and the learner of an RL run.", zh: "在一组加速器上按并行布局执行优化器步骤。每个阶段都用它：预训练、中期训练、SFT、偏好训练，以及强化学习中的学习器。" },
     section: "job",
