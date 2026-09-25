@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -130,10 +132,9 @@ func TestRouting(t *testing.T) {
 	noloop(t, follow, base, "/en/p3-reasoning/inference-time-scaling/")
 	noloop(t, follow, base, "/zh/infrastructure/verification-frontier/")
 
-	// Missing content paths return to the site entrypoint.
-	code(t, nf, base, "/zh/nope", 302)
-	loc(t, nf, base, "/zh/nope", "/", "")
-	noloop(t, follow, base, "/zh/nope")
+	// Missing content paths answer 404, including the paths a crawler composes.
+	code(t, nf, base, "/zh/nope", 404)
+	code(t, nf, base, "/safety/safety/reasoning/foundations/practice/agents-and-sandboxes", 404)
 
 	// Canonicalization: .html and /index.html collapse to the clean URL.
 	loc(t, nf, base, "/en/index.html", "/en/", "")
@@ -303,6 +304,83 @@ func TestPrecompressed(t *testing.T) {
 	}
 
 	// The sibling itself is not a public path: like any unknown content URL it
-	// goes back to the site entrypoint instead of being served.
-	code(t, nf, base, "/en/search.json.gz", http.StatusFound)
+	// answers with the not-found page.
+	code(t, nf, base, "/en/search.json.gz", http.StatusNotFound)
+}
+
+// urlAttr captures every href and src value in a page.
+var urlAttr = regexp.MustCompile(`(?i)\b(?:href|src)="([^"]*)"`)
+
+// relativeURLs returns the href and src values the browser would resolve
+// against the requested address: anything not root-relative, absolute https,
+// or a fragment.
+func relativeURLs(html []byte) []string {
+	var rel []string
+	for _, m := range urlAttr.FindAllSubmatch(html, -1) {
+		v := string(m[1])
+		if !strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "https://") && !strings.HasPrefix(v, "#") {
+			rel = append(rel, v)
+		}
+	}
+	return rel
+}
+
+// The not-found page is served at whatever address was requested, so it must
+// hold no relative URL: resolved against an invented path, one would hand a
+// crawler the next invented path. It is also never a page of its own.
+func TestNotFoundPage(t *testing.T) {
+	requireBook(t)
+	base, nf, _ := newServer(t)
+
+	for _, gz := range []bool{false, true} {
+		req, err := http.NewRequest("GET", base+"/orchestration/reasoning/infrastructure/memory-systems", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gz {
+			req.Header.Set("Accept-Encoding", "gzip")
+		} else {
+			req.Header.Set("Accept-Encoding", "identity")
+		}
+		resp, err := nf.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body io.Reader = resp.Body
+		if resp.Header.Get("Content-Encoding") == "gzip" {
+			zr, err := gzip.NewReader(resp.Body)
+			if err != nil {
+				t.Fatalf("gzip body: %v", err)
+			}
+			body = zr
+		} else if gz {
+			t.Error("gzip accepted, but the not-found page came back uncompressed")
+		}
+		html, err := io.ReadAll(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("gzip=%v: status %d, want 404", gz, resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("gzip=%v: Content-Type %q, want text/html", gz, ct)
+		}
+		if resp.Header.Get("X-Robots-Tag") != "noindex" {
+			t.Errorf("gzip=%v: X-Robots-Tag %q, want noindex", gz, resp.Header.Get("X-Robots-Tag"))
+		}
+		if rel := relativeURLs(html); len(rel) > 0 {
+			t.Errorf("gzip=%v: relative URLs in the not-found page: %q", gz, rel)
+		}
+		for _, home := range []string{`href="/en/"`, `href="/zh/"`} {
+			if !bytes.Contains(html, []byte(home)) {
+				t.Errorf("gzip=%v: not-found page has no %s link", gz, home)
+			}
+		}
+	}
+
+	code(t, nf, base, "/404", http.StatusNotFound)
+	loc(t, nf, base, "/404.html", "/404", "")
 }

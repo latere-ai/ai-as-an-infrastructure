@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// unknownRoute names a path serve answers with the fallback redirect to the
-// site entrypoint: no page, asset, legacy rule, or API route matches it.
+// unknownRoute names a path serve answers with the not-found page: no page,
+// asset, legacy rule, or API route matches it.
 const unknownRoute = "/{unknown}"
 
 // routeOf names the branch of serve a request takes, as the route template
@@ -95,9 +95,9 @@ func langOf(p string) string {
 
 // resolves reports whether serveStatic answers name, a path without its
 // leading slash, with a page or a canonicalizing redirect instead of the
-// fallback to the site entrypoint. It follows serveStatic's lookups: the
-// directory form serves its index or points at the page file, the file form
-// tries the name, then name.html, then points at the directory index.
+// not-found page. It follows serveStatic's lookups: the directory form serves
+// its index or points at the page file, the file form tries the name, then
+// name.html, then points at the directory index.
 func resolves(name string) bool {
 	// writeFile never serves a precompressed sibling by its own name.
 	if strings.HasSuffix(name, ".gz") {

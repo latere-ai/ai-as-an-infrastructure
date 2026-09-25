@@ -10,7 +10,7 @@
 //   - immutable caching for content-addressed assets, no-cache + ETag for HTML
 //   - gzip for text assets (the ~1.2MB search.json especially)
 //   - /healthz and /readyz for the Kubernetes probes
-//   - unknown content URLs fall back to the site entrypoint (302 /)
+//   - unknown content URLs answer 404 with the not-found page
 //
 // Behind the TLS-terminating ingress the server speaks http on :8080; all
 // redirects use relative (absolute-path) Locations so the browser keeps https.
@@ -30,6 +30,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -96,6 +97,20 @@ func init() {
 		}
 		return nil
 	})
+}
+
+// notFoundFile is the build's not-found page. It is served, status 404, for
+// every content URL that matches nothing, and never as a page of its own.
+const notFoundFile = "404.html"
+
+// notFoundBody and notFoundGz hold the not-found page and its precompressed
+// sibling, read once at startup: they are small, and served on every miss.
+// Both stay nil when the site is not built.
+var notFoundBody, notFoundGz []byte
+
+func init() {
+	notFoundBody, _ = fs.ReadFile(book, notFoundFile)
+	notFoundGz, _ = fs.ReadFile(book, notFoundFile+".gz")
 }
 
 // redirect is one reorg rule: an anchored pattern and a $-template target.
@@ -259,13 +274,45 @@ func serveStatic(w http.ResponseWriter, r *http.Request, p string) {
 		}
 	}
 
-	// Unknown content URL -> back to the site entrypoint (which 302s to a
-	// language home) instead of exposing a bare 404 page.
-	http.Redirect(w, r, "/", http.StatusFound)
+	serveNotFound(w, r)
 }
 
-// exists reports whether name is an embedded file (not a directory).
+// serveNotFound answers a content URL that matches nothing with the not-found
+// page and status 404.
+//
+// It used to redirect to the site entrypoint. Every invented URL then came
+// back as the home page, whose relative links, resolved against the invented
+// URL by a crawler that ignores the redirect, became the next invented URLs:
+// one crawler kept that going at about twenty requests a second. A 404 ends
+// the chain, tells search engines the URL is not a page, and shows up as a
+// 404 in the request metrics instead of a redirect.
+func serveNotFound(w http.ResponseWriter, r *http.Request) {
+	h := w.Header()
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("X-Robots-Tag", "noindex")
+	h.Add("Vary", "Accept-Encoding")
+	body := notFoundBody
+	if body == nil {
+		// The site is not built (a bare checkout); the status still holds.
+		body = []byte("<!DOCTYPE html><title>Page not found</title><p>Page not found. <a href=\"/en/\">Home</a></p>\n")
+	} else if notFoundGz != nil && acceptsGzip(r) {
+		h.Set("Content-Encoding", "gzip")
+		body = notFoundGz
+	}
+	h.Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(http.StatusNotFound)
+	if _, err := w.Write(body); err != nil {
+		slog.DebugContext(r.Context(), "writing the not-found page", "err", err)
+	}
+}
+
+// exists reports whether name is an embedded file (not a directory) served
+// under its own name, which the not-found page is not.
 func exists(name string) bool {
+	if name == notFoundFile {
+		return false
+	}
 	info, err := fs.Stat(book, name)
 	return err == nil && !info.IsDir()
 }
@@ -280,11 +327,7 @@ func exists(name string) bool {
 // cost a full copy plus a gzip stream per request, and a handful of concurrent
 // requests ran the pod out of memory.
 func writeFile(w http.ResponseWriter, r *http.Request, name string, immutable bool) bool {
-	if strings.HasSuffix(name, ".gz") {
-		return false
-	}
-	info, err := fs.Stat(book, name)
-	if err != nil || info.IsDir() {
+	if strings.HasSuffix(name, ".gz") || !exists(name) {
 		return false
 	}
 

@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/api"
@@ -12,9 +13,9 @@ type routeCase struct {
 	path, want string
 }
 
-// checkRoutes asserts routeOf for each path, and that it names the fallback
-// exactly when serve takes it. routeOf restates serve's dispatch; the second
-// assertion is what catches the two drifting apart.
+// checkRoutes asserts routeOf for each path, and that it names the not-found
+// page exactly when serve answers with it. routeOf restates serve's dispatch;
+// the second assertion is what catches the two drifting apart.
 func checkRoutes(t *testing.T, cases []routeCase) {
 	t.Helper()
 	for _, c := range cases {
@@ -24,10 +25,13 @@ func checkRoutes(t *testing.T, cases []routeCase) {
 		}
 		w := httptest.NewRecorder()
 		serve(w, r)
-		fellBack := w.Code == http.StatusFound && w.Header().Get("Location") == "/"
-		if fellBack != (c.want == unknownRoute) {
-			t.Errorf("%s: served %d to %q, but routeOf says %q",
-				c.path, w.Code, w.Header().Get("Location"), c.want)
+		// A missing asset is a plain 404 too; the not-found page is the one
+		// that is HTML.
+		notFound := w.Code == http.StatusNotFound &&
+			strings.HasPrefix(w.Header().Get("Content-Type"), "text/html")
+		if notFound != (c.want == unknownRoute) {
+			t.Errorf("%s: served %d %q, but routeOf says %q",
+				c.path, w.Code, w.Header().Get("Content-Type"), c.want)
 		}
 	}
 }
@@ -68,8 +72,11 @@ func TestRouteOfServedPages(t *testing.T) {
 		{"/safety/safety/reasoning/foundations/practice/agents-and-sandboxes", unknownRoute},
 		{"/zh/nope", unknownRoute},
 		{"/en/foundations/nope/deeper", unknownRoute},
-		// A precompressed sibling is never served under its own name.
+		// Neither a precompressed sibling nor the not-found page is served
+		// under its own name.
 		{"/en/search.json.gz", unknownRoute},
+		{"/404", unknownRoute},
+		{"/404/", unknownRoute},
 	})
 }
 
