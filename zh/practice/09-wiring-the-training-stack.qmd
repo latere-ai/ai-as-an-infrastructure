@@ -95,7 +95,7 @@ DataTrove 的最新版本是 2026 年 8 月 13 日发布的 v0.10.0 [@datatrove2
 
 Llama 3 405B 是少数公开了大规模布局的例子。它在每台服务器内用 8 路张量并行，流水线并行为 16 路，其余 GPU 做数据并行；在 16,384 块 H100 上，它报告每块 GPU 400 teraFLOPs，即 41% 的 BF16 模型 FLOPs 利用率，为长序列加上 16 路上下文并行后为 38% [@grattafiori2024llama]。@gls-mfu 指模型自身计算用掉的加速器峰值算力比例（@sec-accelerators-networking），上面这些数字可以当作规划时的现实上限。
 
-承载这类任务的调度器有两大类。Slurm 是大多数高性能计算中心的批处理调度器，它按整节点分配资源，能在任务到达时限前的指定时间给任务发信号，让训练器保存后退出，还能在节点故障或被抢占后把任务重新排队 [@slurm2026sbatch]。在 Kubernetes 上，JobSet 把工作进程编成若干副本化的 Job，给它们分配稳定的主机名，并按声明的故障策略整组重启 [@jobset2026repo]；Kueue 负责排队、执行团队配额，并一次性准入整个工作负载 [@kueue2026gang]，其拓扑感知调度把 Pod 限定在同一个机柜或网络区块内 [@kueue2026tas]。Volcano 和 KAI Scheduler 是 Kubernetes 上的另外两种成组调度器 [@volcano2026repo; @kai2026scheduler]。选哪一类，通常跟着组织里的其他部分走：集群是一台研究用机器，就用 Slurm；同一个集群还要运行 rollout 引擎、环境集群和评测服务，就用 Kubernetes，而有了强化学习，后一种情形很常见。
+承载这类任务的调度器有两大类。Slurm 是大多数高性能计算中心的批处理调度器，它通常按整节点为训练任务分配资源，能在任务到达时限前的指定时间给任务发信号，让训练器保存后退出，还能在节点故障或被抢占后把任务重新排队 [@slurm2026sbatch]。在 Kubernetes 上，JobSet 把工作进程编成若干副本化的 Job，给它们分配稳定的主机名，并按声明的故障策略整组重启 [@jobset2026repo]；Kueue 负责排队、执行团队配额，并一次性准入整个工作负载 [@kueue2026gang]，其拓扑感知调度把 Pod 限定在同一个机柜或网络区块内 [@kueue2026tas]。Volcano 和 KAI Scheduler 是 Kubernetes 上的另外两种成组调度器 [@volcano2026repo; @kai2026scheduler]。选哪一类，通常跟着组织里的其他部分走：集群是一台研究用机器，就用 Slurm；同一个集群还要运行 rollout 引擎、环境集群和评测服务，就用 Kubernetes，而有了强化学习，后一种情形很常见。
 
 下面的任务规格在 Kubernetes 上启动一个 128 节点的预训练任务。它通过队列向 Kueue 申请准入，要求放在同一个网络区块内，出故障后让所有工作进程从最近的检查点重启。容器镜像按摘要固定，这也是运行标识的一部分。
 
@@ -188,7 +188,7 @@ CKPT_ARGS=(
 
 按词元标注版本之所以重要，是因为异步让**陈旧**成了常态。一条用比学习器旧 $k$ 个版本的权重生成的轨迹，就是偏离策略 $k$ 步，而一条长轨迹可能横跨好几次更新。应对办法都很实际。每条轨迹记录生成其中每个词元的策略版本，以及引擎给出的词元 ID 和对数概率。运行设定一个陈旧上限，丢弃超限的轨迹。剩余的偏差由损失函数里经过裁剪或截断的重要性比率来校正，这个比率是学习器与引擎对同一词元给出的概率之比（@sec-training-agents）。混合专家策略还要在学习器中重放引擎的专家路由；运行也要记录学习器与引擎对同一批词元给出的对数概率之差，这个差值即使在同步运行中也不为零，因为两边用的算子和精度不同（@sec-training-to-reason）。
 
-两种同步方式之间的取舍是定量的，一个小模拟就能看出它的形状。rollout 的耗时有长有短：以简短答案结束的轨迹，只需跑到长度上限或等待慢工具的轨迹的一小部分时间。下面的代码把每次 rollout 的耗时设为固定部分 $1-c$ 加上均值为 $c$ 的指数分布尾部，这样均值总是 1，$c$ 就是变异系数，即标准差除以均值。在同步方式下，64 个槽位各生成一条轨迹，更新要等最慢的那条。槽位时间中的空闲比例于是为 $1 - 1/\mathbb{E}[\max]$，对这个分布而言 $\mathbb{E}[\max] = (1-c) + c H_{64}$，其中 $H_{64} = \sum_{i=1}^{64} 1/i \approx 4.74$ 是 64 个单位指数变量最大值的期望。在异步方式下，每个槽位一跑完上一条轨迹，就用最新权重开始下一条，每完成 64 条轨迹做一次更新。没有槽位在等，但轨迹的滞后，即从开始生成到被使用之间经历的更新次数，不再为零。每次更新都让仍在进行中的 63 条轨迹的滞后加一，所以在 $W = 64$ 个槽位、批大小 $B = 64$ 时，平均滞后恰好是 $(W-1)/B = 63/64$，与耗时的离散程度无关；随 $c$ 增长的只有滞后分布的尾部。代码用模拟结果检验这两个闭式解，并报告陈旧上限设为 $K = 2$ 个版本时会丢弃多少轨迹。
+两种同步方式之间的取舍是定量的，一个小模拟就能看出它的形状。rollout 的耗时有长有短：以简短答案结束的轨迹，只需跑到长度上限或等待慢工具的轨迹的一小部分时间。下面的代码把每次 rollout 的耗时设为固定部分 $1-c$ 加上均值为 $c$ 的指数分布尾部，这样均值总是 1，$c$ 就是变异系数，即标准差除以均值。在同步方式下，64 个槽位各生成一条轨迹，更新要等最慢的那条。槽位时间中的空闲比例于是为 $1 - 1/\mathbb{E}[\max]$，对这个分布而言 $\mathbb{E}[\max] = (1-c) + c H_{64}$，其中 $H_{64} = \sum_{i=1}^{64} 1/i \approx 4.74$ 是 64 个单位指数变量最大值的期望。在异步方式下，每个槽位一跑完上一条轨迹，就用最新权重开始下一条，每完成 64 条轨迹做一次更新。没有槽位在等（模拟没有计入训练和传输权重的时间），但轨迹的滞后，即从开始生成到被使用之间经历的更新次数，不再为零。每次更新都让仍在进行中的 63 条轨迹的滞后加一，所以在 $W = 64$ 个槽位、批大小 $B = 64$ 时，平均滞后恰好是 $(W-1)/B = 63/64$，与耗时的离散程度无关；随 $c$ 增长的只有滞后分布的尾部。代码用模拟结果检验这两个闭式解，并报告陈旧上限设为 $K = 2$ 个版本时会丢弃多少轨迹。
 
 :::: {.runnable}
 ```python
@@ -196,36 +196,36 @@ import heapq
 import numpy as np
 import matplotlib.pyplot as plt
 
-B = 64            # trajectories per policy update
-W = 64            # rollout slots, each generating one trajectory at a time
-K = 2             # staleness bound: drop trajectories more than K versions old
-UPDATES = 400     # policy updates simulated for each spread value
+B = 64            # 每次策略更新使用的轨迹数
+W = 64            # rollout 槽位数，每个槽位一次生成一条轨迹
+K = 2             # 陈旧上限：丢弃落后超过 K 个版本的轨迹
+UPDATES = 400     # 每个离散程度下模拟的策略更新次数
 rng = np.random.default_rng(0)
-H = np.sum(1 / np.arange(1, B + 1))           # harmonic number: E[max of B Exp(1)]
+H = np.sum(1 / np.arange(1, B + 1))           # 调和数：B 个 Exp(1) 最大值的期望
 
 def durations(c, size):
-    """Rollout time with mean 1: a fixed part 1 - c plus an exponential tail of mean c."""
+    """均值为 1 的 rollout 耗时：固定部分 1 - c，加上均值为 c 的指数尾部。"""
     return (1 - c) + c * rng.exponential(1.0, size)
 
 def synchronous(c):
-    """Each update waits for the slowest of B rollouts; returns the idle share of slot time."""
+    """每次更新都等 B 条 rollout 中最慢的一条；返回槽位时间中的空闲比例。"""
     t = durations(c, (UPDATES, B))
     return 1 - t.sum() / (B * t.max(axis=1).sum())
 
 def asynchronous(c):
-    """Slots restart at once with the newest weights; every B finished rollouts make an update."""
+    """槽位立即用最新权重重新开始；每完成 B 条 rollout 做一次更新。"""
     version, done, lags = 0, 0, []
     draws = iter(durations(c, W + (UPDATES + 20) * B))
-    slots = [(next(draws), 0) for _ in range(W)]  # (finish time, version it started with)
+    slots = [(next(draws), 0) for _ in range(W)]  # （完成时间，开始时的版本）
     heapq.heapify(slots)
     while version < UPDATES + 20:
         now, v = heapq.heappop(slots)
-        lags.append(version - v)                  # updates since this rollout started
+        lags.append(version - v)                  # 这条 rollout 开始以来的更新次数
         done += 1
         if done == B:
             version, done = version + 1, 0
         heapq.heappush(slots, (now + next(draws), version))
-    return np.array(lags[20 * B:])                # drop the start-up transient
+    return np.array(lags[20 * B:])                # 去掉启动阶段的过渡过程
 
 spread = np.linspace(0.05, 1.0, 12)
 idle = np.array([synchronous(c) for c in spread])
@@ -235,29 +235,29 @@ mean_lag = np.array([l.mean() for l in lags])
 p99_lag = np.array([np.percentile(l, 99) for l in lags])
 dropped = np.array([(l > K).mean() for l in lags])
 
-assert np.all(np.abs(idle - idle_exact) < 0.02)          # synchronous: the closed form holds
-assert np.all(np.abs(mean_lag - (W - 1) / B) < 0.01)     # asynchronous: mean lag is (W-1)/B
-assert dropped[0] == 0 and dropped[-1] > 0.05            # the tail, not the mean, grows
+assert np.all(np.abs(idle - idle_exact) < 0.02)          # 同步：闭式解成立
+assert np.all(np.abs(mean_lag - (W - 1) / B) < 0.01)     # 异步：平均滞后为 (W-1)/B
+assert dropped[0] == 0 and dropped[-1] > 0.05            # 增长的是尾部，而不是均值
 
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5.6, 5.6), sharex=True)
-ax1.plot(spread, idle_exact, color="C0", label="synchronous, closed form")
-ax1.plot(spread, idle, "o", color="C0", ms=4, label="synchronous, simulated")
-ax1.plot(spread, 0 * spread, color="C1", label="asynchronous")
-ax1.set(ylabel="idle share of rollout time", ylim=(-0.03, 1))
+ax1.plot(spread, idle_exact, color="C0", label="同步，闭式解")
+ax1.plot(spread, idle, "o", color="C0", ms=4, label="同步，模拟")
+ax1.plot(spread, 0 * spread, color="C1", label="异步")
+ax1.set(ylabel="rollout 时间中的空闲比例", ylim=(-0.03, 1))
 ax1.legend(fontsize=9, loc="upper left")
-ax2.plot(spread, np.full_like(spread, (W - 1) / B), "--", color="C1", label="mean lag, closed form")
-ax2.plot(spread, mean_lag, "o", color="C1", ms=4, label="mean lag, simulated")
-ax2.plot(spread, p99_lag, "s-", color="C2", ms=4, label="99th percentile lag")
-ax2.plot(spread, 0 * spread, color="C0", label="synchronous")
-ax2.set(xlabel="rollout-time spread c (standard deviation / mean)",
-        ylabel="policy versions behind", ylim=(-0.3, 6))
+ax2.plot(spread, np.full_like(spread, (W - 1) / B), "--", color="C1", label="平均滞后，闭式解")
+ax2.plot(spread, mean_lag, "o", color="C1", ms=4, label="平均滞后，模拟")
+ax2.plot(spread, p99_lag, "s-", color="C2", ms=4, label="第 99 百分位滞后")
+ax2.plot(spread, 0 * spread, color="C0", label="同步")
+ax2.set(xlabel="rollout 耗时的离散程度 c（标准差 / 均值）",
+        ylabel="落后的策略版本数", ylim=(-0.3, 6))
 ax2.legend(fontsize=9, loc="upper left")
 fig.tight_layout()
 
 for k in (0, 4, 8, 11):
     c, i, m, p, d = spread[k], idle[k], mean_lag[k], p99_lag[k], dropped[k]
-    print(f"c = {c:.2f}: synchronous idle {i:4.0%}; asynchronous mean lag {m:.2f}, "
-          f"99th percentile {p:.0f}, over K={K}: {d:4.1%}")
+    print(f"c = {c:.2f}：同步空闲 {i:4.0%}；异步平均滞后 {m:.2f}，"
+          f"第 99 百分位 {p:.0f}，超过 K={K}：{d:4.1%}")
 ```
 ::::
 
@@ -342,7 +342,7 @@ enable_return_routed_experts = true   # the routing that router replay needs
 
 这里的隔离要求比产品沙箱更严，而不是更松。这些环境里的代码由一个正被优化去提高分数的策略写出，所以只要环境暴露了答案、测试文件、网络或凭据，就会被利用，而这种利用会变成学到的行为（@gls-reward-hacking）。每个环境都有独立的文件系统、进程命名空间和默认拒绝出站的网络策略；可信任务用容器就够了，执行代码通常要放在 gVisor 或 microVM 里（@sec-agents-practice）。环境不持有任务用不到的凭据，需要访问外部系统的工具通过代发的受限凭据访问（@sec-security-authorization）。已部署智能体的运行时安全控制在这里原样适用（@sec-runtime-safety）。
 
-验证器运行在策略可写范围之外。常见的打分方式有四种：规则检查器，例如 Math-Verify，它从输出中解析数学答案，再与参考答案做符号比较 [@mathverify2026repo]；测试运行，在最终状态的一份新副本上执行隐藏的测试集，而不是在策略能改动的工作区里执行；奖励模型，像其他模型一样作为 GPU 服务部署；模型裁判，由与 rollout 同类的推理引擎提供服务，预算也与 rollout 一样核算。每种打分方式都有延迟预算，因为慢速验证器会拉长每一条轨迹；也都有确定性预算，因为不稳定的测试就是奖励噪声。每条轨迹都记录产生其奖励的环境镜像、任务、验证器和裁判的修订版本，这样奖励突然上升时，才能查清是验证器变了，还是策略真的变好了。
+验证器运行在策略可写范围之外。常见的打分方式有四种：规则检查器，例如 Math-Verify，它从输出中解析数学答案，再与参考答案做数值或符号比较 [@mathverify2026repo]；测试运行，在最终状态的一份新副本上执行隐藏的测试集，而不是在策略能改动的工作区里执行；奖励模型，像其他模型一样作为 GPU 服务部署；模型裁判，由与 rollout 同类的推理引擎提供服务，预算也与 rollout 一样核算。每种打分方式都有延迟预算，因为慢速验证器会拉长每一条轨迹；也都有确定性预算，因为不稳定的测试就是奖励噪声。每条轨迹都记录产生其奖励的环境镜像、任务、验证器和裁判的修订版本，这样奖励突然上升时，才能查清是验证器变了，还是策略真的变好了。
 
 ::: {.callout-note .dated}
 ## 截至 2026 年 9 月
