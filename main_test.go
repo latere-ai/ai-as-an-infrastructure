@@ -151,6 +151,15 @@ func TestRouting(t *testing.T) {
 	loc(t, nf, base, "/en/p11-frontiers/45-the-compute-frontier", "/en/infrastructure/the-compute-frontier", "")
 	loc(t, nf, base, "/zh/p13-operations/deployment-lifecycle", "/zh/practice/deployment-lifecycle", "")
 	loc(t, nf, base, "/en/p10-practical/38-choosing-a-model", "/en/practice/choosing-a-model", "")
+	// The application stack chapter left its dated slug; the former practice path
+	// and the legacy part dir both reach the new slug in one hop.
+	loc(t, nf, base, "/en/practice/wiring-a-2026-stack", "/en/practice/wiring-the-application-stack", "")
+	loc(t, nf, base, "/zh/practice/wiring-a-2026-stack/", "/zh/practice/wiring-the-application-stack", "")
+	loc(t, nf, base, "/en/practice/wiring-a-2026-stack.html", "/en/practice/wiring-the-application-stack", "")
+	loc(t, nf, base, "/en/p10-practical/44-wiring-a-2026-stack", "/en/practice/wiring-the-application-stack", "")
+	loc(t, nf, base, "/zh/p10-practical/wiring-a-2026-stack.html", "/zh/practice/wiring-the-application-stack", "")
+	loc(t, nf, base, "/zh/p10-practical/44-wiring-a-2026-stack/", "/zh/practice/wiring-the-application-stack", "")
+	noloop(t, follow, base, "/en/p10-practical/44-wiring-a-2026-stack")
 	// The Part IX split: three chapters moved infrastructure -> frontiers, and the
 	// two legacy part dirs reach the new home in one hop.
 	loc(t, nf, base, "/en/infrastructure/verification-frontier", "/en/frontiers/verification-frontier", "")

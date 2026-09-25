@@ -109,6 +109,11 @@ var redirects = []redirect{
 	// Exception: the generative/multimodal chapters (once in p11-frontiers) -> generative.
 	{regexp.MustCompile(`^/(en|zh)/p11-frontiers/(?:\d+-)?(beyond-text|diffusion-flow-matching|speech-and-voice|nar-diffusion-lms|multimodal-models)(?:\.html)?/?$`),
 		`/${1}/generative/${2}`},
+	// Exception: "Wiring the Application Stack" moved from the wiring-a-2026-stack
+	// slug. This rule covers the former /practice/ path and the legacy p10-practical
+	// dir, so an old link takes one hop, not two.
+	{regexp.MustCompile(`^/(en|zh)/(?:practice|p10-practical)/(?:\d+-)?wiring-a-2026-stack(?:\.html)?/?$`),
+		`/${1}/practice/wiring-the-application-stack`},
 	// Bulk per-old-part-dir renames (strip optional NN-, remap the part slug).
 	{regexp.MustCompile(`^/(en|zh)/p0-orientation/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/orientation/${2}`},
 	{regexp.MustCompile(`^/(en|zh)/p1-foundations/(?:\d+-)?([a-z0-9-]+?)(?:\.html)?/?$`), `/${1}/foundations/${2}`},

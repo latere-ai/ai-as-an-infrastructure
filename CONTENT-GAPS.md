@@ -222,14 +222,11 @@ coverage check of the English tree. None has been decided or started.
 
 - [ ] **A year in a chapter path**
 
-  The H1 of `practice/08` is "Wiring the Stack"; the year appears only in the
-  file path `practice/08-wiring-a-2026-stack`, the figure id
-  `fig-wiring-a-2026-stack-cost-crossover`, and the bib filename. Renaming the
-  path changes the published URL and needs a redirect.
-
-  `practice/08-wiring-a-2026-stack` names a year in its H1. Either it becomes
-  the one chapter that is explicitly a dated snapshot, or it is retitled, which
-  regenerates its share card.
+  The application stack chapter now lives at
+  `practice/08-wiring-the-application-stack`, with its bib renamed to match and
+  a one-hop redirect from the former `wiring-a-2026-stack` paths. The year
+  remains only in the figure id `fig-wiring-a-2026-stack-cost-crossover`, which
+  no other page references.
 
 - [x] **Lint misses `---` inside sentences**
 
