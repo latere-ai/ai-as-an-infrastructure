@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.9.7 - 2026-09-25
+
 ### Changed
 
 - Callout text is set a step smaller and in a muted color, so it reads as an
