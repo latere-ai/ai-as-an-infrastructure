@@ -16,6 +16,10 @@ committed: the commit log already holds that.
   default text size, because both widths fell below the column's minimum.
   Codex, the default, is now 756 px in English and 720 px in Chinese, and
   Manuscript 666 px and 648 px.
+- A malformed response from the view counter made the reader fail after
+  load and remove the chapter text from the page. The counts now render only
+  from a well-formed response, and the account, view-count, bookmark and
+  comment widgets each fail on their own without affecting the page.
 
 ### Changed
 
@@ -33,13 +37,18 @@ committed: the commit log already holds that.
   matplotlib animation with the same play, pause, step and scrub controls as
   the book's figures, with a frame counter. Under reduced motion nothing plays
   and the step buttons move one frame at a time.
-- The runnable cells of the Orientation and Foundations parts now implement
-  the mechanism of their section, draw the result and check it against a
-  closed form or a second method: an uncertain break-even volume, an exact
-  arithmetic coder, an inverted-file index with its recall, an IsoFLOP scaling
-  study, MinHash on shingled text, a BPE trainer and encoder, cached decoding
-  against full recomputation, an animated expert load-balancing controller, a
-  ring all-reduce, and learning-rate decay separated from a data ramp.
+- The runnable cells across the book implement the mechanism of their
+  section, draw the result, and check it against a closed form, an exact
+  computation or a second method, instead of printing a few numbers. Among
+  them: a BPE trainer and encoder, KV-cache decoding against full
+  recomputation, a ring all-reduce, continuous batching until the knee,
+  speculative decoding that matches the target distribution, a 2-D diffusion
+  sampler, DPO converging to its closed-form optimum, tree search against a
+  misleading heuristic, checkpointing under random failures, hybrid retrieval
+  with rank fusion, a cluster bootstrap, and a sparse autoencoder recovering
+  planted features. Cells that only restated a table or a figure were
+  removed, and chapters whose mechanism is algorithmic and had no cell gained
+  one.
 
 ## v0.8.0 - 2026-09-24
 

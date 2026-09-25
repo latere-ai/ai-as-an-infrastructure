@@ -11,8 +11,8 @@
 // distribution of the backlog and the time to decision the chapter asks a
 // generator benchmark to report.
 //
-// With fixed arrivals and capacity the figure replays the chapter's runnable
-// example exactly: G = 40 and K = 20 leave B_12 = 240 after 12 intervals, and
+// With fixed arrivals and capacity the backlog follows B_t = max(0, B_{t-1} +
+// G - K): G = 40 and K = 20 leave B_12 = 240 after 12 intervals, and
 // K = 45 leaves 0. The random setting draws G_t ~ Poisson(λ) and K_t ~
 // Poisson(K) from a seeded stream by inverse CDF, one uniform per draw, so the
 // same seed gives the same trace and moving a slider moves the trace smoothly.
@@ -40,7 +40,7 @@ import { tpl } from "./lib/format.ts";
 // ---------------------------------------------------------------- simulation
 
 export const INTERVALS = 24;
-const HORIZON = 12; // the runnable example's horizon
+const HORIZON = 12; // intervals shown
 
 type Variability = "fixed" | "poisson";
 type P = { arrivals: number; capacity: number; variability: Variability; tracked: boolean; deadline: number; seed: number };
