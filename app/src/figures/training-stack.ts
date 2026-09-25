@@ -132,7 +132,7 @@ const COMPS: readonly Comp[] = [
   },
   {
     id: "rollout", layer: "rl",
-    name: { en: "Rollout engines", zh: "轨迹生成引擎" },
+    name: { en: "Rollout engines", zh: "rollout 引擎" },
     examples: { en: "vLLM, SGLang", zh: "vLLM、SGLang" },
     more: { en: "vLLM or SGLang replicas that generate with the current policy, return token IDs and log-probabilities, and take new weights over NCCL, CUDA IPC, or disk.", zh: "用当前策略生成的 vLLM 或 SGLang 副本，返回词元 ID 和对数概率，通过 NCCL、CUDA IPC 或磁盘接收新权重。" },
     does: { en: "Generate trajectories with the current policy. They are serving engines inside the training job: batched and cache-aware, and paused or updated in place when new weights arrive.", zh: "用当前策略生成轨迹。它们是训练任务里的推理服务引擎：批处理、复用缓存，新权重到达时暂停或原地更新。" },
@@ -142,7 +142,7 @@ const COMPS: readonly Comp[] = [
     id: "reward", layer: "rl",
     name: { en: "Rewards and verifiers", zh: "奖励与验证器" },
     examples: { en: "rule checkers, test runners, reward models, model judges", zh: "规则检查器、测试运行器、奖励模型、模型裁判" },
-    more: { en: "Rule-based checkers such as Math-Verify, test runs inside the sandbox, reward-model servers, and model judges served by the same kind of engine as the rollouts.", zh: "Math-Verify 这类规则检查器、在沙箱里执行的测试、奖励模型服务，以及由与轨迹生成同类的引擎提供服务的模型裁判。" },
+    more: { en: "Rule-based checkers such as Math-Verify, test runs inside the sandbox, reward-model servers, and model judges served by the same kind of engine as the rollouts.", zh: "Math-Verify 这类规则检查器、在沙箱里执行的测试、奖励模型服务，以及由与 rollout 同类的推理引擎提供服务的模型裁判。" },
     does: { en: "Scores finished trajectories with a deterministic checker, a test run, a learned reward model, or a model judge. It runs outside the policy's writable boundary and versions its own code.", zh: "用确定性检查器、测试运行、学到的奖励模型或模型裁判，为已完成的轨迹打分。它运行在策略可写范围之外，自身代码也有版本。" },
     section: "env",
   },
@@ -175,7 +175,7 @@ const COMPS: readonly Comp[] = [
     name: { en: "Scheduler", zh: "调度器" },
     examples: { en: "Slurm; Kubernetes with Kueue and JobSet", zh: "Slurm；带 Kueue 和 JobSet 的 Kubernetes" },
     more: { en: "Slurm, or Kubernetes with Kueue queues and quotas over JobSet workloads, admitted all at once with topology-aware placement.", zh: "Slurm，或 Kubernetes 上的 Kueue 队列与配额，管理 JobSet 工作负载，整体一次准入，并按拓扑放置。" },
-    does: { en: "Admits a job's workers all together or not at all, places them close together in the network, restarts the whole gang after a failure, and places the rollout engines and the environment fleet.", zh: "让一个任务的全部工作进程要么一起准入、要么都不准入，把它们放在网络上相近的位置，故障后整组重启；轨迹生成引擎和环境集群也由它放置。" },
+    does: { en: "Admits a job's workers all together or not at all, places them close together in the network, restarts the whole gang after a failure, and places the rollout engines and the environment fleet.", zh: "让一个任务的全部工作进程要么一起准入、要么都不准入，把它们放在网络上相近的位置，故障后整组重启；rollout 引擎和环境集群也由它放置。" },
     section: "job",
   },
   {
@@ -233,7 +233,7 @@ const SECTIONS: Record<Section, Text> = {
   data: { en: "the data plane and its lineage record", zh: "数据平面及其谱系记录" },
   job: { en: "the cluster and the job, with the run identity", zh: "集群与任务，以及运行标识" },
   ckpt: { en: "the checkpoint store and its failure budget", zh: "检查点存储及其故障预算" },
-  rollout: { en: "the rollout fleet", zh: "轨迹生成集群" },
+  rollout: { en: "the rollout fleet", zh: "rollout 集群" },
   env: { en: "environments and verifiers", zh: "环境与验证器" },
   gate: { en: "the evaluation gate and its promotion rule", zh: "评测关卡及其晋级规则" },
   release: { en: "the release artifact", zh: "发布产物" },
@@ -281,7 +281,7 @@ const labels = {
     hopShort: "{from}到{to}",
     listSep: "；",
     phoneOut: "到{to}：{kind}",
-    describeAll: "一套由 {n} 个组件、{l} 层组成的训练技术栈。数据单向流入训练运行时；权重从训练运行时流向三处：检查点存储、轨迹生成引擎，以及经评测关卡到达的发布环节；轨迹只能经由奖励与验证器回到训练运行时。",
+    describeAll: "一套由 {n} 个组件、{l} 层组成的训练技术栈。数据单向流入训练运行时；权重从训练运行时流向三处：检查点存储、rollout 引擎，以及经评测关卡到达的发布环节；轨迹只能经由奖励与验证器回到训练运行时。",
     describeOne: "{name}，属于{layer}层。{does}详见{c}一节。",
   },
 };
@@ -301,7 +301,7 @@ function describe(st: State<P>, lang: Lang): string {
   const sel = st.p.component;
   if (sel === "all") return tpl(L.describeAll, { n: COMPS.length, l: Object.keys(LAYERS).length });
   const c = byId.get(sel)!;
-  return tpl(L.describeOne, { name: c.name[lang], layer: LAYERS[c.layer][lang], does: c.does[lang], c: SECTIONS[c.section][lang] });
+  return tpl(L.describeOne, { name: c.name[lang], layer: LAYERS[c.layer][lang], does: c.does[lang], c: lead(SECTIONS[c.section][lang], lang) });
 }
 
 // ---------------------------------------------------------------- boxes
@@ -567,7 +567,7 @@ function drawReadout(sel: Sel, y0: number, w: number, lang: Lang, narrow: boolea
   y += TYPE.small + 8;
   para(c.more[lang]);
   y += 4;
-  para(tpl(L.covered, { c: SECTIONS[c.section][lang] }));
+  para(tpl(L.covered, { c: lead(SECTIONS[c.section][lang], lang) }));
   y += 6;
   const out = HOPS.filter((h) => h.from === c.id), inn = HOPS.filter((h) => h.to === c.id);
   for (const [head, hs, tmpl] of [[L.callsOut, out, L.hopOut], [L.callsIn, inn, L.hopIn]] as const) {

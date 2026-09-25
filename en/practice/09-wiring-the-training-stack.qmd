@@ -1,0 +1,974 @@
+# Wiring the Training Stack {#sec-training-stack}
+
+@sec-wiring-stack assembled the stack of a team that builds on models: an
+application that calls models through a gateway and runs them on hosted or
+self-hosted serving. A team that builds the models runs a different stack. Its
+product is a set of weights, and the weights come out of a pipeline of
+long-running jobs: data processing that turns crawled and licensed text into
+token shards, training jobs that hold thousands of accelerators for weeks,
+reinforcement learning (RL) runs that keep a fleet of inference engines and
+sandboxes busy, and evaluation gates that decide which saved state becomes a
+release. The theory parts of the book explain the mechanism inside each job:
+data curation (@sec-data-curation), distributed training
+(@sec-training-at-scale), mid-training (@sec-mid-training), post-training
+(@sec-sft-peft through @sec-synthetic-data), training to reason
+(@sec-training-to-reason), and training agents (@sec-training-agents).
+@sec-training-practice adapted an existing model for one product. This chapter
+assembles the stack that produces models in the first place.
+
+The stack is easiest to read as a chain of artifacts, each with an identity: a
+data manifest, token shards, checkpoints (saved copies of the complete training
+state), trajectories, evaluation reports, and a release. Each seam between two
+components passes one of these artifacts, and many failures of a training effort
+are failures at a seam: a data mixture that cannot be rebuilt, a checkpoint that
+does not restore, weights that reach the generators late, an environment that
+leaks its answer, or a gate whose threshold was chosen after the scores were
+seen. The chapter first draws the stack and the stages that use it. It then
+walks the seams in the order the artifacts move, from data to release, and for
+each seam gives the tools, a configuration, and the rule that keeps it
+reproducible. It closes with three reference stacks at different scales, the
+arithmetic that sizes a run, and what changes when the weights are released to
+others.
+
+## The reference architecture
+
+@fig-training-stack-arch draws the stack by layer. Read from top to bottom, it
+follows the artifacts. The data plane turns sources into token shards and
+post-training datasets. The training runtime consumes them, writes checkpoints,
+and reports metrics. In RL post-training the runtime becomes the learner of a
+loop: rollout engines generate trajectories with the current weights, an
+environment fleet executes the actions those trajectories contain, and rewards
+and verifiers score the results. The evaluation gate decides which checkpoint
+may become a release, and compute sits under every job. The color of each arrow
+is what the hand-off carries.
+
+```{figure}
+//| figure: training-stack
+//| label: fig-training-stack-arch
+//| fig-cap: "A reference training stack by layer, with example projects as of September 2026. Arrows are hand-offs, and each arrow's color is what the hand-off carries: data, weights and checkpoints, trajectories and rewards, or metrics and evaluation results. Selecting a component shows what it does, example choices, and the section of this chapter that covers it; with nothing selected, the readout groups the hand-offs by what they carry. The named projects are examples, not recommendations."
+```
+
+The colors make three properties of the stack visible. Data moves one way, into
+the training runtime. Weights leave the runtime for three destinations: the
+checkpoint store, which exists for recovery; the rollout engines, which need
+the newest policy (the model being trained, in RL terms); and, only through the
+gate, release. Trajectories return to the runtime only through the rewards and
+verifiers, so the scoring code sits on the one path by which the model's own
+outputs become its training data.
+
+Two consequences follow for whoever operates the stack. The first is that one
+training runtime serves every stage: pretraining, mid-training, supervised
+fine-tuning (SFT), preference optimization, and the learner of an RL run all
+execute optimizer steps on a gang of accelerators, and they differ in data,
+duration, and what surrounds the runtime. The second is that RL places a serving
+system inside the training job. The rollout engines are vLLM or SGLang, the same
+engines that serve production traffic (@sec-serving-stack), so a model builder
+operates batched inference long before it releases anything. The environment
+fleet is a third kind of compute: CPU containers or lightweight virtual machines,
+sized by the number of trajectories in flight and isolated like any sandbox that
+runs model-written code (@sec-agents-practice).
+
+No box is a single product, and several products fill more than one. An RL
+framework such as verl or slime drives the learner, the rollout engines, and the
+reward calls together; a data library such as DataTrove covers extraction,
+filtering, and deduplication in one pipeline. The durable part of the figure is
+the set of boxes and what each arrow carries, because each arrow is a place
+where an identity must be recorded.
+
+## The stages of training
+
+A model usually passes through six stages, and each uses the stack differently.
+The table names each stage's data, the shape of its compute, the resource that
+usually limits it, and typical open tools.
+
+| Stage | Data | Compute shape | Usual bottleneck | Typical tools |
+| --- | --- | --- | --- | --- |
+| **Pretraining** | Trillions of tokens of web text, code, books, and other licensed sources, sampled by mixture weight | One gang-scheduled job on thousands of accelerators for weeks to months, with data, tensor, pipeline, and expert parallelism | Interconnect bandwidth, hardware failures, and checkpoint writes | Megatron Core, TorchTitan, MaxText; DataTrove or NeMo Curator for data |
+| **Mid-training** | A smaller curated set: high-quality, domain, and long-document data, often on a decaying learning rate | The pretraining cluster for a shorter run, with context parallelism for long sequences | Data quality and schedule; activation memory at long context | The pretraining runtime, continued from its checkpoint |
+| **SFT** | Thousands to millions of demonstrations rendered in the chat template | One node to a few nodes for hours to days | Data quality and template correctness | TRL, Axolotl, NeMo RL, Megatron Core |
+| **Preference optimization** | Preference pairs from annotators or AI feedback | As for SFT, plus a frozen reference model's log-probabilities | Label quality; memory for two models | TRL, OpenRLHF, NeMo RL |
+| **RL with verifiable rewards** | Prompts whose answers a program can check | A learner plus rollout engines, with most GPU time spent generating | Rollout throughput and the long tail of response lengths | verl, OpenRLHF, NeMo RL, slime, TRL |
+| **Agentic RL** | Tasks with environment images, tools, and verifiers | Learner and rollout engines on GPUs, plus a fleet of sandboxes on CPU nodes | Environment latency and failures; policy staleness | prime-rl, SkyRL, slime, AReaL, verl |
+
+Read down the compute column and the stages fall into three shapes. The first
+two are one large synchronous job whose enemies are communication and failure
+(@sec-training-at-scale, @sec-mid-training). SFT and preference optimization are
+small jobs whose quality is decided by their data (@sec-sft-peft,
+@sec-behavior-specs, @sec-dpo-variants). The two RL stages are a system of
+three kinds of worker, learner, generator, and environment, whose throughput is
+decided by how the three are placed and synchronized (@sec-verifiable-rewards,
+@sec-training-to-reason, @sec-training-agents). Each stage starts from the
+previous stage's checkpoint, so the checkpoint store and the evaluation gate
+are also the hand-off between stages.
+
+## The data plane
+
+The first seam delivers data to the trainer. A run does not consume a folder of
+files; it consumes a distribution, a sequence of token batches drawn from
+sources in set proportions (@sec-data-curation). The data plane's product is
+therefore two things: token shards, the tokenized data split into immutable
+files, and a manifest that states how the shards were made and in what
+proportions the run samples them.
+
+The pipeline has the same stages at every scale. Acquisition decides which
+sources may enter, under what terms, and with which opt-outs applied
+(@sec-privacy-provenance). Extraction turns HTML, PDF, or code repositories into
+text while keeping each document's source identifier. Deduplication removes
+exact copies and near-duplicates; the near-duplicate pass groups @gls-minhash
+signatures across shards, which is a global shuffle rather than a per-shard
+step, so it usually sets the plan for the whole pipeline. Quality filtering
+scores documents with heuristics and classifiers, redaction removes personal
+data, and @gls-decontamination removes evaluation items so that a later
+benchmark measures generalization rather than recall. A pinned tokenizer then
+turns accepted text into token IDs (@sec-tokenization), and mixture weights
+decide how many tokens each source contributes in each phase of training
+(@sec-mid-training).
+
+Two open libraries cover most of this pipeline. DataTrove composes extraction,
+filtering, and deduplication blocks into a pipeline that runs unchanged on one
+machine, on Slurm, or on Ray [@datatrove2026repo]. NeMo Curator runs curation
+stages on GPUs over Ray, including deduplication, classification, and quality
+filtering [@nemocurator2026repo]. FineWeb documents a complete pipeline of this
+kind, from 96 Common Crawl snapshots to 15 trillion tokens, with each filter
+chosen by ablation [@penedo2024fineweb].
+
+At the far end of the seam, the trainer reads the shards through a loader that
+must satisfy two conditions: every data-parallel rank receives a disjoint slice
+of each batch, and a restart resumes at the exact sample where the failed run
+stopped, so that no data is skipped or repeated. MosaicML Streaming reads
+sharded datasets from object storage with deterministic, resumable order
+[@mosaicml2026streaming], and Megatron-LM reads indexed token files whose
+mixture is given on the command line as weight and prefix pairs
+[@nvidia2026megatronlm]. @sec-orchestration-data-infra treats shuffle, mixture,
+and resume semantics as versioned algorithms.
+
+The manifest is the file where the run's data identity lives. Its format below
+is illustrative rather than any tool's schema; the fields are what the seam
+needs.
+
+```yaml
+# data-manifest.yaml: the data identity of one run (illustrative schema).
+# Every path is immutable, and the run records this file's digest.
+manifest: pretrain-mix-2026-09
+tokenizer: {name: org/tokenizer-v3, sha256: "9f2c..."}   # token IDs depend on it
+sources:
+  - id: web-2026
+    snapshots: [CC-MAIN-2026-17, CC-MAIN-2026-21]
+    terms: crawl-policy-v4             # the reviewed basis for including it
+    optouts_applied: optout-list-2026-09-01
+    pipeline: {extract: html-text@3, dedup: minhash-b20-r14@2, quality: edu-classifier@5, pii: redact@3}
+    decontaminated_against: eval-registry-2026-09
+    shards: {prefix: /data/web-2026/v7/text_document, sha256_list: web-2026-v7.sha256}
+  - id: code-permissive
+    terms: license-allowlist-v2
+    shards: {prefix: /data/code/v3/text_document, sha256_list: code-v3.sha256}
+  - id: math-curated
+    shards: {prefix: /data/math/v2/text_document, sha256_list: math-v2.sha256}
+phases:                                # sampling weights per phase of training
+  - {name: main,   tokens: 13.5e12, weights: {web-2026: 0.75, code-permissive: 0.20, math-curated: 0.05}}
+  - {name: anneal, tokens: 1.5e12,  weights: {web-2026: 0.45, code-permissive: 0.30, math-curated: 0.25}}
+```
+
+The trainer receives a phase as weight and prefix pairs, which is the form
+Megatron-LM's `--data-path` accepts [@nvidia2026megatronlm]:
+
+```bash
+# The main phase, as the trainer reads it: weight, then shard prefix, per source.
+--data-path 0.75 /data/web-2026/v7/text_document \
+            0.20 /data/code/v3/text_document \
+            0.05 /data/math/v2/text_document
+```
+
+### The lineage record
+
+The manifest makes one promise: every token the run consumed can be traced to a
+source, the terms it entered under, the snapshot it came from, the filter
+versions that accepted it, and the tokenizer that encoded it. Four rules keep
+the promise. Shards are content-addressed and never rewritten; a changed filter
+produces a new shard version and a new manifest. The run records the manifest's
+digest, not a path, so a directory that changes later cannot change what the
+run claims to have read. The decontamination registry is versioned with the
+evaluation suite, so a new benchmark triggers a new check. A deletion request is
+traced through the manifest to every shard and every run that read it; removing
+the record from later corpora is a data operation, while removing its influence
+from trained weights requires retraining or unlearning (@sec-privacy-provenance).
+
+::: {.callout-note .dated}
+## As of September 2026
+
+DataTrove's latest release is v0.10.0, from 13 August 2026
+[@datatrove2026repo]. NeMo Curator is at v1.3.0, and since its 26.02 release it
+builds every modality's pipeline on Ray [@nemocurator2026repo]. MosaicML
+Streaming's latest release is v0.13.0, from July 2025
+[@mosaicml2026streaming].
+:::
+
+## The cluster and the job
+
+The second seam places the trainer on hardware. A training job is a gang: every
+worker must start, because a data-parallel step waits for all of its ranks, and
+a job that holds half of its GPUs while waiting for the rest only blocks other
+work. The scheduler's first duty is therefore **gang scheduling**, admitting all
+of a job's workers together or none of them. Its second is placement. The
+parallelism layout (@sec-training-at-scale) decides which workers exchange the
+most data: tensor parallelism inside one NVLink domain, pipeline and data
+parallelism across the InfiniBand or RoCE fabric, and expert parallelism in
+all-to-all exchanges (@sec-accelerators-networking). A layout that places a
+chatty dimension across a slow boundary loses more throughput than any kernel
+recovers.
+
+Llama 3 405B is one of the few published layouts at scale. It ran with tensor
+parallelism of 8 inside each server, pipeline parallelism of 16, and data
+parallelism over the remaining GPUs; at 16,384 H100 GPUs it reported 400
+teraFLOPs per GPU, or 41 percent BF16 model FLOPs utilization, and 38 percent
+once context parallelism of 16 was added for long sequences
+[@grattafiori2024llama]. @gls-mfu is the share of the accelerators' peak
+arithmetic that the model's own computation uses (@sec-accelerators-networking),
+and those numbers are a realistic ceiling for planning.
+
+Two scheduler families host these jobs. Slurm, the batch scheduler of most HPC
+centers, allocates whole nodes, can send a job a signal a set time before its
+limit so that the trainer saves and exits, and can requeue a job after a node
+failure or preemption [@slurm2026sbatch]. On Kubernetes, JobSet groups the
+workers into replicated Jobs with stable hostnames and restarts the whole group
+under a declared failure policy [@jobset2026repo], and Kueue queues the
+workload, enforces team quotas, and admits it all at once
+[@kueue2026gang]; its topology-aware scheduling keeps the pods within one rack
+or network block [@kueue2026tas]. Volcano and KAI Scheduler are other gang
+schedulers for Kubernetes [@volcano2026repo; @kai2026scheduler]. The choice
+usually follows the rest of the organization: Slurm where the cluster is a
+research machine, Kubernetes where the same cluster also runs rollout engines,
+environment fleets, and evaluation services, which RL makes likely.
+
+The job specification below starts a 128-node pretraining job on Kubernetes. It
+asks Kueue for admission through a queue, requires placement inside one network
+block, and restarts every worker from the last checkpoint after a failure. The
+container image is pinned by digest, which is part of the run identity.
+
+```yaml
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: pt-0042
+  labels:
+    kueue.x-k8s.io/queue-name: pretrain     # Kueue admits all workers or none
+spec:
+  failurePolicy:
+    maxRestarts: 30                         # each restart resumes from the last checkpoint
+  replicatedJobs:
+  - name: workers
+    template:
+      spec:
+        parallelism: 128                    # 128 nodes x 8 GPUs
+        completions: 128
+        backoffLimit: 0                     # one failed pod fails the Job; JobSet restarts all
+        template:
+          metadata:
+            annotations:
+              kueue.x-k8s.io/podset-required-topology: "cloud.provider.com/topology-block"
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: trainer
+              image: registry.example.com/train@sha256:4be1...   # pinned by digest
+              command: ["bash", "-c"]
+              args:
+              - >-
+                torchrun --nnodes=128 --nproc_per_node=8
+                --node_rank=$JOB_COMPLETION_INDEX
+                --master_addr=pt-0042-workers-0-0.pt-0042 --master_port=29500
+                pretrain_gpt.py $MODEL_ARGS $PARALLEL_ARGS $DATA_ARGS $CKPT_ARGS
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+```
+
+The topology level names a node label that the cluster administrator defines;
+`cloud.provider.com/topology-block` is the placeholder Kueue's documentation
+uses. The worker hostnames follow JobSet's pattern of JobSet name, replicated
+Job name, Job index, and pod index, and `JOB_COMPLETION_INDEX` gives each pod its
+node rank. On Slurm the same job is an `sbatch` script with the GPU request, a
+warning signal before the time limit, and `--requeue`.
+
+### The run identity
+
+A number reported from a run is usable only if the run can be identified. The
+run identity is the set of inputs that determine what the run computes: the code
+commit and container digest, the data manifest digest, the model and optimizer
+configuration, the parallel layout, the seeds, and the accelerator type. The
+experiment tracker records it once, at launch, and every metric, checkpoint,
+and evaluation carries the run identifier and the training step. A restart
+after a failure is a new attempt of the same run, not a new run, provided that
+it restores the same state; a change of layout on restart, which resharding
+checkpoints permit, is recorded as a change to the identity because it can
+change numerics. Two runs that differ in any field are different experiments,
+however similar their names.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Kueue's latest release is v0.19.6, from 24 September 2026, and its API group is
+at `v1beta2`; topology-aware scheduling has been beta and enabled by default
+since v0.14 [@kueue2026tas]. JobSet is at v0.12.0 and still serves the
+`v1alpha2` API [@jobset2026repo]. The current Slurm documentation is for
+version 26.05 [@slurm2026sbatch]. On the runtime side, Megatron Core's latest
+release is v0.19.2 [@nvidia2026megatronlm], TorchTitan's is v0.3.0, from 3
+September 2026, and it now configures runs through Python configuration
+functions rather than TOML files [@pytorch2026torchtitanrepo], DeepSpeed's is
+v0.19.7 [@microsoft2026deepspeed], and MaxText's is v0.2.4
+[@google2026maxtext].
+:::
+
+## The checkpoint store
+
+The third seam runs from the trainer to storage and back. A checkpoint holds the
+complete state needed to continue: model weights, optimizer state, the
+learning-rate schedule, random-number generator states, and the data loader's
+position. Optimizer state dominates the size. With mixed-precision Adam, each
+parameter carries a BF16 weight (2 bytes), an FP32 master copy (4 bytes), and
+two FP32 moment estimates (8 bytes), so a full checkpoint holds about 14 bytes
+per parameter, roughly 1 TB for a 70-billion-parameter model. The weights alone,
+in BF16, are 140 GB.
+
+Three techniques keep checkpointing cheap enough to do often. Each rank writes
+only its own shard in parallel, as PyTorch Distributed Checkpoint and
+Megatron's `torch_dist` format do, and the same formats can load the shards onto
+a different parallel layout [@pytorch2026dcp; @nvidia2026megatronlm]; Orbax
+fills the same role for JAX [@google2026orbax]. Saves are asynchronous: training
+pauses only to copy the state from accelerator memory to host memory, and a
+background process writes it out. Storage is tiered: frequent checkpoints go to
+a fast local or scratch tier that keeps only the latest, and less frequent ones
+go to a durable tier with a retention schedule. How often to save follows from
+the checkpoint cost and the failure rate; @sec-machine-breaks derives the
+interval that minimizes lost work, and @sec-orchestration-data-infra treats a
+checkpoint as a distributed commit that is complete only when every shard and
+the metadata are written.
+
+In Megatron-LM, the whole policy is a set of flags on the trainer
+[@nvidia2026megatronlm]:
+
+```bash
+CKPT_ARGS=(
+  --save /lustre/ckpt/pt-0042            # durable tier
+  --load /lustre/ckpt/pt-0042            # the same path: a restart resumes from the latest
+  --ckpt-format torch_dist               # sharded; loads onto a different layout
+  --async-save                           # training pauses only for the copy to host memory
+  --use-persistent-ckpt-worker           # async saves of torch_dist run in this worker
+  --save-interval 1000                   # durable checkpoint every 1,000 steps
+  --save-retain-interval 10000           # keep every 10,000th; older ones are deleted
+  --non-persistent-save-interval 100     # frequent checkpoint every 100 steps ...
+  --non-persistent-ckpt-type global      # ... to a scratch directory that keeps the latest
+  --non-persistent-global-ckpt-dir /scratch/ckpt/pt-0042
+  --exit-signal-handler                  # on SIGTERM, save and exit cleanly
+  --exit-on-missing-checkpoint           # a wrong --load path fails instead of starting over
+)
+```
+
+The last flag closes a quiet failure: without it, a mistyped load path starts a
+new run from random initialization under the old run's name.
+
+### The failure budget
+
+A long run needs a stated budget for time not spent training. The useful
+fraction of wall-clock time, often called effective training time or
+@gls-goodput, loses to four terms: pauses to save, work lost since the last
+checkpoint when a failure strikes, time to detect the failure, and time to
+restart and restore. @sec-machine-breaks models these terms; Meta reported more
+than 90 percent effective training time for Llama 3 405B despite 419 unexpected
+interruptions in 54 days [@grattafiori2024llama]. The budget becomes an
+operating rule when each term has an owner and a measurement: a checkpoint
+pause measured per save, a restore drill run before the long job starts and
+after every change of layout or storage, a detection deadline for hangs as well
+as crashes, and a per-week count of interruptions by cause. A run that falls
+below its budget stops scaling up until the cause is known, because adding
+nodes adds failures.
+
+## The rollout fleet
+
+The fourth seam exists only in RL. A policy generates trajectories, a reward
+path scores them, the learner updates the weights, and the new weights must
+reach the generators before the next round. The generators are rollout
+engines: vLLM or SGLang replicas that batch many trajectories at once and
+return, with each generated token, its token ID and log-probability, which the
+learner needs to compute its update. @sec-training-agents separates the two
+systems decisions this seam involves. Placement puts the learner and the rollout
+engines on the same GPUs, **colocated**, or on separate pools,
+**disaggregated**. Synchronization either waits for a whole batch of
+trajectories before each update, **synchronous**, or lets generation continue
+while the learner trains, **asynchronous**. This section covers the machinery
+that implements those choices.
+
+Weight synchronization is the mechanical core. When learner and engines share
+GPUs, the engine releases its memory while the learner trains, the learner's
+weights are resharded into the engine's layout, and the engine takes them over
+CUDA inter-process communication (IPC) without a copy across the network. When
+they are disaggregated, the learner broadcasts the weights to the engines over
+NCCL or writes them to shared storage for the engines to load. vLLM exposes this
+as a four-phase transfer API, initializing a transfer channel, starting an
+update, transferring the weights in chunks over NCCL or CUDA IPC, and finishing
+with post-processing such as quantization, together with a pause mode that
+keeps in-flight requests while the weights change [@vllm2026rlapis]. SGLang
+offers updates from disk, from tensors, or from a distributed group inside a
+weight-update session, pauses generation by aborting, retracting, or holding
+requests in place, and can report which weight version produced each token
+[@sglang2026rl]. The transfer is not free: a 70-billion-parameter policy in
+BF16 is 140 GB, and at 50 GB/s, one 400 Gb/s link, a full copy to one replica
+takes about three seconds before any parallelism across links.
+
+The per-token version attribution matters because asynchrony makes
+**staleness** routine. A trajectory generated with weights $k$ versions older
+than the learner's is off-policy by $k$ steps, and a long trajectory can span
+several updates. The controls are practical ones. Every trajectory records the
+policy version that produced each of its tokens, along with the engine's token
+IDs and log-probabilities. The run sets a staleness bound and drops what exceeds
+it. The loss corrects the remaining mismatch with a clipped or truncated
+importance ratio between the learner's and the engine's probabilities
+(@sec-training-agents). A mixture-of-experts policy also replays the engine's
+expert routing in the learner, and the run logs the gap between the learner's
+and the engine's log-probabilities for the same tokens, which stays nonzero even
+in synchronous runs because the two use different kernels and precision
+(@sec-training-to-reason).
+
+The trade between the two synchronization modes is quantitative, and a small
+simulation shows its shape. Rollout durations vary: a trajectory that ends in a
+short answer takes a fraction of the time of one that runs to the length limit
+or waits on a slow tool. The cell below draws each rollout's duration as a fixed
+part $1-c$ plus an exponential tail of mean $c$, so the mean is always 1 and
+$c$ is the coefficient of variation, the standard deviation over the mean. In
+the synchronous mode, 64 slots each generate one trajectory, and the update
+waits for the slowest. The idle share of slot time is then
+$1 - 1/\mathbb{E}[\max]$, and for this distribution
+$\mathbb{E}[\max] = (1-c) + c H_{64}$, where $H_{64} = \sum_{i=1}^{64} 1/i
+\approx 4.74$ is the expected maximum of 64 unit exponentials. In the
+asynchronous mode, each slot starts a new trajectory with the newest weights as
+soon as its last one finishes, and every 64 finished trajectories make one
+update. No slot waits, but a trajectory's lag, the number of updates between its
+start and its use, is no longer zero. Each update advances the lag of the 63
+trajectories still in flight, so the mean lag is exactly $(W-1)/B = 63/64$ for
+$W = 64$ slots and a batch of $B = 64$, whatever the spread; only the tail of
+the lag distribution grows with $c$. The cell asserts both closed forms against
+the simulation and reports how many trajectories a bound of $K = 2$ versions
+would drop.
+
+:::: {.runnable}
+```python
+import heapq
+import numpy as np
+import matplotlib.pyplot as plt
+
+B = 64            # trajectories per policy update
+W = 64            # rollout slots, each generating one trajectory at a time
+K = 2             # staleness bound: drop trajectories more than K versions old
+UPDATES = 400     # policy updates simulated for each spread value
+rng = np.random.default_rng(0)
+H = np.sum(1 / np.arange(1, B + 1))           # harmonic number: E[max of B Exp(1)]
+
+def durations(c, size):
+    """Rollout time with mean 1: a fixed part 1 - c plus an exponential tail of mean c."""
+    return (1 - c) + c * rng.exponential(1.0, size)
+
+def synchronous(c):
+    """Each update waits for the slowest of B rollouts; returns the idle share of slot time."""
+    t = durations(c, (UPDATES, B))
+    return 1 - t.sum() / (B * t.max(axis=1).sum())
+
+def asynchronous(c):
+    """Slots restart at once with the newest weights; every B finished rollouts make an update."""
+    version, done, lags = 0, 0, []
+    draws = iter(durations(c, W + (UPDATES + 20) * B))
+    slots = [(next(draws), 0) for _ in range(W)]  # (finish time, version it started with)
+    heapq.heapify(slots)
+    while version < UPDATES + 20:
+        now, v = heapq.heappop(slots)
+        lags.append(version - v)                  # updates since this rollout started
+        done += 1
+        if done == B:
+            version, done = version + 1, 0
+        heapq.heappush(slots, (now + next(draws), version))
+    return np.array(lags[20 * B:])                # drop the start-up transient
+
+spread = np.linspace(0.05, 1.0, 12)
+idle = np.array([synchronous(c) for c in spread])
+idle_exact = 1 - 1 / ((1 - spread) + spread * H)
+lags = [asynchronous(c) for c in spread]
+mean_lag = np.array([l.mean() for l in lags])
+p99_lag = np.array([np.percentile(l, 99) for l in lags])
+dropped = np.array([(l > K).mean() for l in lags])
+
+assert np.all(np.abs(idle - idle_exact) < 0.02)          # synchronous: the closed form holds
+assert np.all(np.abs(mean_lag - (W - 1) / B) < 0.01)     # asynchronous: mean lag is (W-1)/B
+assert dropped[0] == 0 and dropped[-1] > 0.05            # the tail, not the mean, grows
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5.6, 5.6), sharex=True)
+ax1.plot(spread, idle_exact, color="C0", label="synchronous, closed form")
+ax1.plot(spread, idle, "o", color="C0", ms=4, label="synchronous, simulated")
+ax1.plot(spread, 0 * spread, color="C1", label="asynchronous")
+ax1.set(ylabel="idle share of rollout time", ylim=(-0.03, 1))
+ax1.legend(fontsize=8, loc="upper left")
+ax2.plot(spread, np.full_like(spread, (W - 1) / B), "--", color="C1", label="mean lag, closed form")
+ax2.plot(spread, mean_lag, "o", color="C1", ms=4, label="mean lag, simulated")
+ax2.plot(spread, p99_lag, "s-", color="C2", ms=4, label="99th percentile lag")
+ax2.plot(spread, 0 * spread, color="C0", label="synchronous")
+ax2.set(xlabel="rollout-time spread c (standard deviation / mean)",
+        ylabel="policy versions behind", ylim=(-0.3, 6))
+ax2.legend(fontsize=8, loc="upper left")
+fig.tight_layout()
+
+for k in (0, 4, 8, 11):
+    c, i, m, p, d = spread[k], idle[k], mean_lag[k], p99_lag[k], dropped[k]
+    print(f"c = {c:.2f}: synchronous idle {i:4.0%}; asynchronous mean lag {m:.2f}, "
+          f"99th percentile {p:.0f}, over K={K}: {d:4.1%}")
+```
+::::
+
+The printed lines carry the argument. With a spread of only 5 percent, the
+synchronous batch already leaves about 16 percent of slot time idle, because
+the slowest of 64 draws sits well above the mean; with exponential durations,
+$c = 1$, the idle share reaches $1 - 1/H_{64} \approx 79$ percent. The
+asynchronous mode keeps every slot busy at a mean lag just under one version at
+every spread, but its 99th-percentile lag climbs from 2 to 5 versions, and a
+bound of two versions discards about 8 percent of trajectories at $c = 1$. Real
+length distributions are often heavier-tailed than the exponential, and a cap on
+generation length truncates them, so the measured spread of a workload, not a
+default, should set both the synchronization mode and the bound. Partial
+rollouts, which pause a long trajectory at the update and resume it with the new
+weights, and over-sampling with early cutoff are further ways to cut the
+synchronous tail at the cost of mixing versions inside one trajectory.
+
+Placement adds its own arithmetic. Generating a token costs about $2N$ FLOPs for
+a model of $N$ parameters, while training on it costs about $6N$ for the
+forward and backward passes plus $2N$ to recompute the current policy's
+log-probabilities, so the learner performs about four times the arithmetic of
+the generators. Generation, however, runs far below peak, because decoding is
+limited by memory bandwidth (@sec-serving-problem). At an assumed 40 percent
+MFU for training and 5 percent for decoding, generation takes twice the GPU time
+of training; at 10 percent, the two are equal. OpenRLHF's documentation puts
+generation at 80 percent of RLHF training time [@openrlhf2026repo]. Either way,
+the rollout pool usually needs at least as many GPUs as the learner, and in a
+colocated layout the same GPUs alternate between the two roles.
+
+### Frameworks
+
+The open RL frameworks differ mainly in which training backend and rollout
+engine they join, how they place them, and how far they go toward asynchrony.
+
+| Framework | Training and rollout | Placement and synchronization | Built for |
+| --- | --- | --- | --- |
+| **verl** | FSDP, FSDP2, or Megatron learners; vLLM or SGLang rollouts [@verl2026repo] | Colocated hybrid engine by default; one-step-off and fully asynchronous trainers with a staleness threshold | Broad algorithm coverage from one node to hundreds of GPUs |
+| **OpenRLHF** | DeepSpeed learners on Ray; vLLM rollouts [@openrlhf2026repo] | Shared or separate GPUs; asynchronous training by a flag | PPO-family and agent RL on a Ray cluster |
+| **NeMo RL** | PyTorch DTensor or Megatron Core learners on Ray; vLLM or SGLang generation [@nemorl2026repo] | Colocated or separate; asynchronous GRPO | The NVIDIA stack and large mixture-of-experts models |
+| **slime** | Megatron learners; SGLang rollouts behind a router [@slime2026repo] | Colocated or disaggregated; fully asynchronous rollout for long-tailed agent tasks | Large-scale RL with both engines' native arguments |
+| **prime-rl** | FSDP2 learners; vLLM rollouts [@primerl2026repo] | Disaggregated and fully asynchronous, with a bound on off-policy steps | Agentic RL at scale with `verifiers` environments |
+| **SkyRL** | FSDP or Megatron learners; vLLM, SGLang, or an OpenAI-compatible endpoint [@skyrl2026repo] | Synchronous, one-step-off, or fully asynchronous with in-flight weight updates | Long-horizon agents; SkyRL-Gym environments |
+| **AReaL** | Separate training, inference, agent, and weight-update services [@areal2026repo; @fu2025areal] | Fully asynchronous with staleness-aware training | Agents that join online RL through a base URL |
+| **TRL** | Transformers trainers; vLLM colocated or as a server [@hf2026trl; @hf2026trlvllm] | Synchronous, with an experimental asynchronous GRPO trainer that streams from a vLLM server | RL that fits one node or a few (@sec-training-practice) |
+
+A framework is chosen by the engine pair the team already operates and by the
+stage's shape. A Megatron shop training a large mixture-of-experts model reaches
+for slime, NeMo RL, or verl's Megatron path; a team whose bottleneck is
+environment latency on long agent tasks reaches for a fully asynchronous
+design such as prime-rl, SkyRL, or AReaL; and a single node is served by TRL.
+The framework's configuration is where the placement, synchronization, and
+staleness decisions become reviewable. The run below, trimmed from prime-rl's
+own software-engineering example, puts the learner and the rollout engines on
+separate nodes, broadcasts weights over NCCL, bounds staleness, and caps the
+number of episodes in flight, which is also the number of live sandboxes
+[@primerl2026repo]:
+
+```toml
+max_steps = 1000
+seq_len = 131072
+
+[deployment]
+type = "multi_node"
+num_train_nodes = 4              # learner: FSDP2
+num_infer_nodes = 1
+num_infer_replicas = 4           # rollout engines: vLLM
+
+[model]
+name = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+
+[weight_broadcast]
+type = "nccl"                    # learner to engines, once per update
+
+[ckpt]
+interval = 50
+
+[trainer]
+enable_router_replay = true      # replay the engine's expert routing in the learner
+
+[orchestrator]
+batch_size = 256                 # trajectories per update
+group_size = 16                  # samples per task, for group-relative advantages
+max_off_policy_steps = 32        # drop episodes more than 32 versions old
+
+[orchestrator.concurrency]
+max_inflight = 1536              # episodes in flight, and so live sandboxes
+
+[[orchestrator.train.source]]
+name = "scaleswe"
+env.taskset.id = "scaleswe"      # tasks, environment image, and verifier
+env.agent.harness.id = "rlm"
+
+[orchestrator.eval]
+interval = 20                    # held-out evaluation every 20 steps
+
+[inference.vllm]
+tensor_parallel_size = 8
+enable_expert_parallel = true
+enable_return_routed_experts = true   # the routing that router replay needs
+```
+
+::: {.callout-note .dated}
+## As of September 2026
+
+The latest releases are verl v0.9.1, OpenRLHF v0.11.2, NeMo RL v0.7.0, slime
+v0.3.2, prime-rl v0.9.0, SkyRL v0.3.0, and AReaL v2.1.0, all under Apache 2.0
+[@verl2026repo; @openrlhf2026repo; @nemorl2026repo; @slime2026repo;
+@primerl2026repo; @skyrl2026repo; @areal2026repo]. vLLM published its native
+weight-transfer API in May 2026, and SkyRL and prime-rl use it
+[@vllm2026rlapis]. The slime project states that it trained the GLM models from
+GLM-4.5 to GLM-5.3 [@slime2026repo]; prime-rl states that it is built to train
+mixture-of-experts models above a trillion parameters on more than 1,000 GPUs
+and defaults to a bound of 8 off-policy steps [@primerl2026repo]; AReaL 2.0
+split its system into separate training, inference, agent, and weight-update
+services [@areal2026repo].
+:::
+
+## Environments and verifiers
+
+The fifth seam connects the rollouts to the world they act in. In RL with
+verifiable rewards, the "environment" is a prompt and a checker, and both can
+run inside the framework's own processes. In agentic RL, each trajectory needs
+a live environment for as long as it runs: a repository with its test suite, a
+tool server with its database, or a browser. The environment executes the
+policy's actions, returns observations, and at the end hands its final state to
+a verifier. @sec-training-agents covers where environments come from and why
+they must be versioned like data; this section covers how they are served.
+
+Environment servers present one of two interfaces. The first is a
+Gymnasium-style pair of calls, `reset` and `step`, served over the network so
+that environments run in their own containers: OpenEnv packages environments
+this way [@openenv2026repo], the `verifiers` library defines environments,
+their rubrics, and their datasets for prime-rl and for evaluation
+[@verifiers2026repo], and SkyRL-Gym provides math, coding, search, and SQL
+environments behind the Gymnasium API [@skyrl2026repo]. The second interface
+inverts the call: an existing agent harness runs unchanged and reaches the
+policy through an OpenAI-compatible base URL that the RL system serves, and the
+system records the token IDs and log-probabilities behind each response. AReaL
+uses this pattern to put agent applications into online RL [@areal2026repo],
+and SkyRL accepts any OpenAI-compatible endpoint that supports weight sync as a
+rollout engine [@skyrl2026repo]. The second interface is what makes the
+training harness identical to the deployed one (@sec-the-harness), at the cost
+of treating every harness release as a new environment revision.
+
+The fleet behind either interface is sized by concurrency. Every trajectory in
+flight holds one environment, so the in-flight cap in the RL configuration is
+also the number of live sandboxes: 1,536 in the prime-rl example above. The
+fleet runs on CPU nodes, often in a separate pool or a separate provider from
+the GPUs, and its costs are start-up time, image pulls, and the long tail of
+slow actions, which becomes the rollout tail the synchronous simulation
+measured. DeepSeek's sandbox platform shows the scale this reaches: one
+production unit of about 160 nodes serves about 3 million sandboxes a day, and
+the platform keeps stateful rollout execution separate from preemptible GPU
+training [@huang2026dsec].
+
+Isolation is stricter than for a product sandbox, not looser. The code in these
+environments is written by a policy that is being optimized to raise a score,
+so an environment that exposes the answer, the test file, the network, or a
+credential will be exploited, and the exploit becomes a learned behavior
+(@gls-reward-hacking). Each environment gets its own filesystem, process
+namespace, and network policy with default-deny egress; containers suffice for
+trusted tasks, while code execution usually runs under gVisor or in microVMs
+(@sec-agents-practice). The environment holds no credential that the task does
+not require, and a tool that must reach an external system goes through a
+brokered, scoped credential (@sec-security-authorization). The runtime-safety
+controls of a deployed agent apply unchanged (@sec-runtime-safety).
+
+The verifier runs outside the policy's writable boundary. Four kinds of scorer
+are common: rule-based checkers, such as Math-Verify, which parses a
+mathematical answer and compares it with the reference symbolically
+[@mathverify2026repo]; test runs, which execute a hidden test suite in a fresh
+copy of the final state rather than in the workspace the policy could edit;
+reward models, served as a GPU service like any other model; and model judges,
+served by the same kind of engine as the rollouts and budgeted like them. Each
+scorer has a latency budget, because a slow verifier extends every trajectory,
+and a determinism budget, because a flaky test is reward noise. Every
+trajectory records the environment image, task, verifier, and judge revisions
+that produced its reward, which is what lets a reward spike be traced to a
+changed verifier rather than to a better policy.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+OpenEnv, which now lives under the Hugging Face organization, is at v0.6.0 and
+uses a BSD license [@openenv2026repo]. `verifiers` is at v0.3.1 under the MIT
+license [@verifiers2026repo], and SkyRL-Gym ships inside the SkyRL repository
+[@skyrl2026repo].
+:::
+
+## The evaluation gate
+
+The sixth seam decides which checkpoint leaves the run. Evaluation happens at
+three cadences. During pretraining and mid-training, small suites and held-out
+loss run on checkpoints every few thousand steps to catch a regression while it
+is still cheap to roll back. At each stage boundary, a full suite decides whether
+the stage's output becomes the next stage's input. Before release, the gate adds
+safety evaluations and red teaming (@sec-safety-tuning), agent suites where the
+model will act (@sec-evaluating-agents), and contamination checks against the
+data manifest's decontamination registry (@sec-benchmarks).
+
+A candidate is scored as it will be served. The checkpoint is converted to the
+release format, loaded by the serving engine with the chat template and
+generation defaults that will ship, and exposed behind an OpenAI-compatible
+endpoint. The harness then talks to that endpoint rather than to the training
+code: lm-evaluation-harness calls it through its `local-completions` and
+`local-chat-completions` model types [@lmevalharness2026], and Inspect runs
+agentic and safety evaluations against the same kind of endpoint
+[@inspectai2026]. Scoring through the endpoint tests the conversion and the
+serving configuration as well as the weights, which a score computed inside
+the trainer cannot do.
+
+```bash
+# Serve the converted candidate as production will, then score it through the API.
+vllm serve /release/pt-0042-step120000 --served-model-name candidate --port 8000 &
+lm-eval run --model local-completions \
+  --model_args model=candidate,base_url=http://localhost:8000/v1/completions,num_concurrent=32,tokenized_requests=False \
+  --tasks gsm8k,ifeval --output_path results/candidate --log_samples
+python gate.py results/baseline/results.json results/candidate/results.json
+```
+
+The gate itself is a few lines that compare the candidate's scores with fixed
+floors and with the baseline's scores. The thresholds are written before the
+run and live next to it, so no one can choose them after seeing the numbers.
+
+```python
+# gate.py: promote only if every gated metric holds its floor and none regresses
+# beyond its tolerance plus two standard errors. The thresholds were fixed before the run.
+import json
+import sys
+
+GATE = {  # task: (metric key in lm-eval results, floor, allowed drop against the baseline)
+    "gsm8k": ("exact_match,strict-match", 0.80, 0.01),
+    "ifeval": ("prompt_level_strict_acc,none", 0.75, 0.01),
+}
+
+def results(path):
+    with open(path) as f:
+        return json.load(f)["results"]
+
+base, cand = results(sys.argv[1]), results(sys.argv[2])
+failures = []
+for task, (metric, floor, drop) in GATE.items():
+    b, c = base[task][metric], cand[task][metric]
+    se = cand[task].get(metric.replace(",", "_stderr,"))
+    se = se if isinstance(se, float) else 0.0
+    if c < floor:
+        failures.append(f"{task}: {c:.3f} is below the floor {floor}")
+    if c + 2 * se < b - drop:
+        failures.append(f"{task}: {c:.3f} against the baseline {b:.3f}")
+print("PROMOTE" if not failures else "REJECT\n" + "\n".join(failures))
+sys.exit(1 if failures else 0)
+```
+
+The rule in the script is deliberately crude; @sec-statistical-reliability
+explains how to size the suites and set a rule whose error rates are known.
+
+### The promotion rule
+
+The promotion rule is the contract of this seam. It names the suites, metrics,
+floors, regression tolerances, and uncertainty treatment before the run starts
+(@sec-operational-evaluation). It covers every class of behavior the release
+could change: capability, instruction following, safety and refusal
+calibration, and the no-change requirements that protect existing users. It is
+applied to the candidate as served, never to a score logged by the trainer. Its
+decision is recorded with the run identity, the candidate's digest, the suite
+versions, and the name of the approver, and a candidate that fails is never
+promoted by editing the rule. A rule that must change is changed for the next
+run.
+
+## The release artifact
+
+The last seam turns a gated checkpoint into something others can run. A
+training checkpoint is the wrong artifact to ship: it is sharded for a training
+layout, holds FP32 master weights and optimizer state, and needs the training
+code to load. The release is a conversion. It extracts the weights, writes them
+in the serving precision as safetensors files, which hold raw tensors and a
+header and cannot execute code on load [@safetensors2026format], and adds the
+model configuration, the tokenizer files, the chat template, and the generation
+defaults. TorchTitan can save in the Hugging Face layout directly
+[@pytorch2026torchtitanrepo], and Megatron Bridge converts between Megatron and
+Hugging Face checkpoints [@nvidia2026megatronlm]. Quantized builds and GGUF
+files for local runtimes [@ggml2023gguf] are derived artifacts with their own
+digests and their own parity checks (@sec-model-artifacts).
+
+The conversion has one acceptance test: the converted artifact, loaded by the
+serving engine, reproduces the evaluated behavior. Because the gate already
+scored the converted artifact through the serving engine, the test reduces to
+checking that the published files are byte-identical to the ones the gate saw.
+The publisher then signs the release under the OpenSSF model signing
+specification, which signs a manifest of every file's path and digest
+[@openssf2025modelsigning], and pushes it to a model hub or an
+OCI registry [@oci2025distribution]. The hand-off to serving is the start of
+the application stack's lifecycle (@sec-serving-stack, @sec-deployment-lifecycle):
+the release's digest becomes the identity that a serving system pins and that a
+rollback restores.
+
+## Three reference stacks
+
+Most teams that train models fall into one of three archetypes by scale. The
+rows are the layers of @fig-training-stack-arch; the entries are examples as of
+September 2026 and starting points to adapt, not rankings.
+
+| Layer | Post-training team on open weights (1 to 64 GPUs) | RL lab with an environment fleet (hundreds of GPUs) | Pretraining effort (thousands of GPUs) |
+| --- | --- | --- | --- |
+| **Data** | Own demonstrations and preference pairs, public datasets, a manifest in the repository | Task sets with verifiers, environment images in a registry, synthetic data from a teacher model | DataTrove or NeMo Curator on a processing cluster; a corpus manifest; token shards on object storage or Lustre |
+| **Compute and scheduling** | Rented nodes or a managed training API; Slurm or plain Kubernetes Jobs | Kubernetes with Kueue and JobSet, or Slurm; a separate CPU pool for environments | Reserved clusters with InfiniBand or RoCE; Slurm, or Kubernetes with Kueue's topology-aware scheduling |
+| **Training runtime** | TRL, Axolotl, or Unsloth over FSDP2 or DeepSpeed (@sec-training-practice) | The RL framework's learner on FSDP2 or Megatron Core | Megatron Core, TorchTitan, or MaxText with a tuned parallel layout |
+| **Post-training** | SFT and DPO; GRPO in TRL with colocated vLLM | verl, slime, prime-rl, SkyRL, or AReaL with vLLM or SGLang rollouts, asynchronous with a staleness bound | The RL lab's stack, run after mid-training |
+| **Environments and rewards** | Rule checkers such as Math-Verify, in process | Sandboxes behind OpenEnv or `verifiers` interfaces; test runners and judge servers | As for the RL lab, at larger concurrency |
+| **Checkpoints** | Full or adapter checkpoints on local disk, copied to object storage | Sharded asynchronous checkpoints of the learner, plus the data buffer's position | Asynchronous sharded checkpoints in fast and durable tiers, with restore drills |
+| **Tracking and evaluation** | An experiment tracker; lm-evaluation-harness in CI | Per-step reward, length, and staleness statistics; held-out agent suites | Scheduled checkpoint evaluations; a written gate at every stage boundary |
+| **Release** | Adapter or merged weights in safetensors, with a card | A post-trained model released through the pretraining effort's process, or its own | Converted, signed artifacts with model and system cards, a license, and staged access |
+
+The columns share more than they differ. The same seams appear in all three,
+and a team moving from the first column to the second mostly adds the rollout
+fleet and the environment fleet; a team moving to the third mostly adds scale to
+the data plane and to the failure budget. What changes most across the columns
+is which seam fails first: data quality in the first, environment reliability
+and staleness in the second, and hardware failure and checkpoint bandwidth in
+the third.
+
+## The arithmetic of a run
+
+Four numbers size a run before any hardware is reserved: the compute, the
+checkpoint footprint, the data footprint, and, for RL, the split between
+generation and training.
+
+**Compute.** A dense transformer with $N$ parameters trained on $D$ tokens
+performs about $6ND$ floating-point operations: $2ND$ for the forward pass and
+$4ND$ for the backward pass (@sec-scaling-laws). A 70-billion-parameter model on
+15 trillion tokens needs
+
+$$
+6ND = 6 \times (7\times10^{10}) \times (1.5\times10^{13}) = 6.3\times10^{24}\ \text{FLOPs}.
+$$
+
+An H100 SXM delivers about 989 dense BF16 teraFLOPS at peak, half of the
+datasheet's figure with sparsity [@nvidia2026h100]. At 40 percent MFU, each GPU
+contributes $3.96\times10^{14}$ FLOPs per second, so the run needs
+$1.59\times10^{10}$ GPU-seconds, or 4.4 million GPU-hours: 45 days on 4,096
+GPUs before failures, and about 50 days at 90 percent effective training time.
+The same formula checks against a published run: Llama 3 405B on 15.6 trillion
+tokens gives $6ND = 3.79\times10^{25}$, which matches the reported
+$3.8\times10^{25}$, and at the reported 400 teraFLOPs per GPU the run needs about
+26 million GPU-hours, or 67 days on 16,384 GPUs of steady-state training
+[@grattafiori2024llama].
+
+**Checkpoints.** At 14 bytes per parameter, the 70-billion-parameter model's
+full checkpoint is about 980 GB. Spread over 4,096 GPUs, each rank holds about
+240 MB, so the copy to host memory that an asynchronous save waits for takes a
+fraction of a second; the durable write then has until the next save to finish,
+which at one save per hour is about 0.3 GB/s in aggregate. Retention decides
+the storage: keeping every hourly checkpoint for 45 days would take about 1 PB,
+while keeping the latest three full checkpoints and a 140 GB weights-only
+snapshot every six hours for the evaluation history takes about 28 TB.
+
+**Data.** Fifteen trillion tokens stored as 4-byte token IDs, needed once a
+vocabulary exceeds 65,536 entries, occupy 60 TB of shards; 2-byte IDs would
+halve that for a smaller vocabulary. The pool before filtering is an order of
+magnitude larger: DataComp-LM's Common Crawl pool holds 240 trillion tokens
+[@li2024dclm]. The read bandwidth is modest: 15 trillion tokens over 45 days is
+3.9 million tokens per second, about 15 MB/s of token IDs for the whole cluster.
+Storage for training is therefore sized by checkpoint bursts and retention far
+more than by data reads, while storage for data processing is sized by the raw
+pool.
+
+**Rollouts against training.** For an RL run with the placement arithmetic of
+the rollout fleet section, generation performs a quarter of the learner's
+arithmetic but, at 5 percent decoding MFU against 40 percent for training, takes
+twice its GPU time, and a synchronous batch with a wide length spread idles part
+of that time as well. A first plan provisions the rollout pool at one to two
+times the learner's GPUs and then measures, since the ratio moves with response
+length, batch size, and the engine's utilization. The environment fleet is sized
+separately, at one sandbox for each trajectory in flight.
+
+## The model provider
+
+A team that releases weights, or serves them to others, takes on obligations
+that a team training for itself does not. They attach to the release and outlive
+the run.
+
+The first is a release gate beyond capability. A provider evaluates the
+candidate for misuse and dangerous capabilities, red-teams it
+(@sec-safety-tuning), and, if it has published a frontier safety framework,
+applies that framework's thresholds before release (@sec-law-policy). Access can
+be staged: weights for a smaller model, an API with monitoring for a larger one,
+and trusted-access programs for capabilities that need them.
+
+The second is documentation. A model card records intended uses, evaluation
+conditions, and limitations [@mitchell2019modelcards], and a system card
+describes the deployed system and its safeguards. Under the EU AI Act, a
+provider of a general-purpose model has had to keep technical documentation,
+inform downstream providers, adopt a copyright policy, and publish a summary of
+training content since 2 August 2025, and training compute above $10^{25}$
+FLOPs creates a rebuttable presumption of high-impact capability, which
+classifies the model as posing systemic risk and adds further duties
+[@euaiact2024; @eugpai2025]. The arithmetic above lands on both sides of that
+line: the 70-billion-parameter example uses $6.3\times10^{24}$ FLOPs, while
+Llama 3 405B used $3.8\times10^{25}$. The data manifest and the run identity are
+what make the training-content summary and the documentation answerable.
+
+The third is the license. A provider chooses between a standard permissive
+license, such as Apache 2.0 or MIT, and a custom license with use restrictions
+or thresholds, and the data's terms limit what it can grant; @sec-model-landscape
+compares the licenses current releases use. The fourth is distribution: the
+signed artifact of the previous section, published where users fetch models, or
+served behind the provider's own API, which puts the whole application stack of
+@sec-wiring-stack in front of the model. The fifth is deprecation. A provider
+that serves a model publishes a notice period and what happens to requests after
+retirement, which consumers must plan around (@sec-choosing-model), and decides
+how long to keep the retired weights.
+
+::: {.callout-note .dated}
+## As of September 2026
+
+Anthropic has committed to preserving the weights of every publicly released
+model, and of models deployed for significant internal use, for at least the
+lifetime of the company, and to producing a post-deployment report when a model
+is deprecated [@anthropic2025preservation].
+:::
+
+::: {.callout-tip}
+## Constraint arrow
+The serving engine reaches back into training twice. In RL, the rollout engine
+is a serving engine, so its kernels, precision, and expert routing define the
+behavior policy that the learner must correct for. At release, the serving
+engine is the loader the artifact must satisfy, so the tokenizer, chat template,
+and precision chosen in training become an interface every downstream consumer
+depends on. A training stack that treats serving as someone else's problem
+learns about both constraints late: once as an unexplained gap between the
+learner's and the engine's probabilities, and once as a release that scores
+differently from its checkpoint.
+:::
+
+::: {.callout-important}
+## What's contested
+Three choices are unsettled. Synchronous RL keeps every sample on-policy and
+wastes GPU time on the length tail; asynchronous RL recovers the time and pays
+in staleness and correction terms, and published comparisons cover a few
+workloads each (@sec-training-agents). Integrated frameworks join a learner and
+a rollout engine and move quickly with them; composing engines through their
+native weight-update APIs keeps each engine current but moves the integration
+work to the team. And the line between building and renting moves with each
+managed service: a training API such as Tinker runs the loop's arithmetic on the
+provider's accelerators while the team writes the loop
+[@thinkingmachines2025tinker], which leaves data, environments, and gates with
+the team. The seams in this chapter are the part expected to outlast any of
+these answers.
+:::
+
+## Further reading
+
+::: {#further-reading}
+:::

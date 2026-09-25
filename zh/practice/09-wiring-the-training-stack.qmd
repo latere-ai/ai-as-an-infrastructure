@@ -1,0 +1,475 @@
+# 集成训练技术栈 {#sec-training-stack}
+
+@sec-wiring-stack 组装的是基于模型做产品的团队所用的技术栈：应用经网关调用模型，模型跑在托管或自托管的推理服务上。自己训练模型的团队运行的是另一套技术栈。它的产品是一组权重，而权重出自一条由长时间运行的任务组成的流水线：数据处理把抓取和授权获得的文本变成词元分片；训练任务连续数周占用数千块加速器；强化学习（RL）运行让一批推理引擎和沙箱持续忙碌；评测关卡决定哪一份保存下来的状态可以成为发布版本。每个任务内部的机制，本书的理论部分都讲过：数据整理（@sec-data-curation）、分布式训练（@sec-training-at-scale）、中期训练（@sec-mid-training）、后训练（从 @sec-sft-peft 到 @sec-synthetic-data）、推理能力训练（@sec-training-to-reason）和智能体训练（@sec-training-agents）。@sec-training-practice 为单个产品改造一个现成模型；本章组装的，是从头产出模型的那套技术栈。
+
+把这套技术栈看成一条制品链最容易理解，链上每个制品都有自己的标识：数据清单、词元分片、检查点（完整训练状态的存档）、轨迹、评测报告和发布版本。两个组件之间的每道接缝只传递其中一种制品，而训练工作中的许多失败都出在接缝上：数据配比无法重建，检查点恢复不了，权重迟迟到不了生成端，环境泄露了答案，或者关卡阈值是看过分数之后才定的。本章先画出整套技术栈和使用它的各个阶段，再按制品流动的顺序，从数据到发布，逐一走过每道接缝，给出所用工具、一份配置，以及保证这道接缝可复现的规则。最后是三种不同规模的参考技术栈、估算一次运行规模的算术，以及把权重发布给他人之后会有哪些变化。
+
+## 参考架构
+
+@fig-training-stack-arch 按层画出这套技术栈，从上往下读，就是制品流动的顺序。数据平面把各种来源变成词元分片和后训练数据集。训练运行时读入这些数据，写出检查点，并上报指标。到了强化学习后训练，运行时成为一个循环里的学习器：rollout 引擎用当前权重生成轨迹，环境集群执行轨迹中包含的动作，奖励与验证器给结果打分。评测关卡决定哪个检查点可以成为发布版本，算力则承载所有任务。箭头颜色表示交接传递的内容。
+
+```{figure}
+//| figure: training-stack
+//| label: fig-training-stack-arch
+//| fig-cap: "按层划分的参考训练技术栈，图中的项目是截至 2026 年 9 月的示例。箭头表示交接，箭头颜色表示交接传递的内容：数据、权重与检查点、轨迹与奖励，或指标与评测结果。选中一个组件，可以查看它的作用、可选的实现，以及本章讲它的那一节；不选组件时，读数区按传递的内容列出全部交接。图中列出的项目只是示例，并非推荐。"
+```
+
+颜色让这套技术栈的三个性质一目了然。数据只朝一个方向流动，即流入训练运行时。权重从运行时流向三处：检查点存储，用于故障恢复；rollout 引擎，它需要最新的策略（强化学习中被训练的模型）；以及发布，但只能经过关卡。轨迹只能经由奖励与验证器回到运行时，所以打分代码位于唯一一条让模型自身输出变成训练数据的路径上。
+
+对运营这套技术栈的人来说，由此得出两点。第一，一个训练运行时服务所有阶段：预训练、中期训练、监督微调（SFT）、偏好优化，以及强化学习运行中的学习器，都是在一组加速器上执行优化器步骤，区别只在数据、时长和运行时周围的组件。第二，强化学习把一套推理服务系统放进了训练任务。rollout 引擎就是 vLLM 或 SGLang，与承载生产流量的引擎相同（@sec-serving-stack），所以模型构建方早在发布任何东西之前，就已经在运营批量推理了。环境集群是第三类算力：CPU 容器或轻量虚拟机，规模取决于同时在跑的轨迹数量，隔离要求与任何运行模型所写代码的沙箱一样（@sec-agents-practice）。
+
+图中没有哪个位置只对应一个产品，也有产品同时占据好几个位置。verl、slime 这类强化学习框架同时驱动学习器、rollout 引擎和奖励调用；DataTrove 这样的数据库在一条流水线里完成抽取、过滤和去重。图中稳定不变的是这些位置和每支箭头传递的内容，因为每支箭头都是必须记录标识的地方。
+
+## 训练的各个阶段
+
+一个模型通常要经过六个阶段，每个阶段使用这套技术栈的方式都不同。下表列出各阶段的数据、算力形态、通常的瓶颈和常用的开源工具。
+
+| 阶段 | 数据 | 算力形态 | 通常的瓶颈 | 常用工具 |
+| --- | --- | --- | --- | --- |
+| **预训练** | 数万亿词元的网页文本、代码、图书及其他授权来源，按配比权重采样 | 一个成组调度的任务，在数千块加速器上运行数周到数月，采用数据、张量、流水线和专家并行 | 互连带宽、硬件故障和检查点写入 | Megatron Core、TorchTitan、MaxText；数据处理用 DataTrove 或 NeMo Curator |
+| **中期训练** | 规模较小的精选数据：高质量数据、领域数据和长文档，学习率通常在衰减 | 在预训练集群上跑一次较短的运行，长序列用上下文并行 | 数据质量与调度安排；长上下文下的激活显存 | 预训练所用的运行时，从其检查点继续 |
+| **SFT** | 数千到数百万条按对话模板渲染的示范数据 | 一个到几个节点，数小时到数天 | 数据质量与模板是否正确 | TRL、Axolotl、NeMo RL、Megatron Core |
+| **偏好优化** | 来自标注员或 AI 反馈的偏好对 | 与 SFT 相同，另需冻结参考模型的对数概率 | 标注质量；同时容纳两个模型的显存 | TRL、OpenRLHF、NeMo RL |
+| **可验证奖励强化学习** | 答案可由程序检查的提示 | 学习器加 rollout 引擎，GPU 时间大多花在生成上 | rollout 吞吐与回答长度的长尾 | verl、OpenRLHF、NeMo RL、slime、TRL |
+| **智能体强化学习** | 带环境镜像、工具和验证器的任务 | GPU 上的学习器和 rollout 引擎，外加 CPU 节点上的沙箱集群 | 环境延迟与故障；策略陈旧 | prime-rl、SkyRL、slime、AReaL、verl |
+
+顺着算力一列往下看，这些阶段分成三种形态。前两个阶段是一个大型同步任务，要对付的是通信和故障（@sec-training-at-scale、@sec-mid-training）。SFT 和偏好优化是小任务，质量由数据决定（@sec-sft-peft、@sec-behavior-specs、@sec-dpo-variants）。两个强化学习阶段则是由学习器、生成器和环境三类工作进程组成的系统，吞吐取决于三者如何放置、如何同步（@sec-verifiable-rewards、@sec-training-to-reason、@sec-training-agents）。每个阶段都从上一阶段的检查点开始，所以检查点存储和评测关卡同时也是阶段之间的交接点。
+
+## 数据平面
+
+第一道接缝把数据交给训练器。一次运行消耗的不是一个装满文件的目录，而是一个分布：按设定比例从各个来源抽取的一串词元批次（@sec-data-curation）。因此，数据平面的产出有两样：词元分片，即切分成不可变文件的分词后数据；以及一份清单，说明这些分片是怎么做出来的、运行按什么比例采样它们。
+
+不论规模大小，流水线的步骤都一样。获取环节决定哪些来源可以进入、依据什么条款、应用了哪些退出请求（@sec-privacy-provenance）。抽取环节把 HTML、PDF 或代码仓库转成文本，同时保留每份文档的来源标识。去重环节删除完全重复和近重复的内容；近重复检测要跨分片对 @gls-minhash 签名分组，这是一次全局洗牌，而不是逐个分片的处理，所以它通常决定整条流水线的规划。质量过滤用启发式规则和分类器给文档打分，脱敏环节删除个人数据，@gls-decontamination 则剔除评测题目，让日后的基准测试衡量的是泛化能力而不是记忆。随后，固定版本的分词器把被接受的文本转成词元 ID（@sec-tokenization），配比权重决定每个来源在每个训练阶段贡献多少词元（@sec-mid-training）。
+
+两个开源库覆盖了这条流水线的大部分。DataTrove 把抽取、过滤和去重组件拼成一条流水线，同一条流水线可以不加修改地在单机、Slurm 或 Ray 上运行 [@datatrove2026repo]。NeMo Curator 在 Ray 上用 GPU 运行数据整理步骤，包括去重、分类和质量过滤 [@nemocurator2026repo]。FineWeb 完整记录了这样一条流水线，从 96 个 Common Crawl 快照得到 15 万亿词元，每个过滤器都经过消融实验筛选 [@penedo2024fineweb]。
+
+在接缝的另一端，训练器通过加载器读取分片，加载器必须满足两个条件：每个数据并行进程拿到每个批次中互不重叠的一份；重启后从失败运行停下的确切样本处继续，不跳过也不重复任何数据。MosaicML Streaming 从对象存储读取分片数据集，顺序确定且可恢复 [@mosaicml2026streaming]；Megatron-LM 读取带索引的词元文件，配比以“权重、前缀”成对的形式在命令行上给出 [@nvidia2026megatronlm]。@sec-orchestration-data-infra 把洗牌、配比和恢复语义当作带版本的算法来讨论。
+
+一次运行的数据标识就记录在清单里。下面的格式只是示意，并非某个工具的规范；字段是这道接缝需要的内容。
+
+```yaml
+# data-manifest.yaml: the data identity of one run (illustrative schema).
+# Every path is immutable, and the run records this file's digest.
+manifest: pretrain-mix-2026-09
+tokenizer: {name: org/tokenizer-v3, sha256: "9f2c..."}   # token IDs depend on it
+sources:
+  - id: web-2026
+    snapshots: [CC-MAIN-2026-17, CC-MAIN-2026-21]
+    terms: crawl-policy-v4             # the reviewed basis for including it
+    optouts_applied: optout-list-2026-09-01
+    pipeline: {extract: html-text@3, dedup: minhash-b20-r14@2, quality: edu-classifier@5, pii: redact@3}
+    decontaminated_against: eval-registry-2026-09
+    shards: {prefix: /data/web-2026/v7/text_document, sha256_list: web-2026-v7.sha256}
+  - id: code-permissive
+    terms: license-allowlist-v2
+    shards: {prefix: /data/code/v3/text_document, sha256_list: code-v3.sha256}
+  - id: math-curated
+    shards: {prefix: /data/math/v2/text_document, sha256_list: math-v2.sha256}
+phases:                                # sampling weights per phase of training
+  - {name: main,   tokens: 13.5e12, weights: {web-2026: 0.75, code-permissive: 0.20, math-curated: 0.05}}
+  - {name: anneal, tokens: 1.5e12,  weights: {web-2026: 0.45, code-permissive: 0.30, math-curated: 0.25}}
+```
+
+训练器拿到的是某个阶段的“权重、前缀”对，这正是 Megatron-LM 的 `--data-path` 接受的形式 [@nvidia2026megatronlm]：
+
+```bash
+# The main phase, as the trainer reads it: weight, then shard prefix, per source.
+--data-path 0.75 /data/web-2026/v7/text_document \
+            0.20 /data/code/v3/text_document \
+            0.05 /data/math/v2/text_document
+```
+
+### 谱系记录
+
+清单只做一项承诺：运行消耗的每个词元，都能追溯到它的来源、进入时依据的条款、所属的快照、接受它的各个过滤器版本，以及编码它的分词器。四条规则保证这项承诺。分片按内容寻址，从不改写；过滤器一改，就产生新的分片版本和新的清单。运行记录的是清单的摘要，而不是路径，这样目录日后再怎么变，也改变不了运行声称读过的内容。去污染登记表与评测集一起做版本管理，新增一个基准测试就触发一次新的检查。收到删除请求时，通过清单追溯到每个分片和每个读过它的运行；从以后的语料里删掉这条记录是一项数据操作，而要消除它对已训练权重的影响，则需要重新训练或做遗忘（@sec-privacy-provenance）。
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+DataTrove 的最新版本是 2026 年 8 月 13 日发布的 v0.10.0 [@datatrove2026repo]。NeMo Curator 的最新版本是 v1.3.0，从 26.02 版起，所有模态的流水线都构建在 Ray 之上 [@nemocurator2026repo]。MosaicML Streaming 的最新版本是 2025 年 7 月发布的 v0.13.0 [@mosaicml2026streaming]。
+:::
+
+## 集群与任务
+
+第二道接缝把训练器放到硬件上。训练任务是一个整体：每个工作进程都必须启动，因为数据并行的一步要等所有进程到齐；一个任务占着一半 GPU 等另一半，只会挡住别的工作。所以调度器的首要职责是**成组调度**：一个任务的全部工作进程要么一起准入，要么都不准入。第二项职责是放置。并行布局（@sec-training-at-scale）决定哪些工作进程之间交换的数据最多：张量并行放在一个 NVLink 域内，流水线并行和数据并行跨越 InfiniBand 或 RoCE 网络，专家并行则是全对全交换（@sec-accelerators-networking）。如果布局把通信密集的维度放在慢速边界两侧，损失的吞吐任何算子优化都补不回来。
+
+Llama 3 405B 是少数公开了大规模布局的例子。它在每台服务器内用 8 路张量并行，流水线并行为 16 路，其余 GPU 做数据并行；在 16,384 块 H100 上，它报告每块 GPU 400 teraFLOPs，即 41% 的 BF16 模型 FLOPs 利用率，为长序列加上 16 路上下文并行后为 38% [@grattafiori2024llama]。@gls-mfu 指模型自身计算用掉的加速器峰值算力比例（@sec-accelerators-networking），上面这些数字可以当作规划时的现实上限。
+
+承载这类任务的调度器有两大类。Slurm 是大多数高性能计算中心的批处理调度器，它按整节点分配资源，能在任务到达时限前的指定时间给任务发信号，让训练器保存后退出，还能在节点故障或被抢占后把任务重新排队 [@slurm2026sbatch]。在 Kubernetes 上，JobSet 把工作进程编成若干副本化的 Job，给它们分配稳定的主机名，并按声明的故障策略整组重启 [@jobset2026repo]；Kueue 负责排队、执行团队配额，并一次性准入整个工作负载 [@kueue2026gang]，其拓扑感知调度把 Pod 限定在同一个机柜或网络区块内 [@kueue2026tas]。Volcano 和 KAI Scheduler 是 Kubernetes 上的另外两种成组调度器 [@volcano2026repo; @kai2026scheduler]。选哪一类，通常跟着组织里的其他部分走：集群是一台研究用机器，就用 Slurm；同一个集群还要运行 rollout 引擎、环境集群和评测服务，就用 Kubernetes，而有了强化学习，后一种情形很常见。
+
+下面的任务规格在 Kubernetes 上启动一个 128 节点的预训练任务。它通过队列向 Kueue 申请准入，要求放在同一个网络区块内，出故障后让所有工作进程从最近的检查点重启。容器镜像按摘要固定，这也是运行标识的一部分。
+
+```yaml
+apiVersion: jobset.x-k8s.io/v1alpha2
+kind: JobSet
+metadata:
+  name: pt-0042
+  labels:
+    kueue.x-k8s.io/queue-name: pretrain     # Kueue admits all workers or none
+spec:
+  failurePolicy:
+    maxRestarts: 30                         # each restart resumes from the last checkpoint
+  replicatedJobs:
+  - name: workers
+    template:
+      spec:
+        parallelism: 128                    # 128 nodes x 8 GPUs
+        completions: 128
+        backoffLimit: 0                     # one failed pod fails the Job; JobSet restarts all
+        template:
+          metadata:
+            annotations:
+              kueue.x-k8s.io/podset-required-topology: "cloud.provider.com/topology-block"
+          spec:
+            restartPolicy: Never
+            containers:
+            - name: trainer
+              image: registry.example.com/train@sha256:4be1...   # pinned by digest
+              command: ["bash", "-c"]
+              args:
+              - >-
+                torchrun --nnodes=128 --nproc_per_node=8
+                --node_rank=$JOB_COMPLETION_INDEX
+                --master_addr=pt-0042-workers-0-0.pt-0042 --master_port=29500
+                pretrain_gpt.py $MODEL_ARGS $PARALLEL_ARGS $DATA_ARGS $CKPT_ARGS
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+```
+
+拓扑层级对应集群管理员定义的一个节点标签，`cloud.provider.com/topology-block` 是 Kueue 文档里用的占位名。工作进程的主机名遵循 JobSet 的命名方式，依次是 JobSet 名、副本化 Job 名、Job 序号和 Pod 序号；`JOB_COMPLETION_INDEX` 给每个 Pod 提供节点序号。在 Slurm 上，同样的任务是一个 `sbatch` 脚本，其中包括 GPU 申请、时限前的预警信号和 `--requeue`。
+
+### 运行标识
+
+一次运行报告的数字，只有在这次运行可以识别时才有用。运行标识是决定这次运行计算什么的全部输入：代码提交和容器摘要、数据清单摘要、模型与优化器配置、并行布局、随机种子，以及加速器型号。实验追踪系统在启动时记录一次，之后每个指标、检查点和评测结果都带上运行标识和训练步数。故障后的重启只要恢复的是同一份状态，就是同一次运行的新一次尝试，而不是一次新运行；重启时更换布局（检查点可重分片，所以允许这样做）要作为标识的变化记录下来，因为它可能改变数值结果。任何一个字段不同的两次运行，就是两个不同的实验，名字再像也一样。
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+Kueue 的最新版本是 2026 年 9 月 24 日发布的 v0.19.6，API 组版本为 `v1beta2`；拓扑感知调度从 v0.14 起为 beta 并默认开启 [@kueue2026tas]。JobSet 的最新版本是 v0.12.0，仍提供 `v1alpha2` API [@jobset2026repo]。Slurm 当前文档对应 26.05 版 [@slurm2026sbatch]。运行时方面，Megatron Core 的最新版本是 v0.19.2 [@nvidia2026megatronlm]；TorchTitan 的最新版本是 2026 年 9 月 3 日发布的 v0.3.0，现在通过 Python 配置函数而不是 TOML 文件配置运行 [@pytorch2026torchtitanrepo]；DeepSpeed 为 v0.19.7 [@microsoft2026deepspeed]，MaxText 为 v0.2.4 [@google2026maxtext]。
+:::
+
+## 检查点存储
+
+第三道接缝从训练器通往存储，再从存储回到训练器。检查点保存继续训练所需的全部状态：模型权重、优化器状态、学习率调度、随机数生成器状态，以及数据加载器的位置。占大头的是优化器状态。在混合精度 Adam 下，每个参数有一份 BF16 权重（2 字节）、一份 FP32 主副本（4 字节）和两个 FP32 矩估计（8 字节），所以完整检查点约为每参数 14 字节，700 亿参数的模型大约 1 TB。仅权重部分，按 BF16 存是 140 GB。
+
+有三种做法让检查点足够便宜，可以频繁保存。每个进程并行写出自己那一片，PyTorch Distributed Checkpoint 和 Megatron 的 `torch_dist` 格式都是这样，而且同样的格式可以把分片加载到另一种并行布局上 [@pytorch2026dcp; @nvidia2026megatronlm]；JAX 那边由 Orbax 承担同样的角色 [@google2026orbax]。保存是异步的：训练只在把状态从加速器显存复制到主机内存时暂停，写出由后台进程完成。存储分层：频繁的检查点写到只保留最新一份的快速本地层或临时层，频率较低的写到有保留计划的持久层。多久保存一次，取决于检查点成本和故障率；@sec-machine-breaks 推导了使损失工作量最小的间隔，@sec-orchestration-data-infra 则把检查点看作一次分布式提交，只有每个分片和元数据都写完才算完成。
+
+在 Megatron-LM 里，整套策略就是训练器上的一组参数 [@nvidia2026megatronlm]：
+
+```bash
+CKPT_ARGS=(
+  --save /lustre/ckpt/pt-0042            # durable tier
+  --load /lustre/ckpt/pt-0042            # the same path: a restart resumes from the latest
+  --ckpt-format torch_dist               # sharded; loads onto a different layout
+  --async-save                           # training pauses only for the copy to host memory
+  --use-persistent-ckpt-worker           # async saves of torch_dist run in this worker
+  --save-interval 1000                   # durable checkpoint every 1,000 steps
+  --save-retain-interval 10000           # keep every 10,000th; older ones are deleted
+  --non-persistent-save-interval 100     # frequent checkpoint every 100 steps ...
+  --non-persistent-ckpt-type global      # ... to a scratch directory that keeps the latest
+  --non-persistent-global-ckpt-dir /scratch/ckpt/pt-0042
+  --exit-signal-handler                  # on SIGTERM, save and exit cleanly
+  --exit-on-missing-checkpoint           # a wrong --load path fails instead of starting over
+)
+```
+
+最后一个参数堵住了一种不声不响的失败：没有它，加载路径写错时，会以旧运行的名义从随机初始化重新开始一次新运行。
+
+### 故障预算
+
+长时间运行需要给不用于训练的时间定一个明确的预算。墙钟时间中有用的那部分，常称为有效训练时间或 @gls-goodput，会被四项消耗掉：保存时的暂停、故障发生时自上次检查点以来丢失的工作、发现故障的时间，以及重启和恢复的时间。@sec-machine-breaks 对这几项建立了模型；Meta 报告，Llama 3 405B 在 54 天内遇到 419 次意外中断，有效训练时间仍超过 90% [@grattafiori2024llama]。当每一项都有负责人和测量方法时，预算就成了运营规则：每次保存都测量检查点暂停时间；长任务开始前、每次改变布局或存储之后，都做一次恢复演练；对卡死和崩溃都设定发现时限；每周按原因统计中断次数。运行一旦低于预算，就停止扩容，直到查明原因，因为节点越多，故障越多。
+
+## rollout 集群
+
+第四道接缝只在强化学习中出现。策略生成轨迹，奖励路径给轨迹打分，学习器更新权重，新权重必须在下一轮之前送到生成端。生成端是 rollout 引擎：vLLM 或 SGLang 副本，一次批量处理很多条轨迹，并为每个生成的词元返回词元 ID 和对数概率，学习器计算更新时需要这些。@sec-training-agents 把这道接缝涉及的两项系统决策分开讨论。放置决定学习器和 rollout 引擎放在同一批 GPU 上（**共置**），还是放在各自的资源池里（**分离**）。同步决定每次更新前是否等齐一整批轨迹（**同步**），还是让生成在学习器训练时继续进行（**异步**）。本节讲的是实现这些选择的机制。
+
+权重同步是其中的机械核心。学习器和引擎共用 GPU 时，引擎在学习器训练期间释放显存，学习器的权重被重新分片成引擎的布局，再经 CUDA 进程间通信（IPC）交给引擎，不经过网络复制。两者分离时，学习器通过 NCCL 把权重广播给各个引擎，或者写到共享存储上由引擎加载。vLLM 把这一过程做成四个阶段的传输 API：初始化传输通道、开始更新、经 NCCL 或 CUDA IPC 分块传输权重、最后做量化等后处理；另有一种暂停模式，在权重更换期间保留进行中的请求 [@vllm2026rlapis]。SGLang 支持在权重更新会话中从磁盘、张量或分布式通信组更新权重，暂停生成时可以中止、撤回或原地保留请求，还能报告每个词元由哪个权重版本生成 [@sglang2026rl]。传输并不免费：700 亿参数的策略按 BF16 存是 140 GB，以 50 GB/s，也就是一条 400 Gb/s 链路的速度，向一个副本完整复制一次约需 3 秒，这还没算跨多条链路的并行。
+
+按词元标注版本之所以重要，是因为异步让**陈旧**成了常态。一条用比学习器旧 $k$ 个版本的权重生成的轨迹，就是偏离策略 $k$ 步，而一条长轨迹可能横跨好几次更新。应对办法都很实际。每条轨迹记录生成其中每个词元的策略版本，以及引擎给出的词元 ID 和对数概率。运行设定一个陈旧上限，丢弃超限的轨迹。剩余的偏差由损失函数里经过裁剪或截断的重要性比率来校正，这个比率是学习器与引擎对同一词元给出的概率之比（@sec-training-agents）。混合专家策略还要在学习器中重放引擎的专家路由；运行也要记录学习器与引擎对同一批词元给出的对数概率之差，这个差值即使在同步运行中也不为零，因为两边用的算子和精度不同（@sec-training-to-reason）。
+
+两种同步方式之间的取舍是定量的，一个小模拟就能看出它的形状。rollout 的耗时有长有短：以简短答案结束的轨迹，只需跑到长度上限或等待慢工具的轨迹的一小部分时间。下面的代码把每次 rollout 的耗时设为固定部分 $1-c$ 加上均值为 $c$ 的指数分布尾部，这样均值总是 1，$c$ 就是变异系数，即标准差除以均值。在同步方式下，64 个槽位各生成一条轨迹，更新要等最慢的那条。槽位时间中的空闲比例于是为 $1 - 1/\mathbb{E}[\max]$，对这个分布而言 $\mathbb{E}[\max] = (1-c) + c H_{64}$，其中 $H_{64} = \sum_{i=1}^{64} 1/i \approx 4.74$ 是 64 个单位指数变量最大值的期望。在异步方式下，每个槽位一跑完上一条轨迹，就用最新权重开始下一条，每完成 64 条轨迹做一次更新。没有槽位在等，但轨迹的滞后，即从开始生成到被使用之间经历的更新次数，不再为零。每次更新都让仍在进行中的 63 条轨迹的滞后加一，所以在 $W = 64$ 个槽位、批大小 $B = 64$ 时，平均滞后恰好是 $(W-1)/B = 63/64$，与耗时的离散程度无关；随 $c$ 增长的只有滞后分布的尾部。代码用模拟结果检验这两个闭式解，并报告陈旧上限设为 $K = 2$ 个版本时会丢弃多少轨迹。
+
+:::: {.runnable}
+```python
+import heapq
+import numpy as np
+import matplotlib.pyplot as plt
+
+B = 64            # trajectories per policy update
+W = 64            # rollout slots, each generating one trajectory at a time
+K = 2             # staleness bound: drop trajectories more than K versions old
+UPDATES = 400     # policy updates simulated for each spread value
+rng = np.random.default_rng(0)
+H = np.sum(1 / np.arange(1, B + 1))           # harmonic number: E[max of B Exp(1)]
+
+def durations(c, size):
+    """Rollout time with mean 1: a fixed part 1 - c plus an exponential tail of mean c."""
+    return (1 - c) + c * rng.exponential(1.0, size)
+
+def synchronous(c):
+    """Each update waits for the slowest of B rollouts; returns the idle share of slot time."""
+    t = durations(c, (UPDATES, B))
+    return 1 - t.sum() / (B * t.max(axis=1).sum())
+
+def asynchronous(c):
+    """Slots restart at once with the newest weights; every B finished rollouts make an update."""
+    version, done, lags = 0, 0, []
+    draws = iter(durations(c, W + (UPDATES + 20) * B))
+    slots = [(next(draws), 0) for _ in range(W)]  # (finish time, version it started with)
+    heapq.heapify(slots)
+    while version < UPDATES + 20:
+        now, v = heapq.heappop(slots)
+        lags.append(version - v)                  # updates since this rollout started
+        done += 1
+        if done == B:
+            version, done = version + 1, 0
+        heapq.heappush(slots, (now + next(draws), version))
+    return np.array(lags[20 * B:])                # drop the start-up transient
+
+spread = np.linspace(0.05, 1.0, 12)
+idle = np.array([synchronous(c) for c in spread])
+idle_exact = 1 - 1 / ((1 - spread) + spread * H)
+lags = [asynchronous(c) for c in spread]
+mean_lag = np.array([l.mean() for l in lags])
+p99_lag = np.array([np.percentile(l, 99) for l in lags])
+dropped = np.array([(l > K).mean() for l in lags])
+
+assert np.all(np.abs(idle - idle_exact) < 0.02)          # synchronous: the closed form holds
+assert np.all(np.abs(mean_lag - (W - 1) / B) < 0.01)     # asynchronous: mean lag is (W-1)/B
+assert dropped[0] == 0 and dropped[-1] > 0.05            # the tail, not the mean, grows
+
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5.6, 5.6), sharex=True)
+ax1.plot(spread, idle_exact, color="C0", label="synchronous, closed form")
+ax1.plot(spread, idle, "o", color="C0", ms=4, label="synchronous, simulated")
+ax1.plot(spread, 0 * spread, color="C1", label="asynchronous")
+ax1.set(ylabel="idle share of rollout time", ylim=(-0.03, 1))
+ax1.legend(fontsize=8, loc="upper left")
+ax2.plot(spread, np.full_like(spread, (W - 1) / B), "--", color="C1", label="mean lag, closed form")
+ax2.plot(spread, mean_lag, "o", color="C1", ms=4, label="mean lag, simulated")
+ax2.plot(spread, p99_lag, "s-", color="C2", ms=4, label="99th percentile lag")
+ax2.plot(spread, 0 * spread, color="C0", label="synchronous")
+ax2.set(xlabel="rollout-time spread c (standard deviation / mean)",
+        ylabel="policy versions behind", ylim=(-0.3, 6))
+ax2.legend(fontsize=8, loc="upper left")
+fig.tight_layout()
+
+for k in (0, 4, 8, 11):
+    c, i, m, p, d = spread[k], idle[k], mean_lag[k], p99_lag[k], dropped[k]
+    print(f"c = {c:.2f}: synchronous idle {i:4.0%}; asynchronous mean lag {m:.2f}, "
+          f"99th percentile {p:.0f}, over K={K}: {d:4.1%}")
+```
+::::
+
+打印出的几行就是结论。离散程度只有 5% 时，同步批次已经让约 16% 的槽位时间空闲，因为 64 次抽样中最慢的那次明显高于均值；耗时服从指数分布、$c = 1$ 时，空闲比例达到 $1 - 1/H_{64} \approx 79\%$。异步方式让每个槽位都保持忙碌，在任何离散程度下平均滞后都略低于一个版本，但第 99 百分位的滞后从 2 个版本升到 5 个版本；上限设为两个版本时，$c = 1$ 下约有 8% 的轨迹被丢弃。真实的长度分布往往比指数分布的尾部更重，生成长度上限又会把尾部截断，所以应当由实测的工作负载离散程度，而不是某个默认值，来决定同步方式和陈旧上限。部分 rollout 在更新时暂停一条长轨迹、再用新权重继续生成；过量采样加提前截断也能削减同步方式的尾部。两者的代价都是一条轨迹内部混入了多个版本。
+
+放置也有它自己的算术。对 $N$ 个参数的模型，生成一个词元约需 $2N$ FLOPs，而在这个词元上训练，前向加反向约需 $6N$，再加上重新计算当前策略对数概率的 $2N$，所以学习器的计算量约为生成端的四倍。但生成远远达不到峰值，因为解码受显存带宽限制（@sec-serving-problem）。假设训练的 MFU 为 40%、解码为 5%，生成占用的 GPU 时间是训练的两倍；解码为 10% 时，两者相当。OpenRLHF 的文档称生成占 RLHF 训练时间的 80% [@openrlhf2026repo]。无论哪种估计，rollout 资源池通常都至少需要与学习器一样多的 GPU；在共置布局中，则是同一批 GPU 在两种角色之间轮换。
+
+### 框架
+
+各个开源强化学习框架的主要区别在于：连接哪种训练后端和哪种 rollout 引擎，如何放置它们，以及异步做到什么程度。
+
+| 框架 | 训练与 rollout | 放置与同步 | 适用场景 |
+| --- | --- | --- | --- |
+| **verl** | FSDP、FSDP2 或 Megatron 学习器；vLLM 或 SGLang rollout [@verl2026repo] | 默认共置的混合引擎；另有错开一步和完全异步的训练器，可设陈旧阈值 | 算法覆盖面广，从单节点到数百块 GPU |
+| **OpenRLHF** | Ray 上的 DeepSpeed 学习器；vLLM rollout [@openrlhf2026repo] | 共用或分开 GPU；一个参数开启异步训练 | 在 Ray 集群上做 PPO 系列算法和智能体强化学习 |
+| **NeMo RL** | Ray 上的 PyTorch DTensor 或 Megatron Core 学习器；vLLM 或 SGLang 生成 [@nemorl2026repo] | 共置或分离；异步 GRPO | NVIDIA 技术栈与大型混合专家模型 |
+| **slime** | Megatron 学习器；路由器后的 SGLang rollout [@slime2026repo] | 共置或分离；针对长尾智能体任务的完全异步 rollout | 大规模强化学习，直接使用两个引擎的原生参数 |
+| **prime-rl** | FSDP2 学习器；vLLM rollout [@primerl2026repo] | 分离且完全异步，限制偏离策略的步数 | 配合 `verifiers` 环境的大规模智能体强化学习 |
+| **SkyRL** | FSDP 或 Megatron 学习器；vLLM、SGLang 或 OpenAI 兼容端点 [@skyrl2026repo] | 同步、错开一步，或带进行中权重更新的完全异步 | 长程智能体；SkyRL-Gym 环境 |
+| **AReaL** | 训练、推理、智能体和权重更新各为独立服务 [@areal2026repo; @fu2025areal] | 完全异步，训练时考虑陈旧度 | 通过 base URL 接入在线强化学习的智能体 |
+| **TRL** | Transformers 训练器；vLLM 共置或作为独立服务器 [@hf2026trl; @hf2026trlvllm] | 同步，另有一个从 vLLM 服务器流式读取的实验性异步 GRPO 训练器 | 一个或几个节点就能容纳的强化学习（@sec-training-practice） |
+
+选框架，要看团队已经在运营哪一对引擎，以及所处阶段的形态。用 Megatron 训练大型混合专家模型的团队，会选 slime、NeMo RL 或 verl 的 Megatron 路径；瓶颈在长智能体任务环境延迟上的团队，会选 prime-rl、SkyRL 或 AReaL 这类完全异步的设计；单节点用 TRL 就够了。放置、同步和陈旧度这些决定，在框架配置里变得可以审查。下面这次运行摘自 prime-rl 自己的软件工程示例并做了删减：学习器和 rollout 引擎放在不同节点上，权重经 NCCL 广播，陈旧度设了上限，同时在跑的回合数也设了上限，这个数同时就是活着的沙箱数 [@primerl2026repo]：
+
+```toml
+max_steps = 1000
+seq_len = 131072
+
+[deployment]
+type = "multi_node"
+num_train_nodes = 4              # learner: FSDP2
+num_infer_nodes = 1
+num_infer_replicas = 4           # rollout engines: vLLM
+
+[model]
+name = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16"
+
+[weight_broadcast]
+type = "nccl"                    # learner to engines, once per update
+
+[ckpt]
+interval = 50
+
+[trainer]
+enable_router_replay = true      # replay the engine's expert routing in the learner
+
+[orchestrator]
+batch_size = 256                 # trajectories per update
+group_size = 16                  # samples per task, for group-relative advantages
+max_off_policy_steps = 32        # drop episodes more than 32 versions old
+
+[orchestrator.concurrency]
+max_inflight = 1536              # episodes in flight, and so live sandboxes
+
+[[orchestrator.train.source]]
+name = "scaleswe"
+env.taskset.id = "scaleswe"      # tasks, environment image, and verifier
+env.agent.harness.id = "rlm"
+
+[orchestrator.eval]
+interval = 20                    # held-out evaluation every 20 steps
+
+[inference.vllm]
+tensor_parallel_size = 8
+enable_expert_parallel = true
+enable_return_routed_experts = true   # the routing that router replay needs
+```
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+各框架的最新版本为 verl v0.9.1、OpenRLHF v0.11.2、NeMo RL v0.7.0、slime v0.3.2、prime-rl v0.9.0、SkyRL v0.3.0 和 AReaL v2.1.0，均采用 Apache 2.0 许可 [@verl2026repo; @openrlhf2026repo; @nemorl2026repo; @slime2026repo; @primerl2026repo; @skyrl2026repo; @areal2026repo]。vLLM 在 2026 年 5 月发布了原生的权重传输 API，SkyRL 和 prime-rl 已在使用 [@vllm2026rlapis]。slime 项目称 GLM-4.5 到 GLM-5.3 的 GLM 模型都用它训练 [@slime2026repo]；prime-rl 称它为在上千块 GPU 上训练万亿参数以上的混合专家模型而构建，偏离策略步数的默认上限为 8 [@primerl2026repo]；AReaL 2.0 把系统拆成训练、推理、智能体和权重更新几个独立服务 [@areal2026repo]。
+:::
+
+## 环境与验证器
+
+第五道接缝把 rollout 与它所作用的世界连起来。在可验证奖励强化学习中，“环境”就是一个提示加一个检查器，两者都可以在框架自己的进程里运行。在智能体强化学习中，每条轨迹在运行期间都需要一个活着的环境：一个带测试集的代码仓库、一个带数据库的工具服务，或者一个浏览器。环境执行策略给出的动作，返回观察结果，结束时把最终状态交给验证器。@sec-training-agents 讲了环境从哪里来、为什么要像数据一样做版本管理；本节讲的是环境如何提供服务。
+
+环境服务器提供两种接口之一。第一种是 Gymnasium 风格的一对调用 `reset` 和 `step`，通过网络提供，让环境运行在各自的容器里：OpenEnv 用这种方式封装环境 [@openenv2026repo]；`verifiers` 库为 prime-rl 和评测定义环境及其评分规则和数据集 [@verifiers2026repo]；SkyRL-Gym 以 Gymnasium API 提供数学、编程、搜索和 SQL 环境 [@skyrl2026repo]。第二种接口把调用方向反过来：现有的智能体框架原样运行，通过强化学习系统提供的 OpenAI 兼容 base URL 访问策略，系统则记录每次响应背后的词元 ID 和对数概率。AReaL 用这种方式把智能体应用接入在线强化学习 [@areal2026repo]，SkyRL 也接受任何支持权重同步的 OpenAI 兼容端点作为 rollout 引擎 [@skyrl2026repo]。第二种接口能让训练用的框架与部署的框架完全相同（@sec-the-harness），代价是每次框架发布都算一次新的环境修订。
+
+无论用哪种接口，背后集群的规模都由并发量决定。每条进行中的轨迹占用一个环境，所以强化学习配置里的在途上限同时就是活着的沙箱数：上面 prime-rl 的例子是 1,536 个。环境集群运行在 CPU 节点上，常与 GPU 分属不同的资源池，甚至不同的供应商；它的成本在于启动时间、镜像拉取，以及慢动作组成的长尾，而这条长尾正是同步模拟中测到的 rollout 尾部。DeepSeek 的沙箱平台展示了这类集群能达到的规模：一个约 160 个节点的生产单元每天承载约 300 万个沙箱，平台把有状态的 rollout 执行与可抢占的 GPU 训练分开 [@huang2026dsec]。
+
+这里的隔离要求比产品沙箱更严，而不是更松。这些环境里的代码由一个正被优化去提高分数的策略写出，所以只要环境暴露了答案、测试文件、网络或凭据，就会被利用，而这种利用会变成学到的行为（@gls-reward-hacking）。每个环境都有独立的文件系统、进程命名空间和默认拒绝出站的网络策略；可信任务用容器就够了，执行代码通常要放在 gVisor 或 microVM 里（@sec-agents-practice）。环境不持有任务用不到的凭据，需要访问外部系统的工具通过代发的受限凭据访问（@sec-security-authorization）。已部署智能体的运行时安全控制在这里原样适用（@sec-runtime-safety）。
+
+验证器运行在策略可写范围之外。常见的打分方式有四种：规则检查器，例如 Math-Verify，它从输出中解析数学答案，再与参考答案做符号比较 [@mathverify2026repo]；测试运行，在最终状态的一份新副本上执行隐藏的测试集，而不是在策略能改动的工作区里执行；奖励模型，像其他模型一样作为 GPU 服务部署；模型裁判，由与 rollout 同类的推理引擎提供服务，预算也与 rollout 一样核算。每种打分方式都有延迟预算，因为慢速验证器会拉长每一条轨迹；也都有确定性预算，因为不稳定的测试就是奖励噪声。每条轨迹都记录产生其奖励的环境镜像、任务、验证器和裁判的修订版本，这样奖励突然上升时，才能查清是验证器变了，还是策略真的变好了。
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+OpenEnv 现已归入 Hugging Face 组织，版本为 v0.6.0，采用 BSD 许可 [@openenv2026repo]。`verifiers` 的版本为 v0.3.1，采用 MIT 许可 [@verifiers2026repo]；SkyRL-Gym 随 SkyRL 仓库一同发布 [@skyrl2026repo]。
+:::
+
+## 评测关卡
+
+第六道接缝决定哪个检查点能离开这次运行。评测按三种节奏进行。预训练和中期训练期间，每隔几千步就对检查点跑一次小型评测集和留出集损失，趁回滚还便宜时发现退化。在每个阶段的边界，一套完整的评测决定这一阶段的产出能否成为下一阶段的输入。发布之前，关卡还要加上安全评测和红队测试（@sec-safety-tuning）、模型将要执行动作的场景下的智能体评测（@sec-evaluating-agents），以及对照数据清单去污染登记表的污染检查（@sec-benchmarks）。
+
+候选模型要按它将来被服务的方式来打分。先把检查点转换成发布格式，由推理服务引擎连同将要发布的对话模板和生成默认值一起加载，再通过 OpenAI 兼容端点对外提供。评测框架随后访问这个端点，而不是训练代码：lm-evaluation-harness 通过 `local-completions` 和 `local-chat-completions` 两种模型类型调用它 [@lmevalharness2026]，Inspect 则对同类端点运行智能体评测和安全评测 [@inspectai2026]。通过端点打分，检验的不只是权重，还有格式转换和推理服务配置，而在训练器内部计算的分数做不到这一点。
+
+```bash
+# Serve the converted candidate as production will, then score it through the API.
+vllm serve /release/pt-0042-step120000 --served-model-name candidate --port 8000 &
+lm-eval run --model local-completions \
+  --model_args model=candidate,base_url=http://localhost:8000/v1/completions,num_concurrent=32,tokenized_requests=False \
+  --tasks gsm8k,ifeval --output_path results/candidate --log_samples
+python gate.py results/baseline/results.json results/candidate/results.json
+```
+
+关卡本身只有几行代码，把候选模型的分数与固定的下限和基线分数比较。阈值在运行前写好，与运行放在一起，谁也不能看过数字之后再挑阈值。
+
+```python
+# gate.py: promote only if every gated metric holds its floor and none regresses
+# beyond its tolerance plus two standard errors. The thresholds were fixed before the run.
+import json
+import sys
+
+GATE = {  # task: (metric key in lm-eval results, floor, allowed drop against the baseline)
+    "gsm8k": ("exact_match,strict-match", 0.80, 0.01),
+    "ifeval": ("prompt_level_strict_acc,none", 0.75, 0.01),
+}
+
+def results(path):
+    with open(path) as f:
+        return json.load(f)["results"]
+
+base, cand = results(sys.argv[1]), results(sys.argv[2])
+failures = []
+for task, (metric, floor, drop) in GATE.items():
+    b, c = base[task][metric], cand[task][metric]
+    se = cand[task].get(metric.replace(",", "_stderr,"))
+    se = se if isinstance(se, float) else 0.0
+    if c < floor:
+        failures.append(f"{task}: {c:.3f} is below the floor {floor}")
+    if c + 2 * se < b - drop:
+        failures.append(f"{task}: {c:.3f} against the baseline {b:.3f}")
+print("PROMOTE" if not failures else "REJECT\n" + "\n".join(failures))
+sys.exit(1 if failures else 0)
+```
+
+脚本里的规则故意写得很粗；@sec-statistical-reliability 说明了如何确定评测集的规模，以及如何设定错误率已知的规则。
+
+### 晋级规则
+
+晋级规则就是这道接缝的契约。它在运行开始之前写明评测集、指标、下限、退化容差和不确定性的处理方式（@sec-operational-evaluation）。它覆盖发布可能改变的每一类行为：能力、指令遵循、安全与拒答校准，以及保护现有用户的不变要求。它作用于按服务方式部署的候选模型，而不是训练器记下的分数。它的决定与运行标识、候选模型摘要、评测集版本和批准人一起记录；候选模型没通过，绝不靠修改规则来放行。规则确实需要改，就留到下一次运行再改。
+
+## 发布产物
+
+最后一道接缝把通过关卡的检查点变成别人能运行的东西。训练检查点不适合直接发布：它按训练布局分片，含有 FP32 主权重和优化器状态，还要训练代码才能加载。发布是一次转换：提取权重，以推理精度写成 safetensors 文件（这种格式只有原始张量和一个文件头，加载时不会执行代码）[@safetensors2026format]，再加上模型配置、分词器文件、对话模板和生成默认值。TorchTitan 可以直接保存为 Hugging Face 布局 [@pytorch2026torchtitanrepo]，Megatron Bridge 负责在 Megatron 与 Hugging Face 检查点之间转换 [@nvidia2026megatronlm]。量化版本和供本地运行时使用的 GGUF 文件 [@ggml2023gguf] 都是派生制品，各有自己的摘要和一致性检查（@sec-model-artifacts）。
+
+这次转换只有一项验收测试：转换后的制品由推理服务引擎加载后，能复现评测时的行为。由于关卡已经通过推理服务引擎给转换后的制品打过分，这项测试就简化为检查发布的文件与关卡看到的文件逐字节一致。随后，发布方按 OpenSSF 模型签名规范签名，这种签名针对的是一份列出每个文件路径和摘要的清单 [@openssf2025modelsigning]，再把制品推送到模型仓库或 OCI 镜像仓库 [@oci2025distribution]。交给推理服务，就是应用技术栈生命周期的开始（@sec-serving-stack、@sec-deployment-lifecycle）：发布版本的摘要成为推理服务系统固定引用、回滚时恢复的那个标识。
+
+## 三种参考技术栈
+
+训练模型的团队按规模大多属于三种典型形态之一。表中各行对应 @fig-training-stack-arch 的各层；表中条目是截至 2026 年 9 月的示例，是可以改造的起点，而不是排名。
+
+| 层 | 基于开源权重的后训练团队（1 到 64 块 GPU） | 拥有环境集群的强化学习实验室（数百块 GPU） | 预训练项目（数千块 GPU） |
+| --- | --- | --- | --- |
+| **数据** | 自有示范数据和偏好对、公开数据集，清单放在代码仓库里 | 带验证器的任务集、镜像仓库里的环境镜像、教师模型生成的合成数据 | 在数据处理集群上运行 DataTrove 或 NeMo Curator；语料清单；对象存储或 Lustre 上的词元分片 |
+| **算力与调度** | 租用节点或托管训练 API；Slurm 或普通的 Kubernetes Job | 带 Kueue 和 JobSet 的 Kubernetes，或 Slurm；环境单独使用一个 CPU 资源池 | 采用 InfiniBand 或 RoCE 的预留集群；Slurm，或启用 Kueue 拓扑感知调度的 Kubernetes |
+| **训练运行时** | 基于 FSDP2 或 DeepSpeed 的 TRL、Axolotl 或 Unsloth（@sec-training-practice） | 强化学习框架的学习器，基于 FSDP2 或 Megatron Core | 调优过并行布局的 Megatron Core、TorchTitan 或 MaxText |
+| **后训练** | SFT 和 DPO；在 TRL 里用共置的 vLLM 做 GRPO | verl、slime、prime-rl、SkyRL 或 AReaL，配 vLLM 或 SGLang rollout，异步运行并设陈旧上限 | 中期训练之后，沿用强化学习实验室那套技术栈 |
+| **环境与奖励** | Math-Verify 这类规则检查器，在进程内运行 | OpenEnv 或 `verifiers` 接口背后的沙箱；测试运行器和裁判服务 | 与强化学习实验室相同，并发量更大 |
+| **检查点** | 本地磁盘上的完整检查点或适配器检查点，复制到对象存储 | 学习器的分片异步检查点，外加数据缓冲区的位置 | 分快速层和持久层的异步分片检查点，定期做恢复演练 |
+| **追踪与评测** | 一个实验追踪系统；在 CI 中运行 lm-evaluation-harness | 每一步的奖励、长度和陈旧度统计；留出的智能体评测集 | 按计划评测检查点；每个阶段边界都有成文的关卡 |
+| **发布** | safetensors 格式的适配器或合并后权重，附模型卡 | 后训练得到的模型，走预训练项目的发布流程，或自己的流程 | 经过转换和签名的制品，附模型卡和系统卡、许可证，并分阶段开放访问 |
+
+三列之间的共同点多于差异。三列里出现的是同样的接缝：从第一列走到第二列，主要是加上 rollout 集群和环境集群；走到第三列，主要是扩大数据平面的规模、收紧故障预算。三列之间变化最大的，是哪道接缝最先出问题：第一列是数据质量，第二列是环境可靠性和陈旧度，第三列是硬件故障和检查点带宽。
+
+## 运行规模的估算
+
+在预留任何硬件之前，四个数字就能估出一次运行的规模：计算量、检查点占用、数据占用，以及强化学习中生成与训练的比例。
+
+**计算量。** 一个有 $N$ 个参数的稠密 Transformer，在 $D$ 个词元上训练，约需 $6ND$ 次浮点运算：前向 $2ND$，反向 $4ND$（@sec-scaling-laws）。700 亿参数的模型训练 15 万亿词元，需要
+
+$$
+6ND = 6 \times (7\times10^{10}) \times (1.5\times10^{13}) = 6.3\times10^{24}\ \text{FLOPs}.
+$$
+
+H100 SXM 的稠密 BF16 峰值约为 989 teraFLOPS，是数据表中稀疏算力数字的一半 [@nvidia2026h100]。在 40% 的 MFU 下，每块 GPU 每秒贡献 $3.96\times10^{14}$ 次运算，整次运行需要 $1.59\times10^{10}$ GPU 秒，即 440 万 GPU 小时：不算故障，在 4,096 块 GPU 上要 45 天，按 90% 的有效训练时间算约 50 天。同一个公式可以用公开的运行来核对：Llama 3 405B 训练 15.6 万亿词元，$6ND = 3.79\times10^{25}$，与报告的 $3.8\times10^{25}$ 吻合；按报告的每块 GPU 400 teraFLOPs 计算，这次运行约需 2,600 万 GPU 小时，即在 16,384 块 GPU 上稳定训练 67 天 [@grattafiori2024llama]。
+
+**检查点。** 按每参数 14 字节计，700 亿参数模型的完整检查点约 980 GB。分摊到 4,096 块 GPU 上，每个进程约持有 240 MB，所以异步保存需要等待的那次到主机内存的复制，只要零点几秒；持久写入可以一直进行到下一次保存，按每小时保存一次算，总带宽约 0.3 GB/s。存储量由保留策略决定：45 天里每小时的检查点都留着，大约要 1 PB；只保留最近三份完整检查点，外加每六小时一份 140 GB 的纯权重快照作为评测历史，大约只要 28 TB。
+
+**数据。** 词表一旦超过 65,536 项，词元 ID 就要用 4 字节存储，15 万亿词元占 60 TB 分片；词表较小时用 2 字节 ID，占用减半。过滤之前的数据池还要大一个数量级：DataComp-LM 的 Common Crawl 数据池有 240 万亿词元 [@li2024dclm]。读取带宽并不高：45 天读完 15 万亿词元，是每秒 390 万词元，整个集群每秒约 15 MB 的词元 ID。所以，训练用的存储主要由检查点的突发写入和保留量决定，远超数据读取；数据处理用的存储则由原始数据池决定。
+
+**rollout 与训练。** 按 rollout 集群一节的放置算术，强化学习运行中生成端的计算量只有学习器的四分之一，但在解码 MFU 5%、训练 MFU 40% 的假设下，生成占用的 GPU 时间是训练的两倍；如果同步批次的长度离散程度大，这段时间里还有一部分是空闲的。初步规划时，rollout 资源池按学习器 GPU 数的一到两倍配置，然后实测调整，因为这个比例会随回答长度、批大小和引擎利用率变化。环境集群单独估算，每条进行中的轨迹一个沙箱。
+
+## 模型提供方
+
+发布权重或向他人提供模型服务的团队，要承担只为自己训练的团队所没有的义务。这些义务附着在发布版本上，比运行本身存在得更久。
+
+第一项是能力之外的发布关卡。提供方要评估候选模型被滥用的可能和危险能力，对它做红队测试（@sec-safety-tuning）；如果发布过前沿安全框架，还要在发布前应用该框架的阈值（@sec-law-policy）。访问可以分阶段开放：较小的模型开放权重，较大的模型通过带监控的 API 提供，需要额外保障的能力则通过可信访问计划提供。
+
+第二项是文档。模型卡记录预期用途、评测条件和局限 [@mitchell2019modelcards]，系统卡描述部署的系统及其保障措施。根据欧盟《人工智能法》，通用模型的提供方自 2025 年 8 月 2 日起就必须维护技术文档、向下游提供方提供信息、制定版权政策，并公布训练内容摘要；训练算力超过 $10^{25}$ FLOPs 会构成可反驳的高影响能力推定，模型据此被认定为具有系统性风险，并承担更多义务 [@euaiact2024; @eugpai2025]。上面的算术恰好落在这条线的两侧：700 亿参数的例子用了 $6.3\times10^{24}$ FLOPs，Llama 3 405B 用了 $3.8\times10^{25}$。训练内容摘要和技术文档能否回答得上来，靠的正是数据清单和运行标识。
+
+第三项是许可证。提供方要在 Apache 2.0、MIT 这类标准宽松许可证和带使用限制或门槛的自定义许可证之间做选择，而数据本身的条款限制了它能授予什么；@sec-model-landscape 比较了当前各发布版本所用的许可证。第四项是分发：把上一节的已签名制品发布到用户获取模型的地方，或者放在提供方自己的 API 后面提供服务，这就把 @sec-wiring-stack 的整套应用技术栈放到了模型前面。第五项是弃用。提供模型服务的一方要公布通知期，以及模型退役后请求会怎样处理，使用方需要据此做规划（@sec-choosing-model）；提供方还要决定退役模型的权重保存多久。
+
+::: {.callout-note .dated}
+## 截至 2026 年 9 月
+
+Anthropic 承诺，所有公开发布的模型以及在内部大量使用的模型，其权重至少保存到公司存续期结束，并在模型弃用时撰写部署后报告 [@anthropic2025preservation]。
+:::
+
+::: {.callout-tip}
+## 约束如何传导
+推理服务引擎两次反过来影响训练。在强化学习中，rollout 引擎就是推理服务引擎，它的算子、精度和专家路由定义了学习器必须校正的行为策略。到了发布，推理服务引擎是制品必须满足的加载器，于是训练中选定的分词器、对话模板和精度，成了每个下游使用方都依赖的接口。把推理服务当成别人的事的训练技术栈，会很晚才发现这两项约束：一次表现为学习器与引擎的概率之间无法解释的差距，一次表现为发布版本的分数与其检查点对不上。
+:::
+
+::: {.callout-important}
+## 争议所在
+有三项选择尚无定论。同步强化学习让每个样本都保持同策略，却在长度长尾上浪费 GPU 时间；异步强化学习把时间找了回来，代价是陈旧度和校正项，而已发表的比较每项只覆盖少数几种工作负载（@sec-training-agents）。集成框架把一个学习器和一种 rollout 引擎绑在一起，跟着它们快速迭代；通过引擎原生的权重更新 API 自行组合，能让每个引擎保持最新，但集成工作就落到了团队身上。自建与租用的界线也随每一项托管服务移动：Tinker 这样的训练 API 在提供方的加速器上完成循环中的运算，循环由团队自己编写 [@thinkingmachines2025tinker]，数据、环境和关卡仍归团队负责。本章的各道接缝，是有望比这些答案存在得更久的部分。
+:::
+
+## 延伸阅读
+
+::: {#further-reading}
+:::
