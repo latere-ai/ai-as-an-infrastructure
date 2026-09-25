@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -12,6 +14,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	pkgotel "latere.ai/x/pkg/otel"
 
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/api"
 )
@@ -187,5 +190,60 @@ func TestHandlerNamesRoutes(t *testing.T) {
 	}
 	if len(routes) != len(cases) {
 		t.Errorf("request metrics carry %d routes, want %d: %v", len(routes), len(cases), routes)
+	}
+}
+
+// The reader posts its spans to the relay, and the relay forwards them to the
+// collector under the OTLP signal path, body untouched. The request is named
+// by the fixed relay route, never by the client-chosen subpath.
+func TestTelemetryRelay(t *testing.T) {
+	type forwarded struct{ method, path, body string }
+	got := make(chan forwarded, 1)
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("collector read: %v", err)
+		}
+		got <- forwarded{r.Method, r.URL.Path, string(b)}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(collector.Close)
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", collector.URL)
+
+	prev := telemetryRelay
+	t.Cleanup(func() { telemetryRelay = prev })
+	telemetryRelay = pkgotel.TelemetryProxy(telemetryPrefix)
+	rec := installRecorder(t)
+	h := newHandler()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/telemetry/v1/traces", strings.NewReader("spans"))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST relay: status %d, want the collector's 200 (body %q)", w.Code, w.Body.String())
+	}
+	select {
+	case f := <-got:
+		if f != (forwarded{http.MethodPost, "/v1/traces", "spans"}) {
+			t.Errorf("collector received %+v, want POST /v1/traces with the body", f)
+		}
+	default:
+		t.Fatal("the relay forwarded nothing to the collector")
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v1/telemetry/v1/traces", nil))
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET relay: status %d, want 405", w.Code)
+	}
+
+	for _, s := range rec.Ended() {
+		if s.SpanKind() != trace.SpanKindServer {
+			continue
+		}
+		if s.Name() != "POST /v1/telemetry/{signal}" && s.Name() != "GET /v1/telemetry/{signal}" {
+			t.Errorf("relay span named %q, want the fixed relay route", s.Name())
+		}
 	}
 }

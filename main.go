@@ -10,6 +10,7 @@
 //   - immutable caching for content-addressed assets, no-cache + ETag for HTML
 //   - gzip for text assets (the ~1.2MB search.json especially)
 //   - /healthz and /readyz for the Kubernetes probes
+//   - /v1/telemetry/* relays the reader's OpenTelemetry spans to the collector
 //   - unknown content URLs answer 404 with the not-found page
 //
 // Behind the TLS-terminating ingress the server speaks http on :8080; all
@@ -51,6 +52,17 @@ import (
 // exactly like the static-only book (so the routing tests, which call serve
 // directly, are unaffected).
 var commentsAPI *api.Handler
+
+// telemetryPrefix is the path under which the reader posts its OpenTelemetry
+// spans. The shared browser telemetry client (latere-ui/telemetry) posts to it
+// by default.
+const telemetryPrefix = "/v1/telemetry"
+
+// telemetryRelay forwards the reader's spans to the collector, set in main().
+// Browsers cannot reach the node-local collector, and the relay is where the
+// collector's credentials stay. Nil leaves the static contract untouched, as
+// for commentsAPI.
+var telemetryRelay http.Handler
 
 // dbPing, when set (comments enabled), gates /readyz on database reachability.
 var dbPing func(context.Context) error
@@ -181,6 +193,11 @@ func serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_, _ = io.WriteString(w, "ok\n")
+		return
+	}
+
+	if telemetryRelay != nil && strings.HasPrefix(p, telemetryPrefix+"/") {
+		telemetryRelay.ServeHTTP(w, r)
 		return
 	}
 
@@ -513,6 +530,10 @@ func run() error {
 		}
 		commentsAPI = api.New(store.New(pool), id, routes)
 	}
+
+	// The relay reads the collector endpoint the Dash0 operator injects; with
+	// none (a local run) it answers 503 and the reader drops its spans.
+	telemetryRelay = otel.TelemetryProxy(telemetryPrefix)
 
 	addr := cfg.ListenAddr
 	if addr == "" {

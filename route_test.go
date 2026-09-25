@@ -47,6 +47,8 @@ func TestRouteOfPathShapes(t *testing.T) {
 		{"/zh/reasoning/inference-time-scaling.html", "/zh/{page}.html"},
 		{"/en/chunk-02mxrq9m.js", "/{asset}.js"},
 		{"/og/cover.PNG", "/{asset}.png"},
+		// With the relay unset (a bare test run), its path is unknown content.
+		{"/v1/telemetry/v1/traces", unknownRoute},
 		// With comments off, the API paths are ordinary unknown content.
 		{"/api/me", unknownRoute},
 		{"/login", unknownRoute},

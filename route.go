@@ -43,6 +43,9 @@ func routeOf(r *http.Request) string {
 	switch {
 	case p == "/":
 		return "/"
+	case telemetryRelay != nil && strings.HasPrefix(p, telemetryPrefix+"/"):
+		// The subpath names an OTLP signal and is chosen by the client.
+		return telemetryPrefix + "/{signal}"
 	case commentsAPI != nil && commentsAPI.Owns(p):
 		// Before the mux has run, or when no API route matches.
 		if strings.HasPrefix(p, "/api/") {
