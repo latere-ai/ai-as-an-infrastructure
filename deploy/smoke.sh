@@ -1,7 +1,8 @@
 #!/bin/sh
 # Smoke test for the deployed book. Asserts the apex redirect is relative
 # (regression test: it must not point at the internal :8080 port), both
-# language books serve, and the health endpoint is up.
+# language books serve, an unknown path answers 404 rather than redirecting,
+# and the health endpoint is up.
 #
 # Usage:
 #   deploy/smoke.sh                 # hits https://aaai.latere.ai
@@ -33,6 +34,9 @@ esac
 
 check "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/en/")" "200" "/en/ serves"
 check "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/zh/")" "200" "/zh/ serves"
+# The shape a crawler composes from relative links: a redirect here would
+# hand it the home page and its links again.
+check "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/safety/safety/no-such-page")" "404" "unknown path answers 404"
 check "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/healthz")" "200" "/healthz up"
 
 status="PASS"; [ "$fail" = "0" ] || status="FAILED"
