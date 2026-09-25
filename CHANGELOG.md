@@ -10,6 +10,19 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- Wiring the Application Stack is restructured as one arc: the reference
+  architecture, the three paths, then one section per seam (model gateway,
+  tool seam, retrieval and evidence, identity and credentials, telemetry),
+  each holding its tools, configuration and contract, then the reference
+  stacks and the integration release. It had been a concrete first half
+  followed by a separate run of rules that revisited the same components.
+  Its code example is vendor-neutral: an OpenAI-compatible client against the
+  gateway and an MCP tool server over Streamable HTTP.
+- The chapter's address is now practice/wiring-the-application-stack; the
+  old addresses redirect to it.
+
 ## v0.10.1 - 2026-09-25
 
 ### Fixed
