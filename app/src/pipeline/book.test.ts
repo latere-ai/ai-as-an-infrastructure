@@ -8,7 +8,7 @@ import { qmdToHref } from "./book.ts";
 
 test("a chapter's two-digit ordinal is stripped from its href", () => {
   expect(qmdToHref("foundations/01-scaling-laws.qmd")).toBe("foundations/scaling-laws");
-  expect(qmdToHref("practice/13-operating-contracts.qmd")).toBe("practice/operating-contracts");
+  expect(qmdToHref("practice/14-operating-contracts.qmd")).toBe("practice/operating-contracts");
   expect(qmdToHref("foundations/index.qmd")).toBe("foundations");
   expect(qmdToHref("summary.qmd")).toBe("summary");
 });

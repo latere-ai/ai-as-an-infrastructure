@@ -143,9 +143,9 @@ backed; none has been decided or started. Sizing is the audit's estimate.
 - [x] **Quality SLI is defined twice** (paragraph-level consolidation, four
   files)
 
-  `practice/10-reliability-nondeterministic` introduces the sampled, judged
+  `practice/11-reliability-nondeterministic` introduces the sampled, judged
   pass rate and the confidence-bound rule, citing `beyer2016sre`.
-  `practice/13-operating-contracts` introduces it again, cites the same source,
+  `practice/14-operating-contracts` introduces it again, cites the same source,
   restates the rule, and then cross-references the chapter it duplicated. Keep
   the definition where it is introduced and cut 13 down to what only the
   contracts chapter can say.
