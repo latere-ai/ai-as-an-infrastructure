@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.3 - 2026-09-25
+
 ### Changed
 
 - Server telemetry names each request by the route it took instead of its
