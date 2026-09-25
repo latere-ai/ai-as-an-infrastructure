@@ -10,6 +10,13 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Added
+
+- Every section heading ends in a link to that section. It appears on hover
+  or keyboard focus (faintly on touch screens), puts the section's address in
+  the address bar, and copies the full link, so a section can be shared and
+  opens at its own position.
+
 ## v0.9.4 - 2026-09-25
 
 ### Fixed
