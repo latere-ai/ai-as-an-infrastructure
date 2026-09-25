@@ -57,8 +57,20 @@ test("solid accent buttons label in the surface color, not fixed white", () => {
 test("both side columns keep a resize handle outside their scroller", () => {
   const reader = readFileSync(resolve(here, "Reader.tsx"), "utf8");
   expect(reader.match(/className="rdr-resize"/g)?.length).toBe(2);
-  expect(reader).toMatch(/<aside className=\{cls\}[^>]*>\s*\{onStartDrag && <div[^>]*className="rdr-resize"/);
+  expect(reader).toMatch(/<aside className="rdr-toc"[^>]*>\s*\{onStartDrag && <div[^>]*className="rdr-resize"/);
   expect(reader).toMatch(/<aside className="rdr-nav"[^>]*>\s*\{list\}\s*\{onStartDrag && <div[^>]*className="rdr-resize"/);
   expect(rule(".rdr-toc")).not.toContain("overflow");
   expect(rule(".rdr-nav")).not.toContain("overflow");
+});
+
+// The reading-progress count sat in a box narrower than "100%", so the header
+// items left of it, the search field among them, moved when it reached 100.
+test("the progress count keeps one width from 0% to 100%", () => {
+  const reader = readFileSync(resolve(here, "Reader.tsx"), "utf8");
+  expect(reader).toContain('<span className="rdr-pct-label">{progressLabel}</span>');
+  const w = rule(".rdr-pct-label").match(/width: ([\d.]+)ch/);
+  expect(w).toBeTruthy();
+  // "100%" is three tabular digits and a percent sign, under 4.5 ch.
+  expect(parseFloat(w![1])).toBeGreaterThanOrEqual(4.5);
+  expect(rule(".rdr-pct")).toContain("font-variant-numeric: tabular-nums");
 });

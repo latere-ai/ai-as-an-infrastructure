@@ -54,9 +54,6 @@ const LS_KEY = "aaai-reader-settings";
 const HEADER_H = 48;
 const MAIN_MIN = 640 + 2 * 32;
 const TOC_MIN_VW = 1200;
-// The inset of the floating "On this page" card from the viewport edge and
-// the header (--toc-gap in theme.css).
-const TOC_GAP = 16;
 
 const SIDEBAR_EXTERNAL_LINKS = [
   { labelKey: "aboutAuthor", href: "https://changkun.de" },
@@ -118,7 +115,6 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   // screens before hydration corrects it.
   const [vw, setVw] = useState(1440);
   const [tocFits, setTocFits] = useState(true);
-  const [tocCompact, setTocCompact] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
 
   // Remember this page for the search dialog's list of recent pages.
@@ -276,29 +272,13 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   };
   const fontScale = Math.min(1.4, Math.max(0.8, s.fontScale));
 
-  // The card is compact when its full width would reach over the end of the
-  // text lines: measured from the first paragraph, so it follows the layout,
-  // text size and sidebar width the reader has chosen.
-  useEffect(() => {
-    const measure = () => {
-      const p = document.querySelector(".rdr-article > p");
-      if (!p) return;
-      const cardLeft = document.documentElement.clientWidth - TOC_GAP - Math.max(170, Math.min(s.tocW, 360));
-      setTocCompact(p.getBoundingClientRect().right + TOC_GAP > cardLeft);
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [s.tocW, s.navW, s.navCollapsed, s.layout, s.fontScale, chapter.path]);
-
   // Column fit: the article column keeps at least MAIN_MIN, so a widened nav
   // gives way first. Below TOC_MIN_VW "On this page" lives in the same drawer
   // the phone layout uses.
   const showSidebar = !mobile && !s.navCollapsed;
   const navW = Math.max(200, Math.min(s.navW, vw - MAIN_MIN));
   // "On this page" floats over the page, so it takes no width from the
-  // article. Where it would cover the end of the text lines it shows only its
-  // title and opens on hover, focus or tap (tocCompact, measured below).
+  // article; the header button shows and hides it.
   const tocDocked = !mobile && tocFits;
   const tocW = Math.max(170, Math.min(s.tocW, 360));
   const hasToc = chapter.headings.length > 0;
@@ -368,7 +348,9 @@ export default function Reader({ chapter, initial }: ReaderProps) {
               <circle cx="10" cy="10" r="8" fill="none" stroke="var(--accent)" strokeWidth={2.5} strokeLinecap="round"
                 strokeDasharray="50.27" strokeDashoffset={progressDash} style={{ transition: "stroke-dashoffset .15s linear" }} />
             </svg>
-            <span style={{ minWidth: 26, textAlign: "right" }}>{progressLabel}</span>
+            {/* Fixed to the width of "100%", so the search field beside it does
+                not shift when the count gains a digit. */}
+            <span className="rdr-pct-label">{progressLabel}</span>
           </div>
         )}
 
@@ -421,7 +403,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
         <div className="rdr-desktop-aside rdr-toc-wrap">
           {showMiniToc && (
-            <MiniToc t={t} chapter={chapter} activeId={activeId} width={tocW} compact={tocCompact}
+            <MiniToc t={t} chapter={chapter} activeId={activeId} width={tocW}
               onStartDrag={(e) => startDrag("toc", e)} onClose={() => set({ tocCollapsed: true })} />
           )}
         </div>
@@ -690,17 +672,13 @@ function TocLinks({ chapter, activeId, onNavigate }: { chapter: ChapterData; act
   );
 }
 
-function MiniToc({ t, chapter, activeId, onClose, width = 208, compact = false, onStartDrag }: { t: Strings; chapter: ChapterData; activeId: string; onClose: () => void; width?: number; compact?: boolean; onStartDrag?: (e: React.PointerEvent) => void }) {
-  // Compact: the list opens on hover or keyboard focus (CSS), and a tap on the
-  // title pins it open on touch screens.
-  const [peek, setPeek] = useState(false);
-  const cls = ["rdr-toc", compact ? "is-compact" : "", compact && peek ? "is-peek" : ""].filter(Boolean).join(" ");
+function MiniToc({ t, chapter, activeId, onClose, width = 208, onStartDrag }: { t: Strings; chapter: ChapterData; activeId: string; onClose: () => void; width?: number; onStartDrag?: (e: React.PointerEvent) => void }) {
   return (
-    <aside className={cls} style={{ width }}>
+    <aside className="rdr-toc" style={{ width }}>
       {onStartDrag && <div onPointerDown={onStartDrag} title={t.resize} className="rdr-resize" style={{ left: -4 }} />}
       <div className="rdr-toc-scroll">
         <div className="rdr-toc-head">
-          <span className="rdr-toc-title" onClick={compact ? () => setPeek((p) => !p) : undefined}>{t.onThisPage}</span>
+          <span className="rdr-toc-title">{t.onThisPage}</span>
           <button onClick={onClose} aria-label="close" className="rdr-btn" style={{ width: 22, height: 22 }}>
             <Icon d={<path d="M3 3l8 8M11 3l-8 8" strokeLinecap="round" />} size={12} />
           </button>

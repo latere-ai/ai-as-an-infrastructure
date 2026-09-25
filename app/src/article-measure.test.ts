@@ -127,14 +127,11 @@ test("narrow viewports hide the side columns before hydration", () => {
 });
 
 // "On this page" floats over the page: opening it must not take width from
-// the article. The compact check measures the card at the same inset the CSS
-// places it.
-test("the on-this-page card overlays the article and measures its own inset", () => {
-  const cssGap = css.match(/--toc-gap: (\d+)px/)?.[1];
-  const tsGap = reader.match(/const TOC_GAP = (\d+);/)?.[1];
-  expect(cssGap).toBeTruthy();
-  expect(tsGap).toBe(cssGap);
+// the article, and when shown its list is always visible (the header button
+// is the toggle; nothing hides the list behind a hover).
+test("the on-this-page card overlays the article and always shows its list", () => {
   expect(reader).not.toMatch(/tocRoom/);
-  expect(reader).toContain("clientWidth - TOC_GAP - ");
-  expect(css).toMatch(/\.rdr-toc\.is-compact:not\(:hover\):not\(:focus-within\):not\(\.is-peek\) \.rdr-toc-list \{ display: none; \}/);
+  expect(css).not.toMatch(/\.rdr-toc[^{]*:hover[^{]*\.rdr-toc-list/);
+  expect(css).not.toMatch(/is-compact/);
+  expect(reader).toMatch(/aria-pressed=\{tocDocked \? !s\.tocCollapsed : tocDrawer\}/);
 });
