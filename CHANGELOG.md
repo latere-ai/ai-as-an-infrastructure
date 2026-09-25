@@ -10,7 +10,23 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- The site went down after v0.10.0: the server compressed every response on
+  the fly from a full in-memory copy of the file, and a few concurrent
+  requests for the large search indexes (8.5 MB in Chinese) ran the pod past
+  its 192 MiB memory limit, so it was killed and restarted in a loop. Pages
+  and search indexes are now compressed once at build time and streamed as
+  stored, and the pod's limits are raised to 512 MiB and one CPU.
+- The book on the home page showed jagged edges while tilting. Its tilted
+  layers now carry a transparent outline so their edges are smoothed.
+
 ### Changed
+
+- Share cards for Slack, X and LinkedIn are redrawn in the site's ink palette
+  with one red accent. Each keeps its content in the center square that
+  Slack's thumbnail shows: the book's cover on the home card, the part,
+  chapter number and title on a chapter card.
 
 - Wiring the Application Stack is restructured as one arc: the reference
   architecture, the three paths, then one section per seam (model gateway,
