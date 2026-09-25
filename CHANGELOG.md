@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.9.5 - 2026-09-25
+
 ### Added
 
 - Every section heading ends in a link to that section. It appears on hover
