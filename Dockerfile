@@ -23,7 +23,9 @@ WORKDIR /src
 # resolves latere.ai/x/pkg through its vanity import path.
 COPY go.mod go.sum ./
 RUN go mod download
-COPY main.go ./
+# Every Go file of package main, not a named list: a file left off the list
+# builds locally and fails only here. The _test.go files are ignored by build.
+COPY *.go ./
 COPY internal/ ./internal/
 COPY migrations/ ./migrations/
 COPY --from=book /src/_book ./_book
