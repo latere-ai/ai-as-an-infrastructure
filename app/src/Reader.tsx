@@ -54,6 +54,8 @@ const LS_KEY = "aaai-reader-settings";
 const HEADER_H = 48;
 const MAIN_MIN = 640 + 2 * 32;
 const TOC_MIN_VW = 1200;
+// The margin right of the floating "On this page" card (--toc-gap in theme.css).
+const TOC_GAP = 16;
 
 const SIDEBAR_EXTERNAL_LINKS = [
   { labelKey: "aboutAuthor", href: "https://changkun.de" },
@@ -277,7 +279,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
   // Below that it lives in the same drawer the phone layout uses.
   const showSidebar = !mobile && !s.navCollapsed;
   const navW = Math.max(200, Math.min(s.navW, vw - MAIN_MIN));
-  const tocRoom = vw - (showSidebar ? navW : 0) - MAIN_MIN;
+  const tocRoom = vw - (showSidebar ? navW : 0) - MAIN_MIN - TOC_GAP;
   const tocDocked = !mobile && tocFits && tocRoom >= 170;
   const tocW = Math.max(170, Math.min(s.tocW, tocRoom));
   const hasToc = chapter.headings.length > 0;

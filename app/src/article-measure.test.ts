@@ -40,7 +40,8 @@ function measure(lang: "en" | "zh", layout: string): string {
 const px = (v: string) => (v.endsWith("em") ? Math.max(640, parseFloat(v) * 18) : NaN);
 
 test("the column takes its cap from the cascade, not an inline width", () => {
-  expect(css).toContain(".rdr-col { max-width: max(640px, var(--article-max)); }");
+  expect(css).toContain("--measure: max(640px, var(--article-max));");
+  expect(css).toContain("max-width: max(640px, var(--article-max), var(--wide-max));");
   expect(reader).not.toContain("maxWidth: articleMaxWidth");
   expect(reader).toContain('className="rdr-col"');
 });
@@ -51,12 +52,12 @@ test("caps are in em, so the measure holds its character count at any text size"
   }
 });
 
-test("the default measure reads about 80 to 90 Latin characters, zh narrower", () => {
+test("the default measure reads about 90 to 100 Latin characters, zh narrower", () => {
   expect(DEFAULT_SETTINGS.layout).toBe("codex");
   // Inter at 18 px advances about 0.48 em per character of running English.
   const chars = (parseFloat(measure("en", "codex")) / 0.48);
-  expect(chars).toBeGreaterThanOrEqual(80);
-  expect(chars).toBeLessThanOrEqual(90);
+  expect(chars).toBeGreaterThanOrEqual(90);
+  expect(chars).toBeLessThanOrEqual(100);
   // A CJK glyph is ~2x the advance width of a Latin one, so the zh caps must
   // stay the narrower pair.
   for (const layout of ["manuscript", "codex"]) {
@@ -78,6 +79,20 @@ test("manuscript and codex are distinct widths at the default text size", () => 
     expect(px(measure(lang, "manuscript"))).toBeGreaterThan(640);
     expect(px(measure(lang, "manuscript"))).toBeLessThan(px(measure(lang, "codex")));
   }
+});
+
+// Running text keeps the measure; code cells, code blocks, tables and display
+// math may use the whole column, which is wider than the measure.
+test("wide content breaks out of the measure, running text does not", () => {
+  const rule = (sel: string) => css.split("\n").find((l) => l.includes(sel) && l.includes("{")) ?? "";
+  expect(rule(".rdr-article > * {")).toContain("max-width: var(--measure)");
+  expect(rule(".rdr-article > .rdr-runnable")).toContain("max-width: none");
+  expect(rule(".rdr-article > .rdr-runnable")).toContain(".katex-block");
+  expect(css).toMatch(/\.rdr-article > pre, [^{]*\.rdr-article > table,\s*[^{]*\.rdr-article > \.table-scroll \{ width: max-content; min-width: min\(var\(--measure\), 100%\); max-width: 100%; \}/);
+  expect(parseFloat(css.match(/--wide-max: ([\d.]+)em/)![1])).toBeGreaterThan(parseFloat(measure("en", "codex")));
+  // The measure is a registered length, so em resolves on the column and a
+  // heading does not get a wider measure than its paragraph.
+  expect(css).toContain('@property --measure { syntax: "<length-percentage>"; inherits: true;');
 });
 
 test("atlas is uncapped in both languages, so the column fills the row", () => {
@@ -109,4 +124,15 @@ test("narrow viewports hide the side columns before hydration", () => {
   expect(css).toMatch(/@media \(max-width: 1199\.98px\) \{ \.rdr-toc-wrap \{ display: none; \} \}/);
   expect(reader).toContain("const TOC_MIN_VW = 1200;");
   expect(reader).toContain("const MAIN_MIN = 640 + 2 * 32;");
+});
+
+// The floating "On this page" card sits one gap in from the right edge; the
+// column-fit arithmetic in Reader.tsx must subtract the same gap, or a docked
+// card pushes the article below its minimum width.
+test("the column fit reserves the same gap the floating card uses", () => {
+  const cssGap = css.match(/--toc-gap: (\d+)px/)?.[1];
+  const tsGap = reader.match(/const TOC_GAP = (\d+);/)?.[1];
+  expect(cssGap).toBeTruthy();
+  expect(tsGap).toBe(cssGap);
+  expect(reader).toContain("- MAIN_MIN - TOC_GAP;");
 });

@@ -31,12 +31,14 @@ test("overlays are solid surfaces", () => {
   }
 });
 
-test("layout regions carry no radius; controls stay at 4 to 6 px", () => {
-  for (const sel of [".rdr-header", ".rdr-nav", ".rdr-toc", ".rdr-main", ".rdr-drawer"]) {
+test("layout regions carry no radius; controls and the floating card stay at 4 to 6 px", () => {
+  for (const sel of [".rdr-header", ".rdr-nav", ".rdr-main", ".rdr-drawer"]) {
     expect(rule(sel)).not.toContain("border-radius");
     expect(rule(sel)).not.toContain("box-shadow");
   }
-  for (const sel of [".rdr-btn", ".rdr-search", ".rdr-primary", ".rdr-pop", ".rdr-dialog"]) {
+  // "On this page" is a card sized to its list, not a full-height region.
+  expect(rule(".rdr-toc")).not.toContain("box-shadow");
+  for (const sel of [".rdr-btn", ".rdr-search", ".rdr-primary", ".rdr-pop", ".rdr-dialog", ".rdr-toc"]) {
     expect(rule(sel)).toMatch(/border-radius: var\(--radius-(sm|md)\)/);
   }
   expect(tsx).not.toMatch(/borderRadius: (999|1[0-9]|2[0-9])\b/);

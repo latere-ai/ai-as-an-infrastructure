@@ -24,7 +24,7 @@ test("the header and side columns are sticky; only the nav scrolls within itself
   expect(css).toMatch(/\.rdr-header \{[^}]*position: sticky; top: 0;/);
   expect(css).toMatch(/\.rdr-nav \{[^}]*position: sticky; top: var\(--hdr-h\);[^}]*height: calc\(100vh - var\(--hdr-h\)\)/);
   expect(css).toMatch(/\.rdr-nav-scroll \{[^}]*overflow-y: auto; overscroll-behavior: contain;/);
-  expect(css).toMatch(/\.rdr-toc \{[^}]*position: sticky; top: var\(--hdr-h\);/);
+  expect(css).toMatch(/\.rdr-toc \{[^}]*position: sticky; top: calc\(var\(--hdr-h\) \+ var\(--toc-gap\)\);[^}]*max-height: calc\(100vh - var\(--hdr-h\) - 2 \* var\(--toc-gap\)\)/);
 });
 
 test("anchors are native and land below the sticky header", () => {
