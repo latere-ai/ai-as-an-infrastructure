@@ -74,3 +74,23 @@ test("the progress count keeps one width from 0% to 100%", () => {
   expect(parseFloat(w![1])).toBeGreaterThanOrEqual(4.5);
   expect(rule(".rdr-pct")).toContain("font-variant-numeric: tabular-nums");
 });
+
+// Lists were indented with a left margin, which the column's centering rule
+// (margin-inline: auto on top-level blocks) replaced, so bullets hung outside
+// the text and even left of the section heading.
+test("lists indent with padding, which the column centering does not override", () => {
+  const list = rule(".rdr-article ul, .rdr-article ol");
+  expect(list).toContain("padding-left: 1.4em");
+  expect(list).not.toMatch(/margin: [^;]* [^0 ;][^;]*em;/);
+  expect(css).toContain(".reader .rdr-col .rdr-article > * { max-width: var(--measure); margin-left: auto; margin-right: auto; }");
+});
+
+// Callouts were tinted boxes with a colored left bar. They are ruled like a
+// printed sidebar instead: rules above and below, nothing else.
+test("callouts are ruled, without a fill, a side bar or a radius", () => {
+  const box = rule(".rdr-callout");
+  expect(box).toContain("border-top: 1px solid");
+  expect(box).toContain("border-bottom: 1px solid");
+  expect(box).not.toMatch(/border-left|background|border-radius|box-shadow/);
+  expect(css).not.toMatch(/\.rdr-callout[\w-]* \{[^}]*border-left/);
+});
