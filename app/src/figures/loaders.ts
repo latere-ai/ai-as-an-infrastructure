@@ -155,4 +155,5 @@ export const LOADERS: Readonly<Record<string, FigureLoader>> = {
   "reserved-breakeven": () => import("./reserved-breakeven.ts"),
   "retry-amplification": () => import("./retry-amplification.ts"),
   "reference-stack": () => import("./reference-stack.ts"),
+  "training-stack": () => import("./training-stack.ts"),
 };
