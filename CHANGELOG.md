@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.9.0 - 2026-09-25
+
 ### Fixed
 
 - The Codex and Manuscript layouts rendered the same 640 px column at the
