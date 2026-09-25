@@ -94,3 +94,13 @@ test("callouts are ruled, without a fill, a side bar or a radius", () => {
   expect(box).not.toMatch(/border-left|background|border-radius|box-shadow/);
   expect(css).not.toMatch(/\.rdr-callout[\w-]* \{[^}]*border-left/);
 });
+
+// An unconditional ::-webkit-scrollbar style made every scroller in the reader
+// show a permanent bar, even where the platform hides scrollbars until use.
+test("custom scrollbars apply only where the platform's are permanent", () => {
+  const reader = readFileSync(resolve(here, "Reader.tsx"), "utf8");
+  for (const m of css.matchAll(/^([^{}\n]*::-webkit-scrollbar[^{]*)\{/gm)) {
+    expect(m[1]).toContain(":root.classic-scrollbars");
+  }
+  expect(reader).toContain('classList.toggle("classic-scrollbars", probe.offsetWidth - probe.clientWidth > 0)');
+});

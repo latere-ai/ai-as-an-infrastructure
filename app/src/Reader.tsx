@@ -133,6 +133,16 @@ export default function Reader({ chapter, initial }: ReaderProps) {
     return () => document.removeEventListener("click", onClick);
   }, []);
 
+  // Permanent (classic) scrollbars reserve layout width; overlay ones do not.
+  // Only permanent ones get the thin reader style (theme.css).
+  useEffect(() => {
+    const probe = document.createElement("div");
+    probe.style.cssText = "position:absolute;top:-200px;width:100px;height:100px;overflow:scroll";
+    document.body.appendChild(probe);
+    document.documentElement.classList.toggle("classic-scrollbars", probe.offsetWidth - probe.clientWidth > 0);
+    probe.remove();
+  }, []);
+
   // Remember this page for the search dialog's list of recent pages.
   useEffect(() => { pushRecent(lang, chapter.path || "index"); }, [lang, chapter.path]);
 
