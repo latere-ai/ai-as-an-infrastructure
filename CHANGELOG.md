@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.9.6 - 2026-09-25
+
 ### Fixed
 
 - Scrollbars in the reader, the sidebar's among them, were always visible,
