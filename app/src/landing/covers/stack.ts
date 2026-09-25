@@ -8,10 +8,10 @@ import type { Lang } from "../../types.ts";
 import { esc, r } from "../../figures/lib/svg.ts";
 import { layer, smooth, T, txt, wrap, type CoverData, type CoverPart } from "./lib.ts";
 
-// The parts in the order the stack builds up, by part number. The orientation
-// part is the bedrock the rest sits on, the infrastructure that came before;
-// the capability's path starts in compute and ends in governed behavior.
-const STACK_ORDER = ["0", "IX", "I", "II", "III", "IV", "V", "VI", "VII", "X", "XII", "XI", "VIII"];
+// The parts in the order the stack builds up, by part number: compute is the
+// bedrock, governed behavior the top, and the capability's path runs from one
+// to the other.
+const STACK_ORDER = ["IX", "0", "I", "II", "III", "IV", "V", "VI", "VII", "X", "XII", "XI", "VIII"];
 const THICKNESS = [58, 50, 40, 47, 36, 44, 50, 38, 45, 34, 42, 40, 48];
 
 const X0 = 48, X1 = 404, TOP = 340, BOTTOM = 912;
@@ -109,13 +109,13 @@ function strata(lang: Lang, parts: CoverPart[]): string {
 
 // The capability's path: from a square in compute up through every stratum to
 // an open circle above the section, a dot where it crosses each stratum.
-const PATH_X = [120, 156, 140, 182, 214, 204, 240, 232, 262, 254, 284, 292];
+const PATH_X = [110, 128, 156, 140, 182, 214, 204, 240, 232, 262, 254, 284, 292];
 
 function thread(n: number): string {
   const bs = boundaries(n);
   const pts: Array<[number, number]> = [];
-  for (let k = 1; k < n; k++) {
-    const x = PATH_X[(k - 1) % PATH_X.length];
+  for (let k = 0; k < n; k++) {
+    const x = PATH_X[k % PATH_X.length];
     pts.push([x, r((yAt(bs[k], x) + yAt(bs[k + 1], x)) / 2)]);
   }
   const end: [number, number] = [300, TOP - 16];
@@ -143,7 +143,7 @@ function lettering(lang: Lang): string {
     out.push(T(49, 302, t.subtitle, { class: "cv-f2", "font-size": 12.5 }));
   }
   // The direction of the section, read up the left margin.
-  out.push(`<text class="cv-f3" transform="rotate(-90 30 ${(TOP + BOTTOM) / 2})" x="30" y="${(TOP + BOTTOM) / 2}" text-anchor="middle" font-size="7.5" letter-spacing="2">${esc(t.axis)}</text>`);
+  out.push(`<text class="${lang === "zh" ? "cv-cjk cv-f3" : "cv-f3"}" transform="rotate(-90 30 ${(TOP + BOTTOM) / 2})" x="30" y="${(TOP + BOTTOM) / 2}" text-anchor="middle" font-size="7.5" letter-spacing="2">${esc(t.axis)}</text>`);
   out.push(T(48, 956, t.author, { class: lang === "zh" ? "cv-cjk cv-f1" : "cv-f1", "font-size": 14, "font-weight": 500, "letter-spacing": lang === "zh" ? 2 : undefined }));
   // Legend for the thread.
   out.push(`<path class="cv-sa" stroke-width="2.2" stroke-linecap="round" d="M518 952.5h26"/>`, T(552, 956, t.path, { class: "cv-f2", "font-size": 9 }));
