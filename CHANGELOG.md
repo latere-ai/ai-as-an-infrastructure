@@ -10,6 +10,19 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- Bullets and numbers of top-level lists hung outside the text column, left
+  of the section heading, since v0.9.1. Lists are indented inside the column
+  again.
+
+### Changed
+
+- Callouts (the dated "As of" blocks, "What's contested" and "Constraint
+  arrow") are set like a printed sidebar: a rule above, a small label, text a
+  step smaller than the body and a hairline below, instead of a tinted box
+  with a colored left bar.
+
 ## v0.9.3 - 2026-09-25
 
 ### Fixed
