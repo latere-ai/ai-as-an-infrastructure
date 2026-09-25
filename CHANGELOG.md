@@ -10,6 +10,16 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Added
+
+- The reader measures how pages load for the people reading them: load
+  timing, Core Web Vitals (largest contentful paint, interaction to next
+  paint, layout shift) and the book's own requests. The measurements go to
+  the book's server, never to a third party, and carry no cookie and nothing
+  that identifies a reader; query strings are removed from the addresses they
+  record. The measuring code is fetched only after a page has finished
+  loading and gone idle, so it does not slow reading.
+
 ## v0.10.4 - 2026-09-25
 
 ### Changed
