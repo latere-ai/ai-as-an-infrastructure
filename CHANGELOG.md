@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.9.2 - 2026-09-25
+
 ### Fixed
 
 - The header and sidebar moved with the page when it bounced at the top or
