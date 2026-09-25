@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.9.1 - 2026-09-25
+
 ### Changed
 
 - The reading measure is wider: Codex, the default, sets 828 px of text in
