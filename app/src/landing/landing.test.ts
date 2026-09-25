@@ -2,7 +2,8 @@
 // structural: the cover is inline SVG in the server render (so it shows with
 // script disabled) in both languages, no raster cover is referenced anywhere,
 // the landing stays out of the chapter body, the edition comes from the
-// changelog, and the cover palette has a dark twin for every token.
+// changelog, the cover palette has a dark twin for every token, and the tilt
+// attaches nothing under reduced motion.
 
 import { expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -19,6 +20,7 @@ import { loadGlossary } from "../pipeline/glossary.ts";
 import type { ChapterData, Lang } from "../types.ts";
 import { renderCover } from "./cover.ts";
 import { latestRelease, partTitle } from "./landing.ts";
+import { MAX_TURN, mountCover, poseAt, REDUCED_MOTION, type CoverEnv } from "./tilt.ts";
 
 const repoRoot = join(import.meta.dir, "../../..");
 const graphviz = await loadGraphviz();
@@ -120,4 +122,45 @@ test("every cover color token has a dark value", () => {
   // Every token the cover and the stylesheet use is defined.
   const used = new Set([...(renderCover("en") + renderCover("zh") + section).matchAll(/var\(--cv-([\w-]+)\)|stop-color:var\(--cv-([\w-]+)\)/g)].map((m) => `--cv-${m[1] ?? m[2]}`));
   for (const n of used) expect({ n, defined: light.has(n) || n === "--cv-song" }).toEqual({ n, defined: true });
+});
+
+// A stand-in for the cover root and the window, recording what the tilt does.
+function fakes(reduce: boolean) {
+  const listeners: string[] = [];
+  const writes: string[] = [];
+  let frames = 0;
+  const root = {
+    addEventListener: (type: string) => listeners.push(type),
+    removeEventListener: () => {},
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 140 }),
+    style: { setProperty: (k: string) => writes.push(k), removeProperty: () => {} },
+    classList: { add: (c: string) => writes.push(c), remove: () => {} },
+  } as unknown as HTMLElement;
+  const env: CoverEnv = {
+    matchMedia: (q: string) => ({ matches: reduce && q === REDUCED_MOTION }),
+    requestAnimationFrame: () => ++frames,
+    cancelAnimationFrame: () => {},
+    getComputedStyle: () => ({ getPropertyValue: (n: string) => (n === "--ry" ? "18" : "0") }),
+    setTimeout: () => 1,
+    clearTimeout: () => {},
+  };
+  return { root, env, listeners, writes, frames: () => frames };
+}
+
+test("under reduced motion the tilt attaches nothing and writes nothing", () => {
+  const f = fakes(true);
+  const detach = mountCover(f.root, f.env);
+  expect(f.listeners).toEqual([]);
+  expect(f.writes).toEqual([]);
+  expect(f.frames()).toBe(0);
+  detach();
+});
+
+test("with motion allowed the tilt follows the pointer", () => {
+  const f = fakes(false);
+  mountCover(f.root, f.env);
+  expect(f.listeners.sort()).toEqual(["pointerdown", "pointerleave", "pointermove"]);
+  expect(poseAt(1, 0).ry).toBe(MAX_TURN.y);
+  expect(poseAt(0, -1).rx).toBe(MAX_TURN.x);
+  expect(poseAt(5, 5)).toEqual(poseAt(1, 1)); // clamped to the cover
 });
