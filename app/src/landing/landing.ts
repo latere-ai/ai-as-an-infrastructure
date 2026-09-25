@@ -14,7 +14,7 @@ import type { Book } from "../pipeline/book.ts";
 import { formatDate } from "../pipeline/dates.ts";
 import { esc } from "../figures/lib/svg.ts";
 import type { Lang } from "../types.ts";
-import { DEFAULT_COVER, renderCover, type CoverData, type CoverVariant, type Release } from "./cover.ts";
+import { renderCover, type CoverData, type Release } from "./cover.ts";
 
 // Where "Start reading" lands: the Preface, directly below the landing.
 export const START_ID = "preface";
@@ -107,7 +107,7 @@ export function coverDataFor(book: Book, repoRoot: string): CoverData {
   return { parts: parts.map((p, i) => ({ num: ROMAN[i] ?? String(i), title: partTitle(p.label) })), release: readRelease(repoRoot) };
 }
 
-export function renderLanding(book: Book, repoRoot: string, cover: CoverVariant = DEFAULT_COVER): string {
+export function renderLanding(book: Book, repoRoot: string): string {
   const lang = book.lang;
   const s = STRINGS[lang];
   const release = readRelease(repoRoot);
@@ -156,7 +156,7 @@ export function renderLanding(book: Book, repoRoot: string, cover: CoverVariant 
     + (backLinks ? `<p class="lp-back"><span>${s.alsoIn}</span> ${backLinks}</p>` : "")
     + `</nav>`;
 
-  return `<div class="lp-spread"><div class="lp-verso">${renderCover(lang, cover, coverDataFor(book, repoRoot))}</div>${recto}</div>`
+  return `<div class="lp-spread"><div class="lp-verso">${renderCover(lang, coverDataFor(book, repoRoot))}</div>${recto}</div>`
     + contents
     + `<div class="lp-start-anchor" id="${START_ID}"></div>`;
 }

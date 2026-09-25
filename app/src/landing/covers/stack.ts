@@ -112,6 +112,7 @@ function strata(lang: Lang, parts: CoverPart[]): string {
 const PATH_X = [110, 128, 156, 140, 182, 214, 204, 240, 232, 262, 254, 284, 292];
 
 function thread(n: number): string {
+  if (!n) return layer("thread", 0.3, "");
   const bs = boundaries(n);
   const pts: Array<[number, number]> = [];
   for (let k = 0; k < n; k++) {

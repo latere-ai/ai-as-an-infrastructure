@@ -17,7 +17,6 @@ import { renderGlossaryPage, renderTechniqueIndex, type Glossary, type GlossFirs
 import { formatDate, loadReviewDates, reviewKey, type ReviewDates } from "./dates.ts";
 import type { ChapterData, Lang } from "../types.ts";
 import { renderLanding } from "../landing/landing.ts";
-import { COVER_VARIANTS, isCoverVariant, type CoverVariant } from "../landing/cover.ts";
 
 export interface CompileContext {
   bib: Bibliography;
@@ -191,17 +190,8 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     sourcePath: ch.srcRel,
     description: metaDescription(html),
     toc,
-    ...(ch.href === "index" ? { landingHtml: renderLanding(book, join(book.langDir, ".."), coverFromEnv()) } : {}),
+    ...(ch.href === "index" ? { landingHtml: renderLanding(book, join(book.langDir, "..")) } : {}),
   };
-}
-
-// The home page's cover drawing. AAAI_COVER=<name> previews another drawing
-// in a build or the dev server; an unknown name fails the build.
-function coverFromEnv(): CoverVariant | undefined {
-  const v = process.env.AAAI_COVER;
-  if (!v) return undefined;
-  if (!isCoverVariant(v)) throw new Error(`AAAI_COVER=${v}: not a cover (one of ${COVER_VARIANTS.join(", ")})`);
-  return v;
 }
 
 // Back-matter pages whose body aggregates state collected from the whole book:
