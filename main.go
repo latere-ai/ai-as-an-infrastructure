@@ -18,7 +18,6 @@ package main
 
 import (
 	"cmp"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"embed"
@@ -31,7 +30,6 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -61,8 +59,8 @@ var embedded embed.FS
 var book fs.FS
 
 // etags maps an embedded file path to its content ETag. Precomputed once so a
-// conditional request for the 1.2MB search.json is a cheap map lookup, not a
-// re-hash. Only the no-cache responses (HTML, JSON) use it.
+// conditional request for a multi-megabyte search.json is a cheap map lookup,
+// not a re-hash. Only the no-cache responses (HTML, JSON) use it.
 var etags = map[string]string{}
 
 func init() {
@@ -79,9 +77,21 @@ func init() {
 		if err != nil || d.IsDir() {
 			return nil
 		}
-		if b, e := fs.ReadFile(book, p); e == nil {
-			sum := sha256.Sum256(b)
-			etags[p] = `"` + hex.EncodeToString(sum[:16]) + `"`
+		if strings.HasSuffix(p, ".gz") {
+			return nil
+		}
+		// Streamed through the hash rather than read whole: the book is over
+		// 100 MB, and a copy per file would all be garbage at startup.
+		f, e := book.Open(p)
+		if e != nil {
+			return nil
+		}
+		h := sha256.New()
+		if _, e = io.Copy(h, f); e == nil {
+			etags[p] = `"` + hex.EncodeToString(h.Sum(nil)[:16]) + `"`
+		}
+		if e = f.Close(); e != nil {
+			slog.Error("closing an embedded file", "path", p, "err", e)
 		}
 		return nil
 	})
@@ -262,13 +272,18 @@ func exists(name string) bool {
 // writeFile serves the embedded file at name, returning false (without writing)
 // if it is absent or a directory. immutable assets cache for a year; everything
 // else is no-cache with an ETag so revalidation is a cheap 304.
+//
+// Text files are compressed at build time (name.gz beside name). A client that
+// accepts gzip is streamed that sibling; others get the file itself. Nothing is
+// compressed or read whole into memory per request: an 8 MB search index once
+// cost a full copy plus a gzip stream per request, and a handful of concurrent
+// requests ran the pod out of memory.
 func writeFile(w http.ResponseWriter, r *http.Request, name string, immutable bool) bool {
-	info, err := fs.Stat(book, name)
-	if err != nil || info.IsDir() {
+	if strings.HasSuffix(name, ".gz") {
 		return false
 	}
-	body, err := fs.ReadFile(book, name)
-	if err != nil {
+	info, err := fs.Stat(book, name)
+	if err != nil || info.IsDir() {
 		return false
 	}
 
@@ -277,41 +292,45 @@ func writeFile(w http.ResponseWriter, r *http.Request, name string, immutable bo
 	if ctype != "" {
 		h.Set("Content-Type", ctype)
 	}
+	src, tag := name, etags[name]
+	if compressible(ctype) {
+		h.Add("Vary", "Accept-Encoding")
+		if acceptsGzip(r) && exists(name+".gz") {
+			src = name + ".gz"
+			h.Set("Content-Encoding", "gzip")
+			// The encoded bytes differ, so the variant needs its own validator.
+			if tag != "" {
+				tag = strings.TrimSuffix(tag, `"`) + `-gz"`
+			}
+		}
+	}
 	if immutable {
 		h.Set("Cache-Control", "public, max-age=31536000")
 	} else {
 		h.Set("Cache-Control", "no-cache")
-		if tag := etags[name]; tag != "" {
+		if tag != "" {
 			h.Set("ETag", tag)
-			if r.Header.Get("If-None-Match") == tag {
-				w.WriteHeader(http.StatusNotModified)
-				return true
-			}
 		}
 	}
 
-	if compressible(ctype) && len(body) >= 1024 && acceptsGzip(r) {
-		h.Set("Content-Encoding", "gzip")
-		h.Add("Vary", "Accept-Encoding")
-		w.WriteHeader(http.StatusOK)
-		gw := gzip.NewWriter(w)
-		// The status line is already sent, so a write or flush failure cannot
-		// become an error response. Closing is still checked rather than
-		// dropped: an unflushed gzip stream is a truncated page, and this is
-		// the call that would report it.
-		_, writeErr := gw.Write(body)
-		closeErr := gw.Close()
-		if writeErr != nil || closeErr != nil {
-			slog.ErrorContext(r.Context(), "gzip response truncated",
-				"path", r.URL.Path, "write", writeErr, "close", closeErr)
+	f, err := book.Open(src)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "opening an embedded file", "path", src, "err", err)
+		return false
+	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			slog.ErrorContext(r.Context(), "closing an embedded file", "path", src, "err", err)
 		}
-		return true
+	}()
+	rs, ok := f.(io.ReadSeeker)
+	if !ok {
+		slog.ErrorContext(r.Context(), "embedded file is not seekable", "path", src)
+		return false
 	}
-	h.Set("Content-Length", strconv.Itoa(len(body)))
-	w.WriteHeader(http.StatusOK)
-	if _, err := w.Write(body); err != nil {
-		slog.ErrorContext(r.Context(), "writing a response", "path", r.URL.Path, "err", err)
-	}
+	// ServeContent answers If-None-Match against the ETag set above, sets
+	// Content-Length, and copies through a small buffer.
+	http.ServeContent(w, r, "", time.Time{}, rs)
 	return true
 }
 

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -227,4 +230,79 @@ func TestCacheHeaders(t *testing.T) {
 
 	// A missing asset 404s; it must not fall back to the site entrypoint.
 	code(t, nf, base, "/en/figures/does-not-exist.png", 404)
+}
+
+// TestPrecompressed: text is served from its build-time .gz sibling to clients
+// that accept gzip and as the plain file otherwise, with distinct validators.
+// Before, every such response was compressed per request from a full in-memory
+// copy, and concurrent requests for the large search index ran the pod out of
+// memory.
+func TestPrecompressed(t *testing.T) {
+	requireBook(t)
+	base, nf, _ := newServer(t)
+	if !exists("en/search.json.gz") {
+		t.Fatalf("en/search.json.gz is missing: the build did not precompress")
+	}
+	plain, err := fs.ReadFile(book, "en/search.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest("GET", base+"/en/search.json", nil)
+	req.Header.Set("Accept-Encoding", "gzip") // set by hand, so the client does not decode
+	resp, err := nf.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatalf("Content-Encoding => %q, want gzip", resp.Header.Get("Content-Encoding"))
+	}
+	zr, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Errorf("decoded body differs from en/search.json (%d vs %d bytes)", len(got), len(plain))
+	}
+	gzTag := resp.Header.Get("ETag")
+
+	req2, _ := http.NewRequest("GET", base+"/en/search.json", nil)
+	req2.Header.Set("Accept-Encoding", "identity")
+	resp2, err := nf.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body2, err := io.ReadAll(resp2.Body)
+	resp2.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp2.Header.Get("Content-Encoding") != "" || !bytes.Equal(body2, plain) {
+		t.Errorf("identity request => encoding %q, %d bytes; want plain %d bytes", resp2.Header.Get("Content-Encoding"), len(body2), len(plain))
+	}
+	if gzTag == "" || gzTag == resp2.Header.Get("ETag") {
+		t.Errorf("gzip ETag %q must exist and differ from the plain one %q", gzTag, resp2.Header.Get("ETag"))
+	}
+
+	// The variant revalidates with its own validator.
+	req3, _ := http.NewRequest("GET", base+"/en/search.json", nil)
+	req3.Header.Set("Accept-Encoding", "gzip")
+	req3.Header.Set("If-None-Match", gzTag)
+	resp3, err := nf.Do(req3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusNotModified {
+		t.Errorf("conditional gzip GET => %d, want 304", resp3.StatusCode)
+	}
+
+	// The sibling itself is not a public path: like any unknown content URL it
+	// goes back to the site entrypoint instead of being served.
+	code(t, nf, base, "/en/search.json.gz", http.StatusFound)
 }

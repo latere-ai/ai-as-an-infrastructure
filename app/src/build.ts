@@ -15,7 +15,7 @@ import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDocs } from "./pipeline/search.ts";
 import { BASE, ogImageUrl } from "./site.ts";
-import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Lang } from "./types.ts";
 
@@ -122,4 +122,22 @@ writeFileSync(join(outRoot, "sitemap.xml"),
 const missing = [...new Set(missingCards)];
 if (missing.length) console.warn(`  ⚠ ${missing.length} share card(s) missing (run \`make og\`): ${missing.join(", ")}`);
 
-console.log(`built ${pageCount} pages into ${outRoot}`);
+// Precompressed siblings: the server streams name.gz to clients that accept
+// gzip, so no response is compressed, or copied into memory, per request.
+// Files under 1 KiB gain nothing from compression and are left alone.
+const GZ = /\.(html|css|js|json|svg|xml|txt)$/;
+let gzipped = 0;
+const compressTree = (dir: string) => {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) { compressTree(p); continue; }
+    if (!GZ.test(e.name)) continue;
+    const body = readFileSync(p);
+    if (body.length < 1024) continue;
+    writeFileSync(p + ".gz", Bun.gzipSync(body, { level: 9 }));
+    gzipped++;
+  }
+};
+compressTree(outRoot);
+
+console.log(`built ${pageCount} pages into ${outRoot} (${gzipped} precompressed)`);
