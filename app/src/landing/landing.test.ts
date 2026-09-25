@@ -122,6 +122,12 @@ test("every cover color token has a dark value", () => {
   const horizonDark = names(block(':root[data-theme="dark"] {'));
   horizonLight.delete("--cv-song"); // a font stack, not a color
   expect([...horizonLight].filter((n) => !horizonDark.has(n))).toEqual([]);
+  const inkLight = names(block('.cv:is([data-cover="stack"]'));
+  const inkDark = names(block(':root[data-theme="dark"] :is(.cv:is('));
+  expect(inkLight.size).toBeGreaterThan(5);
+  expect([...inkLight].filter((n) => !inkDark.has(n))).toEqual([]);
+  // A colored accent has a dark twin; the type cover's accent is its ink.
+  for (const v of ["stack", "drawing"]) expect(section).toContain(`:root[data-theme="dark"] :is(.cv[data-cover="${v}"]`);
   // Every token the covers and the stylesheet use is defined.
   const defined = new Set([...section.matchAll(/(--cv-[\w-]+):/g)].map((m) => m[1]));
   const markup = COVER_VARIANTS.flatMap((v) => (["en", "zh"] as Lang[]).map((l) => renderCover(l, v, coverData[l]))).join("");
@@ -142,6 +148,28 @@ for (const v of COVER_VARIANTS) {
     for (const html of [en, zh]) expect(html.match(/<text\b/g)?.length ?? 0).toBeGreaterThan(5);
   });
 }
+
+test("the ink covers are flat: no gradients, glow or filters", () => {
+  for (const v of COVER_VARIANTS.filter((c) => c !== "horizon")) {
+    for (const l of ["en", "zh"] as Lang[]) expect(renderCover(l, v, coverData[l])).not.toMatch(/<linearGradient|<radialGradient|<filter/);
+  }
+});
+
+test("the stack and type covers list every part of the manifest", () => {
+  for (const l of ["en", "zh"] as Lang[]) {
+    expect(coverData[l].parts.length).toBe(loadBook(l, repoRoot).parts.filter((p) => !p.single).length);
+    for (const v of ["stack", "type"] as const) {
+      const text = plain(renderCover(l, v, coverData[l]));
+      for (const p of coverData[l].parts) expect({ v, l, part: p.title, found: text.includes(` ${p.title} `) }).toEqual({ v, l, part: p.title, found: true });
+    }
+  }
+});
+
+test("the drawing's title block carries the edition as its revision", () => {
+  const release = { version: "1.2.3", date: "2026-01-02" };
+  expect(renderCover("en", "drawing", { parts: [], release })).toContain(">v1.2.3<");
+  expect(renderCover("en", "drawing", { parts: [], release: null })).toContain(">DRAFT<");
+});
 
 test("the landing draws the cover it is given, and a build can preview one", () => {
   const book = loadBook("en", repoRoot);

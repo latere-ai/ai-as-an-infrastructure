@@ -17,15 +17,22 @@ import type { Lang } from "../types.ts";
 import { esc } from "../figures/lib/svg.ts";
 import type { CoverData } from "./covers/lib.ts";
 import { horizon } from "./covers/horizon.ts";
+import { stack } from "./covers/stack.ts";
+import { drawingCover } from "./covers/drawing.ts";
+import { typeCover } from "./covers/type.ts";
 
 export { W as COVER_W, H as COVER_H } from "./covers/lib.ts";
 export type { CoverData, CoverPart, Release } from "./covers/lib.ts";
 
-// The drawings, by name: "horizon" is the first cover (planet, orbits, road).
-// The name is the one switch: renderCover(lang, "stack") draws that cover, and the stylesheet keys
+// The drawings, by name: "horizon" is the first cover (planet, orbits, road);
+// "stack", "drawing" and "type" are the ink concepts. The name is the one
+// switch: renderCover(lang, "stack") draws that cover, and the stylesheet keys
 // its palette and the landing's accent off data-cover.
 const COVERS = {
   horizon: (lang: Lang, _data: CoverData) => horizon(lang),
+  stack,
+  drawing: drawingCover,
+  type: typeCover,
 } satisfies Record<string, (lang: Lang, data: CoverData) => string>;
 
 export type CoverVariant = keyof typeof COVERS;
