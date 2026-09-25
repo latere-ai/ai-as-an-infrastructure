@@ -343,6 +343,84 @@ reports reconstruction, downstream fidelity, baselines, stability, and
 interventions is more informative than a set of feature labels chosen because
 they look intuitive.
 
+The two-dimensional figures above show five features sharing a plane and a
+sparse autoencoder recovering them. The following cell runs the same test at a scale where the baselines and the
+seed check from this list mean something: 40 feature directions share a
+12-dimensional activation, each active on 4% of inputs with a value between 0
+and 1. It trains two TopK sparse autoencoders ($k=3$, 80 latents) from
+different seeds with Adam and unit-norm decoder columns, and tracks how many
+true directions some decoder column matches at cosine 0.9 or more. The seeds
+recover 88% and 92% of the directions, 82% in both, while the 12 principal
+components match none; the cell asserts that the SAE beats PCA by a wide
+margin. The heatmap shows what the rest of the dictionary does: unmatched
+latents sit near features at lower cosine, a form of splitting. Only a toy
+provides the true directions for this comparison. Set `p_on = 0.15`: the
+features are no longer sparse enough to share 12 dimensions, each seed
+recovers under a third of them, and only 12% are recovered by both seeds.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+m, d, n, k = 40, 12, 80, 3            # true features, activation width, SAE latents, TopK
+p_on = 0.04                           # chance a feature is active on an input; try 0.15
+V = rng.normal(size=(m, d)); V /= np.linalg.norm(V, axis=1, keepdims=True)   # directions v_i
+
+def batch(b):                         # x = sum_i a_i v_i with sparse a_i in [0, 1]
+    return ((rng.random((b, m)) < p_on) * rng.random((b, m))) @ V
+
+def recovered(D):                     # share of v_i matched by a dictionary column at cosine >= 0.9
+    return (np.abs(V @ D).max(1) >= 0.9).mean()
+
+b_dec = batch(20_000).mean(0)
+def train(seed, steps=700, lr=0.006, b=192):   # TopK SAE, Adam, unit-norm decoder columns
+    g = np.random.default_rng(seed)
+    Wd = g.normal(size=(d, n)); Wd /= np.linalg.norm(Wd, axis=0)
+    P = [Wd.T.copy(), np.zeros(n), Wd]          # W_enc, b_enc, W_dec
+    M, S, curve = [0 * p for p in P], [0 * p for p in P], []
+    for t in range(1, steps + 1):
+        x = batch(b) - b_dec
+        z = x @ P[0].T + P[1]
+        f = np.where(z >= np.partition(z, -k, 1)[:, [-k]], np.maximum(z, 0), 0)   # ReLU(TopK_k(z))
+        e = 2 * (f @ P[2].T - x) / b                # gradient of the mean squared error
+        gz = (e @ P[2]) * (f > 0)
+        for p, gp, mo, ve in zip(P, [gz.T @ x, gz.sum(0), e.T @ f], M, S):
+            mo += 0.1 * (gp - mo); ve += 0.001 * (gp * gp - ve)
+            p -= lr * mo / (1 - 0.9 ** t) / (np.sqrt(ve / (1 - 0.999 ** t)) + 1e-8)
+        P[2] /= np.linalg.norm(P[2], axis=0)
+        if t % 50 == 0: curve.append(recovered(P[2]))
+    return P, curve
+
+X = batch(20_000) - b_dec
+pca = np.linalg.svd(X, full_matrices=False)[2].T            # the d principal directions
+(Pa, ca), (Pb, cb) = train(1), train(2)
+both = (np.abs(V @ Pa[2]).max(1) >= 0.9) & (np.abs(V @ Pb[2]).max(1) >= 0.9)
+assert min(ca[-1], cb[-1]) > recovered(pca) + 0.1    # the SAE finds directions PCA cannot
+Z = X[:2000] @ Pa[0].T + Pa[1]
+F = np.where(Z >= np.partition(Z, -k, 1)[:, [-k]], np.maximum(Z, 0), 0)
+ev = 1 - ((F @ Pa[2].T - X[:2000]) ** 2).sum() / (X[:2000] ** 2).sum()
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.4), height_ratios=(1, 1.1))
+steps = np.arange(1, len(ca) + 1) * 50
+ax.plot(steps, ca, label="SAE, seed 1"); ax.plot(steps, cb, label="SAE, seed 2")
+ax.axhline(recovered(pca), color="grey", ls="--", lw=1, label=f"PCA, {d} components")
+ax.set(ylim=(0, 1.02), xlabel="training step", ylabel="share of directions recovered",
+       title=f"{m} features in {d} dimensions; SAE explains {ev:.0%} of variance")
+ax.legend(fontsize=9)
+C = np.abs(V @ Pa[2])
+cols = np.argsort(C.argmax(0) + (C.max(0) < 0.9) * m, kind="stable")   # matched latents first
+bx.imshow(C[:, cols], cmap="Blues", vmin=0, vmax=1, aspect="auto")
+bx.set(xlabel="SAE latent (seed 1), matched first", ylabel="true feature",
+       title="|cos| between true directions and decoder columns")
+bx.grid(False)
+fig.tight_layout()
+print(f"recovered at cosine >= 0.9: seed 1 {ca[-1]:.0%}, seed 2 {cb[-1]:.0%}, both {both.mean():.0%}, "
+      f"PCA {recovered(pca):.0%}")
+```
+::::
+
 ## Make the study reproducible
 
 The unit of work should be an `InterpretabilityStudy`, not an isolated feature

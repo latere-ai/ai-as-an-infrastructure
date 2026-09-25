@@ -59,6 +59,65 @@ $$
 
 这项实验只是更困难未来问题的经验代理。为了计算强模型上限，它需要真实标签，而目标中的超人场景可能没有这种标签。它说明的是，在受测模型系列中，弱标注训练在哪些基准上恢复了性能，又在哪些基准上没有恢复。实验并未证明超人模型能够实现对齐，也没有给出学生模型为何超过监督者的唯一因果解释。
 
+下面的单元格用一个线性玩具模型分离出其中一种原因。任务是在 20 个高斯特征上判断 $y=\mathbf 1[w\cdot x>0]$。弱监督者只在其中 10 个特征上应用同一规则，准确率为 71%，等于闭式解 $1-\theta/\pi$，其中 $\theta$ 是两条规则之间的夹角，单元格断言了这一点。强学生模型是在全部 20 个特征上做的 logistic 回归，用牛顿法在 10,000 个弱标签上拟合。每组标签的准确率都与弱监督者相同，只是错误中来自弱监督者规则的比例不同，其余错误是随机翻转。错误随机时，学生模型达到 96%，恢复了 $R=0.87$ 的差距；错误是系统性的时，它学到的就是弱监督者的规则，$R=0$。下图在两条规则张成的平面上说明原因：随机翻转会相互抵消，系统性错误却是输入的函数，学生模型能够表示它，于是也就拟合了它。把 `n` 改为 `1000`，随机错误的代价也会变大：标签更少时，学生模型只能恢复约三分之二的差距。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+d, n, seen = 20, 10_000, 10          # 输入特征数、弱标签数（可改为 1000）、弱监督者能看到的特征数
+w = rng.normal(size=d)                # 任务：y = 1[w . x > 0]
+X, Xt = rng.normal(size=(n, d)), rng.normal(size=(20_000, d))
+y, yt = X @ w > 0, Xt @ w > 0
+ww = np.where(np.arange(d) < seen, w, 0)                  # 弱监督者的规则
+S_w = ((Xt @ ww > 0) == yt).mean()
+angle = np.arccos(ww @ w / np.linalg.norm(ww) / np.linalg.norm(w))
+assert abs(S_w - (1 - angle / np.pi)) < 0.01              # 高斯输入：准确率 = 1 - 夹角 / pi
+
+def student(labels, lam=1.0):         # 强学生模型：在全部 d 个特征上做 logistic 回归，牛顿迭代
+    v = np.zeros(d)
+    for _ in range(25):
+        p = 1 / (1 + np.exp(-X @ v))
+        H = X.T @ (X * (p * (1 - p))[:, None]) + lam * np.eye(d)
+        v += np.linalg.solve(H, X.T @ (labels - p) - lam * v)
+    return ((Xt @ v > 0) == yt).mean(), v
+
+systematic = X @ ww > 0               # 错误由输入决定
+noisy = y ^ (rng.random(n) < 1 - S_w) # 随机错误，准确率相同
+S_s = student(y)[0]                   # 上限：用真实标签训练的学生模型
+shares = np.linspace(0, 1, 6)         # 来自系统性规则的弱标签比例
+fits = [student(np.where(rng.random(n) < s, systematic, noisy)) for s in shares]
+S_ws = np.array([f[0] for f in fits])
+R = (S_ws - S_w) / (S_s - S_w)
+assert R[0] - R[-1] > 0.5 and abs(R[-1]) < 0.15   # 随机错误可以恢复，系统性错误不能
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 8.2), height_ratios=(1, 1.3))
+ax.axhline(S_s, color="C2", label=f"强模型上限 S_s = {S_s:.3f}")
+ax.plot(shares, S_ws, "o-", color="C0", label="弱标签训练的学生 S_ws")
+ax.axhline(S_w, color="C1", label=f"弱监督者 S_w = {S_w:.3f}")
+ax.set(xlabel="来自系统性规则的弱标签比例（其余为随机翻转）", ylabel="测试准确率",
+       title=f"随机错误时 R = {round(R[0], 2) + 0:.2f}，系统性错误时 R = {round(R[-1], 2) + 0:.2f}")
+ax.legend(fontsize=9, loc="center right")
+e1 = w / np.linalg.norm(w)            # 真实规则与弱规则张成的平面
+e2 = ww - (ww @ e1) * e1; e2 /= np.linalg.norm(e2)
+P = Xt[:500] @ np.stack([e1, e2], 1)
+bx.scatter(*P[yt[:500]].T, s=5, color="C2", alpha=0.5); bx.scatter(*P[~yt[:500]].T, s=5, color="grey", alpha=0.5)
+t = np.array([-3.5, 3.5])
+for vec, c, ls, label in [(w, "C2", "-", "真实规则"), (ww, "C1", "-", "弱监督者"),
+                          (fits[0][1], "C0", "--", "学生，随机错误"), (fits[-1][1], "C0", ":", "学生，系统性错误")]:
+    a, b = vec @ e1, vec @ e2         # 平面内的决策边界 a u + b v = 0
+    bx.plot(-b * t / np.hypot(a, b), a * t / np.hypot(a, b), ls, color=c, lw=2, label=label)
+bx.set(xlim=(-3, 3), ylim=(-3, 3), aspect="equal", xlabel="沿真实规则方向", ylabel="沿弱规则的误差方向",
+       title="随机错误不改变边界，系统性错误使边界转向")
+bx.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2)
+fig.tight_layout()
+print(f"弱监督者 {S_w:.3f}，上限 {S_s:.3f}；在随机出错的标签上，学生为 {S_ws[0]:.3f}；"
+      f"在准确率相同但系统性出错的标签上，学生为 {S_ws[-1]:.3f}")
+```
+::::
+
 ## 辅助评估：放大与辩论
 
 迭代放大是一项提案：监督者把困难任务拆成较小的任务，协调当前智能体的多个副本完成这些任务，再把结果组合成目标答案。随后，训练过程可以把这个组合流程蒸馏回智能体，让智能体学会直接给出组合流程的答案。Christiano 等人在五项玩具算法任务上演示了这一思路，任务分解由研究者手工设计 [@christiano2018supervising]。这项提案不只是答案验证，监督者还要选择分解方式并组合局部结果。流程能否忠实保留原任务，取决于分解质量、错误传播，以及监督者评价中间结果的能力。

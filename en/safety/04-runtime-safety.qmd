@@ -161,6 +161,82 @@ because they resemble harmful ones) [@rottger2024xstest], and a private
 adversarial test set. Threshold changes are policy changes and deserve
 the same review and rollback discipline as code.
 
+The thresholds are themselves estimates from that fixed sample. The following
+cell sets them from 400 labeled compliant and 400 labeled violating items, with
+compliant scores from $\mathcal N(0,1)$ and violating scores from
+$\mathcal N(2.5,1)$, aiming to block at most 1% of compliant items and allow at
+most 5% of violating ones. Taking the empirical 99th and 5th percentiles meets
+both targets on live traffic in only 26% of 2,000 repeated calibrations,
+because each quantile lands on the wrong side about half the time. Choosing
+order statistics from the binomial distribution instead, so that each target
+fails with probability at most 5%, meets both in 95% of calibrations, and the
+cell asserts at least 90%. The price is a wider review band, largest when
+labeled data are scarce: with 100 items per class no order statistic certifies
+a 1% block rate, so nothing is blocked automatically. The guarantee covers only
+the calibration distribution. When violating scores drop by 0.4 after release,
+as they would under obfuscation, only 7% of calibrations keep the miss target,
+and the median share of violating items allowed rises from 3% to 7%. Set
+`shift = 0.8` and it reaches 15%.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from math import lgamma, log, erf, sqrt
+
+rng = np.random.default_rng(0)
+n, trials, sep = 400, 2000, 2.5       # labeled items per class, repeated calibrations, class separation
+fpr_max, miss_max, delta = 0.01, 0.05, 0.05   # block <= 1% of compliant, allow <= 5% of violating, 95% sure
+shift = 0.4                           # obfuscation: violating scores drop by this much after release; try 0.8
+Phi = np.vectorize(lambda x: 0.5 * (1 + erf(x / sqrt(2))))
+
+def rank(m, a):                       # largest r with Pr[Binomial(m, a) < r] <= delta
+    j, lg = np.arange(m + 1), np.array([lgamma(i + 1) for i in range(m + 1)])
+    cdf = np.cumsum(np.exp(lg[m] - lg - lg[::-1] + j * log(a) + (m - j) * log(1 - a)))
+    return int(np.searchsorted(cdf, delta, side="right"))
+
+def thresholds(m, reps, guarantee):   # compliant scores ~ N(0, 1), violating ~ N(sep, 1)
+    c = np.sort(rng.normal(0, 1, (reps, m)), 1)
+    v = np.sort(rng.normal(sep, 1, (reps, m)), 1)
+    if not guarantee:                 # empirical quantiles
+        return v[:, int(miss_max * m)], c[:, int((1 - fpr_max) * m)]
+    rb, ra = rank(m, fpr_max), rank(m, miss_max)   # order statistics with a binomial guarantee
+    return v[:, ra - 1], (c[:, m - rb] if rb else np.full(reps, np.inf))
+
+res = {}
+for g in (False, True):
+    t_allow, t_block = thresholds(n, trials, g)
+    fpr = 1 - Phi(t_block)            # compliant items blocked on live traffic
+    res[g] = fpr, Phi(t_allow - sep), Phi(t_allow - sep + shift)   # violating items allowed
+ok = {g: ((f <= fpr_max) & (mi <= miss_max)).mean() for g, (f, mi, _) in res.items()}
+assert ok[True] >= 1 - 2 * delta and ok[False] < 0.5   # the guarantee holds; the quantiles miss often
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.2))
+for k, (g, idx, label) in enumerate([(False, 1, "empirical quantiles"), (True, 1, "binomial guarantee"),
+                                     (True, 2, f"guarantee, scores shifted by {shift}")]):
+    f, mi = res[g][0], res[g][idx]
+    inside = ((f <= fpr_max) & (mi <= miss_max)).mean()
+    ax.scatter(100 * f, 100 * mi, s=4, alpha=0.35, color=f"C{k}", label=f"{label}: {inside:.0%} meet both")
+ax.axvline(100 * fpr_max, color="grey", ls="--", lw=1); ax.axhline(100 * miss_max, color="grey", ls="--", lw=1)
+ax.set(xlim=(0, 3), ylim=(0, 16), xlabel="compliant items blocked (%)", ylabel="violating items allowed (%)",
+       title=f"{trials} calibrations on {n} labeled items per class")
+ax.legend(fontsize=9, markerscale=3, loc="upper right")
+sizes = [100, 200, 400, 800, 1600, 3200]
+for k, g in enumerate((False, True)):
+    load = []
+    for m in sizes:
+        t_allow, t_block = thresholds(m, 200, g)
+        load.append(np.median(Phi(t_block) - Phi(t_allow)))   # compliant items sent to review
+    bx.plot(sizes, 100 * np.array(load), "o-", color=f"C{k}", label=["empirical quantiles", "binomial guarantee"][k])
+bx.set(xscale="log", xticks=sizes, xticklabels=sizes, xlabel="labeled items per class", ylabel="compliant items reviewed (%)",
+       title="The guarantee costs review load at small samples")
+bx.minorticks_off(); bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"both targets met: {ok[False]:.0%} of calibrations with empirical quantiles, {ok[True]:.0%} with the guarantee; "
+      f"after a {shift} score shift, {(res[True][2] <= miss_max).mean():.0%} keep the miss target")
+```
+::::
+
 The failure mode depends on the effect. A timeout while labeling low-risk prose
 may produce a bounded refusal or a degraded response. A system should fail
 closed for privileged effects, committing no external action until every

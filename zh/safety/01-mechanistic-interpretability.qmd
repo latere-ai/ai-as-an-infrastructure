@@ -154,6 +154,71 @@ $$
 
 这些限制决定了证据能支持哪些主张。同时报告重构、下游保真度、基线、稳定性和干预结果的研究，比一组因为看起来直观而被挑出的特征标签提供更多信息。
 
+上面两张二维图展示了五个特征共用一个平面，以及稀疏自编码器如何把它们恢复出来。下面的单元格把同样的检验放大到让上面列出的基线和种子检查真正有意义的规模：40 个特征方向共用一个 12 维激活，每个特征在 4% 的输入上活跃，取值介于 0 和 1 之间。单元格用两个不同的随机种子训练两部 TopK 稀疏自编码器（$k=3$，80 个潜变量），用 Adam 优化并把解码器列归一化，同时跟踪有多少个真实方向能被某个解码器列以不低于 0.9 的余弦相似度匹配。两个种子分别恢复 88% 和 92% 的方向，其中 82% 两者都能恢复；12 个主成分一个也匹配不上。单元格断言 SAE 的恢复率远高于 PCA。热图显示字典其余部分的情况：未匹配的潜变量以较低的余弦相似度贴近某些特征，这是一种特征分裂。只有玩具模型才能提供这种比较所需的真实方向。把 `p_on` 改为 `0.15`：特征不再稀疏到足以共用 12 个维度，每个种子只恢复不到三分之一，两个种子共同恢复的只有 12%。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+m, d, n, k = 40, 12, 80, 3            # 真实特征数、激活宽度、SAE 潜变量数、TopK 的 k
+p_on = 0.04                           # 每个特征在一次输入上活跃的概率；可改为 0.15
+V = rng.normal(size=(m, d)); V /= np.linalg.norm(V, axis=1, keepdims=True)   # 方向 v_i
+
+def batch(b):                         # x = sum_i a_i v_i，a_i 稀疏且取值于 [0, 1]
+    return ((rng.random((b, m)) < p_on) * rng.random((b, m))) @ V
+
+def recovered(D):                     # 能被某个字典列以余弦 >= 0.9 匹配的 v_i 所占比例
+    return (np.abs(V @ D).max(1) >= 0.9).mean()
+
+b_dec = batch(20_000).mean(0)
+def train(seed, steps=700, lr=0.006, b=192):   # TopK SAE，Adam 优化，解码器列归一化
+    g = np.random.default_rng(seed)
+    Wd = g.normal(size=(d, n)); Wd /= np.linalg.norm(Wd, axis=0)
+    P = [Wd.T.copy(), np.zeros(n), Wd]          # W_enc、b_enc、W_dec
+    M, S, curve = [0 * p for p in P], [0 * p for p in P], []
+    for t in range(1, steps + 1):
+        x = batch(b) - b_dec
+        z = x @ P[0].T + P[1]
+        f = np.where(z >= np.partition(z, -k, 1)[:, [-k]], np.maximum(z, 0), 0)   # ReLU(TopK_k(z))
+        e = 2 * (f @ P[2].T - x) / b                # 均方误差的梯度
+        gz = (e @ P[2]) * (f > 0)
+        for p, gp, mo, ve in zip(P, [gz.T @ x, gz.sum(0), e.T @ f], M, S):
+            mo += 0.1 * (gp - mo); ve += 0.001 * (gp * gp - ve)
+            p -= lr * mo / (1 - 0.9 ** t) / (np.sqrt(ve / (1 - 0.999 ** t)) + 1e-8)
+        P[2] /= np.linalg.norm(P[2], axis=0)
+        if t % 50 == 0: curve.append(recovered(P[2]))
+    return P, curve
+
+X = batch(20_000) - b_dec
+pca = np.linalg.svd(X, full_matrices=False)[2].T            # d 个主成分方向
+(Pa, ca), (Pb, cb) = train(1), train(2)
+both = (np.abs(V @ Pa[2]).max(1) >= 0.9) & (np.abs(V @ Pb[2]).max(1) >= 0.9)
+assert min(ca[-1], cb[-1]) > recovered(pca) + 0.1    # SAE 能找到 PCA 找不到的方向
+Z = X[:2000] @ Pa[0].T + Pa[1]
+F = np.where(Z >= np.partition(Z, -k, 1)[:, [-k]], np.maximum(Z, 0), 0)
+ev = 1 - ((F @ Pa[2].T - X[:2000]) ** 2).sum() / (X[:2000] ** 2).sum()
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.4), height_ratios=(1, 1.1))
+steps = np.arange(1, len(ca) + 1) * 50
+ax.plot(steps, ca, label="SAE，种子 1"); ax.plot(steps, cb, label="SAE，种子 2")
+ax.axhline(recovered(pca), color="grey", ls="--", lw=1, label=f"PCA，{d} 个主成分")
+ax.set(ylim=(0, 1.02), xlabel="训练步数", ylabel="被恢复的方向比例",
+       title=f"{m} 个特征共用 {d} 维；SAE 解释 {ev:.0%} 的方差")
+ax.legend(fontsize=9)
+C = np.abs(V @ Pa[2])
+cols = np.argsort(C.argmax(0) + (C.max(0) < 0.9) * m, kind="stable")   # 已匹配的潜变量排在前面
+bx.imshow(C[:, cols], cmap="Blues", vmin=0, vmax=1, aspect="auto")
+bx.set(xlabel="SAE 潜变量（种子 1），已匹配的在前", ylabel="真实特征",
+       title="真实方向与解码器列之间的 |cos|")
+bx.grid(False)
+fig.tight_layout()
+print(f"余弦 >= 0.9 的恢复比例：种子 1 为 {ca[-1]:.0%}，种子 2 为 {cb[-1]:.0%}，两者共同 {both.mean():.0%}，"
+      f"PCA 为 {recovered(pca):.0%}")
+```
+::::
+
 ## 让研究可复现
 
 工作单位应是一项 `InterpretabilityStudy`，不是一张孤立的特征截图。最小留存记录如下：

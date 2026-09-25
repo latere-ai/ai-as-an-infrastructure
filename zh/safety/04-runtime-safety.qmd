@@ -87,6 +87,67 @@ $$
 
 校准、假阳性率、假阴性率和审查率应按类别、语言和重要用户群体报告，而不能只给全局平均值。阈值是在一份固定的数据样本上选定的。分布偏移、混淆和自适应攻击都会让线上流量偏离这份样本，可能使选定的阈值失效，因此发布评估既要包含普通流量，也要包含用于测量过度拒绝（因与有害请求相似而错误拒绝无害请求）的对照案例 [@rottger2024xstest] 和私有对抗测试集。阈值变化也是策略变化，应当采用与代码相同的审查和回滚纪律。
 
+阈值本身也是从这份固定样本得到的估计。下面的单元格用 400 个已标注的合规内容和 400 个已标注的违规内容设定阈值：合规内容的分数服从 $\mathcal N(0,1)$，违规内容服从 $\mathcal N(2.5,1)$，目标是阻止的合规内容不超过 1%，放行的违规内容不超过 5%。直接取经验上的第 99 和第 5 百分位数，在 2,000 次重复校准中只有 26% 在线上流量里同时达到两项目标，因为每个分位数大约有一半的机会落在错误一侧。改用二项分布选择顺序统计量，让每项目标失守的概率不超过 5%，就有 95% 的校准同时达标，单元格断言这一比例至少为 90%。代价是更宽的审查区间，已标注数据越少越明显：每类只有 100 个样本时，没有任何顺序统计量能保证 1% 的阻止率，于是不再自动阻止任何内容。这项保证只对校准时的分布成立。如果上线后违规内容的分数像遭到混淆时那样下降 0.4，只有 7% 的校准仍满足漏放目标，被放行违规内容比例的中位数从 3% 升到 7%。把 `shift` 改为 `0.8`，这个比例会升到 15%。
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from math import lgamma, log, erf, sqrt
+
+rng = np.random.default_rng(0)
+n, trials, sep = 400, 2000, 2.5       # 每类的已标注样本数、重复校准次数、两类分数的间隔
+fpr_max, miss_max, delta = 0.01, 0.05, 0.05   # 阻止不超过 1% 的合规内容，放行不超过 5% 的违规内容，置信度 95%
+shift = 0.4                           # 混淆：上线后违规内容的分数下降这么多；可改为 0.8
+Phi = np.vectorize(lambda x: 0.5 * (1 + erf(x / sqrt(2))))
+
+def rank(m, a):                       # 满足 Pr[Binomial(m, a) < r] <= delta 的最大 r
+    j, lg = np.arange(m + 1), np.array([lgamma(i + 1) for i in range(m + 1)])
+    cdf = np.cumsum(np.exp(lg[m] - lg - lg[::-1] + j * log(a) + (m - j) * log(1 - a)))
+    return int(np.searchsorted(cdf, delta, side="right"))
+
+def thresholds(m, reps, guarantee):   # 合规内容的分数 ~ N(0, 1)，违规内容 ~ N(sep, 1)
+    c = np.sort(rng.normal(0, 1, (reps, m)), 1)
+    v = np.sort(rng.normal(sep, 1, (reps, m)), 1)
+    if not guarantee:                 # 经验分位数
+        return v[:, int(miss_max * m)], c[:, int((1 - fpr_max) * m)]
+    rb, ra = rank(m, fpr_max), rank(m, miss_max)   # 带二项保证的顺序统计量
+    return v[:, ra - 1], (c[:, m - rb] if rb else np.full(reps, np.inf))
+
+res = {}
+for g in (False, True):
+    t_allow, t_block = thresholds(n, trials, g)
+    fpr = 1 - Phi(t_block)            # 线上流量中被阻止的合规内容
+    res[g] = fpr, Phi(t_allow - sep), Phi(t_allow - sep + shift)   # 被放行的违规内容
+ok = {g: ((f <= fpr_max) & (mi <= miss_max)).mean() for g, (f, mi, _) in res.items()}
+assert ok[True] >= 1 - 2 * delta and ok[False] < 0.5   # 保证成立；经验分位数经常失守
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.2))
+for k, (g, idx, label) in enumerate([(False, 1, "经验分位数"), (True, 1, "二项保证"),
+                                     (True, 2, f"二项保证，分数下移 {shift}")]):
+    f, mi = res[g][0], res[g][idx]
+    inside = ((f <= fpr_max) & (mi <= miss_max)).mean()
+    ax.scatter(100 * f, 100 * mi, s=4, alpha=0.35, color=f"C{k}", label=f"{label}：{inside:.0%} 同时达标")
+ax.axvline(100 * fpr_max, color="grey", ls="--", lw=1); ax.axhline(100 * miss_max, color="grey", ls="--", lw=1)
+ax.set(xlim=(0, 3), ylim=(0, 16), xlabel="被阻止的合规内容（%）", ylabel="被放行的违规内容（%）",
+       title=f"{trials} 次校准，每类 {n} 个已标注样本")
+ax.legend(fontsize=9, markerscale=3, loc="upper right")
+sizes = [100, 200, 400, 800, 1600, 3200]
+for k, g in enumerate((False, True)):
+    load = []
+    for m in sizes:
+        t_allow, t_block = thresholds(m, 200, g)
+        load.append(np.median(Phi(t_block) - Phi(t_allow)))   # 送去人工审查的合规内容
+    bx.plot(sizes, 100 * np.array(load), "o-", color=f"C{k}", label=["经验分位数", "二项保证"][k])
+bx.set(xscale="log", xticks=sizes, xticklabels=sizes, xlabel="每类的已标注样本数", ylabel="进入审查的合规内容（%）",
+       title="样本少时，保证要以审查负担为代价")
+bx.minorticks_off(); bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"两项目标同时达标：经验分位数为 {ok[False]:.0%} 的校准，二项保证为 {ok[True]:.0%}；"
+      f"分数下移 {shift} 后，只有 {(res[True][2] <= miss_max).mean():.0%} 仍满足漏放目标")
+```
+::::
+
 失效方式取决于实际效果。为低风险文本分类时发生超时，可以返回有界拒绝或降级响应。特权工具产生效果之前则必须在故障时关闭：所有必要检查返回有效决定之前，不得提交任何外部动作。
 
 ## 提示注入改变了威胁模型

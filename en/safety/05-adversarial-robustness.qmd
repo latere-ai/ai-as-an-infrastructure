@@ -95,6 +95,95 @@ some optimized prompts cross model boundaries, not that every suffix transfers t
 model. Black-box methods instead use target queries, response scores, or a separate attack
 model; their query budget is part of the result.
 
+The following cell shows the mechanism on a toy guard with random weights:
+1,000 token embeddings, attention pooling, and a small MLP whose score flags a
+sequence above 0. A 20-token request that the guard flags gets a 4-token
+suffix. At each step the GCG search computes the gradient of the score with
+respect to the one-hot suffix tokens, samples 32 single-token swaps among the
+16 most promising tokens per position, evaluates them, and keeps the best;
+random search evaluates 32 random swaps instead. Over eight restarts GCG gets
+past the guard in a median of 128 queries and random search in about 1,650,
+and the cell asserts a gap of at least a factor of two. The lower plot shows
+why the gradient helps although it is only a linear approximation: across all
+1,000 tokens at one position it underestimates every change but ranks the
+swaps, with correlation 0.71, and its top 16 include the largest drops. Set
+`L = 8`: the longer suffix gives random search more room, and its median falls
+to about 620 queries against 144 for GCG.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+V, dm, H, B, steps = 1000, 16, 32, 32, 60  # vocabulary, width, hidden units, candidates per step, steps
+L = 4                                 # adversarial suffix length; try 8
+topk = 16                             # GCG: tokens kept per position from the gradient
+E = rng.normal(size=(V, dm)); q = rng.normal(size=dm) * 0.3
+W1 = rng.normal(size=(H, dm)) / 3; w2 = rng.normal(size=H)
+
+def score(T):                         # toy guard: attention pooling, then an MLP; flags when score > 0
+    X = E[T]; a = np.exp(X @ q); a /= a.sum(-1, keepdims=True)
+    return np.tanh((a[..., None] * X).sum(-2) @ W1.T) @ w2
+
+single = np.tanh(E @ W1.T) @ w2
+request = np.argsort(-single)[:20]    # 20 tokens the guard flags on their own
+
+def grad(T):                          # d score / d one-hot, rows = suffix positions
+    X = E[T]; a = np.exp(X @ q); a /= a.sum(); h = a @ X
+    gh = W1.T @ (w2 * (1 - np.tanh(W1 @ h) ** 2))
+    ge = a[:, None] * gh + a[:, None] * np.outer((X - h) @ gh, q)   # d score / d e_i
+    return ge[-L:] @ E.T
+
+def attack(seed, use_grad):
+    g = np.random.default_rng(seed)
+    T = np.concatenate([request, g.integers(0, V, L)])
+    trace = [score(T)]
+    for _ in range(steps):
+        pos = g.integers(0, L, B)
+        if use_grad:                  # sample swaps among the most promising tokens per position
+            tok = np.argsort(grad(T), 1)[pos, g.integers(0, topk, B)]
+        else:
+            tok = g.integers(0, V, B)
+        C = np.repeat(T[None], B, 0); C[np.arange(B), len(request) + pos] = tok
+        s = score(C)
+        if s.min() < trace[-1]: T = C[s.argmin()]
+        trace.append(min(trace[-1], s.min()))
+    return np.array(trace)
+
+gcg = np.array([attack(s, True) for s in range(8)])
+rnd = np.array([attack(s, False) for s in range(8)])
+queries = np.arange(steps + 1) * B
+first = lambda tr: np.array([queries[np.argmax(t < 0)] if (t < 0).any() else np.inf for t in tr])
+assert np.all(np.diff(gcg, axis=1) <= 0) and np.median(first(gcg)) < np.median(first(rnd)) / 2
+
+T0 = np.concatenate([request, rng.integers(0, V, L)])
+C = np.repeat(T0[None], V, 0); C[:, -1] = np.arange(V)          # every token at the last position
+pred = grad(T0)[-1] - grad(T0)[-1][T0[-1]]                      # first-order change in score
+actual = score(C) - score(T0)
+r = np.corrcoef(pred, actual)[0, 1]
+assert r > 0.5
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.0))
+for k, (tr, name) in enumerate([(gcg, "gradient-guided (GCG)"), (rnd, "random search")]):
+    ax.plot(queries, np.median(tr, 0), color=f"C{k}", label=f"{name}: median {np.median(first(tr)):.0f} queries")
+    ax.fill_between(queries, *np.percentile(tr, [25, 75], 0), color=f"C{k}", alpha=0.2, lw=0)
+ax.axhline(0, color="grey", ls="--", lw=1)
+ax.set(xlabel="guard evaluations (queries)", ylabel="guard score (flag above 0)",
+       title=f"Suffix of {L} tokens on a toy guard, 8 restarts")
+ax.legend(fontsize=9)
+top = np.argsort(pred)[:topk]         # the candidates GCG samples from at this position
+bx.scatter(pred, actual, s=6, alpha=0.4, color="C0", label="all tokens")
+bx.scatter(pred[top], actual[top], s=14, color="C1", label=f"top {topk} by gradient")
+bx.set(xlabel="predicted change from the gradient", ylabel="actual change in score",
+       title=f"The gradient ranks swaps, r = {r:.2f}, but underestimates them")
+bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"queries to get past the guard (median of 8): GCG {np.median(first(gcg)):.0f}, "
+      f"random search {np.median(first(rnd)):.0f}; gradient-actual correlation {r:.2f}")
+```
+::::
+
 **Many-shot attacks** fill a long context with fabricated demonstrations in which the
 assistant complies, then append the behavior under test. Anthropic reported that attack
 effectiveness increased approximately as a power law with the number of demonstrations in

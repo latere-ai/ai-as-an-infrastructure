@@ -321,6 +321,78 @@ A detector may retain confidence after one edit and lose it after another.
 Absence of a detectable watermark is not proof of human authorship; the text
 may come from a nonparticipating generator, be too short, or have been changed.
 
+The following cell implements the green-list scheme on a toy language model
+with a 200-token vocabulary. At each step a keyed hash of the previous token
+marks a quarter of the vocabulary green, $\gamma=0.25$, and generation adds
+`delta = 1.0` to the green logits. The detector counts green tokens $G$ among
+the $t$ scored tokens and computes $z=(G-\gamma t)/\sqrt{t\gamma(1-\gamma)}$.
+The cell asserts that unwatermarked text gives $z$ with mean near 0 and
+standard deviation near 1, the null that the threshold $z\ge4$ relies on.
+Watermarked text crosses the threshold after about 50 tokens, and every text is
+flagged by 200. Replacing 30% of the tokens at random leaves 39% flagged at 200
+tokens, because a replacement changes its own green status and reseeds the
+next token's list; the cell asserts that the green excess falls as
+$(1-\varepsilon)^2$ with edit rate $\varepsilon$. Set `delta = 2.0` and the
+edited texts are flagged about as reliably as the unedited ones were.
+
+:::: {.runnable}
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+rng = np.random.default_rng(0)
+V, T, docs = 200, 300, 200            # vocabulary, tokens per text, texts per condition
+gamma = 0.25                          # share of the vocabulary on the green list
+delta = 1.0                           # logit bias on green tokens; try 2.0
+z0 = rng.normal(0, 2, V)              # next-token logits: a shifted copy of z0 per previous token
+vocab = np.arange(V)
+
+def green(prev, tok):                 # keyed pseudo-random green list, reseeded by the previous token
+    return (prev * 7919 + tok * 104729 + 12345) * 2654435761 % 2**32 < gamma * 2**32
+
+def generate(bias):
+    X = np.zeros((docs, T + 1), dtype=np.int64); X[:, 0] = rng.integers(0, V, docs)
+    for t in range(T):
+        prev = X[:, t, None]
+        logit = z0[(vocab + prev * 37) % V] + bias * green(prev, vocab)
+        X[:, t + 1] = np.argmax(logit + rng.gumbel(size=logit.shape), 1)   # Gumbel-max sampling
+    return X
+
+def zscores(X):                       # z after each scored token: (G_t - gamma t) / sqrt(t gamma (1 - gamma))
+    G = np.cumsum(green(X[:, :-1], X[:, 1:]), 1)
+    t = np.arange(1, T + 1)
+    return (G - gamma * t) / np.sqrt(t * gamma * (1 - gamma))
+
+def edit(X, eps):                     # replace a share eps of the tokens with random ones
+    return np.where(rng.random(X.shape) < eps, rng.integers(0, V, X.shape), X)
+
+W, H = generate(delta), generate(0.0)
+zh = zscores(H)[:, -1]
+assert abs(zh.mean()) < 0.2 and abs(zh.std() - 1) < 0.15      # unwatermarked text: z ~ N(0, 1)
+excess = lambda X: green(X[:, :-1], X[:, 1:]).mean() - gamma
+eps = np.linspace(0, 0.5, 6)
+kept = np.array([excess(edit(W, e)) for e in eps]) / excess(W)
+assert np.abs(kept - (1 - eps) ** 2).max() < 0.05              # an edit also resets the next token's list
+
+fig, (ax, bx) = plt.subplots(2, 1, figsize=(5.6, 7.0))
+t = np.arange(1, T + 1)
+for k, (X, name) in enumerate([(W, "watermarked"), (edit(W, 0.3), "watermarked, 30% of tokens replaced"), (H, "no watermark")]):
+    z = zscores(X)
+    ax.plot(t, np.median(z, 0), color=f"C{k}", label=f"{name}: {(z[:, 199] >= 4).mean():.0%} flagged at 200")
+    ax.fill_between(t, *np.percentile(z, [10, 90], 0), color=f"C{k}", alpha=0.2, lw=0)
+ax.axhline(4, color="grey", ls="--", lw=1)
+ax.set(xlabel="tokens scored", ylabel="detector z-score", title="z grows with the square root of length")
+ax.legend(fontsize=9, loc="upper left")
+bx.plot(eps, (1 - eps) ** 2, color="grey", lw=1, label="(1 - edit rate)²")
+bx.plot(eps, kept, "o", color="C1", label="simulated")
+bx.set(xlabel="share of tokens replaced", ylabel="green excess kept", title="Each replacement costs two scored tokens")
+bx.legend(fontsize=9)
+fig.tight_layout()
+print(f"green share: {gamma + excess(W):.3f} watermarked, {gamma + excess(H):.3f} without; "
+      f"unwatermarked z mean {zh.mean():+.2f}, sd {zh.std():.2f}")
+```
+::::
+
 SynthID-Text is a production example with a different sampling construction from
 the original green-list scheme, which uses a secret key to select a subset of
 the vocabulary, the green list, at each step and biases generation toward it.
