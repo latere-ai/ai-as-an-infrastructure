@@ -57,6 +57,7 @@ export interface ChapterData {
   sourcePath: string; // repo-relative .qmd behind this page, e.g. "en/index.qmd"
   description: string; // meta description (first paragraph, for SEO snippets)
   toc: NavPart[]; // full-book nav
+  landingHtml?: string; // home page only: title spread and contents (landing/landing.ts)
 }
 
 export interface ReaderSettings {

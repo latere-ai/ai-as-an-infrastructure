@@ -13,6 +13,7 @@ import { Comments } from "./comments.tsx";
 import { BookmarkButton, ChapterStats, Contained, HeaderAuth } from "./account.tsx";
 import { REPO_URL, editUrl, issueUrl } from "./repo.ts";
 import { pageUrl } from "./site.ts";
+import { Landing } from "./landing/Landing.tsx";
 
 type Strings = {
   sidebar: string; onThisPage: string; settings: string; search: string;
@@ -419,6 +420,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
 
         <main className="rdr-main">
           <article className="rdr-col" style={{ fontFamily: bodyFont }}>
+            {chapter.landingHtml && <Landing html={chapter.landingHtml} />}
             <ChapterOpener chapter={chapter} t={t} />
             {articleBody}
             <PrevNextNav chapter={chapter} t={t} />

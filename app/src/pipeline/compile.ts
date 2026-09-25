@@ -3,6 +3,7 @@
 // from the book model.
 
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { Book, BookChapter } from "./book.ts";
 import { navFor, prevNext } from "./book.ts";
@@ -15,6 +16,7 @@ import type { GraphvizInstance } from "./diagrams.ts";
 import { renderGlossaryPage, renderTechniqueIndex, type Glossary, type GlossFirstUseMap } from "./glossary.ts";
 import { formatDate, loadReviewDates, reviewKey, type ReviewDates } from "./dates.ts";
 import type { ChapterData, Lang } from "../types.ts";
+import { renderLanding } from "../landing/landing.ts";
 
 export interface CompileContext {
   bib: Bibliography;
@@ -188,6 +190,7 @@ export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext)
     sourcePath: ch.srcRel,
     description: metaDescription(html),
     toc,
+    ...(ch.href === "index" ? { landingHtml: renderLanding(book, join(book.langDir, "..")) } : {}),
   };
 }
 
