@@ -10,6 +10,19 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- The header and sidebar moved with the page when it bounced at the top or
+  bottom of a chapter. They are now fixed to the window, so only the page
+  bounces.
+
+### Changed
+
+- "On this page" floats over the top right of the page instead of taking a
+  column, so opening or closing it no longer moves the text. Where the full
+  card would cover the ends of the text lines, it shows only its title and
+  opens on hover, keyboard focus or a tap.
+
 ## v0.9.1 - 2026-09-25
 
 ### Changed
