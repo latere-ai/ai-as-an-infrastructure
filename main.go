@@ -81,17 +81,16 @@ func init() {
 			return nil
 		}
 		// Streamed through the hash rather than read whole: the book is over
-		// 100 MB, and a copy per file would all be garbage at startup.
-		f, e := book.Open(p)
-		if e != nil {
-			return nil
-		}
-		h := sha256.New()
-		if _, e = io.Copy(h, f); e == nil {
-			etags[p] = `"` + hex.EncodeToString(h.Sum(nil)[:16]) + `"`
-		}
-		if e = f.Close(); e != nil {
-			slog.Error("closing an embedded file", "path", p, "err", e)
+		// 100 MB, and a copy per file would all be garbage at startup. A file
+		// that cannot be opened or read gets no ETag.
+		if f, e := book.Open(p); e == nil {
+			h := sha256.New()
+			if _, ce := io.Copy(h, f); ce == nil {
+				etags[p] = `"` + hex.EncodeToString(h.Sum(nil)[:16]) + `"`
+			}
+			if ce := f.Close(); ce != nil {
+				slog.Error("closing an embedded file", "path", p, "err", ce)
+			}
 		}
 		return nil
 	})
@@ -313,25 +312,25 @@ func writeFile(w http.ResponseWriter, r *http.Request, name string, immutable bo
 		}
 	}
 
+	ctx := r.Context()
 	f, err := book.Open(src)
 	if err != nil {
-		slog.ErrorContext(r.Context(), "opening an embedded file", "path", src, "err", err)
+		slog.ErrorContext(ctx, "opening an embedded file", "path", src, "err", err)
 		return false
 	}
-	defer func() {
-		if err := f.Close(); err != nil {
-			slog.ErrorContext(r.Context(), "closing an embedded file", "path", src, "err", err)
-		}
-	}()
-	rs, ok := f.(io.ReadSeeker)
-	if !ok {
-		slog.ErrorContext(r.Context(), "embedded file is not seekable", "path", src)
-		return false
+	served := false
+	if rs, ok := f.(io.ReadSeeker); ok {
+		// ServeContent answers If-None-Match against the ETag set above, sets
+		// Content-Length, and copies through a small buffer.
+		http.ServeContent(w, r, "", time.Time{}, rs)
+		served = true
+	} else {
+		slog.ErrorContext(ctx, "embedded file is not seekable", "path", src)
 	}
-	// ServeContent answers If-None-Match against the ETag set above, sets
-	// Content-Length, and copies through a small buffer.
-	http.ServeContent(w, r, "", time.Time{}, rs)
-	return true
+	if err := f.Close(); err != nil {
+		slog.ErrorContext(ctx, "closing an embedded file", "path", src, "err", err)
+	}
+	return served
 }
 
 func contentType(name string) string {
