@@ -10,6 +10,12 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- A release no longer takes the book offline. The new server starts and
+  becomes ready before the old one stops; before, each release left about
+  25 seconds in which every page answered 503.
+
 ## v0.10.7 - 2026-09-26
 
 ### Changed
