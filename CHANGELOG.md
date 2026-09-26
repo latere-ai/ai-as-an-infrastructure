@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.8 - 2026-09-26
+
 ### Fixed
 
 - A release no longer takes the book offline. The new server starts and
