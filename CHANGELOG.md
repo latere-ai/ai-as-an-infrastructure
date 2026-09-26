@@ -10,6 +10,24 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Added
+
+- Every page, in both languages, has a Markdown version at its address plus
+  `.md`: `/en/foundations/scaling-laws.md` for a chapter, `/en/index.md` for
+  the home page. It is written for AI agents and other tools that read text
+  rather than render the reader. It opens with the page's title, address,
+  part, review date, license, and the address of the same page in the other
+  language. Equations come as TeX, tables as Markdown tables, callouts as
+  quoted notes, runnable cells as code blocks, and each figure as its
+  numbered caption linked to the figure on the page. Every link is a full
+  address, so the text reads the same when copied out of the site. The home
+  page's version lists the whole book's contents.
+- `/agentweb.json` lists every page in reading order, English first, with
+  its title, description, part, review date, the address of its Markdown
+  version, and the same page in the other language. It is the index the
+  site's robots.txt, sitemap, llms.txt and Markdown responses will be
+  generated from.
+
 ### Fixed
 
 - Every link on every page is now written from the site root
@@ -17,6 +35,9 @@ committed: the commit log already holds that.
   crawler that resolved relative links against the address it had asked for,
   not the page it received, turned each link into a new invented address;
   a root-relative link names the same page from anywhere.
+- Eight reference titles showed a fragment of markup, such as
+  `<span class="nocase">TPU v4</span>`, around a word the bibliography
+  protects from lowercasing. They now show the word alone.
 
 ## v0.10.5 - 2026-09-26
 
