@@ -25,8 +25,22 @@ committed: the commit log already holds that.
 - `/agentweb.json` lists every page in reading order, English first, with
   its title, description, part, review date, the address of its Markdown
   version, and the same page in the other language. It is the index the
-  site's robots.txt, sitemap, llms.txt and Markdown responses will be
-  generated from.
+  site's robots.txt, sitemap, llms.txt and Markdown responses are generated
+  from.
+- The site states how crawlers and AI tools may use the book, and gives them
+  the book in a form they read directly. `/robots.txt` allows search indexing
+  and use in AI answers and refuses AI training, in the Content Signals
+  format, with the policy text that makes the refusal a reservation of rights
+  under EU copyright law. `/llms.txt` and `/zh/llms.txt` list every page of
+  their edition with its description and a link to its Markdown version, and
+  `/llms-full.txt` and `/zh/llms-full.txt` hold every page's Markdown in
+  reading order. A tool that asks for Markdown at a page's own address
+  (`Accept: text/markdown`) receives the Markdown version, and every page
+  names that version in its head. `/sitemap.xml` now gives each page's review
+  date. Each page also describes itself in schema.org structured data: the
+  home page as its edition of the book, with author, publisher and license,
+  and every other page as a chapter of it, with its place in the book and the
+  same chapter in the other language.
 
 ### Fixed
 
