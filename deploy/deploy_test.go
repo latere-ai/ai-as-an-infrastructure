@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -27,6 +28,12 @@ var injectedByOperator = []string{
 type deployment struct {
 	Kind string `yaml:"kind"`
 	Spec struct {
+		Strategy struct {
+			RollingUpdate struct {
+				MaxSurge       *int `yaml:"maxSurge"`
+				MaxUnavailable *int `yaml:"maxUnavailable"`
+			} `yaml:"rollingUpdate"`
+		} `yaml:"strategy"`
 		Template struct {
 			Spec struct {
 				Containers []struct {
@@ -89,4 +96,26 @@ func TestDeploymentLeavesTelemetryToTheOperator(t *testing.T) {
 			}
 		}
 	}
+}
+
+// A release must not take the book offline. With one replica, a rollout that
+// removes the old pod before the new one is ready (maxUnavailable 1,
+// maxSurge 0) left the ingress without an endpoint for about 25 seconds of
+// 503s on every release.
+func TestRolloutKeepsTheBookServing(t *testing.T) {
+	ru := loadDeployment(t).Spec.Strategy.RollingUpdate
+	if ru.MaxUnavailable == nil || *ru.MaxUnavailable != 0 {
+		t.Errorf("maxUnavailable = %s, want 0 so the old pod serves until the new one is ready", show(ru.MaxUnavailable))
+	}
+	if ru.MaxSurge == nil || *ru.MaxSurge < 1 {
+		t.Errorf("maxSurge = %s, want at least 1 so a new pod can start beside the old one", show(ru.MaxSurge))
+	}
+}
+
+// show prints an optional manifest integer, or "unset".
+func show(v *int) string {
+	if v == nil {
+		return "unset"
+	}
+	return strconv.Itoa(*v)
 }
