@@ -3,7 +3,8 @@
 // hydration bundle (which carries the Pyodide runnable, viz, and figure
 // runtimes), and writes a search index. Every page also gets a Markdown twin
 // beside its HTML (twin.ts) for agents and tools that read text, and every
-// page is listed in the agentweb.json page index (agentweb.ts).
+// page is listed in the agentweb.json page index (agentweb.ts), from which the
+// server generates robots.txt, sitemap.xml and llms.txt.
 
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
@@ -16,7 +17,7 @@ import { loadGlossary } from "./pipeline/glossary.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDocs } from "./pipeline/search.ts";
-import { BASE, ogImageUrl } from "./site.ts";
+import { ogImageUrl } from "./site.ts";
 import { markdownTwin, twinInput } from "./twin.ts";
 import { agentwebIndex, agentwebPage, type AgentwebPage } from "./agentweb.ts";
 import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync, readdirSync } from "node:fs";
@@ -53,7 +54,6 @@ const hrefsByLang: Record<Lang, Set<string>> = { en: new Set(books.en.chapters.m
 
 let pageCount = 0;
 const agentPages: AgentwebPage[] = [];
-const pathsByLang: Record<Lang, Set<string>> = { en: new Set(), zh: new Set() };
 // English share-card text keyed by chapter href (shared across languages). Filled
 // on the en pass and read on the zh pass so zh pages unfurl an English card.
 // Relies on en rendering before zh below; the zh lookup falls back gracefully.
@@ -108,32 +108,18 @@ for (const lang of ["en", "zh"] as Lang[]) {
     writeFileSync(join(langOut, ch.href + ".md"), markdownTwin(twin));
     agentPages.push(agentwebPage(twin));
     searchDocs.push(...buildSearchDocs(data, ch.href, lang));
-    pathsByLang[lang].add(ch.href === "index" ? "" : ch.href); // clean path for sitemap
     pageCount++;
   }
   writeFileSync(join(langOut, "search.json"), JSON.stringify(searchDocs));
   console.log(`  ${lang}: ${book.chapters.length} pages`);
 }
 
-// Root artifacts (served from _book root): favicon, robots, hreflang sitemap.
+// Root artifacts (served from _book root): the favicon, the page index the
+// server's agent-facing endpoints are generated from, and the not-found page.
 cpSync(join(repoRoot, "app", "static", "favicon.svg"), join(outRoot, "favicon.svg"));
-writeFileSync(join(outRoot, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${BASE}/sitemap.xml\n`);
-// The page index the server's agent-facing endpoints are generated from.
 writeFileSync(join(outRoot, "agentweb.json"), JSON.stringify(agentwebIndex(agentPages, { en: books.en.title, zh: books.zh.title }), null, 2) + "\n");
 // Served by the Go server, status 404, for content URLs that match nothing.
 writeFileSync(join(outRoot, "404.html"), notFoundPage({ css }));
-
-const allPaths = [...new Set([...pathsByLang.en, ...pathsByLang.zh])].sort();
-const loc = (lang: string, p: string) => `${BASE}/${lang}/${p}`;
-const sitemap = allPaths.map((p) => {
-  const langs = (["en", "zh"] as Lang[]).filter((l) => pathsByLang[l].has(p));
-  const alts = langs.map((l) => `    <xhtml:link rel="alternate" hreflang="${l === "zh" ? "zh-Hans" : "en"}" href="${loc(l, p)}"/>`);
-  if (langs.includes("en")) alts.push(`    <xhtml:link rel="alternate" hreflang="x-default" href="${loc("en", p)}"/>`);
-  // one <url> per existing language version, each carrying the full alternate set
-  return langs.map((l) => `  <url>\n    <loc>${loc(l, p)}</loc>\n${alts.join("\n")}\n  </url>`).join("\n");
-}).join("\n");
-writeFileSync(join(outRoot, "sitemap.xml"),
-  `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">\n${sitemap}\n</urlset>\n`);
 
 // Pages reference /og/<href>.png, generated on demand by `make og` and vendored.
 // Warn (don't fail) if any are missing so a new/renamed chapter doesn't silently

@@ -52,6 +52,12 @@ func TestRouteOfPathShapes(t *testing.T) {
 		// With comments off, the API paths are ordinary unknown content.
 		{"/api/me", unknownRoute},
 		{"/login", unknownRoute},
+		// With the agent-facing handlers unset, their paths are unknown
+		// content too: the build writes none of these files.
+		{"/robots.txt", unknownRoute},
+		{"/sitemap.xml", unknownRoute},
+		{"/llms.txt", unknownRoute},
+		{"/zh/llms-full.txt", unknownRoute},
 	})
 }
 
@@ -68,8 +74,6 @@ func TestRouteOfServedPages(t *testing.T) {
 		{"/zh/reasoning/inference-time-scaling/", "/zh/{part}/{chapter}"},
 		{"/en/search.json", "/en/search.json"},
 		{"/agentweb.json", "/agentweb.json"},
-		{"/robots.txt", "/robots.txt"},
-		{"/sitemap.xml", "/sitemap.xml"},
 		// A Markdown twin is named after its page's template.
 		{"/en/foundations/scaling-laws.md", "/en/{part}/{chapter}.md"},
 		{"/en/foundations.md", "/en/{page}.md"},

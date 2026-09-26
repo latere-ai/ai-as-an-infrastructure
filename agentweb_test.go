@@ -122,6 +122,19 @@ func readBook(t *testing.T, name string) []byte {
 	return b
 }
 
+// The server writes robots.txt and sitemap.xml from the page index. A copy
+// left in the build output would be served in their place whenever the
+// handlers are not installed, and would pass the route tests for the wrong
+// reason.
+func TestBuildLeavesRobotsAndSitemapToServer(t *testing.T) {
+	requireBook(t)
+	for _, name := range []string{"robots.txt", "sitemap.xml"} {
+		if exists(name) {
+			t.Errorf("the build wrote %s; the server generates it from %s", name, agentIndexFile)
+		}
+	}
+}
+
 // A missing or invalid index must stop the server at startup rather than
 // leave the agent-facing paths answering 404.
 func TestLoadAgentWebRefusesBadIndex(t *testing.T) {
