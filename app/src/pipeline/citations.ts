@@ -55,7 +55,10 @@ function addEntries(entries: Map<string, BibEntry>, content: string): void {
       key: e.key,
       authors,
       year,
-      title: String(f.title ?? "").replace(/[{}]/g, ""),
+      // The parser marks a braced, case-protected span as
+      // <span class="nocase">; titles are escaped as text, so keep the span's
+      // words and drop the markup.
+      title: String(f.title ?? "").replace(/<span class="nocase">([\s\S]*?)<\/span>/g, "$1").replace(/[{}]/g, ""),
       publisher: f.publisher ? String(f.publisher) : f.journal ? String(f.journal) : undefined,
       url: f.url ? String(f.url) : f.eprint ? `https://arxiv.org/abs/${f.eprint}` : undefined,
       note: (f.note ? String(f.note) : undefined) ?? prev?.note,

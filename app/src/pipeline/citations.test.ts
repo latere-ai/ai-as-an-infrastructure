@@ -63,6 +63,24 @@ test("an edited volume (editor, no author) cites by editor name, not the bibtex 
   expect(cite).not.toContain(">beyer2016sre"); // the key must not leak into the text
 });
 
+test("a brace-protected title word renders as text, without the parser's case markup", () => {
+  // The bibtex parser wraps a braced span ({TPU v4}) in <span class="nocase">
+  // to protect it from sentence casing; the escaped title used to show that
+  // markup as literal text on the references page.
+  const path = join(tmpdir(), `cite-nocase-${process.pid}.bib`);
+  writeFileSync(path, `@article{jouppi2023tpu,
+  title  = {{TPU v4}: An Optically Reconfigurable Supercomputer},
+  author = {Jouppi, Norman},
+  year   = {2023},
+}\n`);
+  const bib = loadBibliography(path);
+  bib.cited.add("jouppi2023tpu");
+  const html = renderBibliography(bib);
+  expect(bib.entries.get("jouppi2023tpu")!.title).not.toContain("<");
+  expect(html).toContain("TPU v4");
+  expect(html).not.toContain("nocase");
+});
+
 test("a multi-word corporate author keeps its whole name, not the last token", () => {
   // Regression: bibtex `{{Google DeepMind}}` parses as a literal name; surname()
   // used to take the last token, citing it as "DeepMind" (and "Face", "AI", …).
