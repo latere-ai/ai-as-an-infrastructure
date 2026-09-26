@@ -52,7 +52,7 @@ export interface ChapterData {
   prev: PrevNext | null;
   next: PrevNext | null;
   langHref: string; // the same page in the other language
-  prefix: string; // "../" * depth, to make lang-root-relative hrefs page-relative
+  prefix: string; // the language root ("/en/"), prepended to lang-root-relative hrefs
   path: string; // own lang-root-relative clean path ("" for home), shared across langs
   sourcePath: string; // repo-relative .qmd behind this page, e.g. "en/index.qmd"
   description: string; // meta description (first paragraph, for SEO snippets)

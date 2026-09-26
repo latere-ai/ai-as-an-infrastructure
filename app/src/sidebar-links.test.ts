@@ -20,8 +20,8 @@ const chapter: ChapterData = {
   headings: [],
   prev: null,
   next: null,
-  langHref: "../zh/",
-  prefix: "",
+  langHref: "/zh/",
+  prefix: "/en/",
   path: "",
   sourcePath: "en/index.qmd",
   description: "Preface.",
@@ -82,7 +82,7 @@ test("sidebar external about links are localized on zh pages", () => {
     chapter: {
       ...chapter,
       lang: "zh",
-      langHref: "../en/",
+      langHref: "/en/",
       crumbChapter: "前言",
       title: "前言",
       toc: [

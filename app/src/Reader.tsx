@@ -342,7 +342,7 @@ export default function Reader({ chapter, initial }: ReaderProps) {
           <Icon d={<><rect x="2" y="3" width="12" height="10" rx="2" /><line x1="6.5" y1="3" x2="6.5" y2="13" /></>} />
         </button>
 
-        <a href={chapter.prefix || "./"} className="rdr-brand">
+        <a href={chapter.prefix} className="rdr-brand">
           <LatereLogo />
           <span style={{ fontFamily: "var(--font-serif)", fontStyle: lang === "zh" ? "normal" : "italic", fontSize: 19, letterSpacing: "-.01em", lineHeight: 1 }}>
             {lang === "zh" ? "AI 基建" : "AI Infra"}
@@ -536,7 +536,7 @@ function SearchModal({ t, lang, current, prefix, onClose }: { t: Strings; lang: 
   }, [sel]);
 
   const hrefFor = (d: SearchDoc) => {
-    const base = d.href === "index" ? (prefix || "./") : `${prefix}${d.href}`;
+    const base = d.href === "index" ? prefix : `${prefix}${d.href}`;
     return d.anchor ? `${base}#${d.anchor}` : base;
   };
 

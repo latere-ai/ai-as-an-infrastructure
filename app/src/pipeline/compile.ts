@@ -28,20 +28,17 @@ export interface CompileContext {
   glossaryFirstUses: GlossFirstUseMap; // first book occurrence for each glossary key
 }
 
-// A chapter href as a clickable link relative to the current page. The index
-// (home) chapter is canonically the lang root, so it links to the directory
-// (prefix, or "./" at depth 0), never "/en/index".
+// A chapter href as a clickable link. The index (home) chapter is canonically
+// the lang root, so it links to the directory (the prefix), never "/en/index".
 function linkHref(href: string, prefix: string): string {
-  return href === "index" ? (prefix || "./") : prefix + href;
+  return href === "index" ? prefix : prefix + href;
 }
 
-// Depth of a chapter's output file relative to the language root, for building
-// the cross-language href (e.g. p1-foundations/06-x → ../zh/p1-.../06-x). The
-// home chapter maps to the other lang's root directory.
+// The same chapter in the other language (e.g. foundations/x → /zh/foundations/x).
+// The home chapter maps to the other lang's root directory.
 function langHrefFor(lang: Lang, href: string): string {
   const other = lang === "en" ? "zh" : "en";
-  const up = "../".repeat(href.split("/").length); // climb out of lang dir
-  return href === "index" ? `${up}${other}/` : `${up}${other}/${href}`;
+  return href === "index" ? `/${other}/` : `/${other}/${href}`;
 }
 
 function chapterWord(lang: string, num: string): string {
@@ -114,7 +111,12 @@ export function reviewedLabel(lang: Lang, srcRel: string): string {
 export function compileChapter(book: Book, ch: BookChapter, ctx: CompileContext): ChapterData {
   let src = readFileSync(ch.qmdPath, "utf8");
   if (book.lang === "zh") src = stripCjkSoftBreaks(src);
-  const prefix = "../".repeat(ch.href.split("/").length - 1); // page depth → "../"*
+  // Links are root-relative ("/en/foundations/x"), so each resolves to the same
+  // page whatever address the page was fetched from and whatever base a client
+  // resolves it against. Page-relative links ("../foundations/x") were resolved
+  // by one crawler against the address it had requested rather than the page
+  // it received, and every such resolution invented a new address.
+  const prefix = `/${book.lang}/`;
   let { html, headings } = renderMarkdown(src, {
     bib: ctx.bib,
     xref: ctx.xref,

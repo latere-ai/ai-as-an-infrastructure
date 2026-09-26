@@ -112,18 +112,20 @@ export function renderLanding(book: Book, repoRoot: string): string {
   const s = STRINGS[lang];
   const release = readRelease(repoRoot);
   const other = lang === "en" ? "zh" : "en";
+  // Root-relative, like every other link in the book: see compile.ts.
+  const root = `/${lang}/`;
 
   const parts = book.parts.filter((p) => !p.single);
   const numbered = parts.flatMap((p) => p.chapters.filter((c) => c.num));
   const back = book.parts.filter((p) => p.single).flatMap((p) => p.chapters).filter((c) => c.href !== "index");
 
   const edition = release
-    ? `<a href="changelog">v${esc(release.version)}</a><span class="lp-sep">${lang === "zh" ? "，" : ", "}</span>${esc(formatDate(release.date, lang))}`
+    ? `<a href="${root}changelog">v${esc(release.version)}</a><span class="lp-sep">${lang === "zh" ? "，" : ", "}</span>${esc(formatDate(release.date, lang))}`
     : "";
   const colophon = [
     edition && `<div><dt>${s.edition}</dt><dd>${edition}</dd></div>`,
     `<div><dt>${s.language}</dt><dd><span class="lp-lang-here">${lang === "en" ? "English" : "中文"}</span><span class="lp-sep" aria-hidden="true"> / </span>`
-      + `<a href="../${other}/" hreflang="${s.otherLang}" lang="${s.otherLang}">${s.langName}</a></dd></div>`,
+      + `<a href="/${other}/" hreflang="${s.otherLang}" lang="${s.otherLang}">${s.langName}</a></dd></div>`,
     `<div><dt>${s.license}</dt><dd><a href="${LICENSE_URL}" rel="license noreferrer" target="_blank">${LICENSE}</a></dd></div>`,
   ].filter(Boolean).join("");
 
@@ -143,12 +145,12 @@ export function renderLanding(book: Book, repoRoot: string): string {
     const nums = p.chapters.filter((c) => c.num).map((c) => c.num);
     const range = nums.length ? s.chapters(nums[0], nums[nums.length - 1]) : "";
     const href = p.intro?.href ?? p.chapters[0]?.href ?? "";
-    return `<li><a href="${esc(href)}"><span class="lp-num">${ROMAN[i] ?? i}</span>`
+    return `<li><a href="${root}${esc(href)}"><span class="lp-num">${ROMAN[i] ?? i}</span>`
       + `<span class="lp-part"><span class="lp-part-title">${esc(partTitle(p.label))}</span>`
       + (range ? `<span class="lp-part-range">${range}</span>` : "")
       + `</span></a></li>`;
   }).join("");
-  const backLinks = back.map((c) => `<a href="${esc(c.href)}">${esc(c.title)}</a>`).join(`<span class="lp-sep" aria-hidden="true"> · </span>`);
+  const backLinks = back.map((c) => `<a href="${root}${esc(c.href)}">${esc(c.title)}</a>`).join(`<span class="lp-sep" aria-hidden="true"> · </span>`);
 
   const contents = `<nav class="lp-contents" id="${CONTENTS_ID}" aria-labelledby="lp-contents-h">`
     + `<div class="lp-contents-head"><h2 id="lp-contents-h">${s.contents}</h2><span>${s.count(parts.length, numbered.length)}</span></div>`

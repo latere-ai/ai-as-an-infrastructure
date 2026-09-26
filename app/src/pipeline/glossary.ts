@@ -117,7 +117,7 @@ export function renderGlossaryPage(gloss: Glossary, used: Set<string>, firstUses
     const lead = lang === "zh" ? esc(e.zh) : enLabel;
     const trail = lang === "zh" ? enLabel : esc(e.zh);
     const first = firstUses.get(e.key);
-    const firstHref = first ? (first.href === "index" ? "./" : first.href) : "";
+    const firstHref = first ? `/${lang}/${first.href === "index" ? "" : first.href}` : "";
     const firstMeta = first
       ? `<div class="rdr-gls-meta">${lang === "zh" ? "首次出现：" : "First occurrence: "}<a href="${escAttr(firstHref)}">${chapterLabel(first)}</a></div>`
       : "";

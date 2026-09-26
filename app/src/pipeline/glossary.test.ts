@@ -17,7 +17,7 @@ const rh: GlossEntry = { key: "reward-hacking", en: "reward hacking", zh: "奖�
 
 test("zh first use expands to 中文（English）, later use is the abbr", () => {
   expect(renderGloss(moe, "zh", true, "../")).toContain("混合专家（MoE）");
-  expect(renderGloss(moe, "zh", true, "../")).toContain('href="../glossary#gls-moe"');
+  expect(renderGloss(moe, "zh", true, "/zh/")).toContain('href="/zh/glossary#gls-moe"');
   expect(renderGloss(moe, "zh", false, "../")).toContain(">MoE<");
   expect(renderGloss(moe, "zh", false, "../")).not.toContain("（");
 });
@@ -49,7 +49,7 @@ test("glossary page lists only used terms, anchored by key", () => {
   expect(html).toContain('id="gls-moe"');
   expect(html).toContain("混合专家");
   expect(html).toContain("首次出现：");
-  expect(html).toContain('href="foundations/transformer-architecture"');
+  expect(html).toContain('href="/zh/foundations/transformer-architecture"');
   expect(html).toContain("第 7 章 · Transformer 架构及其变体");
   expect(html).toContain('<p class="rdr-gls-explain">混合专家（MoE） routes each token to a small subset of experts.</p>');
   expect(html).not.toContain("奖励欺骗"); // not in the used set

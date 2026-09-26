@@ -63,7 +63,10 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const rows = [...data.landingHtml!.matchAll(/<li><a href="([^"]+)"/g)].map((m) => m[1]);
     expect(rows.length).toBe(parts.length);
     const hrefs = new Set(book.chapters.map((c) => c.href));
-    for (const href of rows) expect(hrefs.has(href)).toBe(true);
+    for (const href of rows) {
+      expect(href.startsWith(`/${lang}/`)).toBe(true);
+      expect(hrefs.has(href.slice(lang.length + 2))).toBe(true);
+    }
   });
 }
 

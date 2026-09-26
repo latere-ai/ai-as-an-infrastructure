@@ -79,8 +79,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
   for (const ch of book.chapters) {
     const data = compileChapter(book, ch, ctx);
     const bodyHtml = renderToString(createElement(Reader, { chapter: data }));
-    const depth = ch.href.split("/").length - 1;
-    const clientHref = "../".repeat(depth) + clientEntry;
+    const clientHref = `/${lang}/${clientEntry}`;
     // English-only share card (same image + text for en/zh at this path).
     if (lang === "en") enShare[ch.href] = { title: data.title, description: data.description };
     const en = enShare[ch.href] ?? { title: data.title, description: data.description };

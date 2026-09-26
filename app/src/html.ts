@@ -28,7 +28,7 @@ export function page(opts: {
   chapter: ChapterData;
   bodyHtml: string;
   css: string;
-  clientHref: string; // relative path to the hydration bundle
+  clientHref: string; // root-relative path to the hydration bundle
   // English share-card text (title + description) and image, used verbatim for
   // the Open Graph / Twitter tags so a shared link unfurls an English card even
   // on zh pages. Omitted by the dev server, which falls back to the page itself.

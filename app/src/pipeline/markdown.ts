@@ -28,7 +28,7 @@ export interface RenderContext {
   currentHref: string;
   chapterTitle: string;
   chapterNum: string;
-  prefix: string; // "../" * depth for page-relative hrefs
+  prefix: string; // the language root ("/en/") that page hrefs hang off
   graphviz: GraphvizInstance;
   lang: Lang;
   glossary: Glossary;
@@ -49,11 +49,6 @@ function slugify(s: string): string {
   return s.toLowerCase().trim().replace(/[^\w一-鿿\s-]/g, "").replace(/\s+/g, "-").replace(/-+/g, "-");
 }
 
-// Relative path from a chapter's output file to "<lang>/figures/".
-function figPrefix(currentHref: string): string {
-  const depth = currentHref.split("/").length - 1;
-  return "../".repeat(depth) + "figures/";
-}
 
 function attrValue(tag: string, name: string): string | undefined {
   return tag.match(new RegExp(`\\b${name}="([^"]*)"`))?.[1];
@@ -184,9 +179,9 @@ function collectHeadings(md: MarkdownIt, body: string): { headings: Heading[]; t
 }
 
 // Wrap standalone figure images in <figure> with a numbered caption, and rewrite
-// /figures/ and figures/ paths to the chapter-relative prefix.
+// /figures/ and figures/ paths to the language's figure directory.
 function postProcess(html: string, ctx: RenderContext): string {
-  const prefix = figPrefix(ctx.currentHref);
+  const prefix = `${ctx.prefix}figures/`;
   html = html.replace(/src="\/?figures\//g, `src="${prefix}`);
   // <p>…<img … id="fig-x" … alt="cap" …>…</p>  →  <figure>…<figcaption>
   html = html.replace(/<p>\s*(<img\b[^>]*\bid="(fig-[^"]+)"[^>]*>)\s*<\/p>/g, (_m, img: string, id: string) => {

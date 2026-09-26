@@ -45,7 +45,7 @@ function renderBook(lang: Lang): Page[] {
       currentHref: ch.href,
       chapterTitle: ch.title,
       chapterNum: ch.num,
-      prefix: "../".repeat(ch.href.split("/").length - 1),
+      prefix: `/${lang}/`,
       graphviz,
       lang,
       glossary,
