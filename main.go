@@ -41,8 +41,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	"go.opentelemetry.io/otel/attribute"
 	"latere.ai/x/pkg/authkit/oidc"
 	"latere.ai/x/pkg/otel"
 
@@ -467,10 +465,8 @@ func isProbe(path string) bool {
 // The probes are excluded: Kubernetes polls them every few seconds and they
 // would otherwise be the bulk of the recorded spans.
 //
-// routeOf names every request on both signals. WithRouteTemplate sets the span
-// name and the span's http.route. otelhttp does not read span attributes when
-// it records the request metrics; it reads the labeler in the request context,
-// so the route goes there too, once serve has run.
+// routeOf names every request on both signals: WithRouteTemplate sets the span
+// name and http.route on the span and on the request metrics.
 //
 // Markdown negotiation, when loaded, runs inside the tracing: a page served as
 // its twin is one request with one span, named after the page.
@@ -479,13 +475,7 @@ func newHandler() http.Handler {
 	if agentPages != nil {
 		site = agentPages
 	}
-	labeled := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		site.ServeHTTP(w, r)
-		if l, ok := otelhttp.LabelerFromContext(r.Context()); ok {
-			l.Add(attribute.String("http.route", routeOf(r)))
-		}
-	})
-	return otel.Handler(labeled, "aaai",
+	return otel.Handler(site, "aaai",
 		otel.WithSkip(func(r *http.Request) bool { return isProbe(r.URL.Path) }),
 		otel.WithRouteTemplate(routeOf),
 	)
