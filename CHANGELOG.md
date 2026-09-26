@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.9 - 2026-09-26
+
 ### Fixed
 
 - The last moment of a release no longer fails a request. The old server
