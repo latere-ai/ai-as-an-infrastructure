@@ -1,13 +1,15 @@
 // What the book publishes for agents and tools that read text: a Markdown twin
-// of every page in both languages. Every page of both manifests is compiled
-// with the whole-book context the build uses, and each twin is checked for
-// structure: YAML front matter naming the page, no markup or relative link
-// left in the body, every KaTeX formula back as TeX, every figure as a link to
-// the live page. When a build is present, the files on disk are checked too.
-// None of the checks depends on wording.
+// of every page in both languages, and the agentweb.json page index that lists
+// them. Every page of both manifests is compiled with the whole-book context
+// the build uses, and each twin is checked for structure: YAML front matter
+// naming the page, no markup or relative link left in the body, every KaTeX
+// formula back as TeX, every figure as a link to the live page. The index is
+// checked against the contract the server's agentweb package decodes. When a
+// build is present, the files on disk are checked too. None of the checks
+// depends on wording.
 
 import { expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { loadBook } from "./pipeline/book.ts";
@@ -16,7 +18,8 @@ import { compileChapter } from "./pipeline/compile.ts";
 import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
-import { LICENSE, LICENSE_URL, pageUrl } from "./site.ts";
+import { agentwebIndex, agentwebPage, type AgentwebIndex } from "./agentweb.ts";
+import { BASE, LICENSE, LICENSE_URL, SITE_NAME, pageUrl } from "./site.ts";
 import { markdownTwin, twinInput, type TwinInput } from "./twin.ts";
 import type { Lang } from "./types.ts";
 
@@ -168,4 +171,61 @@ test.skipIf(!built)("the build writes every twin beside its page, precompressed 
     for (const ch of books[lang].chapters) expect(existsSync(join(outRoot, lang, `${ch.href}.md`))).toBe(true);
     expect(existsSync(join(outRoot, lang, "foundations", "scaling-laws.md.gz"))).toBe(true);
   }
+});
+
+// Problems with a page index against the agentweb.json contract. `markdownExists`
+// says whether a twin path resolves to a file.
+function contractProblems(index: AgentwebIndex, markdownExists: (path: string) => boolean): string[] {
+  const problems: string[] = [];
+  const keys = (o: object) => Object.keys(o).sort().join(",");
+  if (keys(index) !== "origin,pages,summary,title") problems.push(`top-level fields: ${keys(index)}`);
+  if (index.origin !== BASE) problems.push(`origin ${index.origin}`);
+  if (index.title !== SITE_NAME) problems.push(`title ${index.title}`);
+  if (typeof index.summary !== "string" || !index.summary.trim()) problems.push("summary is empty");
+  const allowed = new Set(["path", "lang", "title", "description", "section", "lastmod", "markdown", "alternates"]);
+  const paths = new Set(index.pages.map((p) => p.path));
+  let seenZh = false;
+  for (const p of index.pages) {
+    const at = `${p.path}:`;
+    for (const k of Object.keys(p)) if (!allowed.has(k)) problems.push(`${at} unknown field ${k}`);
+    for (const [k, v] of Object.entries(p)) {
+      const empty = v === "" || v === null || v === undefined || (typeof v === "object" && !Object.keys(v).length);
+      if (empty) problems.push(`${at} empty ${k}`);
+    }
+    if (p.lang !== "en" && p.lang !== "zh") { problems.push(`${at} lang ${p.lang}`); continue; }
+    if (p.lang === "zh") seenZh = true;
+    else if (seenZh) problems.push(`${at} English page after a Chinese one`);
+    if (typeof p.title !== "string" || !p.title.trim()) problems.push(`${at} no title`);
+    if (!p.path.startsWith(`/${p.lang}/`)) problems.push(`${at} path is not under /${p.lang}/`);
+    if (!p.markdown?.startsWith(`/${p.lang}/`) || !p.markdown.endsWith(".md")) problems.push(`${at} markdown ${p.markdown}`);
+    else if (!markdownExists(p.markdown)) problems.push(`${at} markdown ${p.markdown} does not exist`);
+    if (p.lastmod !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(p.lastmod)) problems.push(`${at} lastmod ${p.lastmod}`);
+    for (const [lang, alt] of Object.entries(p.alternates ?? {})) {
+      if (lang === p.lang || !alt.startsWith(`/${lang}/`)) problems.push(`${at} alternate ${lang} ${alt}`);
+      else if (!paths.has(alt)) problems.push(`${at} alternate ${alt} is not a listed page`);
+    }
+  }
+  for (const lang of langs) {
+    const listed = index.pages.filter((p) => p.lang === lang).map((p) => p.path);
+    const manifest = books[lang].chapters.map((c) => pageUrl(lang, c.href === "index" ? "" : c.href).slice(BASE.length));
+    if (listed.join("\n") !== manifest.join("\n")) problems.push(`${lang}: pages differ from the manifest's reading order (${listed.length} listed, ${manifest.length} in the manifest)`);
+  }
+  return problems;
+}
+
+const twinPaths = new Set(pages.map((p) => `/${p.lang}/${p.href}.md`));
+
+test("the page index follows the agentweb.json contract", () => {
+  const index = agentwebIndex(pages.map((p) => agentwebPage(p.input)));
+  expect(contractProblems(index, (path) => twinPaths.has(path))).toEqual([]);
+  const home = index.pages.find((p) => p.lang === "en" && p.path === "/en/")!;
+  expect(home.markdown).toBe("/en/index.md");
+  expect(index.pages.filter((p) => p.lang === "en").length).toBe(books.en.chapters.length);
+  expect(index.pages.filter((p) => p.lang === "zh").length).toBe(books.zh.chapters.length);
+});
+
+const builtIndex = join(outRoot, "agentweb.json");
+test.skipIf(!existsSync(builtIndex))("the built agentweb.json follows the contract and names twins on disk", () => {
+  const index = JSON.parse(readFileSync(builtIndex, "utf8")) as AgentwebIndex;
+  expect(contractProblems(index, (path) => existsSync(join(outRoot, path)))).toEqual([]);
 });

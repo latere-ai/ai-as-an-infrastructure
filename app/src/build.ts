@@ -2,7 +2,8 @@
 // under _book/{en,zh}, matching the canonical clean chapter paths. Copies figures, emits the
 // hydration bundle (which carries the Pyodide runnable, viz, and figure
 // runtimes), and writes a search index. Every page also gets a Markdown twin
-// beside its HTML (twin.ts) for agents and tools that read text.
+// beside its HTML (twin.ts) for agents and tools that read text, and every
+// page is listed in the agentweb.json page index (agentweb.ts).
 
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
@@ -17,6 +18,7 @@ import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDocs } from "./pipeline/search.ts";
 import { BASE, ogImageUrl } from "./site.ts";
 import { markdownTwin, twinInput } from "./twin.ts";
+import { agentwebIndex, agentwebPage, type AgentwebPage } from "./agentweb.ts";
 import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Lang } from "./types.ts";
@@ -50,6 +52,7 @@ const books = { en: loadBook("en", repoRoot), zh: loadBook("zh", repoRoot) };
 const hrefsByLang: Record<Lang, Set<string>> = { en: new Set(books.en.chapters.map((c) => c.href)), zh: new Set(books.zh.chapters.map((c) => c.href)) };
 
 let pageCount = 0;
+const agentPages: AgentwebPage[] = [];
 const pathsByLang: Record<Lang, Set<string>> = { en: new Set(), zh: new Set() };
 // English share-card text keyed by chapter href (shared across languages). Filled
 // on the en pass and read on the zh pass so zh pages unfurl an English card.
@@ -101,7 +104,9 @@ for (const lang of ["en", "zh"] as Lang[]) {
     writeFileSync(outPath, html);
     // The Markdown twin sits beside the HTML at the same clean path plus ".md"
     // (index.md for the home page).
-    writeFileSync(join(langOut, ch.href + ".md"), markdownTwin(twinInput(book, ch, data, hrefsByLang[other])));
+    const twin = twinInput(book, ch, data, hrefsByLang[other]);
+    writeFileSync(join(langOut, ch.href + ".md"), markdownTwin(twin));
+    agentPages.push(agentwebPage(twin));
     searchDocs.push(...buildSearchDocs(data, ch.href, lang));
     pathsByLang[lang].add(ch.href === "index" ? "" : ch.href); // clean path for sitemap
     pageCount++;
@@ -113,6 +118,8 @@ for (const lang of ["en", "zh"] as Lang[]) {
 // Root artifacts (served from _book root): favicon, robots, hreflang sitemap.
 cpSync(join(repoRoot, "app", "static", "favicon.svg"), join(outRoot, "favicon.svg"));
 writeFileSync(join(outRoot, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${BASE}/sitemap.xml\n`);
+// The page index the server's agent-facing endpoints are generated from.
+writeFileSync(join(outRoot, "agentweb.json"), JSON.stringify(agentwebIndex(agentPages), null, 2) + "\n");
 // Served by the Go server, status 404, for content URLs that match nothing.
 writeFileSync(join(outRoot, "404.html"), notFoundPage({ css }));
 

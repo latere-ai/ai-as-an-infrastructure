@@ -24,6 +24,16 @@ export const markdownPath = (lang: string, path: string) => `/${lang}/${path || 
 
 export const SITE_DESCRIPTION = "The lifecycle of a capability, from compute to deployed, governed behavior.";
 
+// One paragraph on what the book is, for indexes that describe the site as a
+// whole rather than one page (agentweb.json, and the llms.txt served from it).
+export const SITE_SUMMARY =
+  "A book that treats AI as an infrastructure and explains it design-first. " +
+  "It follows one capability through its lifecycle, from raw compute and corpus construction " +
+  "to a deployed behavior that can be measured, constrained, and operated, and at each layer asks " +
+  "how the mechanism got its shape, what trade-offs that shape encodes, and what theory lies underneath. " +
+  "It is written for software engineers who know systems and distributed computing but are new to " +
+  "machine learning. The English and Chinese editions carry the same chapters, sources, equations, and figures.";
+
 // Social share cards are 1200x630 (the de-facto Open Graph / Twitter
 // "summary_large_image" size). Generated on demand by `make og`, vendored under
 // _book/og/<href>.png, and referenced absolutely from every page's head. Cards
