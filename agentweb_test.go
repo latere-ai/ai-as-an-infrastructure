@@ -169,8 +169,8 @@ func TestRobotsTxt(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
 		t.Errorf("Content-Type %q, want text/plain", ct)
 	}
-	if cc := resp.Header.Get("Cache-Control"); cc != "no-cache" {
-		t.Errorf("Cache-Control %q, want no-cache", cc)
+	if cc := resp.Header.Get("Cache-Control"); cc != agentweb.DefaultCacheControl {
+		t.Errorf("Cache-Control %q, want the shared default %q", cc, agentweb.DefaultCacheControl)
 	}
 	text := string(body)
 	// The policy text carries the reservation of rights the refused signal

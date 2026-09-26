@@ -118,12 +118,9 @@ func loadAgentWeb(tree fs.FS) (map[string]http.Handler, http.Handler, error) {
 		describedBy[root.lang] = root.prefix + "/llms.txt"
 	}
 
-	// The documents change with each deploy, like the pages, so they take the
-	// pages' policy: revalidate every time, a 304 against the ETag when
-	// nothing changed.
-	for p, h := range docs {
-		docs[p] = revalidate(h)
-	}
+	// The handlers send agentweb.DefaultCacheControl (five minutes, then a
+	// 304 against the ETag), which lets Cloudflare answer repeated fetches of
+	// the multi-megabyte llms-full.txt without reaching the pod.
 
 	pages, err := agentweb.Negotiate(http.HandlerFunc(serve), idx, agentweb.NegotiateOptions{
 		DescribedBy: func(p agentweb.Page) string { return describedBy[p.Lang] },
@@ -132,12 +129,4 @@ func loadAgentWeb(tree fs.FS) (map[string]http.Handler, http.Handler, error) {
 		return nil, nil, err
 	}
 	return docs, pages, nil
-}
-
-// revalidate sets Cache-Control: no-cache on every response of h.
-func revalidate(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache")
-		h.ServeHTTP(w, r)
-	})
 }
