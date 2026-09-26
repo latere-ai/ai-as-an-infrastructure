@@ -5,7 +5,8 @@
 // the contract that package decodes: paths are origin-relative, an absent
 // value is omitted rather than written empty, and pages come in reading
 // order, English first. `editions` is the book's own addition, which the
-// package ignores and the server reads to title each language's llms.txt.
+// package ignores and the server reads so each language's llms.txt is
+// written in that language: its title, summary, and section headings.
 
 import { BASE, BOOK_SUMMARY, MATTER_SECTION, SITE_NAME, markdownPath, pagePath } from "./site.ts";
 import { twinTitle, type TwinInput } from "./twin.ts";
