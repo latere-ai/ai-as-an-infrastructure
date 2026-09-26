@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.6 - 2026-09-26
+
 ### Added
 
 - Every page, in both languages, has a Markdown version at its address plus
