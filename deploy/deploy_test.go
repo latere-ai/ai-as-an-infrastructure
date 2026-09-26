@@ -36,9 +36,17 @@ type deployment struct {
 		} `yaml:"strategy"`
 		Template struct {
 			Spec struct {
-				Containers []struct {
-					Name string `yaml:"name"`
-					Env  []struct {
+				TerminationGracePeriodSeconds *int `yaml:"terminationGracePeriodSeconds"`
+				Containers                    []struct {
+					Name      string `yaml:"name"`
+					Lifecycle struct {
+						PreStop struct {
+							Sleep struct {
+								Seconds int `yaml:"seconds"`
+							} `yaml:"sleep"`
+						} `yaml:"preStop"`
+					} `yaml:"lifecycle"`
+					Env []struct {
 						Name  string `yaml:"name"`
 						Value string `yaml:"value"`
 					} `yaml:"env"`
@@ -118,4 +126,27 @@ func show(v *int) string {
 		return "unset"
 	}
 	return strconv.Itoa(*v)
+}
+
+// The old pod must keep serving until ingress-nginx has dropped it. The server
+// closes its listener as soon as the stop signal arrives; without a pause
+// before that signal, nginx still routed to the old address for about a
+// second and the rollout answered 502.
+func TestStoppingPodServesUntilIngressDropsIt(t *testing.T) {
+	d := loadDeployment(t)
+	grace := 30 // Kubernetes' default terminationGracePeriodSeconds
+	if g := d.Spec.Template.Spec.TerminationGracePeriodSeconds; g != nil {
+		grace = *g
+	}
+	for _, c := range d.Spec.Template.Spec.Containers {
+		pause := c.Lifecycle.PreStop.Sleep.Seconds
+		if pause < 3 {
+			t.Errorf("container %s: preStop sleep %ds, want at least 3s so ingress drops the pod first", c.Name, pause)
+		}
+		// The pause and the server's 10s drain must both fit in the grace
+		// period, or the kubelet kills the pod mid-drain.
+		if pause+10 > grace {
+			t.Errorf("container %s: preStop %ds + 10s drain exceeds the %ds grace period", c.Name, pause, grace)
+		}
+	}
 }
