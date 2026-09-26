@@ -8,6 +8,9 @@ import type { Lang } from "./types.ts";
 export const BASE = "https://aaai.latere.ai";
 export const SITE_NAME = "AI as an Infrastructure";
 export const AUTHOR = "Changkun Ou";
+export const AUTHOR_URL = "https://changkun.de";
+export const PUBLISHER = "Latere AI";
+export const PUBLISHER_URL = "https://latere.ai";
 
 // The book's license, named on the title page and in every page's Markdown
 // twin, with the Creative Commons deed that states its terms.
@@ -26,9 +29,10 @@ export const markdownPath = (lang: string, path: string) => `/${lang}/${path || 
 
 export const SITE_DESCRIPTION = "The lifecycle of a capability, from compute to deployed, governed behavior.";
 
-// One paragraph per language on what the book is, for indexes that describe
-// the site as a whole rather than one page: agentweb.json, and the llms.txt
-// of each language the server generates from it.
+// One paragraph per language on what the book is, for descriptions of the
+// book as a whole rather than one page: agentweb.json and the llms.txt of each
+// language the server generates from it, and the Book node in each home
+// page's structured data.
 export const BOOK_SUMMARY: Record<Lang, string> = {
   en:
     "A book that treats AI as an infrastructure and explains it design-first. " +

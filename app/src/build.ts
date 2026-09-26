@@ -9,8 +9,8 @@
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
 import Reader from "./Reader.tsx";
-import { page, notFoundPage } from "./html.ts";
-import { loadBook } from "./pipeline/book.ts";
+import { page, notFoundPage, type PageFacts } from "./html.ts";
+import { loadBook, type Book, type BookChapter } from "./pipeline/book.ts";
 import { compileChapter } from "./pipeline/compile.ts";
 import { loadBibliographyDir } from "./pipeline/citations.ts";
 import { loadGlossary } from "./pipeline/glossary.ts";
@@ -47,10 +47,23 @@ const clientEntry = clientOutputs.find((o) => o.kind === "entry-point")!.name;
 const graphviz = await loadGraphviz();
 const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
 
-// Both manifests up front: a page's twin names the other language's page only
-// when that page exists.
+// Both manifests up front: a page's twin and its structured data name the
+// other language's page only when that page exists.
 const books = { en: loadBook("en", repoRoot), zh: loadBook("zh", repoRoot) };
 const hrefsByLang: Record<Lang, Set<string>> = { en: new Set(books.en.chapters.map((c) => c.href)), zh: new Set(books.zh.chapters.map((c) => c.href)) };
+const titlesByLang: Record<Lang, Map<string, string>> = {
+  en: new Map(books.en.chapters.map((c) => [c.href, c.title])),
+  zh: new Map(books.zh.chapters.map((c) => [c.href, c.title])),
+};
+const bookTitles: Record<Lang, string> = { en: books.en.title, zh: books.zh.title };
+
+// The part a chapter sits in, named with the href of the part's intro page,
+// for the breadcrumb in its structured data. Front and back matter and the
+// intro pages themselves sit in none.
+function partOf(book: Book, ch: BookChapter): PageFacts["part"] {
+  const part = book.parts.find((p) => !p.single && p.chapters.includes(ch));
+  return part?.intro ? { name: part.label, path: part.intro.href } : null;
+}
 
 let pageCount = 0;
 const agentPages: AgentwebPage[] = [];
@@ -96,7 +109,14 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const en = enShare[ch.href] ?? { title: data.title, description: data.description };
     const share = { title: en.title, description: en.description, imageUrl: ogImageUrl(ch.href) };
     if (!existsSync(join(outRoot, "og", ch.href + ".png"))) missingCards.push(ch.href);
-    const html = page({ chapter: data, bodyHtml, css, clientHref, share });
+    const twin = twinInput(book, ch, data, hrefsByLang[other]);
+    const facts: PageFacts = {
+      titles: bookTitles,
+      reviewed: twin.lastmod,
+      translation: titlesByLang[other].get(ch.href) ?? null,
+      part: partOf(book, ch),
+    };
+    const html = page({ chapter: data, bodyHtml, css, clientHref, share, facts });
     // hrefs are extensionless; the file on disk keeps .html (nginx try_files
     // serves the clean URL from it).
     const outPath = join(langOut, ch.href + ".html");
@@ -104,7 +124,6 @@ for (const lang of ["en", "zh"] as Lang[]) {
     writeFileSync(outPath, html);
     // The Markdown twin sits beside the HTML at the same clean path plus ".md"
     // (index.md for the home page).
-    const twin = twinInput(book, ch, data, hrefsByLang[other]);
     writeFileSync(join(langOut, ch.href + ".md"), markdownTwin(twin));
     agentPages.push(agentwebPage(twin));
     searchDocs.push(...buildSearchDocs(data, ch.href, lang));
@@ -117,7 +136,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
 // Root artifacts (served from _book root): the favicon, the page index the
 // server's agent-facing endpoints are generated from, and the not-found page.
 cpSync(join(repoRoot, "app", "static", "favicon.svg"), join(outRoot, "favicon.svg"));
-writeFileSync(join(outRoot, "agentweb.json"), JSON.stringify(agentwebIndex(agentPages, { en: books.en.title, zh: books.zh.title }), null, 2) + "\n");
+writeFileSync(join(outRoot, "agentweb.json"), JSON.stringify(agentwebIndex(agentPages, bookTitles), null, 2) + "\n");
 // Served by the Go server, status 404, for content URLs that match nothing.
 writeFileSync(join(outRoot, "404.html"), notFoundPage({ css }));
 

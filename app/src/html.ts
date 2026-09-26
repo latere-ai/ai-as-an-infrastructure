@@ -1,10 +1,19 @@
 // Page template shared by the dev server and the SSG build. Wraps SSR'd shell
-// HTML with the head (fonts + KaTeX from CDN, the design's CSS inlined) and the
-// hydration data, then the client bundle and after-body runtime scripts.
+// HTML with the head (fonts + KaTeX from CDN, the design's CSS inlined, the
+// page's schema.org structured data) and the hydration data, then the client
+// bundle and after-body runtime scripts.
 
-import type { ChapterData } from "./types.ts";
+import { book, breadcrumbList, chapter as chapterNode, jsonLdScript, organization, person, type BreadcrumbItem, type WorkRef } from "latere-ui/structured-data";
+import type { ChapterData, Lang } from "./types.ts";
 import { DEFAULT_SETTINGS } from "./types.ts";
-import { SITE_NAME, AUTHOR, OG_W, OG_H, SITE_DESCRIPTION, ogImageUrl, pageUrl } from "./site.ts";
+import {
+  SITE_NAME, AUTHOR, AUTHOR_URL, BOOK_SUMMARY, LICENSE_URL, OG_W, OG_H, PUBLISHER, PUBLISHER_URL, SITE_DESCRIPTION,
+  markdownPath, ogImageUrl, pageUrl,
+} from "./site.ts";
+
+// BCP 47 tag of each language, as <html lang>, the hreflang links, and the
+// structured data declare it.
+const LANG_TAG: Record<Lang, string> = { en: "en", zh: "zh-Hans" };
 
 // Applied before first paint so a returning reader's saved theme/palette/layout
 // (the CSS keys off data-theme/data-palette/data-layout on <html>) is set before
@@ -24,6 +33,67 @@ const FONT_LINKS = `
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/lxgw-wenkai-tc-webfont@1.0.0/style.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">`;
 
+// What a page's structured data states beyond the page itself, which the
+// build knows from both manifests.
+export interface PageFacts {
+  titles: Record<Lang, string>; // the book's title in each language
+  reviewed: string; // the page's review date, YYYY-MM-DD, or "" when it has none
+  translation: string | null; // the page's title in the other language, or null when that language lacks the page
+  // The part the page sits in, with the path of the part's intro page; null
+  // for front and back matter and for an intro page itself.
+  part: { name: string; path: string } | null;
+}
+
+// The page's schema.org description as a JSON-LD script element. The home
+// page describes its language's edition of the book as a Book; every other
+// page is a Chapter of that Book, with the breadcrumb from the book's home.
+// English is the source language, so an English node lists its translation
+// (workTranslation) and a Chinese node names the English work it was
+// translated from (translationOfWork), and only when that page exists.
+export function structuredData(chapter: ChapterData, facts: PageFacts): string {
+  const lang = chapter.lang;
+  const other: Lang = lang === "en" ? "zh" : "en";
+  const home = (l: Lang) => pageUrl(l, "");
+  const url = pageUrl(lang, chapter.path);
+  const author = person({ name: AUTHOR, url: AUTHOR_URL });
+  const translated = (ref: WorkRef) =>
+    facts.translation === null ? {} : lang === "en" ? { workTranslation: ref } : { translationOfWork: ref };
+
+  if (chapter.path === "") {
+    return jsonLdScript(book({
+      "@id": url,
+      name: facts.titles[lang],
+      url,
+      inLanguage: LANG_TAG[lang],
+      description: BOOK_SUMMARY[lang],
+      author,
+      publisher: organization({ name: PUBLISHER, url: PUBLISHER_URL }),
+      license: LICENSE_URL,
+      ...translated({ "@id": home(other), name: facts.titles[other], url: home(other), inLanguage: LANG_TAG[other] }),
+    }));
+  }
+
+  const crumbs: BreadcrumbItem[] = [{ name: facts.titles[lang], url: home(lang) }];
+  if (facts.part) crumbs.push({ name: facts.part.name, url: pageUrl(lang, facts.part.path) });
+  crumbs.push({ name: chapter.title });
+  const otherUrl = pageUrl(other, chapter.path);
+  return jsonLdScript([
+    chapterNode({
+      "@id": url,
+      name: chapter.title,
+      url,
+      position: chapter.chapterNum ? Number(chapter.chapterNum) : undefined,
+      inLanguage: LANG_TAG[lang],
+      isPartOf: { "@id": home(lang), name: facts.titles[lang], url: home(lang) },
+      author,
+      license: LICENSE_URL,
+      dateModified: facts.reviewed || undefined,
+      ...translated({ "@id": otherUrl, name: facts.translation ?? undefined, url: otherUrl, inLanguage: LANG_TAG[other] }),
+    }),
+    breadcrumbList(crumbs),
+  ]);
+}
+
 export function page(opts: {
   chapter: ChapterData;
   bodyHtml: string;
@@ -33,6 +103,9 @@ export function page(opts: {
   // the Open Graph / Twitter tags so a shared link unfurls an English card even
   // on zh pages. Omitted by the dev server, which falls back to the page itself.
   share?: { title: string; description: string; imageUrl: string };
+  // The facts for the page's structured data. Omitted by the dev server,
+  // whose pages then carry none.
+  facts?: PageFacts;
 }): string {
   const { chapter, bodyHtml, css, clientHref } = opts;
   const isHome = chapter.path === "";
@@ -40,7 +113,7 @@ export function page(opts: {
   const data = JSON.stringify(chapter).replace(/</g, "\\u003c");
   // Per-language canonical URLs + hreflang so both languages are independently
   // indexable and Google serves the right one. en/zh share the chapter path.
-  const htmlLang = chapter.lang === "zh" ? "zh-Hans" : "en";
+  const htmlLang = LANG_TAG[chapter.lang];
   const url = (lang: string) => pageUrl(lang, chapter.path); // path "" → /<lang>/
   const attr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
   const desc = chapter.description ? `\n<meta name="description" content="${attr(chapter.description)}">` : "";
@@ -87,8 +160,10 @@ ${THEME_SCRIPT}
 <link rel="alternate" hreflang="en" href="${url("en")}">
 <link rel="alternate" hreflang="zh-Hans" href="${url("zh")}">
 <link rel="alternate" hreflang="x-default" href="${url("en")}">
+<link rel="alternate" type="text/markdown" href="${markdownPath(chapter.lang, chapter.path)}">
+<link rel="license" href="${LICENSE_URL}">
 <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-${social}
+${social}${opts.facts ? "\n" + structuredData(chapter, opts.facts) : ""}
 <script>document.cookie="lang=${chapter.lang};path=/;max-age=31536000;samesite=lax"</script>
 ${FONT_LINKS}
 <style>${css}</style>
