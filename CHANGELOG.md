@@ -10,6 +10,13 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- The last moment of a release no longer fails a request. The old server
+  keeps answering for five seconds after it is told to stop, until the
+  ingress has stopped sending it traffic; before, requests in that second
+  could get a 502.
+
 ## v0.10.8 - 2026-09-26
 
 ### Fixed
