@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.7 - 2026-09-26
+
 ### Changed
 
 - robots.txt, the sitemap and the llms.txt files may now be cached for up
