@@ -10,6 +10,13 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Changed
+
+- robots.txt, the sitemap and the llms.txt files may now be cached for up
+  to five minutes, so a change to them reaches crawlers and agents within
+  minutes of a release, and the large llms-full.txt is answered from the
+  edge on repeated fetches.
+
 ## v0.10.6 - 2026-09-26
 
 ### Added
