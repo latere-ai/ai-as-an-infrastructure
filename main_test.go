@@ -113,10 +113,9 @@ func TestRouting(t *testing.T) {
 	code(t, nf, base, "/zh/", 200)
 	code(t, nf, base, "/zh/reasoning/inference-time-scaling", 200)
 
-	// One page, one URL. A page's images and links are relative, so serving the
-	// same file under both spellings breaks every one of them on the wrong form:
-	// at "/en" the home's "search.json" would resolve to "/search.json".
-	// A directory index keeps the trailing slash, a page file drops it.
+	// One page, one URL: the other spelling redirects to it rather than serving
+	// the same file twice. A directory index keeps the trailing slash, a page
+	// file drops it.
 	loc(t, nf, base, "/en", "/en/", "")
 	loc(t, nf, base, "/zh", "/zh/", "")
 	code(t, nf, base, "/en", 301)
@@ -311,14 +310,17 @@ func TestPrecompressed(t *testing.T) {
 // urlAttr captures every href and src value in a page.
 var urlAttr = regexp.MustCompile(`(?i)\b(?:href|src)="([^"]*)"`)
 
+// urlScheme matches a URL that names its scheme (https:, http:, mailto:, data:).
+var urlScheme = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*:`)
+
 // relativeURLs returns the href and src values the browser would resolve
-// against the requested address: anything not root-relative, absolute https,
-// or a fragment.
+// against the requested address: anything not root-relative, not carrying a
+// scheme, and not a fragment.
 func relativeURLs(html []byte) []string {
 	var rel []string
 	for _, m := range urlAttr.FindAllSubmatch(html, -1) {
 		v := string(m[1])
-		if !strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "https://") && !strings.HasPrefix(v, "#") {
+		if !strings.HasPrefix(v, "/") && !strings.HasPrefix(v, "#") && !urlScheme.MatchString(v) {
 			rel = append(rel, v)
 		}
 	}
@@ -383,4 +385,40 @@ func TestNotFoundPage(t *testing.T) {
 
 	code(t, nf, base, "/404", http.StatusNotFound)
 	loc(t, nf, base, "/404.html", "/404", "")
+}
+
+// Every page is fetched at its own address and, by some crawlers, resolved
+// against another one: the address they asked for before a redirect, or one
+// they invented. A page-relative link then names a different page for each
+// base, which is how one crawler composed new addresses at about twenty
+// requests a second. Every href and src in the built book must resolve to the
+// same URL from any base.
+func TestPagesHoldNoRelativeURLs(t *testing.T) {
+	requireBook(t)
+	pages := 0
+	err := fs.WalkDir(book, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(p, ".html") {
+			return nil
+		}
+		html, err := fs.ReadFile(book, p)
+		if err != nil {
+			return err
+		}
+		if rel := relativeURLs(html); len(rel) > 0 {
+			t.Errorf("%s: %d page-relative URLs, e.g. %q", p, len(rel), rel[:min(len(rel), 3)])
+		}
+		pages++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the book: %v", err)
+	}
+	// Both languages hold over a hundred pages; far fewer means the walk
+	// looked in the wrong place and proved nothing.
+	if pages < 200 {
+		t.Fatalf("checked %d pages, want the whole book", pages)
+	}
 }
