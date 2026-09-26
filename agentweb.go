@@ -27,12 +27,14 @@ var agentDocs map[string]http.Handler
 // only.
 var agentPages http.Handler
 
-// edition is one language edition's title and summary. The build writes them
-// into the page index beside the fields the agentweb package decodes, which
-// ignores them, so the Chinese llms.txt is titled and summarized in Chinese.
+// edition is one language edition's title, summary, and the heading over the
+// pages outside any part. The build writes them into the page index beside
+// the fields the agentweb package decodes, which ignores them, so the Chinese
+// llms.txt is written in Chinese throughout.
 type edition struct {
-	Title   string `json:"title"`
-	Summary string `json:"summary"`
+	Title          string `json:"title"`
+	Summary        string `json:"summary"`
+	DefaultSection string `json:"defaultSection"`
 }
 
 // llmsRoots are the language trees, each with an llms.txt and llms-full.txt
@@ -99,10 +101,10 @@ func loadAgentWeb(tree fs.FS) (map[string]http.Handler, http.Handler, error) {
 	describedBy := map[string]string{}
 	for _, root := range llmsRoots {
 		ed := ext.Editions[root.lang]
-		if ed.Title == "" || ed.Summary == "" {
-			return nil, nil, fmt.Errorf("the page index names no title and summary for the %s edition", root.lang)
+		if ed.Title == "" || ed.Summary == "" || ed.DefaultSection == "" {
+			return nil, nil, fmt.Errorf("the page index lacks the title, summary, or default section of the %s edition", root.lang)
 		}
-		opts := agentweb.LLMsOptions{Lang: root.lang, Title: ed.Title, Summary: ed.Summary}
+		opts := agentweb.LLMsOptions{Lang: root.lang, Title: ed.Title, Summary: ed.Summary, DefaultSection: ed.DefaultSection}
 		llms, err := agentweb.LLMsTxtHandler(idx, opts)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s llms.txt: %w", root.lang, err)

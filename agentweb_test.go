@@ -146,7 +146,11 @@ func TestLoadAgentWebRefusesBadIndex(t *testing.T) {
 		"invalid": index(`{"origin": "not a url", "pages": []}`),
 		"no zh edition": index(`{
 			"origin": "https://aaai.latere.ai", "title": "T", "summary": "S",
-			"editions": {"en": {"title": "T", "summary": "S"}},
+			"editions": {"en": {"title": "T", "summary": "S", "defaultSection": "D"}},
+			"pages": [{"path": "/en/", "lang": "en", "title": "T"}]}`),
+		"no default section": index(`{
+			"origin": "https://aaai.latere.ai", "title": "T", "summary": "S",
+			"editions": {"en": {"title": "T", "summary": "S"}, "zh": {"title": "T", "summary": "S", "defaultSection": "D"}},
 			"pages": [{"path": "/en/", "lang": "en", "title": "T"}]}`),
 	}
 	for name, tree := range cases {
@@ -240,8 +244,9 @@ func TestSitemap(t *testing.T) {
 	}
 }
 
-// Each language's llms.txt is titled in that language and lists that
-// language's Markdown twins, every one of them and no other.
+// Each language's llms.txt is titled in that language, heads the pages
+// outside any part in that language, and lists that language's Markdown
+// twins, every one of them and no other.
 func TestLLMsTxt(t *testing.T) {
 	base, c := agentServer(t)
 	idx, editions := builtIndex(t)
@@ -256,6 +261,9 @@ func TestLLMsTxt(t *testing.T) {
 		text := string(body)
 		if first, _, _ := strings.Cut(text, "\n"); first != "# "+editions[root.lang].Title {
 			t.Errorf("%s/llms.txt opens with %q, want the %s edition's title", root.prefix, first, root.lang)
+		}
+		if !strings.Contains(text, "\n## "+editions[root.lang].DefaultSection+"\n") {
+			t.Errorf("%s/llms.txt has no %s heading for the pages outside any part", root.prefix, root.lang)
 		}
 		links := 0
 		for _, p := range idx.Pages {

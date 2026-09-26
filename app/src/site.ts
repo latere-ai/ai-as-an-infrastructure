@@ -49,6 +49,11 @@ export const BOOK_SUMMARY: Record<Lang, string> = {
     "中英文两个版本的章节、文献来源、公式和图表一一对应。",
 };
 
+// The heading, per language, over the pages that sit in no part (the Preface,
+// the Epilogue and the back matter) where the whole book is listed by part:
+// each language's llms.txt.
+export const MATTER_SECTION: Record<Lang, string> = { en: "Front and back matter", zh: "前言与书末" };
+
 // Social share cards are 1200x630 (the de-facto Open Graph / Twitter
 // "summary_large_image" size). Generated on demand by `make og`, vendored under
 // _book/og/<href>.png, and referenced absolutely from every page's head. Cards

@@ -186,11 +186,16 @@ function contractProblems(index: AgentwebIndex, markdownExists: (path: string) =
   if (keys(index.editions ?? {}) !== "en,zh") problems.push(`editions: ${keys(index.editions ?? {})}`);
   for (const lang of langs) {
     const ed = index.editions?.[lang];
+    if (keys(ed ?? {}) !== "defaultSection,summary,title") problems.push(`${lang} edition fields: ${keys(ed ?? {})}`);
     if (ed?.title !== books[lang].title) problems.push(`${lang} edition title ${ed?.title}`);
-    if (typeof ed?.summary !== "string" || !ed.summary.trim()) problems.push(`${lang} edition summary is empty`);
+    for (const k of ["summary", "defaultSection"] as const) {
+      if (typeof ed?.[k] !== "string" || !ed[k].trim()) problems.push(`${lang} edition ${k} is empty`);
+    }
   }
   if (index.editions?.en?.summary !== index.summary) problems.push("the English edition's summary differs from the index summary");
-  if (index.editions?.zh?.summary === index.editions?.en?.summary) problems.push("the Chinese edition repeats the English summary");
+  for (const k of ["summary", "defaultSection"] as const) {
+    if (index.editions?.zh?.[k] === index.editions?.en?.[k]) problems.push(`the Chinese edition repeats the English ${k}`);
+  }
   const allowed = new Set(["path", "lang", "title", "description", "section", "lastmod", "markdown", "alternates"]);
   const paths = new Set(index.pages.map((p) => p.path));
   let seenZh = false;

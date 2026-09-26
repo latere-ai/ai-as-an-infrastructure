@@ -7,7 +7,7 @@
 // order, English first. `editions` is the book's own addition, which the
 // package ignores and the server reads to title each language's llms.txt.
 
-import { BASE, BOOK_SUMMARY, SITE_NAME, markdownPath, pagePath } from "./site.ts";
+import { BASE, BOOK_SUMMARY, MATTER_SECTION, SITE_NAME, markdownPath, pagePath } from "./site.ts";
 import { twinTitle, type TwinInput } from "./twin.ts";
 import type { Lang } from "./types.ts";
 
@@ -23,10 +23,12 @@ export interface AgentwebPage {
 }
 
 // One language edition of the book: its title as that edition's manifest
-// names it, and the summary quoted under the title of its llms.txt.
+// names it, the summary quoted under the title of its llms.txt, and the
+// heading llms.txt lists the pages outside any part under.
 export interface AgentwebEdition {
   title: string;
   summary: string;
+  defaultSection: string;
 }
 
 export interface AgentwebIndex {
@@ -64,8 +66,8 @@ export function agentwebIndex(pages: AgentwebPage[], titles: Record<Lang, string
     title: SITE_NAME,
     summary: BOOK_SUMMARY.en,
     editions: {
-      en: { title: titles.en, summary: BOOK_SUMMARY.en },
-      zh: { title: titles.zh, summary: BOOK_SUMMARY.zh },
+      en: { title: titles.en, summary: BOOK_SUMMARY.en, defaultSection: MATTER_SECTION.en },
+      zh: { title: titles.zh, summary: BOOK_SUMMARY.zh, defaultSection: MATTER_SECTION.zh },
     },
     pages: [...pages].sort((a, b) => LANG_ORDER[a.lang] - LANG_ORDER[b.lang]),
   };
