@@ -10,6 +10,14 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- Every link on every page is now written from the site root
+  (`/en/foundations/...`) instead of relative to the page it sits on. A
+  crawler that resolved relative links against the address it had asked for,
+  not the page it received, turned each link into a new invented address;
+  a root-relative link names the same page from anywhere.
+
 ## v0.10.5 - 2026-09-26
 
 ### Added
