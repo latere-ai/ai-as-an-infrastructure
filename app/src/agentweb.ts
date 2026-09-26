@@ -4,9 +4,10 @@
 // Markdown twin to a request that asks for text/markdown. The field names are
 // the contract that package decodes: paths are origin-relative, an absent
 // value is omitted rather than written empty, and pages come in reading
-// order, English first.
+// order, English first. `editions` is the book's own addition, which the
+// package ignores and the server reads to title each language's llms.txt.
 
-import { BASE, SITE_NAME, SITE_SUMMARY, markdownPath, pagePath } from "./site.ts";
+import { BASE, BOOK_SUMMARY, SITE_NAME, markdownPath, pagePath } from "./site.ts";
 import { twinTitle, type TwinInput } from "./twin.ts";
 import type { Lang } from "./types.ts";
 
@@ -21,10 +22,18 @@ export interface AgentwebPage {
   alternates?: Partial<Record<Lang, string>>; // the same page in other languages, origin-relative
 }
 
+// One language edition of the book: its title as that edition's manifest
+// names it, and the summary quoted under the title of its llms.txt.
+export interface AgentwebEdition {
+  title: string;
+  summary: string;
+}
+
 export interface AgentwebIndex {
   origin: string;
   title: string;
   summary: string;
+  editions: Record<Lang, AgentwebEdition>;
   pages: AgentwebPage[];
 }
 
@@ -47,12 +56,17 @@ export function agentwebPage(input: TwinInput): AgentwebPage {
 }
 
 // `pages` in reading order per language; the sort is stable, so each
-// language keeps its order and English comes first.
-export function agentwebIndex(pages: AgentwebPage[]): AgentwebIndex {
+// language keeps its order and English comes first. `titles` are the book's
+// title in each language, from the manifests.
+export function agentwebIndex(pages: AgentwebPage[], titles: Record<Lang, string>): AgentwebIndex {
   return {
     origin: BASE,
     title: SITE_NAME,
-    summary: SITE_SUMMARY,
+    summary: BOOK_SUMMARY.en,
+    editions: {
+      en: { title: titles.en, summary: BOOK_SUMMARY.en },
+      zh: { title: titles.zh, summary: BOOK_SUMMARY.zh },
+    },
     pages: [...pages].sort((a, b) => LANG_ORDER[a.lang] - LANG_ORDER[b.lang]),
   };
 }

@@ -119,7 +119,7 @@ for (const lang of ["en", "zh"] as Lang[]) {
 cpSync(join(repoRoot, "app", "static", "favicon.svg"), join(outRoot, "favicon.svg"));
 writeFileSync(join(outRoot, "robots.txt"), `User-agent: *\nAllow: /\nSitemap: ${BASE}/sitemap.xml\n`);
 // The page index the server's agent-facing endpoints are generated from.
-writeFileSync(join(outRoot, "agentweb.json"), JSON.stringify(agentwebIndex(agentPages), null, 2) + "\n");
+writeFileSync(join(outRoot, "agentweb.json"), JSON.stringify(agentwebIndex(agentPages, { en: books.en.title, zh: books.zh.title }), null, 2) + "\n");
 // Served by the Go server, status 404, for content URLs that match nothing.
 writeFileSync(join(outRoot, "404.html"), notFoundPage({ css }));
 

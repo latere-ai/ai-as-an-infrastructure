@@ -178,10 +178,19 @@ test.skipIf(!built)("the build writes every twin beside its page, precompressed 
 function contractProblems(index: AgentwebIndex, markdownExists: (path: string) => boolean): string[] {
   const problems: string[] = [];
   const keys = (o: object) => Object.keys(o).sort().join(",");
-  if (keys(index) !== "origin,pages,summary,title") problems.push(`top-level fields: ${keys(index)}`);
+  if (keys(index) !== "editions,origin,pages,summary,title") problems.push(`top-level fields: ${keys(index)}`);
   if (index.origin !== BASE) problems.push(`origin ${index.origin}`);
   if (index.title !== SITE_NAME) problems.push(`title ${index.title}`);
   if (typeof index.summary !== "string" || !index.summary.trim()) problems.push("summary is empty");
+  // Each language's llms.txt is titled and summarized in that language.
+  if (keys(index.editions ?? {}) !== "en,zh") problems.push(`editions: ${keys(index.editions ?? {})}`);
+  for (const lang of langs) {
+    const ed = index.editions?.[lang];
+    if (ed?.title !== books[lang].title) problems.push(`${lang} edition title ${ed?.title}`);
+    if (typeof ed?.summary !== "string" || !ed.summary.trim()) problems.push(`${lang} edition summary is empty`);
+  }
+  if (index.editions?.en?.summary !== index.summary) problems.push("the English edition's summary differs from the index summary");
+  if (index.editions?.zh?.summary === index.editions?.en?.summary) problems.push("the Chinese edition repeats the English summary");
   const allowed = new Set(["path", "lang", "title", "description", "section", "lastmod", "markdown", "alternates"]);
   const paths = new Set(index.pages.map((p) => p.path));
   let seenZh = false;
@@ -216,7 +225,7 @@ function contractProblems(index: AgentwebIndex, markdownExists: (path: string) =
 const twinPaths = new Set(pages.map((p) => `/${p.lang}/${p.href}.md`));
 
 test("the page index follows the agentweb.json contract", () => {
-  const index = agentwebIndex(pages.map((p) => agentwebPage(p.input)));
+  const index = agentwebIndex(pages.map((p) => agentwebPage(p.input)), { en: books.en.title, zh: books.zh.title });
   expect(contractProblems(index, (path) => twinPaths.has(path))).toEqual([]);
   const home = index.pages.find((p) => p.lang === "en" && p.path === "/en/")!;
   expect(home.markdown).toBe("/en/index.md");
