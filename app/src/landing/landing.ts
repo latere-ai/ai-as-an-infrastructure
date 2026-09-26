@@ -15,13 +15,11 @@ import { formatDate } from "../pipeline/dates.ts";
 import { esc } from "../figures/lib/svg.ts";
 import type { Lang } from "../types.ts";
 import { renderCover, type CoverData, type Release } from "./cover.ts";
+import { LICENSE, LICENSE_URL } from "../site.ts";
 
 // Where "Start reading" lands: the Preface, directly below the landing.
 export const START_ID = "preface";
 export const CONTENTS_ID = "contents";
-
-export const LICENSE = "CC BY-NC-ND 4.0";
-const LICENSE_URL = "https://creativecommons.org/licenses/by-nc-nd/4.0/";
 
 interface Strings {
   author: string; // the byline as the language sets it
