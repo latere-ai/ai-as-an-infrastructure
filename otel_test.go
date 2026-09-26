@@ -193,6 +193,61 @@ func TestHandlerNamesRoutes(t *testing.T) {
 	}
 }
 
+// The agent-facing endpoints are named by their literal paths and a Markdown
+// twin by its page's template plus ".md", on spans and request metrics alike.
+// A page served as Markdown by negotiation keeps its page's route: the route
+// names the address, and the representation is chosen by the Accept header.
+func TestHandlerNamesAgentRoutes(t *testing.T) {
+	rec := installRecorder(t)
+	reader := installMeterReader(t)
+	installAgentWeb(t)
+	h := newHandler()
+
+	cases := []struct{ path, accept, route string }{
+		{"/robots.txt", "", "/robots.txt"},
+		{"/sitemap.xml", "", "/sitemap.xml"},
+		{"/llms.txt", "", "/llms.txt"},
+		{"/zh/llms.txt", "", "/zh/llms.txt"},
+		{"/llms-full.txt", "", "/llms-full.txt"},
+		{"/zh/llms-full.txt", "", "/zh/llms-full.txt"},
+		{"/en/foundations/scaling-laws.md", "", "/en/{part}/{chapter}.md"},
+		{"/en/foundations.md", "", "/en/{page}.md"},
+		{"/zh/index.md", "", "/zh/index.md"},
+		{"/zh/foundations/scaling-laws", "text/markdown", "/zh/{part}/{chapter}"},
+	}
+	for _, c := range cases {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, c.path, nil)
+		if c.accept != "" {
+			req.Header.Set("Accept", c.accept)
+		}
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s: status %d, want 200", c.path, w.Code)
+		}
+	}
+
+	spans := rec.Ended()
+	if len(spans) != len(cases) {
+		t.Fatalf("recorded %d spans, want %d", len(spans), len(cases))
+	}
+	for i, c := range cases {
+		if got, want := spans[i].Name(), "GET "+c.route; got != want {
+			t.Errorf("%s: span name %q, want %q", c.path, got, want)
+		}
+	}
+	routes := durationRoutes(t, reader)
+	for _, c := range cases {
+		if routes[c.route] != 1 {
+			t.Errorf("request metrics: %d requests under http.route %q, want 1 (all: %v)",
+				routes[c.route], c.route, routes)
+		}
+	}
+	if len(routes) != len(cases) {
+		t.Errorf("request metrics carry %d routes, want %d: %v", len(routes), len(cases), routes)
+	}
+}
+
 // The reader posts its spans to the relay, and the relay forwards them to the
 // collector under the OTLP signal path, body untouched. The request is named
 // by the fixed relay route, never by the client-chosen subpath.

@@ -43,6 +43,9 @@ func routeOf(r *http.Request) string {
 	switch {
 	case p == "/":
 		return "/"
+	case agentDocs[p] != nil:
+		// The generated documents are a fixed set of literal paths.
+		return p
 	case telemetryRelay != nil && strings.HasPrefix(p, telemetryPrefix+"/"):
 		// The subpath names an OTLP signal and is chosen by the client.
 		return telemetryPrefix + "/{signal}"
@@ -70,12 +73,26 @@ func routeOf(r *http.Request) string {
 		return unknownRoute
 	}
 	rest := strings.Trim(strings.TrimPrefix(p, lang), "/")
+	if page, ok := strings.CutSuffix(rest, ".md"); ok {
+		// A Markdown twin takes its page's template, so the part intros'
+		// twins share one route instead of one literal each. The home
+		// page's twin has one path per language and keeps it.
+		switch {
+		case page == "index":
+			return lang + "/index.md"
+		case !strings.Contains(page, "/"):
+			return lang + "/{page}.md"
+		case strings.Count(page, "/") == 1:
+			return lang + "/{part}/{chapter}.md"
+		}
+		return lang + "/{path}.md"
+	}
 	switch {
 	case rest == "":
 		return lang + "/"
 	case !strings.Contains(rest, "/") && path.Ext(rest) != "":
-		// A build file beside the pages (search.json, sitemap.xml, robots.txt).
-		// Only files that exist reach here, so the build bounds the set.
+		// A build file beside the pages (search.json, agentweb.json). Only
+		// files that exist reach here, so the build bounds the set.
 		return lang + "/" + rest
 	case !strings.Contains(rest, "/"):
 		return lang + "/{page}"

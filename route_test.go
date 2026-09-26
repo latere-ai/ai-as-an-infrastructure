@@ -67,8 +67,16 @@ func TestRouteOfServedPages(t *testing.T) {
 		{"/zh/reasoning/inference-time-scaling", "/zh/{part}/{chapter}"},
 		{"/zh/reasoning/inference-time-scaling/", "/zh/{part}/{chapter}"},
 		{"/en/search.json", "/en/search.json"},
+		{"/agentweb.json", "/agentweb.json"},
 		{"/robots.txt", "/robots.txt"},
 		{"/sitemap.xml", "/sitemap.xml"},
+		// A Markdown twin is named after its page's template.
+		{"/en/foundations/scaling-laws.md", "/en/{part}/{chapter}.md"},
+		{"/en/foundations.md", "/en/{page}.md"},
+		{"/zh/index.md", "/zh/index.md"},
+		{"/en/foundations/nope.md", unknownRoute},
+		{"/en/nope.md", unknownRoute},
+		{"/en/foundations/scaling-laws.md.gz", unknownRoute},
 		// The shape a crawler composes from relative links resolved against
 		// the wrong base, and paths that look like pages but are not.
 		{"/safety/safety/reasoning/foundations/practice/agents-and-sandboxes", unknownRoute},
@@ -79,6 +87,22 @@ func TestRouteOfServedPages(t *testing.T) {
 		{"/en/search.json.gz", unknownRoute},
 		{"/404", unknownRoute},
 		{"/404/", unknownRoute},
+	})
+}
+
+// The documents generated from the page index are a fixed set of literal
+// paths, each named by its path. No other path under those names exists.
+func TestRouteOfAgentEndpoints(t *testing.T) {
+	installAgentWeb(t)
+	checkRoutes(t, []routeCase{
+		{"/robots.txt", "/robots.txt"},
+		{"/sitemap.xml", "/sitemap.xml"},
+		{"/llms.txt", "/llms.txt"},
+		{"/llms-full.txt", "/llms-full.txt"},
+		{"/zh/llms.txt", "/zh/llms.txt"},
+		{"/zh/llms-full.txt", "/zh/llms-full.txt"},
+		{"/en/llms.txt", unknownRoute},
+		{"/zh/robots.txt", unknownRoute},
 	})
 }
 

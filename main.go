@@ -11,6 +11,11 @@
 //   - gzip for text assets (the ~1.2MB search.json especially)
 //   - /healthz and /readyz for the Kubernetes probes
 //   - /v1/telemetry/* relays the reader's OpenTelemetry spans to the collector
+//   - robots.txt (with Content Signals usage preferences), sitemap.xml, and
+//     each language's llms.txt and llms-full.txt, generated from the page
+//     index the build writes (agentweb.go)
+//   - a page requested with Accept: text/markdown answers with its Markdown
+//     twin, and every page names its twin in a Link header
 //   - unknown content URLs answer 404 with the not-found page
 //
 // Behind the TLS-terminating ingress the server speaks http on :8080; all
@@ -193,6 +198,13 @@ func serve(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		_, _ = io.WriteString(w, "ok\n")
+		return
+	}
+
+	// The documents generated from the page index are literal paths no page
+	// or legacy rule matches.
+	if h, ok := agentDocs[p]; ok {
+		h.ServeHTTP(w, r)
 		return
 	}
 
@@ -421,15 +433,19 @@ func contentType(name string) string {
 		return "application/xml"
 	case strings.HasSuffix(name, ".txt"):
 		return "text/plain; charset=utf-8"
+	case strings.HasSuffix(name, ".md"):
+		return "text/markdown; charset=utf-8"
 	}
 	return ""
 }
 
-// compressible mirrors the nginx gzip_types: text and the search-index JSON.
+// compressible mirrors the nginx gzip_types: text and the search-index JSON,
+// plus the pages' Markdown twins.
 func compressible(ctype string) bool {
 	for _, prefix := range []string{
 		"text/html", "text/css", "text/javascript", "application/javascript",
 		"application/json", "image/svg+xml", "text/plain", "application/xml",
+		"text/markdown",
 	} {
 		if strings.HasPrefix(ctype, prefix) {
 			return true
@@ -455,9 +471,16 @@ func isProbe(path string) bool {
 // name and the span's http.route. otelhttp does not read span attributes when
 // it records the request metrics; it reads the labeler in the request context,
 // so the route goes there too, once serve has run.
+//
+// Markdown negotiation, when loaded, runs inside the tracing: a page served as
+// its twin is one request with one span, named after the page.
 func newHandler() http.Handler {
+	site := http.Handler(http.HandlerFunc(serve))
+	if agentPages != nil {
+		site = agentPages
+	}
 	labeled := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serve(w, r)
+		site.ServeHTTP(w, r)
 		if l, ok := otelhttp.LabelerFromContext(r.Context()); ok {
 			l.Add(attribute.String("http.route", routeOf(r)))
 		}
@@ -500,6 +523,14 @@ func run() error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("config: %w", err)
+	}
+
+	// The agent-facing documents and Markdown negotiation are part of the
+	// book's public contract, so a build without a valid page index does not
+	// start.
+	agentDocs, agentPages, err = loadAgentWeb(book)
+	if err != nil {
+		return fmt.Errorf("agentweb: %w", err)
 	}
 	if cfg.DatabaseURL != "" {
 		pool, err := store.NewPool(context.Background(), cfg.ServingURL(), cfg.DatabaseURL)
