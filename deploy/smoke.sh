@@ -2,7 +2,9 @@
 # Smoke test for the deployed book. Asserts the apex redirect is relative
 # (regression test: it must not point at the internal :8080 port), both
 # language books serve, an unknown path answers 404 rather than redirecting,
-# and the health endpoint is up.
+# the health endpoint is up, robots.txt states the usage preferences, llms.txt
+# serves, and a page answers an agent asking for Markdown with Markdown and a
+# browser with HTML.
 #
 # Usage:
 #   deploy/smoke.sh                 # hits https://aaai.latere.ai
@@ -38,6 +40,19 @@ check "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/zh/")" "200" "/zh/ serve
 # hand it the home page and its links again.
 check "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/safety/safety/no-such-page")" "404" "unknown path answers 404"
 check "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/healthz")" "200" "/healthz up"
+
+# Search and AI answers are allowed, training is refused.
+signals=no
+case "$(curl -sS "$BASE/robots.txt")" in
+  *"Content-Signal: ai-train=no, search=yes, ai-input=yes"*) signals=yes ;;
+esac
+check "$signals" "yes" "robots.txt states the content signals"
+check "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/llms.txt")" "200" "/llms.txt serves"
+# One address, two representations, chosen by the Accept header.
+check "$(curl -sS -o /dev/null -w '%{content_type}' -H 'Accept: text/markdown' "$BASE/en/")" \
+  "text/markdown; charset=utf-8" "/en/ answers Accept: text/markdown with Markdown"
+check "$(curl -sS -o /dev/null -w '%{content_type}' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' "$BASE/en/")" \
+  "text/html; charset=utf-8" "/en/ answers a browser with HTML"
 
 status="PASS"; [ "$fail" = "0" ] || status="FAILED"
 
