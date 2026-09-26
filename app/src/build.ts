@@ -1,7 +1,8 @@
 // Static site generator: compile every chapter of both languages to static HTML
 // under _book/{en,zh}, matching the canonical clean chapter paths. Copies figures, emits the
 // hydration bundle (which carries the Pyodide runnable, viz, and figure
-// runtimes), and writes a search index.
+// runtimes), and writes a search index. Every page also gets a Markdown twin
+// beside its HTML (twin.ts) for agents and tools that read text.
 
 import { renderToString } from "react-dom/server";
 import { createElement } from "react";
@@ -15,6 +16,7 @@ import { buildCrossref } from "./pipeline/crossref.ts";
 import { loadGraphviz } from "./pipeline/diagrams.ts";
 import { buildSearchDocs } from "./pipeline/search.ts";
 import { BASE, ogImageUrl } from "./site.ts";
+import { markdownTwin, twinInput } from "./twin.ts";
 import { mkdirSync, writeFileSync, cpSync, readFileSync, existsSync, rmSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { Lang } from "./types.ts";
@@ -42,6 +44,11 @@ const clientEntry = clientOutputs.find((o) => o.kind === "entry-point")!.name;
 const graphviz = await loadGraphviz();
 const glossary = loadGlossary(join(repoRoot, "glossary.yml"));
 
+// Both manifests up front: a page's twin names the other language's page only
+// when that page exists.
+const books = { en: loadBook("en", repoRoot), zh: loadBook("zh", repoRoot) };
+const hrefsByLang: Record<Lang, Set<string>> = { en: new Set(books.en.chapters.map((c) => c.href)), zh: new Set(books.zh.chapters.map((c) => c.href)) };
+
 let pageCount = 0;
 const pathsByLang: Record<Lang, Set<string>> = { en: new Set(), zh: new Set() };
 // English share-card text keyed by chapter href (shared across languages). Filled
@@ -57,7 +64,8 @@ const ogSrc = join(repoRoot, "app", "static", "og");
 if (existsSync(ogSrc)) cpSync(ogSrc, join(outRoot, "og"), { recursive: true });
 
 for (const lang of ["en", "zh"] as Lang[]) {
-  const book = loadBook(lang, repoRoot);
+  const book = books[lang];
+  const other: Lang = lang === "en" ? "zh" : "en";
   const bib = loadBibliographyDir(join(repoRoot, "refs"));
   const xref = buildCrossref(book);
   const ctx = { bib, xref, graphviz, refsDir: join(repoRoot, "refs"), glossary, glossaryUsed: new Set<string>(), glossaryFirstUses: new Map() };
@@ -91,6 +99,9 @@ for (const lang of ["en", "zh"] as Lang[]) {
     const outPath = join(langOut, ch.href + ".html");
     mkdirSync(dirname(outPath), { recursive: true });
     writeFileSync(outPath, html);
+    // The Markdown twin sits beside the HTML at the same clean path plus ".md"
+    // (index.md for the home page).
+    writeFileSync(join(langOut, ch.href + ".md"), markdownTwin(twinInput(book, ch, data, hrefsByLang[other])));
     searchDocs.push(...buildSearchDocs(data, ch.href, lang));
     pathsByLang[lang].add(ch.href === "index" ? "" : ch.href); // clean path for sitemap
     pageCount++;
@@ -126,7 +137,7 @@ if (missing.length) console.warn(`  ⚠ ${missing.length} share card(s) missing 
 // Precompressed siblings: the server streams name.gz to clients that accept
 // gzip, so no response is compressed, or copied into memory, per request.
 // Files under 1 KiB gain nothing from compression and are left alone.
-const GZ = /\.(html|css|js|json|svg|xml|txt)$/;
+const GZ = /\.(html|md|css|js|json|svg|xml|txt)$/;
 let gzipped = 0;
 const compressTree = (dir: string) => {
   for (const e of readdirSync(dir, { withFileTypes: true })) {

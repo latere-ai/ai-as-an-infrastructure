@@ -12,9 +12,16 @@ export const AUTHOR = "Changkun Ou";
 export const LICENSE = "CC BY-NC-ND 4.0";
 export const LICENSE_URL = "https://creativecommons.org/licenses/by-nc-nd/4.0/";
 
-// A page's absolute address. `path` is the lang-root-relative clean path
-// ("" for a language's home page), the same value ChapterData.path carries.
-export const pageUrl = (lang: string, path: string) => `${BASE}/${lang}/${path}`;
+// A page's origin-relative and absolute address. `path` is the
+// lang-root-relative clean path ("" for a language's home page), the same
+// value ChapterData.path carries.
+export const pagePath = (lang: string, path: string) => `/${lang}/${path}`;
+export const pageUrl = (lang: string, path: string) => BASE + pagePath(lang, path);
+
+// A page's Markdown twin, written beside its HTML: the home page's is
+// /<lang>/index.md, every other page's is its clean path plus ".md".
+export const markdownPath = (lang: string, path: string) => `/${lang}/${path || "index"}.md`;
+
 export const SITE_DESCRIPTION = "The lifecycle of a capability, from compute to deployed, governed behavior.";
 
 // Social share cards are 1200x630 (the de-facto Open Graph / Twitter

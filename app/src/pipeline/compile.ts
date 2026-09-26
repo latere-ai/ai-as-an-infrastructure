@@ -96,10 +96,17 @@ function gitDate(lang: string, qmdPath: string): string {
 // review-dates test fails until the entry is added.
 let reviewDates: ReviewDates | null = null;
 const missingReview = new Set<string>();
-export function reviewedLabel(lang: Lang, srcRel: string): string {
+
+// The review date as YYYY-MM-DD, "" for a page with no entry. Machine-read
+// outputs (the Markdown twins, agentweb.json) carry this form.
+export function reviewedIso(srcRel: string): string {
   reviewDates ??= loadReviewDates();
+  return reviewDates.get(reviewKey(srcRel)) ?? "";
+}
+
+export function reviewedLabel(lang: Lang, srcRel: string): string {
   const key = reviewKey(srcRel);
-  const iso = reviewDates.get(key);
+  const iso = reviewedIso(srcRel);
   if (!iso) {
     if (!missingReview.has(key)) console.warn(`  review-dates: no entry for ${key}`);
     missingReview.add(key);
