@@ -135,6 +135,18 @@ func New(s commentStore, id Identity, auth *AuthRoutes) *Handler {
 // ServeHTTP routes an /api request.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
 
+// Route is the path of the mux pattern that serves r, such as
+// "/api/comments/{id}", or "" when no route matches. It consults the mux
+// without serving the request, so a caller can name the route before the
+// handler runs and after it returns.
+func (h *Handler) Route(r *http.Request) string {
+	_, pattern := h.mux.Handler(r)
+	if _, route, ok := strings.Cut(pattern, " "); ok {
+		return route
+	}
+	return pattern
+}
+
 // Owns reports whether the API (vs the static file server) should handle a path.
 func (h *Handler) Owns(path string) bool {
 	if strings.HasPrefix(path, "/api/") {

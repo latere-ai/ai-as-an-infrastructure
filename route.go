@@ -50,8 +50,14 @@ func routeOf(r *http.Request) string {
 		// The subpath names an OTLP signal and is chosen by the client.
 		return telemetryPrefix + "/{signal}"
 	case commentsAPI != nil && commentsAPI.Owns(p):
-		// Before the mux has run, or when no API route matches.
+		// The traced handler runs on a copy of this request, so the pattern
+		// the comments mux matched never reaches it; the mux is asked
+		// directly.
+		if route := commentsAPI.Route(r); route != "" {
+			return route
+		}
 		if strings.HasPrefix(p, "/api/") {
+			// No API route matches.
 			return "/api/{endpoint}"
 		}
 		return p // Owns admits only the four literal OIDC routes.
