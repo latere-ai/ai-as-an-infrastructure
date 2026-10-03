@@ -14,8 +14,8 @@ export const PUBLISHER_URL = "https://latere.ai";
 
 // The book's license, named on the title page and in every page's Markdown
 // twin, with the Creative Commons deed that states its terms.
-export const LICENSE = "CC BY-NC-ND 4.0";
-export const LICENSE_URL = "https://creativecommons.org/licenses/by-nc-nd/4.0/";
+export const LICENSE = "CC BY-NC-SA 4.0";
+export const LICENSE_URL = "https://creativecommons.org/licenses/by-nc-sa/4.0/";
 
 // A page's origin-relative and absolute address. `path` is the
 // lang-root-relative clean path ("" for a language's home page), the same

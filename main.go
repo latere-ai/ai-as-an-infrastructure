@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Latere AI
+// SPDX-License-Identifier: MIT
+
 // Command aaai-web serves the compiled book. The whole _book/ tree is embedded
 // into the binary at build time (`bun run build` produces it), so deployment is
 // one self-contained static binary: no vendored HTML in git, no separate web

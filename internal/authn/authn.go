@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Latere AI
+// SPDX-License-Identifier: MIT
+
 // Package authn adapts the latere OIDC client to the comments API's Identity
 // interface and adds a same-origin double-submit CSRF check on the book domain.
 package authn

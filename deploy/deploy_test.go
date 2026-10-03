@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Latere AI
+// SPDX-License-Identifier: MIT
+
 // Package deploy tests the Kubernetes manifests. They are applied by the
 // release pipeline against the live cluster, so a mistake here surfaces as a
 // broken deployment rather than a failed build.

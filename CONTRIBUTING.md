@@ -7,9 +7,11 @@ site. See [`README.md`](README.md) for what the book is and its outline.
 
 ## What can be merged
 
-The content is licensed [CC BY-NC-ND
-4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/), so derivative
-rewrites of the prose cannot be merged. What helps:
+The text is licensed [CC BY-NC-SA
+4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) and the code MIT; a
+contribution is accepted under the license of the part it changes. Changes
+that fix a problem a reader would notice are merged; a rewrite that only
+substitutes a different voice is not. What helps:
 
 - factual corrections, with a primary source and its date;
 - stale numbers, names, or product behavior, with the date and scope in which

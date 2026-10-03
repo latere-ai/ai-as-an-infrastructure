@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Latere AI
+// SPDX-License-Identifier: MIT
+
 // Package api serves the reader-comments JSON API. It is mounted by main.go
 // under /api and is only active when a database is configured; with no DB the
 // book stays a pure static server.

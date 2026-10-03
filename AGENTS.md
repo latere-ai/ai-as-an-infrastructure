@@ -4,7 +4,9 @@ A technical book, written design-first. The spine is the lifecycle of
 a capability, from compute to a deployed and governed behavior. See `README.md`
 for the part list and `CONVENTIONS.md` for how chapters are written.
 
-Released under latere.ai, licensed CC BY-NC-ND 4.0.
+Released under latere.ai. The text (`en/`, `zh/`, `refs/`, `glossary.yml`) is
+licensed CC BY-NC-SA 4.0 (`LICENSE-TEXT`); the code is MIT (`LICENSE`), and
+every Go file carries the SPDX notice the license gate checks.
 
 ## Layout
 

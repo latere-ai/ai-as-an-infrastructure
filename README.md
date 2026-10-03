@@ -3,7 +3,8 @@
 [![build](https://img.shields.io/github/actions/workflow/status/latere-ai/ai-as-an-infrastructure/render.yml?branch=main&label=build)](https://github.com/latere-ai/ai-as-an-infrastructure/actions/workflows/render.yml)
 [![release](https://img.shields.io/github/v/release/latere-ai/ai-as-an-infrastructure?label=release)](https://github.com/latere-ai/ai-as-an-infrastructure/releases)
 [![updated](https://img.shields.io/github/last-commit/latere-ai/ai-as-an-infrastructure/main?label=updated)](https://aaai.latere.ai/en/changelog)
-[![license](https://img.shields.io/badge/license-CC%20BY--NC--ND%204.0-blue)](LICENSE)
+[![text: CC BY-NC-SA 4.0](https://img.shields.io/badge/text-CC%20BY--NC--SA%204.0-lightgrey)](LICENSE-TEXT)
+[![code: MIT](https://img.shields.io/badge/code-MIT-blue)](LICENSE)
 
 From Systems to Agents: history, design decisions, and foundations.
 
@@ -150,9 +151,9 @@ license, the repository layout, and how to build and test the book locally.
 
 ## License
 
-Content is licensed
-[CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/). See
-[`LICENSE`](LICENSE). Copyright © 2026 latere.ai. You may read, share, and
-quote the book with attribution for non-commercial purposes; redistributing a
-modified version is not permitted. Corrections and fixes contributed here are
-merged into the book itself, so they are not derivative works.
+The book's text (`en/`, `zh/`), bibliography (`refs/`), and glossary
+(`glossary.yml`): [CC BY-NC-SA 4.0](LICENSE-TEXT). You may share and adapt it
+with attribution for non-commercial purposes, provided an adapted version is
+shared under the same license. The code (the server, the reader in `app/`, the
+figure modules and sources, the tools, and the tests): [MIT](LICENSE).
+© 2026 Latere AI.
