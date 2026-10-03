@@ -1,10 +1,18 @@
-# AI as an Infrastructure
+<p align="center">
+  <a href="https://aaai.latere.ai/en/"><img src="app/static/og/index.png" alt="AI as an Infrastructure: From Systems to Agents: History, Design Decisions, and Foundations, by Changkun Ou" width="760"></a>
+</p>
 
-[![build](https://img.shields.io/github/actions/workflow/status/latere-ai/ai-as-an-infrastructure/render.yml?branch=main&label=build)](https://github.com/latere-ai/ai-as-an-infrastructure/actions/workflows/render.yml)
-[![release](https://img.shields.io/github/v/release/latere-ai/ai-as-an-infrastructure?label=release)](https://github.com/latere-ai/ai-as-an-infrastructure/releases)
-[![updated](https://img.shields.io/github/last-commit/latere-ai/ai-as-an-infrastructure/main?label=updated)](https://aaai.latere.ai/en/changelog)
-[![text: CC BY-NC-SA 4.0](https://img.shields.io/badge/text-CC%20BY--NC--SA%204.0-lightgrey)](LICENSE-TEXT)
-[![code: MIT](https://img.shields.io/badge/code-MIT-blue)](LICENSE)
+<p align="center">
+  <a href="https://aaai.latere.ai/en/"><img alt="Read in English" src="https://img.shields.io/badge/read-English-c8442f"></a>
+  <a href="https://aaai.latere.ai/zh/"><img alt="中文阅读" src="https://img.shields.io/badge/%E9%98%85%E8%AF%BB-%E4%B8%AD%E6%96%87-c8442f"></a>
+  <a href="https://github.com/latere-ai/ai-as-an-infrastructure/actions/workflows/render.yml"><img alt="build" src="https://img.shields.io/github/actions/workflow/status/latere-ai/ai-as-an-infrastructure/render.yml?branch=main&label=build"></a>
+  <a href="https://github.com/latere-ai/ai-as-an-infrastructure/releases"><img alt="release" src="https://img.shields.io/github/v/release/latere-ai/ai-as-an-infrastructure?label=release"></a>
+  <a href="https://aaai.latere.ai/en/changelog"><img alt="updated" src="https://img.shields.io/github/last-commit/latere-ai/ai-as-an-infrastructure/main?label=updated"></a>
+  <a href="LICENSE-TEXT"><img alt="Text: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/text-CC%20BY--NC--SA%204.0-lightgrey"></a>
+  <a href="LICENSE"><img alt="Code: MIT" src="https://img.shields.io/badge/code-MIT-blue"></a>
+</p>
+
+# AI as an Infrastructure
 
 From Systems to Agents: history, design decisions, and foundations.
 
@@ -27,6 +35,24 @@ first chapter to the last: every term is introduced where it is first used.
 The book is web-only: its runnable cells, interactive figures, and diagrams do
 not survive a static PDF or EPUB. The English and Chinese editions carry the
 same chapters, sources, equations, and figures.
+
+## Figures you can use
+
+The chapters carry interactive figures and runnable cells. You step a
+pipeline schedule through one optimizer step, move an operation along an
+accelerator's roofline, watch a target model accept or reject a draft, and
+give a tree search a noisy evaluator.
+
+<table>
+  <tr>
+    <td width="50%"><a href="https://aaai.latere.ai/en/infrastructure/accelerators-networking"><img src=".github/readme/roofline.png" alt="The roofline of three accelerators, with operations placed by arithmetic intensity"></a><br><sub>The roofline of three accelerators: place an operation by its arithmetic intensity and see whether memory bandwidth or compute bounds it.</sub></td>
+    <td width="50%"><a href="https://aaai.latere.ai/en/foundations/training-at-scale"><img src=".github/readme/pipeline-schedule.png" alt="Pipeline-parallel schedules: GPipe, 1F1B, and interleaved, with idle bubbles and activations held"></a><br><sub>Pipeline parallelism, step by step: GPipe, 1F1B, and interleaved schedules, the idle bubble, and the activations each stage holds.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%"><a href="https://aaai.latere.ai/en/inference/faster-decoding"><img src=".github/readme/speculative-sampling.png" alt="Speculative sampling: drafted tokens accepted or rejected by the target model"></a><br><sub>Speculative sampling: which drafted tokens the target model accepts, and why the output still follows the target distribution.</sub></td>
+    <td width="50%"><a href="https://aaai.latere.ai/en/reasoning/eliciting-reasoning"><img src=".github/readme/tree-search.png" alt="Tree search over reasoning steps with a noisy evaluator"></a><br><sub>Tree search with a noisy evaluator: a larger budget generates more solutions, but the top-scored leaf is not always one of them.</sub></td>
+  </tr>
+</table>
 
 ## Outline
 
@@ -148,6 +174,14 @@ figure sources, and the reader that builds and serves the site.
 [`CONTRIBUTING.md`](CONTRIBUTING.md) covers what can be merged under the
 license, the repository layout, and how to build and test the book locally.
 [`CONVENTIONS.md`](CONVENTIONS.md) is how chapters are written and translated.
+
+## Use of language models
+
+Most of the book was written by large language models, prompted and steered
+throughout by the author, who set its scope, structure, and arguments, wrote
+or rewrote parts of the text, and directed every revision. The preface says
+how it is checked. The author takes full responsibility for its accuracy,
+integrity, and conclusions.
 
 ## License
 
