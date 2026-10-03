@@ -10,6 +10,10 @@
 // after adding or retitling chapters; commit the regenerated PNGs.
 //
 // CHROME names the browser binary; a headless shell build is enough.
+//
+// `bun run og --readme` draws only the home card, at twice the resolution, to
+// .github/readme/cover.png: the README banner, which GitHub shows on
+// high-density screens where the 1200x630 card looks soft.
 
 import { loadBook, type Book } from "./pipeline/book.ts";
 import { selectCards } from "./og-select.ts";
@@ -33,17 +37,18 @@ export function cardOf(book: Book, href: string, author: string): Card {
   return chapterCard(ch, book.lang, book.title, author);
 }
 
-// Draws one card of `book` to a PNG at `outPath`, staging its HTML in `tmpDir`.
-export function drawCard(chrome: string, book: Book, card: Card, tmpDir: string, name: string, outPath: string): boolean {
+// Draws one card of `book` to a PNG at `outPath`, staging its HTML in `tmpDir`,
+// at `scale` device pixels per CSS pixel.
+export function drawCard(chrome: string, book: Book, card: Card, tmpDir: string, name: string, outPath: string, scale = 1): boolean {
   const htmlPath = join(tmpDir, name + ".html");
   writeFileSync(htmlPath, cardHtml(card, book.lang, css, renderCover(book.lang, coverDataFor(book, repoRoot))));
   mkdirSync(dirname(outPath), { recursive: true });
-  return screenshot(chrome, htmlPath, outPath);
+  return screenshot(chrome, htmlPath, outPath, scale);
 }
 
-function screenshot(chrome: string, htmlPath: string, outPath: string): boolean {
+function screenshot(chrome: string, htmlPath: string, outPath: string, scale: number): boolean {
   const r = spawnSync(chrome, [
-    "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
+    "--headless=new", "--disable-gpu", "--hide-scrollbars", `--force-device-scale-factor=${scale}`,
     `--window-size=${OG_W},${OG_H}`, "--virtual-time-budget=8000",
     `--screenshot=${outPath}`, `file://${htmlPath}`,
   ], { encoding: "utf8" });
@@ -64,6 +69,14 @@ if (import.meta.main) {
   mkdirSync(ogRoot, { recursive: true });
 
   const book = loadBook("en", repoRoot);
+  if (process.argv.includes("--readme")) {
+    const out = join(repoRoot, ".github", "readme", "cover.png");
+    const ok = drawCard(chrome, book, cardOf(book, "index", AUTHOR), tmpDir, "readme", out, 2);
+    rmSync(tmpDir, { recursive: true, force: true });
+    if (!ok) { console.error("✗ failed: the README cover"); process.exit(1); }
+    console.log(`generated the README cover at ${out}`);
+    process.exit(0);
+  }
   const { wanted, unknown } = selectCards(book.chapters, process.argv.slice(2));
   if (unknown.length) { console.error(`no such chapter href: ${unknown.join(", ")}`); process.exit(1); }
   let made = 0;

@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://aaai.latere.ai/en/"><img src="app/static/og/index.png" alt="AI as an Infrastructure: From Systems to Agents: History, Design Decisions, and Foundations, by Changkun Ou" width="760"></a>
+  <a href="https://aaai.latere.ai/en/"><img src=".github/readme/cover.png" alt="AI as an Infrastructure: From Systems to Agents: History, Design Decisions, and Foundations, by Changkun Ou" width="760"></a>
 </p>
 
 <p align="center">
