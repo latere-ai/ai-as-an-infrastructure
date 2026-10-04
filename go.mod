@@ -51,7 +51,7 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/grpc v1.83.1 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	latere.ai/x/ci-gate v0.50.2 // indirect
+	latere.ai/x/ci-gate v0.50.3 // indirect
 )
 
 tool latere.ai/x/ci-gate/cmd/lateregate
