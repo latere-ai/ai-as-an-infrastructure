@@ -20,6 +20,10 @@ committed: the commit log already holds that.
   semantic conventions v1.43.0, the schema of this SDK; with an older schema
   the two conflict when merged and the book server disables telemetry export at start.
 
+### Security
+
+- Built with Go 1.27.2 and golang.org/x/net v0.60.0, which fix GO-2026-6611, GO-2026-6612, GO-2026-6613 and GO-2026-6617.
+
 ## v0.10.9 - 2026-09-26
 
 ### Fixed
