@@ -19,6 +19,11 @@ committed: the commit log already holds that.
   `latere.ai/x/pkg` v0.90.2. pkg v0.90.2 names the service resource with
   semantic conventions v1.43.0, the schema of this SDK; with an older schema
   the two conflict when merged and the book server disables telemetry export at start.
+- With `OTEL_EXPORTER_OTLP_ENDPOINT` set, the book server also exports the
+  Go runtime's metrics: memory, goroutines, GOGC, GOMAXPROCS and scheduling
+  latency, as `go.memory.*`, `go.goroutine.count`, `go.config.gogc`,
+  `go.processor.limit` and `go.schedule.duration`, through
+  `latere.ai/x/pkg` v0.106.0.
 
 ### Security
 
