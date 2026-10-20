@@ -10,6 +10,8 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+## v0.10.10 - 2026-10-20
+
 - The book's text is licensed CC BY-NC-SA 4.0, where it was CC BY-NC-ND 4.0:
   an adapted version may now be shared, non-commercially and under the same
   license. The code that builds and serves the site is MIT. Every page names
