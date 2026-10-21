@@ -10,6 +10,11 @@ committed: the commit log already holds that.
 
 ## Unreleased
 
+### Fixed
+
+- **Built with Go 1.27.3,** which fixes GO-2026-6809, a flaw in the
+  standard library's certificate verification that this code can reach.
+
 ## v0.10.10 - 2026-10-20
 
 - The book's text is licensed CC BY-NC-SA 4.0, where it was CC BY-NC-ND 4.0:
