@@ -3,7 +3,7 @@
 // runnable) + diagrams (dot inline SVG, figure modules) + numbered figures.
 // Raw {=html} viz blocks pass through verbatim (html:true).
 
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from "markdown-it";
 import attrs from "markdown-it-attrs";
 import { katex } from "@mdit/plugin-katex";
 import { existsSync, readFileSync } from "node:fs";
@@ -106,7 +106,7 @@ function inlineLocalSvgFigure(img: string, id: string, alt: string, ctx: RenderC
   return addInlineSvgAttrs(namespaceSvgIds(svg, `${id}-`), alt);
 }
 
-function createMd(ctx: RenderContext): MarkdownIt {
+function createMd(ctx: RenderContext): MarkdownItInstance {
   // `highlight` colors static code fences (Python) at build time; the default
   // fence renderer (defFence below) invokes it and adds the <pre><code> wrapper.
   const md = new MarkdownIt({ html: true, linkify: false, typographer: false, breaks: false, highlight: highlightCode });
@@ -159,7 +159,7 @@ function splitTitle(src: string): { titleLine: string; body: string } {
   return { titleLine: "", body: src };
 }
 
-function collectHeadings(md: MarkdownIt, body: string): { headings: Heading[]; tokens: ReturnType<MarkdownIt["parse"]> } {
+function collectHeadings(md: MarkdownItInstance, body: string): { headings: Heading[]; tokens: ReturnType<MarkdownItInstance["parse"]> } {
   const tokens = md.parse(body, {});
   const headings: Heading[] = [];
   let inCallout = 0;
@@ -171,7 +171,7 @@ function collectHeadings(md: MarkdownIt, body: string): { headings: Heading[]; t
     const level = Number(tok.tag.slice(1));
     if (level !== 2 && level !== 3) continue;
     const text = tokens[i + 1]?.content ?? "";
-    let id = tok.attrGet("id");
+    let id = tok.attrGet("id")?.toString();
     if (!id) { id = slugify(text); tok.attrSet("id", id); }
     headings.push({ id, text: text.replace(/\[@[^\]]+\]/g, "").replace(/@[a-z]+-[a-z0-9-]+/g, "").trim(), level });
   }

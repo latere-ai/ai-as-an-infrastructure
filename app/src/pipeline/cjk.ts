@@ -10,7 +10,7 @@
 // bold; see the comment on the plugin. It is installed for both languages: it
 // only acts on a run with a CJK neighbor.
 
-import type MarkdownIt from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 
 const CJK = /[　-〿㐀-䶿一-鿿豈-﫿＀-￯]/;
 

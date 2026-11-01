@@ -5,7 +5,7 @@
 
 import { test, expect } from "bun:test";
 import MarkdownIt from "markdown-it";
-import { inlineRefs } from "./inline-refs.ts";
+import { inlineRefs, type RefContext } from "./inline-refs.ts";
 import type { Bibliography } from "./citations.ts";
 import type { CrossrefMap } from "./crossref.ts";
 
@@ -18,7 +18,7 @@ function bibOf(key: string): Bibliography {
 
 function render(srcText: string, prefix: string): string {
   const md = new MarkdownIt();
-  const ctx = { bib: bibOf("smith2020"), xref: new Map() as CrossrefMap, currentHref: "p1-x/y.html", prefix };
+  const ctx = { bib: bibOf("smith2020"), xref: new Map() as CrossrefMap, currentHref: "p1-x/y.html", prefix } as RefContext;
   md.use(inlineRefs, ctx);
   return md.render(srcText);
 }
