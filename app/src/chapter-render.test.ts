@@ -378,7 +378,7 @@ test("hard wraps in prose do not split hyphenated compounds", () => {
 });
 
 // A display formula wider than the column must stay visible. KaTeX emits each
-// display as a .katex-html run of inline-block .base spans, split where TeX
+// display as a .katex-html run of inline-block .katex-base spans, split where TeX
 // allows a break, and its own stylesheet forbids wrapping; theme.css lifts
 // that so the runs wrap, and keeps horizontal scroll for a run that cannot
 // break. Both halves are checked: the rule exists, and every rendered display
@@ -393,7 +393,7 @@ test("display math wraps at KaTeX break points and scrolls when it cannot", () =
   for (const page of pages) {
     for (const [, body] of page.html.matchAll(/<span class="katex-display">([\s\S]*?)<\/p>/g)) {
       displays++;
-      if (!body.startsWith('<span class="katex">') || !body.includes('<span class="katex-html" aria-hidden="true"><span class="base">'))
+      if (!body.startsWith('<span class="katex">') || !body.includes('<span class="katex-html" aria-hidden="true"><span class="katex-base">'))
         unselected.push(page.path);
     }
   }

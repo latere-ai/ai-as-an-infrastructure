@@ -4,8 +4,7 @@
 // citations @key, and cross-refs @sec-x / @fig-x. Runs as an inline rule so it
 // never touches code spans (those are tokenized earlier).
 
-import type MarkdownIt from "markdown-it";
-import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
+import type { MarkdownIt, StateInline } from "markdown-it";
 import { renderCite, type Bibliography } from "./citations.ts";
 import { relHref, type CrossrefMap } from "./crossref.ts";
 import { renderGloss, renderGlossText, type Glossary, type GlossFirstUseMap } from "./glossary.ts";

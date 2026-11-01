@@ -35,6 +35,9 @@ const EMOJI: Record<string, string> = {
 };
 
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
+// A bare domain such as chat.latere.ai is a link; markdown-it 15's linkify-it
+// recognizes one only with fuzzyLink, which it no longer turns on by default.
+md.linkify.set({ fuzzyLink: true });
 
 const ui = {
   en: {

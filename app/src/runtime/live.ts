@@ -13,7 +13,7 @@
 // on the first Run, once per page.
 import { Transport } from '../figures/runtime/transport.ts';
 
-  var PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v0.27.2/full/';
+  var PYODIDE = 'https://cdn.jsdelivr.net/pyodide/v314.0.7/full/';
   var pyPromise = null;
   // Matplotlib's bundled fonts (DejaVu Sans) have no CJK glyphs, so Chinese
   // labels in zh runnable cells render as tofu boxes. Fetch a CJK font on
