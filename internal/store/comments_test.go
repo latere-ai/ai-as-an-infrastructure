@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pashagolub/pgxmock/v4"
+	"github.com/pashagolub/pgxmock/v5"
 
 	"github.com/latere-ai/ai-as-an-infrastructure/internal/store"
 )
