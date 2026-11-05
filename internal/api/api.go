@@ -8,7 +8,7 @@ package api
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -365,9 +365,7 @@ func sanitizeAnchor(a *store.Anchor) *store.Anchor {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
+	if err := json.UnmarshalRead(http.MaxBytesReader(w, r.Body, 1<<20), v, json.RejectUnknownMembers(true)); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad json")
 		return false
 	}
@@ -380,7 +378,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	// The status line is already sent, so a failed encode cannot become an
 	// error response. It is logged rather than dropped: the client receives a
 	// truncated body and this is the only place that knows why.
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	if err := json.MarshalWrite(w, v); err != nil {
 		slog.Error("writing a response", "status", status, "err", err)
 	}
 }

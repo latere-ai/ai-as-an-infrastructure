@@ -25,7 +25,7 @@ type Note struct {
 	Lang      string    `json:"lang"`
 	Path      string    `json:"path"`
 	BodyMD    string    `json:"body"`
-	Anchor    *Anchor   `json:"anchor,omitempty"`
+	Anchor    *Anchor   `json:"anchor,omitzero"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }

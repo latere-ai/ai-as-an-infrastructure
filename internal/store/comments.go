@@ -38,12 +38,12 @@ type Comment struct {
 	ID           string     `json:"id"`
 	Lang         string     `json:"lang"`
 	Path         string     `json:"path"`
-	ParentID     *string    `json:"parentId,omitempty"`
+	ParentID     *string    `json:"parentId,omitzero"`
 	AuthorSub    string     `json:"-"` // never serialized to clients
 	AuthorName   string     `json:"author"`
 	AuthorAvatar string     `json:"avatar"`
 	BodyMD       string     `json:"body"`
-	Anchor       *Anchor    `json:"anchor,omitempty"`
+	Anchor       *Anchor    `json:"anchor,omitzero"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	UpdatedAt    time.Time  `json:"updatedAt"`
 	Deleted      bool       `json:"deleted"`

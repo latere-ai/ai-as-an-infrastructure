@@ -6,7 +6,7 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
+	"encoding/json/v2"
 	"encoding/xml"
 	"io"
 	"io/fs"
