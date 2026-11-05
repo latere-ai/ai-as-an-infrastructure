@@ -11,7 +11,7 @@ const requirements = readFileSync(
 );
 
 test("book CI provisions the Python packages used by executable chapter tests", () => {
-  expect(workflow).toMatch(/actions\/setup-python@v\d+/);
+  expect(workflow).toMatch(/actions\/setup-python@[0-9a-f]{40} # v\d+\.\d+\.\d+/);
   expect(workflow).toContain("python -m pip install --requirement requirements-test.txt");
   expect(requirements).toMatch(/^numpy==\d+\.\d+\.\d+$/m);
   expect(requirements).toMatch(/^matplotlib==\d+\.\d+\.\d+$/m);
