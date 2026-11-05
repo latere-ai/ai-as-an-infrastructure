@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 
 const workflow = readFileSync(
-  new URL("../../.github/workflows/render.yml", import.meta.url),
+  new URL("../../.github/workflows/book.yml", import.meta.url),
   "utf8",
 );
 const requirements = readFileSync(
@@ -10,7 +10,7 @@ const requirements = readFileSync(
   "utf8",
 );
 
-test("render CI provisions the Python packages used by executable chapter tests", () => {
+test("book CI provisions the Python packages used by executable chapter tests", () => {
   expect(workflow).toMatch(/actions\/setup-python@v\d+/);
   expect(workflow).toContain("python -m pip install --requirement requirements-test.txt");
   expect(requirements).toMatch(/^numpy==\d+\.\d+\.\d+$/m);
