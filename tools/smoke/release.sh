@@ -7,8 +7,8 @@
 # browser with HTML.
 #
 # Usage:
-#   deploy/smoke.sh                 # hits https://aaai.latere.ai
-#   deploy/smoke.sh http://localhost:8080   # local container
+#   tools/smoke/release.sh                  # hits https://aaai.latere.ai
+#   tools/smoke/release.sh http://localhost:8080  # local container
 #
 # Shared-pipeline contract (service-release.yml smoke job): honors the BASE_URL
 # env as the target, and when OUTPUT_MD is set writes a markdown evidence block
@@ -64,4 +64,9 @@ if [ -n "${OUTPUT_MD:-}" ]; then
   } > "$OUTPUT_MD"
 fi
 
-[ "$fail" = "0" ] && echo "PASS" || { echo "FAILED"; exit 1; }
+if [ "$fail" = "0" ]; then
+  echo "PASS"
+else
+  echo "FAILED"
+  exit 1
+fi

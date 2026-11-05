@@ -164,6 +164,6 @@ language tree.
 Releases are cut by the maintainers. A push to `main` builds the `:main`
 container image. A version tag, made with `go tool lateregate release vX.Y.Z`,
 moves the `Unreleased` notes under the version, and the release workflow
-builds the image, deploys `deploy/prod/`, runs `deploy/smoke.sh` against the
+builds the image, deploys `deploy/prod/`, runs `tools/smoke/release.sh` against the
 live site, and publishes the GitHub release. `deploy/publish.sh` applies the
 same overlay by hand.

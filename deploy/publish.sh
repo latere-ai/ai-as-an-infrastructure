@@ -129,7 +129,7 @@ run_smoke() {
   attempt=1
   while [ "$attempt" -le "$SMOKE_ATTEMPTS" ]; do
     log "Running smoke test against $BASE_URL (attempt $attempt/$SMOKE_ATTEMPTS)"
-    if sh deploy/smoke.sh "$BASE_URL"; then
+    if sh tools/smoke/release.sh "$BASE_URL"; then
       return 0
     fi
 

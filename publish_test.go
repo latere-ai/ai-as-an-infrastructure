@@ -32,9 +32,9 @@ func TestPublishIgnoresConflictingRemoteTags(t *testing.T) {
 
 	writeTestFile(t, filepath.Join(source, "README.md"), "test project\n", 0o644)
 	writeTestFile(t, filepath.Join(source, "deploy", "publish.sh"), string(publishScript), 0o644)
-	writeTestFile(t, filepath.Join(source, "deploy", "smoke.sh"), "#!/bin/sh\nexit 0\n", 0o755)
+	writeTestFile(t, filepath.Join(source, "tools", "smoke", "release.sh"), "#!/bin/sh\nexit 0\n", 0o755)
 	writeTestFile(t, filepath.Join(source, "deploy", "prod", ".keep"), "", 0o644)
-	runCmd(t, source, nil, "git", "add", "README.md", "deploy")
+	runCmd(t, source, nil, "git", "add", "README.md", "deploy", "tools")
 	runCmd(t, source, nil, "git", "commit", "-m", "initial publish fixture")
 	runCmd(t, source, nil, "git", "tag", "v0.0.1")
 	runCmd(t, source, nil, "git", "remote", "add", "origin", remote)
