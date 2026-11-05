@@ -42,9 +42,9 @@ reading.
   headless Chrome). These ARE committed (source assets); `make build` copies
   them into `_book/og/` and warns (does not fail) if a referenced card is
   missing. Re-run and commit after adding or retitling a chapter.
-- The build is the test: `make build` must compile both books. CI (`render.yml`)
-  lints the `.qmd` sources, runs the Bun build, and runs `go test`; a broken
-  build is a broken commit.
+- The build is the test: `make build` must compile both books. CI (`book.yml`)
+  runs the Bun build and its tests, then `go test`; a broken build is a broken
+  commit.
 - `cd app && bun test` checks structure, en/zh parity, rendering, runnable
   cells, citations, and links, not wording. Do not add tests that pin phrases,
   heading text, or sentence order; a prose edit should need no test edit.

@@ -44,7 +44,7 @@ build:
 og:
 	cd app && bun run og
 
-# Style/diagram lint on the .qmd sources (no em dashes, no mermaid fences).
+# The Go lint, the same as lint-go.
 lint:
 	@go tool lateregate lint
 
@@ -56,7 +56,6 @@ lint:
 # Only a non-empty patch fails the target. go fix also exits non-zero when a
 # package does not type-check, which is a build error rather than a finding,
 # so stderr is dropped and the decision rests on the patch alone.
-# It is separate from `lint`, which is a .qmd style check on the prose sources.
 lint-modernize:
 	@go tool lateregate modernize
 

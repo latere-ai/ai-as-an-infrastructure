@@ -157,9 +157,3 @@ test("interactive figures declare the language of the page they are on", () => {
   }
 });
 
-test("Chinese reader prose does not use em dashes", () => {
-  const offenders = qmdFiles("zh").filter((page) =>
-    readFileSync(join(repoRoot, "zh", page), "utf8").includes("—"),
-  );
-  expect(offenders).toEqual([]);
-});

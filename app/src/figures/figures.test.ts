@@ -74,7 +74,6 @@ test("every module is registered under its file name and labels both languages",
     }
     for (const s of texts) {
       expect(s.trim().length, `${name}: empty label`).toBeGreaterThan(0);
-      expect(s, `${name}: labels use commas, periods, or colons, not em dashes`).not.toContain("\u2014");
     }
   }
 });

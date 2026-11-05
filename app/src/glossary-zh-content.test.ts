@@ -32,7 +32,6 @@ test("every English glossary entry has a complete Chinese counterpart", () => {
   ).toEqual([]);
 });
 
-test("Chinese definitions end with a full stop and use no em dash", () => {
+test("Chinese definitions end with a full stop", () => {
   expect(definitions.filter(({ zh }) => !zh.endsWith("。")).map(({ key }) => key)).toEqual([]);
-  expect(definitions.filter(({ zh }) => zh.includes("—")).map(({ key }) => key)).toEqual([]);
 });

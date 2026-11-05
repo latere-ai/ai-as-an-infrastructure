@@ -228,11 +228,6 @@ coverage check of the English tree. None has been decided or started.
   remains only in the figure id `fig-wiring-a-2026-stack-cost-crossover`, which
   no other page references.
 
-- [x] **Lint misses `---` inside sentences**
-
-  The reader renders `---` in prose as an em dash. `tools/lint.sh` now fails on
-  `---` inside a prose line.
-
 ## Open goal: visuals that explain
 
 - [x] **Visuals that explain** (done 2026-09-24, except the golden-image tests below)

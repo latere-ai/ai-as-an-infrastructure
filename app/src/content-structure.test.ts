@@ -53,7 +53,7 @@ test("substantive chapters expose uncertainty and lower-layer constraints", () =
 test("no chapter carries a mermaid fence", () => {
   // The reader does not render mermaid, so a ```mermaid or ```{mermaid} fence
   // would ship as a code listing instead of a diagram. Diagrams are figure
-  // modules (```{figure}) or Graphviz (```{dot}). Same rule as tools/lint.sh.
+  // modules (```{figure}) or Graphviz (```{dot}).
   const fence = /^[ \t]*(?:```|~~~)[ \t]*\{?\.?mermaid/m;
   const offenders = ["en", "zh"].flatMap(qmdPaths).filter((path) => fence.test(src(path)));
   expect(offenders).toEqual([]);
