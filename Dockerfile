@@ -2,7 +2,7 @@
 # book embedded in it. Nothing is vendored in git and there is no separate web
 # server: stage 1 compiles _book/ from source with Bun, stage 2 embeds it into
 # the Go binary, and the final image is just that static binary. See main.go for
-# the routing it serves and .github/workflows/docker.yml for the CI build.
+# the routing it serves and .github/workflows/release.yml for the release build.
 
 # syntax=docker/dockerfile:1
 

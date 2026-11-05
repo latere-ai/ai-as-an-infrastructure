@@ -425,3 +425,10 @@ func TestPagesHoldNoRelativeURLs(t *testing.T) {
 		t.Fatalf("checked %d pages, want the whole book", pages)
 	}
 }
+
+// The image gate runs "aaai-web version" and expects this prefix.
+func TestVersionLine(t *testing.T) {
+	if got := versionLine(); !strings.HasPrefix(got, "aaai-web ") {
+		t.Fatalf("versionLine() = %q, want prefix %q", got, "aaai-web ")
+	}
+}

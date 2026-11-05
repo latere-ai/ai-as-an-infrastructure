@@ -39,6 +39,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -485,10 +486,26 @@ func newHandler() http.Handler {
 }
 
 func main() {
+	// "aaai-web version" prints the build and exits, so the image gate can
+	// check that the image it built is this binary without starting a server.
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		fmt.Println(versionLine())
+		return
+	}
 	if err := run(); err != nil {
 		slog.Error("aaai-web stopped", "err", err)
 		os.Exit(1)
 	}
+}
+
+// versionLine names the binary and the module version the toolchain recorded
+// ("(devel)" for a build outside a tagged module).
+func versionLine() string {
+	v := "unknown"
+	if bi, ok := debug.ReadBuildInfo(); ok && bi.Main.Version != "" {
+		v = bi.Main.Version
+	}
+	return "aaai-web " + v
 }
 
 // run owns the process lifecycle. It is separate from main so the telemetry
