@@ -17,13 +17,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// injectedByOperator are the variables the Dash0 operator supplies. It points
-// workloads at the collector on their own node and must be the only writer of
-// these two: it skips any container that already sets either one, emitting only
-// a Warning event. A manifest that sets them therefore reads as configured
-// while its telemetry goes to whatever the value names, which after the Dash0
-// migration is nothing.
-var injectedByOperator = []string{
+// exportVariables are the variables that point telemetry at a backend. No
+// backend runs and export is off on purpose, so no manifest sets them: a
+// container that did would send telemetry to an address nothing serves.
+var exportVariables = []string{
 	"OTEL_EXPORTER_OTLP_ENDPOINT",
 	"OTEL_EXPORTER_OTLP_PROTOCOL",
 }
@@ -100,9 +97,9 @@ func TestDeploymentLeavesTelemetryToTheOperator(t *testing.T) {
 	}
 	for _, c := range containers {
 		for _, e := range c.Env {
-			for _, name := range injectedByOperator {
+			for _, name := range exportVariables {
 				if e.Name == name {
-					t.Errorf("container %q sets %s=%q; the Dash0 operator skips containers that set it, so this container would export to the named address instead of the node-local collector. Remove it and let the operator inject.", c.Name, name, e.Value)
+					t.Errorf("container %q sets %s=%q; export is off on purpose, so this container would send telemetry to an address nothing serves. Remove it.", c.Name, name, e.Value)
 				}
 			}
 		}

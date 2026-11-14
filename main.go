@@ -570,8 +570,8 @@ func run() error {
 		commentsAPI = api.New(store.New(pool), id, routes)
 	}
 
-	// The relay reads the collector endpoint the Dash0 operator injects; with
-	// none (a local run) it answers 503 and the reader drops its spans.
+	// The relay reads the collector endpoint from OTEL_EXPORTER_OTLP_ENDPOINT;
+	// with none set it answers 503 and the reader drops its spans.
 	telemetryRelay = otel.TelemetryProxy(telemetryPrefix)
 
 	addr := cfg.ListenAddr
