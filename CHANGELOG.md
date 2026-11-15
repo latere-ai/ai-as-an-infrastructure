@@ -12,6 +12,8 @@ committed: the commit log already holds that.
 
 ### Changed
 
+- Built with Go 1.27.4, which fixes GO-2026-6859.
+
 - **The manifest comments say telemetry export is off.** The Dash0 collector
   is retired and no manifest sets `OTEL_EXPORTER_OTLP_ENDPOINT`.
 
