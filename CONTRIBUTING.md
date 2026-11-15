@@ -53,7 +53,7 @@ migration, because other chapters and outside links point at them.
 | `figures-src/` | Python scripts for the remaining static charts. Each writes an English and a Chinese SVG to `en/figures/` and `zh/figures/`; `common.py` holds the shared style and the localization |
 | `app/` | the reader: a React and Bun static site generator that compiles the `.qmd` sources into `_book/{en,zh}`. The compiler is `app/src/pipeline/`, the browser runtime for runnable cells and figures is `app/src/runtime/` and `app/src/figures/runtime/`, and chapter review dates live in `app/src/data/review-dates.json` |
 | `main.go`, `internal/`, `migrations/` | the production server. It embeds `_book/` and serves it as one binary, with optional reader comments backed by Postgres |
-| `deploy/` | the Kubernetes manifests, the release smoke test, and a manual publish script |
+| `deploy/`, `tools/smoke/` | the Kubernetes manifests and a manual publish script, and the release smoke test |
 
 `_book/` is generated and not committed, apart from a `.gitkeep` that lets the
 server's embed directive resolve before a build.
